@@ -1,0 +1,22 @@
+{
+  "name": "Sefpos - Restoran Yönetim Sistemi",
+  "short_name": "Sefpos",
+  "description": "Hızlı ve güvenilir restoran POS sistemi",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#f97316",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "./logo.png",
+      "sizes": "any",
+      "type": "image/png"
+    },
+    {
+      "src": "./logo256.png",
+      "sizes": "256x256",
+      "type": "image/png"
+    }
+  ]
+}

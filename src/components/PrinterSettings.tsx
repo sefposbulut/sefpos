@@ -1,0 +1,651 @@
+import { useState, useEffect } from 'react';
+import { supabase } from '../lib/supabase';
+import { useAuth } from '../contexts/AuthContext';
+import {
+  Printer, Plus, Trash2, Save, RefreshCw, CheckCircle, XCircle,
+  ToggleLeft, ToggleRight, Settings2, AlertCircle, X, ChevronDown, Wifi, WifiOff
+} from 'lucide-react';
+import {
+  PrinterDevice, PrinterConfig, PrintSettings, PrintAgentStatus,
+  loadPrintSettings, savePrintSettings, getAvailablePrinters,
+  isElectron, checkPrintAgent, checkPrintAgentDetailed, buildKitchenHtml, buildReceiptHtml, printHtml
+} from '../lib/printService';
+
+interface Category {
+  id: string;
+  name: string;
+}
+
+const PRINTER_TYPES = [
+  { value: 'kitchen', label: 'Mutfak', color: 'bg-orange-100 text-orange-700' },
+  { value: 'bar', label: 'Bar / İçecek', color: 'bg-blue-100 text-blue-700' },
+  { value: 'receipt', label: 'Fiş / Kasa', color: 'bg-green-100 text-green-700' },
+  { value: 'takeaway', label: 'Paket / Kurye', color: 'bg-amber-100 text-amber-700' },
+  { value: 'custom', label: 'Özel', color: 'bg-slate-100 text-slate-700' },
+];
+
+export function PrinterSettings() {
+  const { tenant } = useAuth();
+  const [settings, setSettings] = useState<PrintSettings>(loadPrintSettings());
+  const [availablePrinters, setAvailablePrinters] = useState<PrinterDevice[]>([]);
+  const [loadingPrinters, setLoadingPrinters] = useState(false);
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [showAddPrinter, setShowAddPrinter] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [testResult, setTestResult] = useState<string>('');
+  const [expandedPrinter, setExpandedPrinter] = useState<number | null>(null);
+  const [agentConnected, setAgentConnected] = useState<boolean | null>(null);
+  const [agentStatus, setAgentStatus] = useState<PrintAgentStatus | null>(null);
+  const [agentDetail, setAgentDetail] = useState<string | undefined>(undefined);
+  const [checkingAgent, setCheckingAgent] = useState(false);
+
+  const [newPrinter, setNewPrinter] = useState<Omit<PrinterConfig, 'printerName'> & { printerName: string }>({
+    printerName: '',
+    label: '',
+    type: 'kitchen',
+    categoryIds: [],
+    enabled: true,
+  });
+
+  useEffect(() => {
+    const saved = loadPrintSettings();
+    setSettings(saved);
+    loadCategories();
+    if (isElectron()) {
+      fetchPrinters();
+      return;
+    }
+
+    let lastStatus: boolean | null = null;
+
+    const checkAgent = async () => {
+      const result = await checkPrintAgentDetailed();
+      setAgentConnected(result.connected);
+      setAgentStatus(result.status);
+      setAgentDetail(result.detail);
+      if (result.connected && lastStatus !== true) {
+        fetchPrinters();
+      }
+      lastStatus = result.connected;
+    };
+
+    checkAgent();
+    const interval = setInterval(checkAgent, 5000);
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    if (tenant && !settings.restaurantName) {
+      setSettings(prev => ({ ...prev, restaurantName: tenant.name || '' }));
+    }
+  }, [tenant]);
+
+  const loadCategories = async () => {
+    if (!tenant) return;
+    const { data } = await supabase.from('categories').select('id, name').eq('tenant_id', tenant.id).order('sort_order');
+    setCategories(data || []);
+  };
+
+  const fetchPrinters = async () => {
+    setLoadingPrinters(true);
+    const list = await getAvailablePrinters();
+    setAvailablePrinters(list);
+    setLoadingPrinters(false);
+  };
+
+  const handleSave = () => {
+    savePrintSettings(settings);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2000);
+  };
+
+  const addPrinter = () => {
+    if (!newPrinter.printerName) return;
+    const config: PrinterConfig = {
+      printerName: newPrinter.printerName,
+      label: newPrinter.label || newPrinter.printerName,
+      type: newPrinter.type as PrinterConfig['type'],
+      categoryIds: newPrinter.categoryIds,
+      enabled: true,
+    };
+    setSettings(prev => ({ ...prev, printers: [...prev.printers, config] }));
+    setNewPrinter({ printerName: '', label: '', type: 'kitchen', categoryIds: [], enabled: true });
+    setShowAddPrinter(false);
+  };
+
+  const removePrinter = (index: number) => {
+    setSettings(prev => ({ ...prev, printers: prev.printers.filter((_, i) => i !== index) }));
+    if (expandedPrinter === index) setExpandedPrinter(null);
+  };
+
+  const updatePrinter = (index: number, updates: Partial<PrinterConfig>) => {
+    setSettings(prev => ({
+      ...prev,
+      printers: prev.printers.map((p, i) => i === index ? { ...p, ...updates } : p),
+    }));
+  };
+
+  const toggleCategory = (printerIndex: number, categoryId: string) => {
+    const printer = settings.printers[printerIndex];
+    const has = printer.categoryIds.includes(categoryId);
+    updatePrinter(printerIndex, {
+      categoryIds: has
+        ? printer.categoryIds.filter(id => id !== categoryId)
+        : [...printer.categoryIds, categoryId],
+    });
+  };
+
+  const handleTestPrint = async (printerName: string, type: string) => {
+    setTestResult('Gönderiliyor...');
+    let html = '';
+    if (type === 'receipt') {
+      html = buildReceiptHtml({
+        restaurantName: settings.restaurantName || 'ŞefPOS',
+        restaurantPhone: settings.restaurantPhone,
+        restaurantAddress: settings.restaurantAddress,
+        tableLabel: 'Masa 1',
+        orderNumber: 'TEST-001',
+        items: [
+          { productName: 'Test Ürün 1', quantity: 2, unitPrice: 25, totalAmount: 50 },
+          { productName: 'Test Ürün 2', quantity: 1, unitPrice: 15, totalAmount: 15, notes: 'Az baharatlı' },
+        ],
+        subtotal: 65,
+        taxAmount: 0,
+        discountAmount: 0,
+        total: 65,
+        footer: settings.receiptFooter,
+      });
+    } else {
+      html = buildKitchenHtml({
+        restaurantName: settings.restaurantName || 'ŞefPOS',
+        tableLabel: 'Masa 1',
+        orderNumber: 'TEST-001',
+        items: [
+          { productName: 'Test Ürün 1', quantity: 2 },
+          { productName: 'Test Ürün 2', quantity: 1, notes: 'Az baharatlı' },
+        ],
+      });
+    }
+
+    const result = await printHtml(html, printerName);
+    setTestResult(result.success ? 'Test fişi gönderildi!' : `Hata: ${result.error}`);
+    setTimeout(() => setTestResult(''), 4000);
+  };
+
+  const typeInfo = (type: string) => PRINTER_TYPES.find(t => t.value === type) || PRINTER_TYPES[3];
+
+  return (
+    <div className="space-y-5">
+      <div className="bg-gradient-to-r from-orange-500 to-red-600 rounded-xl p-4 md:p-6 text-white">
+        <div className="flex items-center gap-3 mb-2">
+          <Printer className="w-6 h-6" />
+          <h3 className="text-lg md:text-2xl font-bold">Yazıcı Ayarları</h3>
+        </div>
+        <p className="text-orange-50 text-sm">80mm termal yazıcılarınızı kategorilere göre yapılandırın. Sipariş eklendiğinde otomatik yazdırır.</p>
+      </div>
+
+      {!isElectron() && agentConnected === true && (
+        <div className="bg-green-50 border border-green-200 rounded-xl p-4 flex items-start gap-3">
+          <Wifi className="w-5 h-5 text-green-600 flex-shrink-0 mt-0.5" />
+          <div>
+            <p className="font-bold text-green-800">Print Agent Bağlı</p>
+            <p className="text-sm text-green-700">
+              {agentDetail?.includes('Supabase')
+                ? 'Yazma işleri Supabase Realtime kanalı üzerinden masaüstü uygulamaya iletilecek. HTTPS ortamında sorunsuz çalışır.'
+                : 'ŞefPOS masaüstü uygulaması arka planda çalışıyor. Web üzerinden yazıcılar kullanılabilir durumda.'
+              }
+            </p>
+          </div>
+        </div>
+      )}
+      {!isElectron() && agentConnected === false && agentStatus !== null && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 space-y-3">
+          <div className="flex items-start gap-3">
+            <WifiOff className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+            <div className="flex-1">
+              <p className="font-bold text-amber-800">Print Agent Bağlı Değil</p>
+              {agentStatus === 'blocked_mixed_content' ? (
+                <div className="mt-1 space-y-2">
+                  <p className="text-sm text-amber-700 font-semibold">Tarayıcı güvenlik politikası HTTP isteğini engelliyor (Mixed Content).</p>
+                  <p className="text-sm text-amber-700">Bu sayfa HTTPS üzerinden açıldığı için tarayıcı, HTTP üzerindeki Print Agent'a bağlanmayı reddediyor.</p>
+                  <div className="bg-amber-100 rounded-lg p-3 text-xs text-amber-800 space-y-1.5">
+                    <p className="font-bold">Çözüm seçenekleri:</p>
+                    <p>1. Chrome adres çubuğuna <code className="bg-amber-200 px-1 rounded">chrome://flags/#unsafely-treat-insecure-origin-as-secure</code> yaz, <code className="bg-amber-200 px-1 rounded">http://127.0.0.1:7878</code> ekle ve Chrome'u yeniden başlat.</p>
+                    <p>2. Siteyi HTTP üzerinden aç: <code className="bg-amber-200 px-1 rounded">http://</code> ile başlayan adresi kullan.</p>
+                    <p>3. ŞefPOS masaüstü uygulamasını kullan (HTTPS sorunu olmaz).</p>
+                  </div>
+                </div>
+              ) : agentStatus === 'not_running' ? (
+                <p className="text-sm text-amber-700 mt-1">Web üzerinden yazdırabilmek için bu bilgisayarda ŞefPOS masaüstü uygulamasının açık olması gerekir. Uygulama açıkken bağlantı otomatik kurulur (port 7878).</p>
+              ) : (
+                <p className="text-sm text-amber-700 mt-1">Bağlantı kurulamadı. {agentDetail && <span className="font-mono text-xs">({agentDetail})</span>}</p>
+              )}
+            </div>
+          </div>
+          <div className="flex items-center gap-3 pl-8">
+            <button
+              onClick={async () => {
+                setCheckingAgent(true);
+                const result = await checkPrintAgentDetailed();
+                setAgentConnected(result.connected);
+                setAgentStatus(result.status);
+                setAgentDetail(result.detail);
+                if (result.connected) fetchPrinters();
+                setCheckingAgent(false);
+              }}
+              disabled={checkingAgent}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white rounded-lg text-xs font-semibold transition"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${checkingAgent ? 'animate-spin' : ''}`} />
+              {checkingAgent ? 'Kontrol ediliyor...' : 'Tekrar Dene'}
+            </button>
+            <a
+              href="http://127.0.0.1:7878/status"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-xs text-amber-700 underline hover:text-amber-900"
+            >
+              Tarayıcıda test et
+            </a>
+          </div>
+        </div>
+      )}
+
+      <div className="bg-white rounded-xl border border-slate-200 p-4 md:p-6 space-y-4">
+        <h4 className="font-bold text-slate-800 text-base border-b border-slate-100 pb-3 flex items-center gap-2">
+          <Settings2 className="w-4 h-4 text-orange-500" /> Genel Yazdırma Ayarları
+        </h4>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label className="block text-xs font-bold text-slate-600 mb-1.5 uppercase tracking-wide">Restoran Adı (Fiş Başlığı)</label>
+            <input
+              type="text"
+              value={settings.restaurantName}
+              onChange={e => setSettings(p => ({ ...p, restaurantName: e.target.value }))}
+              className="w-full px-3 py-2.5 rounded-lg border border-slate-200 focus:ring-2 focus:ring-orange-400 focus:border-transparent outline-none text-sm"
+              placeholder="Restoran adı"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-bold text-slate-600 mb-1.5 uppercase tracking-wide">Telefon</label>
+            <input
+              type="text"
+              value={settings.restaurantPhone}
+              onChange={e => setSettings(p => ({ ...p, restaurantPhone: e.target.value }))}
+              className="w-full px-3 py-2.5 rounded-lg border border-slate-200 focus:ring-2 focus:ring-orange-400 focus:border-transparent outline-none text-sm"
+              placeholder="0212 xxx xx xx"
+            />
+          </div>
+        </div>
+        <div>
+          <label className="block text-xs font-bold text-slate-600 mb-1.5 uppercase tracking-wide">Adres</label>
+          <input
+            type="text"
+            value={settings.restaurantAddress ?? ''}
+            onChange={e => setSettings(p => ({ ...p, restaurantAddress: e.target.value }))}
+            className="w-full px-3 py-2.5 rounded-lg border border-slate-200 focus:ring-2 focus:ring-orange-400 focus:border-transparent outline-none text-sm"
+            placeholder="Restoran adresi (fişte görünür)"
+          />
+        </div>
+
+        <div>
+          <label className="block text-xs font-bold text-slate-600 mb-1.5 uppercase tracking-wide">Fiş Alt Yazısı</label>
+          <input
+            type="text"
+            value={settings.receiptFooter}
+            onChange={e => setSettings(p => ({ ...p, receiptFooter: e.target.value }))}
+            className="w-full px-3 py-2.5 rounded-lg border border-slate-200 focus:ring-2 focus:ring-orange-400 focus:border-transparent outline-none text-sm"
+            placeholder="Teşekkür ederiz, iyi günler!"
+          />
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label className="block text-xs font-bold text-slate-600 mb-1.5 uppercase tracking-wide">Varsayılan Kasa/Fiş Yazıcısı</label>
+            <select
+              value={settings.defaultReceiptPrinter}
+              onChange={e => setSettings(p => ({ ...p, defaultReceiptPrinter: e.target.value }))}
+              className="w-full px-3 py-2.5 rounded-lg border border-slate-200 focus:ring-2 focus:ring-orange-400 focus:border-transparent outline-none text-sm"
+            >
+              <option value="">Seçilmedi</option>
+              {availablePrinters.map(p => (
+                <option key={p.name} value={p.name}>{p.name}{p.isDefault ? ' (Varsayılan)' : ''}</option>
+              ))}
+              {availablePrinters.length === 0 && settings.defaultReceiptPrinter && (
+                <option value={settings.defaultReceiptPrinter}>{settings.defaultReceiptPrinter}</option>
+              )}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-bold text-slate-600 mb-1.5 uppercase tracking-wide">Varsayılan Paket/Kurye Yazıcısı</label>
+            <select
+              value={(settings as any).defaultTakeawayPrinter || ''}
+              onChange={e => setSettings(p => ({ ...p, defaultTakeawayPrinter: e.target.value }))}
+              className="w-full px-3 py-2.5 rounded-lg border border-slate-200 focus:ring-2 focus:ring-orange-400 focus:border-transparent outline-none text-sm"
+            >
+              <option value="">Seçilmedi (kasa yazıcısı kullanılır)</option>
+              {availablePrinters.map(p => (
+                <option key={p.name} value={p.name}>{p.name}{p.isDefault ? ' (Varsayılan)' : ''}</option>
+              ))}
+              {availablePrinters.length === 0 && (settings as any).defaultTakeawayPrinter && (
+                <option value={(settings as any).defaultTakeawayPrinter}>{(settings as any).defaultTakeawayPrinter}</option>
+              )}
+            </select>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="flex items-center justify-between bg-slate-50 rounded-xl p-3 border border-slate-100">
+            <div>
+              <p className="font-semibold text-slate-800 text-sm">Otomatik Mutfak Fişi</p>
+              <p className="text-xs text-slate-500">Sipariş eklendikçe mutfağa yaz</p>
+            </div>
+            <button onClick={() => setSettings(p => ({ ...p, autoPrintKitchen: !p.autoPrintKitchen }))}>
+              {settings.autoPrintKitchen
+                ? <ToggleRight className="w-10 h-10 text-orange-500" />
+                : <ToggleLeft className="w-10 h-10 text-slate-300" />
+              }
+            </button>
+          </div>
+          <div className="flex items-center justify-between bg-slate-50 rounded-xl p-3 border border-slate-100">
+            <div>
+              <p className="font-semibold text-slate-800 text-sm">Otomatik Müşteri Fişi</p>
+              <p className="text-xs text-slate-500">Ödeme alındığında otomatik yaz</p>
+            </div>
+            <button onClick={() => setSettings(p => ({ ...p, autoPrintReceipt: !p.autoPrintReceipt }))}>
+              {settings.autoPrintReceipt
+                ? <ToggleRight className="w-10 h-10 text-orange-500" />
+                : <ToggleLeft className="w-10 h-10 text-slate-300" />
+              }
+            </button>
+          </div>
+          <div className="flex items-center justify-between bg-slate-50 rounded-xl p-3 border border-slate-100">
+            <div>
+              <p className="font-semibold text-slate-800 text-sm">Otomatik Paket Fişi</p>
+              <p className="text-xs text-slate-500">Paket/kurye siparişinde yaz</p>
+            </div>
+            <button onClick={() => setSettings(p => ({ ...p, autoPrintTakeaway: !(p as any).autoPrintTakeaway }))}>
+              {(settings as any).autoPrintTakeaway !== false
+                ? <ToggleRight className="w-10 h-10 text-orange-500" />
+                : <ToggleLeft className="w-10 h-10 text-slate-300" />
+              }
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {categories.length > 0 && (
+        <div className="bg-white rounded-xl border border-slate-200 p-4 md:p-6 space-y-4">
+          <div className="border-b border-slate-100 pb-3">
+            <h4 className="font-bold text-slate-800 text-base flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 text-red-500" /> Kategori Yazdirma Kontrolu
+            </h4>
+            <p className="text-xs text-slate-500 mt-1">Kapali kategorilerin urunleri icin mutfak/bar ficsi cikmaz. Kasa ficsi etkilenmez.</p>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+            {categories.map(cat => {
+              const isDisabled = (settings.disabledCategoryIds || []).includes(cat.id);
+              return (
+                <button
+                  key={cat.id}
+                  onClick={() => {
+                    const current = settings.disabledCategoryIds || [];
+                    const updated = isDisabled ? current.filter(id => id !== cat.id) : [...current, cat.id];
+                    setSettings(p => ({ ...p, disabledCategoryIds: updated }));
+                  }}
+                  className={`flex items-center justify-between px-3 py-2.5 rounded-xl border text-sm font-medium transition-all ${
+                    isDisabled
+                      ? 'bg-red-50 border-red-200 text-red-700'
+                      : 'bg-green-50 border-green-200 text-green-700'
+                  }`}
+                >
+                  <span className="truncate">{cat.name}</span>
+                  {isDisabled
+                    ? <XCircle className="w-4 h-4 flex-shrink-0 ml-2" />
+                    : <CheckCircle className="w-4 h-4 flex-shrink-0 ml-2" />
+                  }
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      <div className="bg-white rounded-xl border border-slate-200 p-4 md:p-6 space-y-4">
+        <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+          <h4 className="font-bold text-slate-800 text-base flex items-center gap-2">
+            <Printer className="w-4 h-4 text-orange-500" /> Yazıcı Listesi
+          </h4>
+          <div className="flex gap-2">
+            {(isElectron() || agentConnected) && (
+              <button
+                onClick={fetchPrinters}
+                disabled={loadingPrinters}
+                className="flex items-center gap-1.5 px-3 py-1.5 border border-slate-200 rounded-lg hover:bg-slate-50 text-slate-600 text-xs font-semibold transition"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${loadingPrinters ? 'animate-spin' : ''}`} />
+                Yenile
+              </button>
+            )}
+            <button
+              onClick={() => setShowAddPrinter(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-orange-500 hover:bg-orange-600 text-white rounded-lg text-xs font-semibold transition"
+            >
+              <Plus className="w-3.5 h-3.5" /> Yazıcı Ekle
+            </button>
+          </div>
+        </div>
+
+        {availablePrinters.length > 0 && (
+          <div className="bg-slate-50 rounded-lg p-3 border border-slate-100">
+            <p className="text-xs font-bold text-slate-500 uppercase tracking-wide mb-2">Sisteme Kayıtlı Yazıcılar</p>
+            <div className="flex flex-wrap gap-2">
+              {availablePrinters.map(p => (
+                <span key={p.name} className={`px-2 py-1 rounded-lg text-xs font-medium border ${p.isDefault ? 'bg-blue-50 border-blue-200 text-blue-700' : 'bg-white border-slate-200 text-slate-600'}`}>
+                  {p.name}{p.isDefault ? ' ★' : ''}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {showAddPrinter && (
+          <div className="bg-slate-50 rounded-xl p-4 border border-slate-200 space-y-3">
+            <div className="flex items-center justify-between">
+              <h5 className="font-bold text-slate-700 text-sm">Yeni Yazıcı Ekle</h5>
+              <button onClick={() => setShowAddPrinter(false)} className="p-1 hover:bg-slate-200 rounded-lg transition">
+                <X className="w-4 h-4 text-slate-500" />
+              </button>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-bold text-slate-600 mb-1 uppercase tracking-wide">Yazıcı</label>
+                {availablePrinters.length > 0 ? (
+                  <select
+                    value={newPrinter.printerName}
+                    onChange={e => setNewPrinter(p => ({ ...p, printerName: e.target.value }))}
+                    className="w-full px-3 py-2 rounded-lg border border-slate-200 focus:ring-2 focus:ring-orange-400 focus:border-transparent outline-none text-sm"
+                  >
+                    <option value="">Yazıcı seçin</option>
+                    {availablePrinters.map(p => (
+                      <option key={p.name} value={p.name}>{p.name}{p.isDefault ? ' (Varsayılan)' : ''}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    type="text"
+                    value={newPrinter.printerName}
+                    onChange={e => setNewPrinter(p => ({ ...p, printerName: e.target.value }))}
+                    className="w-full px-3 py-2 rounded-lg border border-slate-200 focus:ring-2 focus:ring-orange-400 focus:border-transparent outline-none text-sm"
+                    placeholder="Yazıcı adını manuel girin"
+                  />
+                )}
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-600 mb-1 uppercase tracking-wide">Etiket</label>
+                <input
+                  type="text"
+                  value={newPrinter.label}
+                  onChange={e => setNewPrinter(p => ({ ...p, label: e.target.value }))}
+                  className="w-full px-3 py-2 rounded-lg border border-slate-200 focus:ring-2 focus:ring-orange-400 focus:border-transparent outline-none text-sm"
+                  placeholder="Örn: Mutfak Yazıcısı"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-600 mb-1 uppercase tracking-wide">Tür</label>
+                <select
+                  value={newPrinter.type}
+                  onChange={e => setNewPrinter(p => ({ ...p, type: e.target.value as any }))}
+                  className="w-full px-3 py-2 rounded-lg border border-slate-200 focus:ring-2 focus:ring-orange-400 focus:border-transparent outline-none text-sm"
+                >
+                  {PRINTER_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+                </select>
+              </div>
+            </div>
+            <div className="flex gap-2 justify-end">
+              <button onClick={() => setShowAddPrinter(false)} className="px-4 py-2 border border-slate-200 rounded-lg text-slate-600 text-sm hover:bg-slate-50 transition font-semibold">
+                İptal
+              </button>
+              <button onClick={addPrinter} disabled={!newPrinter.printerName} className="px-4 py-2 bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white rounded-lg text-sm font-semibold transition flex items-center gap-1.5">
+                <Plus className="w-3.5 h-3.5" /> Ekle
+              </button>
+            </div>
+          </div>
+        )}
+
+        {settings.printers.length === 0 ? (
+          <div className="text-center py-8 text-slate-400">
+            <Printer className="w-10 h-10 mx-auto mb-2 text-slate-200" />
+            <p className="text-sm font-medium">Henüz yazıcı eklenmedi</p>
+            <p className="text-xs mt-1">Sisteme bağlı yazıcıları yukarıdan ekleyin</p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {settings.printers.map((printer, index) => {
+              const tInfo = typeInfo(printer.type);
+              const isExpanded = expandedPrinter === index;
+              return (
+                <div key={index} className="border border-slate-200 rounded-xl overflow-hidden">
+                  <div className="flex items-center gap-3 px-4 py-3 bg-slate-50">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-bold text-slate-800 text-sm">{printer.label || printer.printerName}</span>
+                        <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${tInfo.color}`}>{tInfo.label}</span>
+                        {!printer.enabled && <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-red-100 text-red-600">Kapalı</span>}
+                      </div>
+                      <p className="text-xs text-slate-500 mt-0.5">{printer.printerName}</p>
+                      <p className="text-xs text-slate-400 mt-0.5">
+                        {printer.categoryIds.length === 0
+                          ? 'Tüm kategoriler'
+                          : printer.categoryIds.map(cid => categories.find(c => c.id === cid)?.name || cid).join(', ')
+                        }
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => handleTestPrint(printer.printerName, printer.type)}
+                        className="px-2 py-1.5 text-xs bg-blue-50 hover:bg-blue-100 text-blue-600 rounded-lg transition font-semibold"
+                      >
+                        Test
+                      </button>
+                      <button
+                        onClick={() => setExpandedPrinter(isExpanded ? null : index)}
+                        className="p-1.5 hover:bg-slate-200 rounded-lg transition"
+                      >
+                        <ChevronDown className={`w-4 h-4 text-slate-500 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+                      </button>
+                      <button
+                        onClick={() => removePrinter(index)}
+                        className="p-1.5 hover:bg-red-50 text-red-400 hover:text-red-600 rounded-lg transition"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+
+                  {isExpanded && (
+                    <div className="px-4 pb-4 pt-3 space-y-4 border-t border-slate-100 bg-white">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-xs font-bold text-slate-600 mb-1 uppercase tracking-wide">Etiket</label>
+                          <input
+                            type="text"
+                            value={printer.label}
+                            onChange={e => updatePrinter(index, { label: e.target.value })}
+                            className="w-full px-3 py-2 rounded-lg border border-slate-200 focus:ring-2 focus:ring-orange-400 focus:border-transparent outline-none text-sm"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-slate-600 mb-1 uppercase tracking-wide">Tür</label>
+                          <select
+                            value={printer.type}
+                            onChange={e => updatePrinter(index, { type: e.target.value as any })}
+                            className="w-full px-3 py-2 rounded-lg border border-slate-200 focus:ring-2 focus:ring-orange-400 focus:border-transparent outline-none text-sm"
+                          >
+                            {PRINTER_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+                          </select>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-between bg-slate-50 rounded-lg p-3">
+                        <p className="text-sm font-semibold text-slate-700">Yazıcı Aktif</p>
+                        <button onClick={() => updatePrinter(index, { enabled: !printer.enabled })}>
+                          {printer.enabled
+                            ? <ToggleRight className="w-9 h-9 text-orange-500" />
+                            : <ToggleLeft className="w-9 h-9 text-slate-300" />
+                          }
+                        </button>
+                      </div>
+
+                      <div>
+                        <div className="flex items-center gap-2 mb-2">
+                          <p className="text-xs font-bold text-slate-600 uppercase tracking-wide">Kategoriler</p>
+                          <span className="text-xs text-slate-400">(boş = tüm kategoriler)</span>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {categories.map(cat => {
+                            const selected = printer.categoryIds.includes(cat.id);
+                            return (
+                              <button
+                                key={cat.id}
+                                onClick={() => toggleCategory(index, cat.id)}
+                                className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition ${
+                                  selected
+                                    ? 'bg-orange-500 border-orange-500 text-white'
+                                    : 'bg-white border-slate-200 text-slate-600 hover:border-orange-300'
+                                }`}
+                              >
+                                {selected && <CheckCircle className="w-3 h-3 inline-block mr-1" />}
+                                {cat.name}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {testResult && (
+        <div className={`rounded-xl px-4 py-3 text-sm font-medium flex items-center gap-2 ${testResult.includes('Hata') ? 'bg-red-50 border border-red-200 text-red-700' : 'bg-green-50 border border-green-200 text-green-700'}`}>
+          {testResult.includes('Hata') ? <XCircle className="w-4 h-4 flex-shrink-0" /> : <CheckCircle className="w-4 h-4 flex-shrink-0" />}
+          {testResult}
+        </div>
+      )}
+
+      <button
+        onClick={handleSave}
+        className="flex items-center gap-2 bg-orange-500 hover:bg-orange-600 text-white px-6 py-2.5 rounded-xl font-semibold transition-all active:scale-95 shadow-md"
+      >
+        {saved ? <CheckCircle className="w-4 h-4" /> : <Save className="w-4 h-4" />}
+        {saved ? 'Kaydedildi!' : 'Ayarları Kaydet'}
+      </button>
+    </div>
+  );
+}

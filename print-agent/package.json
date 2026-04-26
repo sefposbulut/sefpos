@@ -1,0 +1,16 @@
+{
+  "name": "shefpos-print-agent",
+  "version": "1.0.0",
+  "description": "ShefPOS Print Agent - Web tarayici icin yazici koprusu",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "build": "pkg index.js --target node18-win-x64 --output ShefPOS-PrintAgent.exe --compress GZip"
+  },
+  "bin": "index.js",
+  "pkg": {
+    "targets": ["node18-win-x64"],
+    "outputPath": "dist",
+    "compress": "GZip"
+  }
+}
