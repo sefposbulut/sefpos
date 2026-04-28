@@ -80,7 +80,7 @@ interface AuthContextType {
   profileLoadFailed: boolean;
   isOwnerOrAdmin: boolean;
   signIn: (email: string, password: string) => Promise<{ error: any }>;
-  signUp: (email: string, password: string, fullName: string, tenantName: string) => Promise<{ error: any }>;
+  signUp: (email: string, password: string, fullName: string, tenantName: string, contactEmail?: string) => Promise<{ error: any }>;
   signOut: () => Promise<void>;
   refreshProfile: () => Promise<void>;
   refreshBranches: () => Promise<void>;
@@ -145,6 +145,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [permissions, setPermissions] = useState<UserPermissions>(DEFAULT_WAITER_PERMISSIONS);
   const [loading, setLoading] = useState(true);
   const [profileLoadFailed, setProfileLoadFailed] = useState(false);
+
+  const isProfileBlocked = (p: any) => p?.is_active === false;
+
+  const forceSignOutForBlockedProfile = async () => {
+    await supabase.auth.signOut();
+    localStorage.removeItem('shefpos_admin_tenant_impersonation');
+    setUser(null);
+    setProfile(null);
+    setTenant(null);
+    setBranches([]);
+    setActiveBranchState(null);
+    setPermissions(DEFAULT_WAITER_PERMISSIONS);
+  };
 
   const loadBranches = async (tenantId: string, prof: Profile) => {
     try {
@@ -332,17 +345,31 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
 
       const prof = profileData as unknown as ProfileWithRole;
-      setProfile(prof as unknown as Profile);
+      if (isProfileBlocked(prof)) {
+        await forceSignOutForBlockedProfile();
+        setProfileLoadFailed(true);
+        return;
+      }
+      const impersonatedTenantId = localStorage.getItem('shefpos_admin_tenant_impersonation');
+      const effectiveTenantId = (prof as any).is_super_admin && impersonatedTenantId
+        ? impersonatedTenantId
+        : prof.tenant_id;
+      const effectiveProfile = {
+        ...(prof as any),
+        tenant_id: effectiveTenantId,
+      } as unknown as ProfileWithRole;
+
+      setProfile(effectiveProfile as unknown as Profile);
 
       const { data: tenantData } = await supabase
         .from('tenants')
         .select('*')
-        .eq('id', prof.tenant_id)
+        .eq('id', effectiveTenantId)
         .maybeSingle();
 
       setTenant(tenantData as unknown as Tenant);
-      setPermissions(buildPermissionsFromRole(prof as unknown as Profile, prof.roles ?? null));
-      await loadBranches(prof.tenant_id, prof as unknown as Profile);
+      setPermissions(buildPermissionsFromRole(effectiveProfile as unknown as Profile, prof.roles ?? null));
+      await loadBranches(effectiveTenantId, effectiveProfile as unknown as Profile);
     } catch {
       setProfileLoadFailed(true);
     }
@@ -377,9 +404,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (data.user) {
       const { data: profileData } = await supabase
         .from('profiles')
-        .select('allowed_ips, role, tenant_id')
+        .select('*')
         .eq('id', data.user.id)
         .maybeSingle();
+
+      if (isProfileBlocked(profileData)) {
+        await forceSignOutForBlockedProfile();
+        return {
+          error: new Error('Bu kullanıcı hesabı pasif durumda. Yönetici ile görüşün.'),
+          blocked: true,
+        };
+      }
 
       if (profileData?.tenant_id) {
         const { data: tenantData } = await supabase
@@ -401,7 +436,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return { error: null };
   };
 
-  const signUp = async (email: string, password: string, fullName: string, tenantName: string) => {
+  const signUp = async (email: string, password: string, fullName: string, tenantName: string, contactEmail?: string) => {
     const { data, error } = await supabase.auth.signUp({
       email,
       password,
@@ -409,6 +444,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         data: {
           full_name: fullName,
           tenant_name: tenantName,
+          contact_email: contactEmail || null,
         },
       },
     });
@@ -429,6 +465,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     localStorage.removeItem('shefpos_active_branch');
     localStorage.removeItem('shefpos_remembered_login');
     localStorage.removeItem('device_binding_checked');
+    localStorage.removeItem('shefpos_admin_tenant_impersonation');
     setUser(null);
     setProfile(null);
     setTenant(null);
@@ -455,6 +492,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     setPrintAgentTenantId(tenant?.id ?? null);
   }, [tenant]);
+
+  useEffect(() => {
+    if (!user || isLocalMode() || isSqlServerMode()) return;
+    const timer = setInterval(async () => {
+      const { data } = await supabase
+        .from('profiles')
+        .select('is_active')
+        .eq('id', user.id)
+        .maybeSingle();
+      if ((data as any)?.is_active === false) {
+        await forceSignOutForBlockedProfile();
+      }
+    }, 30000);
+    return () => clearInterval(timer);
+  }, [user?.id]);
 
   const setActiveBranch = (branch: Branch) => {
     setActiveBranchState(branch);

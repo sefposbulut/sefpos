@@ -27,14 +27,14 @@ interface DeviceBinding {
   status: 'active' | 'inactive';
   registered_at: string;
   waiters?: {
-    full_name: string;
+    name: string;
     phone: string;
   };
 }
 
 interface Waiter {
   id: string;
-  full_name: string;
+  name: string;
   phone: string;
 }
 
@@ -57,7 +57,7 @@ interface BindingRequest {
   created_at: string;
   expires_at: string;
   waiters?: {
-    full_name: string;
+    name: string;
     phone: string;
   };
 }
@@ -70,11 +70,23 @@ export function DeviceManagement() {
   const [requests, setRequests] = useState<BindingRequest[]>([]);
   const [waiters, setWaiters] = useState<Waiter[]>([]);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'requests' | 'devices' | 'bindings' | 'logs'>('devices');
+  const [activeTab, setActiveTab] = useState<'requests' | 'devices' | 'bindings' | 'logs'>('requests');
   const [toggling, setToggling] = useState<string | null>(null);
   const [deviceId, setDeviceId] = useState('');
   const [waiterId, setWaiterId] = useState('');
   const [bindingError, setBindingError] = useState('');
+
+  const syncLegacyWaiterStatus = async (waiterId: string, status: 'active' | 'inactive') => {
+    if (!tenant?.id) return;
+    // Legacy-only table; ignore errors on schemas that only use profiles.
+    await supabase
+      .from('waiters')
+      .update({ status })
+      .eq('tenant_id', tenant.id)
+      .eq('id', waiterId)
+      .then(() => {})
+      .catch(() => {});
+  };
 
   const loadDevices = async () => {
     if (!tenant) return;
@@ -102,7 +114,7 @@ export function DeviceManagement() {
         .from('device_bindings')
         .select(`
           *,
-          waiters(full_name, phone)
+          waiters(name, phone)
         `)
         .eq('tenant_id', tenant.id)
         .order('registered_at', { ascending: false });
@@ -119,14 +131,31 @@ export function DeviceManagement() {
     try {
       const { data, error } = await supabase
         .from('waiters')
-        .select('id, full_name, phone')
+        .select('id, name, phone')
         .eq('tenant_id', tenant.id)
-        .order('full_name', { ascending: true });
+        .order('name', { ascending: true });
 
       if (error) throw error;
       setWaiters((data || []) as any);
     } catch (e) {
-      console.error('Error loading waiters:', e);
+      // Newer schemas may not have `waiters`; fall back to `profiles`.
+      try {
+        const { data: profileWaiters, error: profileErr } = await supabase
+          .from('profiles')
+          .select('id, full_name, phone, role')
+          .eq('tenant_id', tenant.id)
+          .in('role', ['waiter', 'courier']);
+
+        if (profileErr) throw profileErr;
+        const mapped = (profileWaiters || []).map((p: any) => ({
+          id: p.id,
+          name: p.full_name || (p.phone ? `Garson (${p.phone})` : 'Garson'),
+          phone: p.phone || '',
+        }));
+        setWaiters(mapped);
+      } catch (fallbackErr) {
+        console.error('Error loading waiters/profiles:', fallbackErr);
+      }
     }
   };
 
@@ -137,7 +166,7 @@ export function DeviceManagement() {
         .from('device_binding_requests')
         .select(`
           *,
-          waiters(full_name, phone)
+          waiters(name, phone)
         `)
         .eq('tenant_id', tenant.id)
         .eq('status', 'pending')
@@ -155,6 +184,13 @@ export function DeviceManagement() {
     if (!tenant) return;
     setToggling(requestId);
     try {
+      const { data: reqData, error: reqErr } = await supabase
+        .from('device_binding_requests')
+        .select('device_info')
+        .eq('id', requestId)
+        .maybeSingle();
+      if (reqErr) throw reqErr;
+
       // Update request to accepted
       const { error: updateError } = await supabase
         .from('device_binding_requests')
@@ -163,17 +199,32 @@ export function DeviceManagement() {
 
       if (updateError) throw updateError;
 
-      // Create device binding
-      const { error: bindError } = await supabase
+      // Create-or-activate device binding (idempotent for unique_waiter_device)
+      const { data: existingBinding, error: existingErr } = await supabase
         .from('device_bindings')
-        .insert({
-          device_id: deviceId,
-          waiter_id: waiterId,
-          tenant_id: tenant.id,
-          status: 'active',
-        });
+        .select('id, status')
+        .eq('waiter_id', waiterId)
+        .eq('device_id', deviceId)
+        .maybeSingle();
+      if (existingErr) throw existingErr;
 
-      if (bindError) throw bindError;
+      if (existingBinding?.id) {
+        const { error: activateErr } = await supabase
+          .from('device_bindings')
+          .update({ status: 'active', tenant_id: tenant.id })
+          .eq('id', existingBinding.id);
+        if (activateErr) throw activateErr;
+      } else {
+        const { error: bindError } = await supabase
+          .from('device_bindings')
+          .insert({
+            device_id: deviceId,
+            waiter_id: waiterId,
+            tenant_id: tenant.id,
+            status: 'active',
+          });
+        if (bindError) throw bindError;
+      }
 
       await loadRequests();
       await loadBindings();
@@ -269,30 +320,103 @@ export function DeviceManagement() {
     if (!confirm('Bu cihaz bağlamasını kaldırmak istediğinizden emin misiniz?')) return;
 
     try {
-      const { error } = await supabase
+      const binding = bindings.find(b => b.id === id);
+      let query = supabase
         .from('device_bindings')
         .delete()
-        .eq('id', id);
+        .eq('tenant_id', tenant?.id || '');
+
+      // Delete all duplicate rows for same waiter/device pair to prevent resurrection.
+      if (binding?.waiter_id && binding?.device_id) {
+        query = query.eq('waiter_id', binding.waiter_id).eq('device_id', binding.device_id);
+      } else {
+        query = query.eq('id', id);
+      }
+
+      const { error } = await query;
 
       if (error) throw error;
+
+      // If waiter has no more active devices, mark waiter inactive.
+      if (binding?.waiter_id && tenant?.id) {
+        const { data: activeForWaiter } = await supabase
+          .from('device_bindings')
+          .select('id')
+          .eq('tenant_id', tenant.id)
+          .eq('waiter_id', binding.waiter_id)
+          .eq('status', 'active')
+          .limit(1);
+
+        if (!activeForWaiter || activeForWaiter.length === 0) {
+          await syncLegacyWaiterStatus(binding.waiter_id, 'inactive');
+        }
+      }
+
       await loadBindings();
+      await loadWaiters();
     } catch (e) {
       console.error('Error deleting binding:', e);
+      alert((e as Error).message || 'Bağlama silinemedi');
     }
   };
 
   const toggleBindingStatus = async (id: string, currentStatus: string) => {
     setToggling(id);
     try {
-      const { error } = await supabase
+      const nextStatus = currentStatus === 'active' ? 'inactive' : 'active';
+      const binding = bindings.find(b => b.id === id);
+      let query = supabase
         .from('device_bindings')
-        .update({ status: currentStatus === 'active' ? 'inactive' : 'active' })
-        .eq('id', id);
+        .update({ status: nextStatus })
+        .eq('tenant_id', tenant?.id || '');
+
+      // Update all duplicate rows for same waiter/device pair.
+      if (binding?.waiter_id && binding?.device_id) {
+        query = query.eq('waiter_id', binding.waiter_id).eq('device_id', binding.device_id);
+      } else {
+        query = query.eq('id', id);
+      }
+
+      const { error } = await query;
 
       if (error) throw error;
+
+      // When disabling, also close device requests so approval polling can't resurrect access.
+      if (nextStatus === 'inactive' && binding?.waiter_id && tenant?.id) {
+        await supabase
+          .from('device_binding_requests')
+          .update({ status: 'rejected' })
+          .eq('tenant_id', tenant.id)
+          .eq('waiter_id', binding.waiter_id)
+          .eq('device_id', binding.device_id)
+          .in('status', ['pending', 'accepted']);
+      }
+
+      // Keep waiter status synchronized with binding state.
+      if (binding?.waiter_id && tenant?.id) {
+        if (nextStatus === 'active') {
+          await syncLegacyWaiterStatus(binding.waiter_id, 'active');
+        } else {
+          const { data: activeForWaiter } = await supabase
+            .from('device_bindings')
+            .select('id')
+            .eq('tenant_id', tenant.id)
+            .eq('waiter_id', binding.waiter_id)
+            .eq('status', 'active')
+            .neq('id', id)
+            .limit(1);
+
+          if (!activeForWaiter || activeForWaiter.length === 0) {
+            await syncLegacyWaiterStatus(binding.waiter_id, 'inactive');
+          }
+        }
+      }
+
       await loadBindings();
+      await loadWaiters();
     } catch (e) {
       console.error('Error toggling binding:', e);
+      alert((e as Error).message || 'Durum güncellenemedi');
     } finally {
       setToggling(null);
     }
@@ -316,12 +440,14 @@ export function DeviceManagement() {
       const { error } = await supabase
         .from('device_registrations')
         .update({ is_active: !currentStatus })
-        .eq('id', deviceId);
+        .eq('id', deviceId)
+        .eq('tenant_id', tenant?.id || '');
 
       if (error) throw error;
       await loadDevices();
     } catch (e) {
       console.error('Error toggling device:', e);
+      alert((e as Error).message || 'Cihaz durumu güncellenemedi');
     } finally {
       setToggling(null);
     }
@@ -334,12 +460,14 @@ export function DeviceManagement() {
       const { error } = await supabase
         .from('device_registrations')
         .delete()
-        .eq('id', deviceId);
+        .eq('id', deviceId)
+        .eq('tenant_id', tenant?.id || '');
 
       if (error) throw error;
       await loadDevices();
     } catch (e) {
       console.error('Error deleting device:', e);
+      alert((e as Error).message || 'Cihaz silinemedi');
     }
   };
 
@@ -392,6 +520,17 @@ export function DeviceManagement() {
   return (
     <div className="space-y-6">
       <div className="flex gap-2 border-b border-slate-200 overflow-x-auto">
+        <button
+          onClick={() => setActiveTab('requests')}
+          className={`px-4 py-3 font-medium transition border-b-2 whitespace-nowrap ${
+            activeTab === 'requests'
+              ? 'border-orange-500 text-orange-600'
+              : 'border-transparent text-slate-600 hover:text-slate-900'
+          }`}
+        >
+          <Key className="w-4 h-4 inline mr-2" />
+          İstekler ({requests.length})
+        </button>
         <button
           onClick={() => setActiveTab('devices')}
           className={`px-4 py-3 font-medium transition border-b-2 whitespace-nowrap ${
@@ -450,7 +589,7 @@ export function DeviceManagement() {
                         </div>
                         <div>
                           <p className="font-semibold text-slate-900">
-                            {req.waiters?.full_name || 'Bilinmeyen Garson'}
+                            {req.waiters?.name || 'Bilinmeyen Garson'}
                           </p>
                           <p className="text-sm text-slate-500">
                             {req.waiters?.phone || ''}
@@ -610,7 +749,7 @@ export function DeviceManagement() {
                   <option value="">-- Garson Seçin --</option>
                   {waiters.map((waiter) => (
                     <option key={waiter.id} value={waiter.id}>
-                      {waiter.full_name} ({waiter.phone})
+                      {waiter.name} ({waiter.phone})
                     </option>
                   ))}
                 </select>
@@ -677,7 +816,7 @@ export function DeviceManagement() {
                           </span>
                         </div>
                         <div className="text-sm font-medium text-slate-700">
-                          Garson: {binding.waiters?.full_name || 'Bilinmiyor'}
+                          Garson: {binding.waiters?.name || 'Bilinmiyor'}
                         </div>
                         <div className="text-xs text-slate-500">
                           Bağlanma: {formatDate(binding.registered_at)}

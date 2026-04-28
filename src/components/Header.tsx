@@ -40,11 +40,27 @@ export function Header({ onOpenSettings, onOpenAdmin, onOpenOnboarding }: Header
   const [showNotifications, setShowNotifications] = useState(false);
   const [tickets, setTickets] = useState<Notification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
+  const [systemUnreadCount, setSystemUnreadCount] = useState(0);
   const [supportSubject, setSupportSubject] = useState('');
   const [supportMessage, setSupportMessage] = useState('');
   const [supportPriority, setSupportPriority] = useState<'low' | 'medium' | 'high'>('medium');
   const [supportLoading, setSupportLoading] = useState(false);
   const [supportSent, setSupportSent] = useState(false);
+
+  const trialInfo = (() => {
+    if (!tenant || tenant.subscription_status !== 'trial') return null;
+    const now = Date.now();
+    const trialEndMs = tenant.subscription_expires_at
+      ? new Date(tenant.subscription_expires_at).getTime()
+      : (new Date(tenant.created_at).getTime() + (3 * 24 * 60 * 60 * 1000));
+    if (!Number.isFinite(trialEndMs)) return null;
+    const remainingMs = trialEndMs - now;
+    const remainingDays = Math.max(0, Math.ceil(remainingMs / (24 * 60 * 60 * 1000)));
+    return {
+      remainingDays,
+      expired: remainingMs <= 0,
+    };
+  })();
 
   useEffect(() => {
     if (!isElectron) return;
@@ -57,6 +73,60 @@ export function Header({ onOpenSettings, onOpenAdmin, onOpenOnboarding }: Header
     if (!tenant || !user) return;
     loadTickets();
   }, [tenant, user]);
+
+  useEffect(() => {
+    if (!tenant || !user) return;
+
+    const unreadKey = `notif_unread_${tenant.id}`;
+    const dismissedKey = `notif_dismissed_${tenant.id}`;
+    const sessionStartKey = `notif_session_start_${tenant.id}_${user.id}`;
+    const sessionStart = localStorage.getItem(sessionStartKey) || new Date().toISOString();
+    localStorage.setItem(sessionStartKey, sessionStart);
+    const stored = JSON.parse(localStorage.getItem(unreadKey) || '[]') as string[];
+    const dismissed = new Set(JSON.parse(localStorage.getItem(dismissedKey) || '[]') as string[]);
+    setSystemUnreadCount(stored.filter(id => !dismissed.has(id)).length);
+
+    supabase
+      .from('support_notifications')
+      .select('id, tenant_id, created_at, type')
+      .or(`tenant_id.eq.${tenant.id},tenant_id.is.null`)
+      .gte('created_at', sessionStart)
+      .order('created_at', { ascending: false })
+      .limit(100)
+      .then(({ data }) => {
+        const incoming = (data || [])
+          .filter((d: any) => d.type !== 'revoke')
+          .map((d: any) => d.id)
+          .filter((id: string) => !dismissed.has(id));
+        const current = new Set(stored.filter(id => !dismissed.has(id)));
+        incoming.forEach((id: string) => current.add(id));
+        localStorage.setItem(unreadKey, JSON.stringify(Array.from(current).slice(-300)));
+        setSystemUnreadCount(current.size);
+      });
+
+    const channel = supabase
+      .channel(`header-system-notifs-${tenant.id}`)
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'support_notifications',
+      }, (payload) => {
+        const n = payload.new as any;
+        if (n.tenant_id && n.tenant_id !== tenant.id) return;
+        if (n.type === 'revoke') return;
+        if (n.created_at && n.created_at < sessionStart) return;
+        if (dismissed.has(n.id)) return;
+        const current = new Set(JSON.parse(localStorage.getItem(unreadKey) || '[]') as string[]);
+        current.add(n.id);
+        localStorage.setItem(unreadKey, JSON.stringify(Array.from(current).slice(-300)));
+        setSystemUnreadCount(current.size);
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [tenant?.id, user?.id]);
 
   const loadTickets = async () => {
     if (!tenant) return;
@@ -100,6 +170,11 @@ export function Header({ onOpenSettings, onOpenAdmin, onOpenOnboarding }: Header
     setTimeout(() => setSupportSent(false), 3000);
   };
 
+  const totalUnread = unreadCount + systemUnreadCount;
+  const userLabel = profile?.role === 'waiter'
+    ? `Garson: ${profile?.full_name || user?.email?.split('@')[0] || 'Kullanıcı'}`
+    : (profile?.full_name || user?.email?.split('@')[0] || 'Kullanıcı');
+
   return (
     <>
       <header className="fixed top-0 left-0 right-0 bg-white shadow-sm border-b border-slate-200 z-30">
@@ -109,6 +184,13 @@ export function Header({ onOpenSettings, onOpenAdmin, onOpenOnboarding }: Header
               <img src={logoSrc} alt="ŞefPOS" className="hidden md:block md:h-12 md:w-auto md:rounded-none object-contain flex-shrink-0" />
               <div className="hidden md:block">
                 <p className="text-xs text-slate-500">{tenant?.name}</p>
+                {trialInfo && (
+                  <p className={`text-[11px] font-semibold mt-0.5 ${trialInfo.expired ? 'text-red-600' : 'text-amber-600'}`}>
+                    {trialInfo.expired
+                      ? 'Deneme suresi doldu'
+                      : `Deneme suresi: ${trialInfo.remainingDays} gun`}
+                  </p>
+                )}
               </div>
             </div>
 
@@ -179,10 +261,10 @@ export function Header({ onOpenSettings, onOpenAdmin, onOpenOnboarding }: Header
                 </div>
               )}
 
-              <div className="hidden md:flex items-center space-x-2 px-3 py-1.5 bg-slate-50 rounded-lg">
+              <div className="flex items-center space-x-2 px-2.5 py-1.5 md:px-3 bg-slate-50 rounded-lg max-w-[160px] md:max-w-[240px]">
                 <User className="w-4 h-4 text-slate-500" />
                 <div>
-                  <p className="text-sm font-medium text-slate-700">{profile?.full_name}</p>
+                  <p className="text-xs md:text-sm font-medium text-slate-700 truncate">{userLabel}</p>
                   <p className="text-xs text-slate-500">{roleLabels[profile?.role || ''] || profile?.role}</p>
                 </div>
               </div>
@@ -209,14 +291,24 @@ export function Header({ onOpenSettings, onOpenAdmin, onOpenOnboarding }: Header
               )}
 
               <button
-                onClick={() => { setShowNotifications(!showNotifications); setShowSupport(false); loadTickets(); }}
+                onClick={() => {
+                  const next = !showNotifications;
+                  setShowNotifications(next);
+                  setShowSupport(false);
+                  loadTickets();
+                  if (next && tenant?.id) {
+                    const unreadKey = `notif_unread_${tenant.id}`;
+                    localStorage.removeItem(unreadKey);
+                    setSystemUnreadCount(0);
+                  }
+                }}
                 className="relative p-1.5 md:p-2 text-slate-600 hover:text-slate-900 rounded-lg hover:bg-slate-100 transition-all active:scale-95"
                 title="Bildirimler"
               >
                 <Bell className="w-4 h-4 md:w-5 md:h-5" />
-                {unreadCount > 0 && (
+                {totalUnread > 0 && (
                   <span className="absolute -top-0.5 -right-0.5 w-4 h-4 bg-red-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center">
-                    {unreadCount > 9 ? '9+' : unreadCount}
+                    {totalUnread > 9 ? '9+' : totalUnread}
                   </span>
                 )}
               </button>
@@ -380,6 +472,20 @@ export function Header({ onOpenSettings, onOpenAdmin, onOpenOnboarding }: Header
                 <Send className="w-4 h-4" />
                 {supportLoading ? 'Gönderiliyor...' : 'Gönder'}
               </button>
+
+              <div className="pt-2 border-t border-slate-200">
+                <p className="text-xs font-bold text-slate-500 mb-2 uppercase tracking-wide">Destek Yanıtları</p>
+                <div className="max-h-36 overflow-y-auto space-y-2">
+                  {tickets.filter(t => t.admin_reply).length === 0 ? (
+                    <p className="text-xs text-slate-400">Henüz destek yanıtı yok</p>
+                  ) : tickets.filter(t => t.admin_reply).map(t => (
+                    <div key={t.id} className="bg-slate-50 border border-slate-200 rounded-lg p-2.5">
+                      <p className="text-[11px] font-semibold text-slate-700 truncate">{t.subject}</p>
+                      <p className="text-xs text-slate-600 mt-1 line-clamp-2">{t.admin_reply}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
             </div>
           </div>
         </>

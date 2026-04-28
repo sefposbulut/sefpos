@@ -85,7 +85,7 @@ class QueryCache {
     const promise = Promise.all([
       supabase
         .from('products')
-        .select('id, name, price, category_id, is_active, image_url, barcode, printer_name')
+        .select('id, name, price, cost, category_id, is_active, image_url, barcode, printer_name, unit, stock_quantity, tax_rate, scale_enabled')
         .eq('tenant_id', tenantId)
         .eq('is_active', true),
       supabase

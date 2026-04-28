@@ -2,24 +2,15 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { sqlDb, localDb, isSqlServerMode, isLocalMode } from './sqlDb';
 
 const isElectronRuntime = !!(window as any).electronAPI;
-const envSupabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-const envSupabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
-
-try {
-  if (envSupabaseUrl) localStorage.setItem('shefpos_db_url', envSupabaseUrl);
-  if (envSupabaseAnonKey) localStorage.setItem('shefpos_db_anon_key', envSupabaseAnonKey);
-} catch {
-  // localStorage may be unavailable in rare runtime contexts
-}
 
 const supabaseUrl =
-  envSupabaseUrl ||
   (isElectronRuntime ? localStorage.getItem('shefpos_db_url') : null) ||
+  import.meta.env.VITE_SUPABASE_URL ||
   'https://placeholder.supabase.co';
 
 const supabaseAnonKey =
-  envSupabaseAnonKey ||
   (isElectronRuntime ? localStorage.getItem('shefpos_db_anon_key') : null) ||
+  import.meta.env.VITE_SUPABASE_ANON_KEY ||
   'placeholder-key';
 
 if (!import.meta.env.VITE_SUPABASE_URL && !localStorage.getItem('shefpos_db_url')) {

@@ -2,14 +2,20 @@ import { supabase } from './supabase';
 
 // Get device binding code - ALWAYS unique per device, NOT stored
 export function getDeviceBindingCode(): string {
-  // Generate a UNIQUE code based on browser fingerprint + timestamp
-  // This ensures each browser/device gets a unique code every time
-  const fingerprint = getBrowserFingerprint();
-  const timestamp = Date.now().toString(36).slice(-4).toUpperCase();
-  const random = Math.random().toString(36).slice(2, 4).toUpperCase();
+  // One-time per device/browser code (persistent)
+  const key = 'waiter_device_code';
+  const existing = localStorage.getItem(key);
+  if (existing && existing.length === 6) return existing.toUpperCase();
 
-  // Combine: FP (2) + TS (4) = 6 chars, always different for different devices
-  return `${fingerprint}${timestamp}${random}`.slice(0, 6).toUpperCase();
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  const fingerprint = getBrowserFingerprint(); // first 2 chars stay stable
+  let randomPart = '';
+  for (let i = 0; i < 4; i++) {
+    randomPart += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  const code = `${fingerprint}${randomPart}`.slice(0, 6).toUpperCase();
+  localStorage.setItem(key, code);
+  return code;
 }
 
 // Get browser fingerprint (persistent per browser)

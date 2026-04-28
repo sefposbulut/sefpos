@@ -24,7 +24,7 @@ const defaultConfig: SqlServerConfig = {
   port: '1433',
   database: 'sefpos45',
   username: 'sa',
-  password: '',
+  password: '1578',
   encrypt: false,
   trustServerCertificate: true,
 };
@@ -40,6 +40,7 @@ function SqlServerForm({ onSave, onBack, onClose, showBack = true, inline = fals
   const [importStatus, setImportStatus] = useState<'idle' | 'importing' | 'ok' | 'error'>('idle');
   const [importMessage, setImportMessage] = useState('');
   const [activeMode, setActiveMode] = useState<string | null>(null);
+  const isPostgresMode = activeMode === 'postgres';
 
   useEffect(() => {
     const api = (window as any).electronAPI;
@@ -70,8 +71,9 @@ function SqlServerForm({ onSave, onBack, onClose, showBack = true, inline = fals
         await api.setSqlServerConfig(config);
       }
       if (api?.setDbMode) {
-        await api.setDbMode('sqlserver');
-        setActiveMode('sqlserver');
+        const targetMode = isPostgresMode ? 'postgres' : 'sqlserver';
+        await api.setDbMode(targetMode);
+        setActiveMode(targetMode);
       }
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
@@ -90,6 +92,23 @@ function SqlServerForm({ onSave, onBack, onClose, showBack = true, inline = fals
     setImportStatus('importing');
     setImportMessage('');
     const api = (window as any).electronAPI;
+    if (isPostgresMode) {
+      if (!api?.postgresInitDatabase) {
+        setImportStatus('error');
+        setImportMessage('PostgreSQL kurulum özelliği bu sürümde yok.');
+        return;
+      }
+      const result = await api.postgresInitDatabase(config);
+      if (result.success) {
+        setImportStatus('ok');
+        setImportMessage(result.output || 'PostgreSQL veritabanı hazırlandı.');
+      } else {
+        setImportStatus('error');
+        setImportMessage(result.error || 'Kurulum başarısız oldu.');
+      }
+      return;
+    }
+
     if (!api?.importSqlServerSchema) {
       setImportStatus('error');
       setImportMessage('Bu özellik sadece Electron uygulamasında çalışır.');
@@ -114,15 +133,16 @@ function SqlServerForm({ onSave, onBack, onClose, showBack = true, inline = fals
     setTestStatus('testing');
     setTestMessage('');
     const api = (window as any).electronAPI;
-    if (!api?.sqlTestConnection) {
+    const testFn = isPostgresMode ? api?.postgresTestConnection : api?.sqlTestConnection;
+    if (!testFn) {
       setTestStatus('error');
       setTestMessage('Bu özellik sadece Electron uygulamasında çalışır.');
       return;
     }
-    const result = await api.sqlTestConnection(config);
+    const result = await testFn(config);
     if (result.success) {
       setTestStatus('ok');
-      setTestMessage(`Bağlantı başarılı! (TDS ${result.tdsVersion || 'varsayılan'})`);
+      setTestMessage(isPostgresMode ? 'PostgreSQL bağlantısı başarılı.' : `Bağlantı başarılı! (TDS ${result.tdsVersion || 'varsayılan'})`);
     } else {
       setTestStatus('error');
       setTestMessage(result.error || 'Bağlantı başarısız');
@@ -147,12 +167,12 @@ function SqlServerForm({ onSave, onBack, onClose, showBack = true, inline = fals
 
   return (
     <div className={inline ? '' : 'w-full max-w-lg'}>
-      {activeMode === 'sqlserver' && (
+      {(activeMode === 'sqlserver' || activeMode === 'postgres') && (
         <div className={`flex items-center gap-3 rounded-xl px-4 py-3 mb-4 ${inline ? 'bg-emerald-50 border-2 border-emerald-200' : 'bg-emerald-500/15 border border-emerald-500/30'}`}>
           <div className={`w-2.5 h-2.5 rounded-full animate-pulse flex-shrink-0 ${inline ? 'bg-emerald-500' : 'bg-emerald-400'}`} />
           <div>
-            <p className={`text-sm font-bold ${inline ? 'text-emerald-800' : 'text-emerald-300'}`}>SQL Server Modu Aktif</p>
-            <p className={`text-xs ${inline ? 'text-emerald-600' : 'text-emerald-400/80'}`}>Bu sistem yerel SQL Server veritabanına bağlı olarak çalışıyor.</p>
+            <p className={`text-sm font-bold ${inline ? 'text-emerald-800' : 'text-emerald-300'}`}>{isPostgresMode ? 'PostgreSQL Modu Aktif' : 'SQL Server Modu Aktif'}</p>
+            <p className={`text-xs ${inline ? 'text-emerald-600' : 'text-emerald-400/80'}`}>{isPostgresMode ? 'Bu sistem yerel PostgreSQL veritabanına bağlı olarak çalışıyor.' : 'Bu sistem yerel SQL Server veritabanına bağlı olarak çalışıyor.'}</p>
           </div>
         </div>
       )}
@@ -171,7 +191,7 @@ function SqlServerForm({ onSave, onBack, onClose, showBack = true, inline = fals
               <Server className="w-5 h-5 text-emerald-400" />
             </div>
             <div>
-              <h1 className="text-xl font-bold text-white">SQL Server Ayarları</h1>
+              <h1 className="text-xl font-bold text-white">{isPostgresMode ? 'PostgreSQL Ayarları' : 'SQL Server Ayarları'}</h1>
               <p className="text-slate-400 text-sm">Yerel veritabanı bağlantı bilgileri</p>
             </div>
           </div>
@@ -192,7 +212,7 @@ function SqlServerForm({ onSave, onBack, onClose, showBack = true, inline = fals
             <Server className="w-4 h-4 text-emerald-600" />
           </div>
           <div>
-            <h4 className="font-bold text-gray-800 text-sm">SQL Server Bağlantısı</h4>
+            <h4 className="font-bold text-gray-800 text-sm">{isPostgresMode ? 'PostgreSQL Bağlantısı' : 'SQL Server Bağlantısı'}</h4>
             <p className="text-xs text-gray-500">Yerel veritabanı bağlantı bilgileri</p>
           </div>
         </div>
@@ -216,7 +236,7 @@ function SqlServerForm({ onSave, onBack, onClose, showBack = true, inline = fals
               type="text"
               value={config.port}
               onChange={e => handleChange('port', e.target.value)}
-              placeholder="1433"
+              placeholder={isPostgresMode ? '5432' : '1433'}
               className={inputCls}
             />
           </div>
@@ -239,7 +259,7 @@ function SqlServerForm({ onSave, onBack, onClose, showBack = true, inline = fals
             type="text"
             value={config.username}
             onChange={e => handleChange('username', e.target.value)}
-            placeholder="sa"
+            placeholder={isPostgresMode ? 'postgres' : 'sa'}
             autoComplete="off"
             className={inputCls}
           />
@@ -335,8 +355,8 @@ function SqlServerForm({ onSave, onBack, onClose, showBack = true, inline = fals
             <p className={`text-xs font-bold uppercase tracking-wide mb-1 ${inline ? 'text-slate-500' : 'text-slate-400'}`}>
               Otomatik Kurulum
             </p>
-            <p className={`text-xs mb-3 ${inline ? 'text-slate-600' : 'text-slate-400'}`}>
-              Kaydet butonuna bastıktan sonra <strong>sefpos45</strong> veritabanını otomatik oluşturup şemayı içe aktarın.
+          <p className={`text-xs mb-3 ${inline ? 'text-slate-600' : 'text-slate-400'}`}>
+              Kaydet butonuna bastıktan sonra <strong>sefpos45</strong> veritabanını otomatik hazırlayın.
             </p>
 
             {importStatus !== 'idle' && (

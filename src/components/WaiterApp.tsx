@@ -1,12 +1,13 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
-import { LogOut, ChevronDown, Plus, Minus, Trash2, Check, X, AlertCircle, ShoppingCart } from 'lucide-react';
+import { LogOut, Plus, Minus, Check, X, AlertCircle, ShoppingCart, RefreshCw, Search, ArrowRightLeft } from 'lucide-react';
 
 interface WaiterSession {
   id: string;
   name: string;
   phone: string;
   tenant_id: string;
+  branch_id?: string | null;
   loginTime: string;
 }
 
@@ -16,6 +17,7 @@ interface RestaurantTable {
   status: 'available' | 'occupied' | 'reserved' | 'dirty';
   current_order_id: string | null;
   group_id: string;
+  branch_id: string | null;
 }
 
 interface TableGroup {
@@ -29,7 +31,7 @@ interface Product {
   id: string;
   name: string;
   price: number;
-  category_id: string;
+  category_id: string | null;
 }
 
 interface CartItem {
@@ -50,7 +52,11 @@ export function WaiterApp({ onLogout }: { onLogout: () => void }) {
   const [products, setProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<any[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  const [productSearch, setProductSearch] = useState('');
+  const [qtyMultiplier, setQtyMultiplier] = useState(1);
   const [cart, setCart] = useState<CartItem[]>([]);
+  const [cartOpen, setCartOpen] = useState(false);
+  const [moveTargetTableId, setMoveTargetTableId] = useState('');
   const [orderLoading, setOrderLoading] = useState(false);
 
   useEffect(() => {
@@ -58,22 +64,26 @@ export function WaiterApp({ onLogout }: { onLogout: () => void }) {
     if (saved) {
       const waiterSession = JSON.parse(saved);
       setSession(waiterSession);
-      loadTableGroups(waiterSession.tenant_id);
+      loadTableGroups(waiterSession.tenant_id, waiterSession.branch_id || null);
+      loadProducts(waiterSession.tenant_id, waiterSession.branch_id || null);
     }
   }, []);
 
-  const loadTableGroups = async (tenantId: string) => {
+  const loadTableGroups = async (tenantId: string, branchId?: string | null) => {
     try {
-      const { data: tables, error } = await supabase
+      let query = supabase
         .from('restaurant_tables')
-        .select('id, table_number, status, current_order_id, group_id, table_groups(id, name, prefix)')
+        .select('id, table_number, status, current_order_id, group_id, branch_id, table_groups(id, name, prefix)')
         .eq('tenant_id', tenantId)
         .order('table_number');
+      if (branchId) query = query.eq('branch_id', branchId);
+      const { data: tables, error } = await query;
 
       if (error) throw error;
 
       const grouped = new Map<string, TableGroup>();
       tables?.forEach((table: any) => {
+        if (!table.group_id || !table.table_groups?.id) return;
         const groupId = table.group_id;
         if (!grouped.has(groupId)) {
           grouped.set(groupId, {
@@ -89,6 +99,7 @@ export function WaiterApp({ onLogout }: { onLogout: () => void }) {
           status: table.status,
           current_order_id: table.current_order_id,
           group_id: groupId,
+          branch_id: table.branch_id || null,
         });
       });
 
@@ -106,40 +117,51 @@ export function WaiterApp({ onLogout }: { onLogout: () => void }) {
     }
   };
 
-  const loadProducts = async (tenantId: string) => {
+  const loadProducts = async (tenantId: string, _branchId?: string | null) => {
     try {
-      const { data: cats, error: catError } = await supabase
-        .from('categories')
-        .select('id, name')
-        .eq('tenant_id', tenantId)
-        .order('display_order');
+      const [catsRes, prodsRes] = await Promise.all([
+        supabase
+          .from('categories')
+          .select('id, name')
+          .eq('tenant_id', tenantId)
+          .order('sort_order'),
+        supabase
+          .from('products')
+          .select('id, name, price, category_id')
+          .eq('tenant_id', tenantId)
+          .eq('is_active', true)
+          .order('name'),
+      ]);
 
-      if (catError) throw catError;
-      setCategories(cats || []);
+      if (catsRes.error) throw catsRes.error;
+      if (prodsRes.error) throw prodsRes.error;
 
-      const { data: prods, error: prodError } = await supabase
-        .from('products')
-        .select('id, name, price, category_id')
-        .eq('tenant_id', tenantId)
-        .eq('is_active', true);
+      const safeCats = (catsRes.data || []).map((c: any) => ({ id: c.id, name: c.name }));
+      const safeProducts = (prodsRes.data || []).map((p: any) => ({
+        id: p.id,
+        name: p.name,
+        price: Number(p.price) || 0,
+        category_id: p.category_id || null,
+      }));
 
-      if (prodError) throw prodError;
-      setProducts(prods || []);
+      setCategories(safeCats);
+      setProducts(safeProducts);
 
-      if (cats && cats.length > 0) {
-        setSelectedCategory(cats[0].id);
-      }
+      setSelectedCategory(prev => {
+        if (prev === '__all__') return '__all__';
+        if (prev && safeCats.some((c: any) => c.id === prev)) return prev;
+        return '__all__';
+      });
     } catch (err) {
       console.error('Ürün yükleme hatası:', err);
+      setCategories([]);
+      setProducts([]);
     }
   };
 
   const handleTableClick = (table: RestaurantTable) => {
     setSelectedTable(table);
     setShowOrderPanel(true);
-    if (!products.length && session) {
-      loadProducts(session.tenant_id);
-    }
   };
 
   const handleAddToCart = (product: Product) => {
@@ -147,11 +169,11 @@ export function WaiterApp({ onLogout }: { onLogout: () => void }) {
     if (existingItem) {
       setCart(cart.map(item =>
         item.product.id === product.id
-          ? { ...item, quantity: item.quantity + 1 }
+          ? { ...item, quantity: item.quantity + qtyMultiplier }
           : item
       ));
     } else {
-      setCart([...cart, { product, quantity: 1 }]);
+      setCart([...cart, { product, quantity: qtyMultiplier }]);
     }
   };
 
@@ -181,12 +203,13 @@ export function WaiterApp({ onLogout }: { onLogout: () => void }) {
         .insert({
           table_id: selectedTable.id,
           tenant_id: session.tenant_id,
-          branch_id: selectedTable.id, // Will need to get actual branch_id
+          branch_id: selectedTable.branch_id || null,
           status: 'open',
           payment_status: 'unpaid',
-          total_price: cart.reduce((sum, item) => sum + (item.product.price * item.quantity), 0),
+          total_amount: cart.reduce((sum, item) => sum + (item.product.price * item.quantity), 0),
           order_type: 'dine_in',
-          user_id: session.id,
+          waiter_id: session.id,
+          waiter_name: session.name,
         })
         .select()
         .single();
@@ -217,12 +240,53 @@ export function WaiterApp({ onLogout }: { onLogout: () => void }) {
       setCart([]);
       setShowOrderPanel(false);
       setSelectedTable(null);
-      loadTableGroups(session.tenant_id);
+      loadTableGroups(session.tenant_id, session.branch_id || null);
     } catch (err: any) {
       console.error('Sipariş oluşturma hatası:', err);
       alert(err.message || 'Sipariş oluşturulamadı');
     } finally {
       setOrderLoading(false);
+    }
+  };
+
+  const handleMoveTable = async () => {
+    if (!selectedTable?.current_order_id) {
+      alert('Taşınacak aktif sipariş bulunamadı');
+      return;
+    }
+    if (!moveTargetTableId || moveTargetTableId === selectedTable.id) {
+      alert('Geçerli bir hedef masa seçin');
+      return;
+    }
+    const targetTable = tableGroups.flatMap(g => g.tables).find(t => t.id === moveTargetTableId);
+    if (!targetTable) {
+      alert('Hedef masa bulunamadı');
+      return;
+    }
+    if (targetTable.current_order_id || targetTable.status === 'occupied') {
+      alert('Hedef masa dolu, boş masa seçin');
+      return;
+    }
+
+    try {
+      const movedOrderId = selectedTable.current_order_id;
+      await supabase
+        .from('restaurant_tables')
+        .update({ current_order_id: movedOrderId, status: 'occupied' })
+        .eq('id', targetTable.id);
+
+      await supabase
+        .from('restaurant_tables')
+        .update({ current_order_id: null, status: 'available' })
+        .eq('id', selectedTable.id);
+
+      setMoveTargetTableId('');
+      setShowOrderPanel(false);
+      setSelectedTable(null);
+      await loadTableGroups(session!.tenant_id, session!.branch_id || null);
+      alert(`Sipariş masa ${selectedTable.table_number}'dan masa ${targetTable.table_number}'a taşındı`);
+    } catch (e: any) {
+      alert(e?.message || 'Masa taşıma başarısız');
     }
   };
 
@@ -232,9 +296,14 @@ export function WaiterApp({ onLogout }: { onLogout: () => void }) {
   };
 
   const currentGroup = tableGroups.find(g => g.id === selectedGroupId);
-  const filteredProducts = selectedCategory
+  const filteredProductsByCategory = selectedCategory && selectedCategory !== '__all__'
     ? products.filter(p => p.category_id === selectedCategory)
     : products;
+  const filteredProducts = filteredProductsByCategory.filter(p =>
+    !productSearch.trim() || p.name.toLowerCase().includes(productSearch.trim().toLowerCase())
+  );
+  const allTables = tableGroups.flatMap(g => g.tables);
+  const moveCandidates = allTables.filter(t => t.id !== selectedTable?.id && !t.current_order_id && t.status !== 'occupied');
 
   const cartTotal = cart.reduce((sum, item) => sum + (item.product.price * item.quantity), 0);
 
@@ -254,13 +323,15 @@ export function WaiterApp({ onLogout }: { onLogout: () => void }) {
       {/* Header */}
       <div className="bg-gradient-to-r from-orange-600 to-red-600 text-white">
         <div className="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold">{session.name}</h1>
-            <p className="text-orange-100 text-sm">{session.phone}</p>
+          <div className="min-w-0">
+            <h1 className="text-lg md:text-xl font-bold truncate">
+              Garson: <span className="font-black">{session.name}</span>
+            </h1>
+            <p className="text-orange-100 text-xs md:text-sm truncate">{session.phone}</p>
           </div>
           <button
             onClick={handleLogout}
-            className="flex items-center gap-2 px-4 py-2 bg-white/20 hover:bg-white/30 rounded-lg transition-colors"
+            className="flex items-center gap-2 px-4 py-2 bg-white/20 hover:bg-white/30 rounded-lg transition-colors font-semibold text-sm"
           >
             <LogOut className="w-4 h-4" />
             Çıkış
@@ -296,12 +367,12 @@ export function WaiterApp({ onLogout }: { onLogout: () => void }) {
 
               {/* Tables Grid */}
               {currentGroup && (
-                <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-4">
+                <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-3 md:gap-4">
                   {currentGroup.tables.map(table => (
                     <button
                       key={table.id}
                       onClick={() => handleTableClick(table)}
-                      className={`aspect-square rounded-lg font-bold text-white transition-all transform hover:scale-105 flex flex-col items-center justify-center ${
+                      className={`aspect-square rounded-2xl font-black text-white transition-all transform hover:scale-[1.02] shadow-lg hover:shadow-xl flex flex-col items-center justify-center ${
                         table.status === 'occupied'
                           ? 'bg-orange-600 hover:bg-orange-700'
                           : table.status === 'reserved'
@@ -325,65 +396,165 @@ export function WaiterApp({ onLogout }: { onLogout: () => void }) {
         </div>
       ) : (
         /* Order Panel */
-        <div className="max-w-7xl mx-auto px-4 py-8">
+        <div className="max-w-7xl mx-auto px-4 py-6">
           <button
             onClick={() => {
               setShowOrderPanel(false);
               setSelectedTable(null);
               setCart([]);
             }}
-            className="text-white hover:text-orange-400 transition-colors font-semibold mb-6 flex items-center gap-2"
+            className="text-slate-600 hover:text-orange-600 transition-colors font-semibold mb-6 flex items-center gap-2"
           >
             ← Masalara Dön
           </button>
 
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            {/* Products */}
-            <div className="lg:col-span-2 space-y-4">
+          <div className="grid grid-cols-1 gap-6 pb-28">
+            <div className="space-y-4">
               <div className="bg-white rounded-lg p-4">
                 <h2 className="text-xl font-bold text-slate-900 mb-4">
                   Masa {selectedTable?.table_number} Sipariş Oluştur
                 </h2>
 
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+                  <div className="relative">
+                    <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      value={productSearch}
+                      onChange={(e) => setProductSearch(e.target.value)}
+                      placeholder="Ürün ara..."
+                      className="w-full pl-9 pr-3 py-2.5 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-orange-400 text-sm"
+                    />
+                  </div>
+                  <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
+                    {[1,2,3,4,5,6,7,8,9,10].map(n => (
+                      <button
+                        key={n}
+                        onClick={() => setQtyMultiplier(n)}
+                        className={`min-w-8 h-8 rounded-md text-xs font-bold border ${qtyMultiplier === n ? 'bg-orange-600 text-white border-orange-600' : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'}`}
+                      >
+                        x{n}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
                 {/* Categories */}
                 <div className="flex gap-2 mb-4 overflow-x-auto pb-2">
-                  {categories.map(cat => (
-                    <button
-                      key={cat.id}
-                      onClick={() => setSelectedCategory(cat.id)}
-                      className={`px-4 py-2 rounded-lg font-semibold whitespace-nowrap transition-colors ${
-                        selectedCategory === cat.id
-                          ? 'bg-orange-600 text-white'
-                          : 'bg-slate-100 text-slate-900 hover:bg-slate-200'
-                      }`}
-                    >
-                      {cat.name}
-                    </button>
-                  ))}
+                  {categories.length === 0 ? (
+                    <div className="flex items-center gap-2 text-sm text-slate-500 px-2">
+                      <span>Kategori bulunamadı</span>
+                      <button
+                        onClick={() => session && loadProducts(session.tenant_id)}
+                        className="inline-flex items-center gap-1 px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold"
+                      >
+                        <RefreshCw className="w-3 h-3" />
+                        Yenile
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      <button
+                        onClick={() => setSelectedCategory('__all__')}
+                        className={`px-4 py-2 rounded-lg font-semibold whitespace-nowrap transition-colors ${
+                          selectedCategory === '__all__'
+                            ? 'bg-orange-600 text-white'
+                            : 'bg-slate-100 text-slate-900 hover:bg-slate-200'
+                        }`}
+                      >
+                        Tümü
+                      </button>
+                      {categories.map(cat => (
+                        <button
+                          key={cat.id}
+                          onClick={() => setSelectedCategory(cat.id)}
+                          className={`px-4 py-2 rounded-lg font-semibold whitespace-nowrap transition-colors ${
+                            selectedCategory === cat.id
+                              ? 'bg-orange-600 text-white'
+                              : 'bg-slate-100 text-slate-900 hover:bg-slate-200'
+                          }`}
+                        >
+                          {cat.name}
+                        </button>
+                      ))}
+                    </>
+                  )}
                 </div>
 
                 {/* Products Grid */}
                 <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-                  {filteredProducts.map(product => (
-                    <button
-                      key={product.id}
-                      onClick={() => handleAddToCart(product)}
-                      className="p-3 bg-slate-50 hover:bg-orange-50 border border-slate-200 rounded-lg transition-colors text-left"
-                    >
-                      <div className="font-semibold text-slate-900 text-sm line-clamp-2">
-                        {product.name}
-                      </div>
-                      <div className="text-orange-600 font-bold mt-2">
-                        {product.price.toLocaleString('tr-TR')} ₺
-                      </div>
-                    </button>
-                  ))}
+                  {filteredProducts.length === 0 ? (
+                    <div className="col-span-full text-sm text-slate-500 bg-slate-50 border border-slate-200 rounded-lg p-4">
+                      Bu kategoride ürün bulunamadı.
+                    </div>
+                  ) : (
+                    filteredProducts.map(product => (
+                      <button
+                        key={product.id}
+                        onClick={() => handleAddToCart(product)}
+                        className="p-3 bg-slate-50 hover:bg-orange-50 border border-slate-200 rounded-lg transition-colors text-left"
+                      >
+                        <div className="font-semibold text-slate-900 text-sm line-clamp-2">
+                          {product.name}
+                        </div>
+                        <div className="text-orange-600 font-bold mt-2">
+                          {product.price.toLocaleString('tr-TR')} ₺
+                        </div>
+                      </button>
+                    ))
+                  )}
                 </div>
               </div>
-            </div>
 
-            {/* Cart */}
-            <div className="bg-white rounded-lg p-4 h-fit">
+              {selectedTable?.current_order_id && (
+                <div className="bg-white rounded-lg p-4 border border-slate-200">
+                  <div className="flex items-center gap-2 mb-3">
+                    <ArrowRightLeft className="w-4 h-4 text-orange-600" />
+                    <h3 className="font-bold text-slate-800">Masa Taşıma</h3>
+                  </div>
+                  <div className="flex flex-col md:flex-row gap-2">
+                    <select
+                      value={moveTargetTableId}
+                      onChange={(e) => setMoveTargetTableId(e.target.value)}
+                      className="flex-1 px-3 py-2.5 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-orange-400 text-sm"
+                    >
+                      <option value="">Hedef boş masa seçin</option>
+                      {moveCandidates.map(t => (
+                        <option key={t.id} value={t.id}>Masa {t.table_number}</option>
+                      ))}
+                    </select>
+                    <button
+                      onClick={handleMoveTable}
+                      className="px-4 py-2.5 rounded-lg bg-orange-600 hover:bg-orange-700 text-white text-sm font-semibold"
+                    >
+                      Taşı
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <button
+            onClick={() => setCartOpen(true)}
+            className="fixed bottom-4 right-4 z-40 bg-orange-600 hover:bg-orange-700 text-white rounded-full shadow-xl px-4 py-3 flex items-center gap-2"
+          >
+            <ShoppingCart className="w-5 h-5" />
+            <span className="font-bold text-sm">{cart.length} ürün • {cartTotal.toLocaleString('tr-TR')} ₺</span>
+          </button>
+
+          {cartOpen && (
+            <div className="fixed inset-0 z-50">
+              <div className="absolute inset-0 bg-black/40" onClick={() => setCartOpen(false)} />
+              <div className="absolute bottom-0 left-0 right-0 bg-white rounded-t-2xl shadow-2xl max-h-[78vh] overflow-hidden">
+                <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
+                  <h3 className="text-lg font-bold text-slate-900">Sepet</h3>
+                  <button onClick={() => setCartOpen(false)} className="p-2 rounded-lg hover:bg-slate-100">
+                    <X className="w-5 h-5 text-slate-600" />
+                  </button>
+                </div>
+                <div className="p-4 overflow-y-auto max-h-[52vh]">
+                  <div className="bg-white rounded-lg p-4 h-fit">
               <h3 className="text-lg font-bold text-slate-900 mb-4">Sepet</h3>
 
               {cart.length === 0 ? (
@@ -439,7 +610,7 @@ export function WaiterApp({ onLogout }: { onLogout: () => void }) {
                     <button
                       onClick={handleCreateOrder}
                       disabled={orderLoading}
-                      className="w-full bg-orange-600 hover:bg-orange-700 disabled:bg-slate-400 text-white font-bold py-3 rounded-lg transition-colors flex items-center justify-center gap-2"
+                      className="w-full bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600 disabled:bg-slate-400 text-white font-bold py-3 rounded-xl transition-colors flex items-center justify-center gap-2"
                     >
                       {orderLoading ? (
                         <>
@@ -456,8 +627,11 @@ export function WaiterApp({ onLogout }: { onLogout: () => void }) {
                   </div>
                 </>
               )}
+                  </div>
+                </div>
+              </div>
             </div>
-          </div>
+          )}
         </div>
       )}
     </div>

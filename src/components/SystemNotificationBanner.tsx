@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { X, Bell, AlertTriangle, CheckCircle, Info, XCircle } from 'lucide-react';
+import { playNotificationSound } from '../lib/notification';
 
 interface SystemNotification {
   id: string;
@@ -19,6 +20,7 @@ function Banner({ notification, onDismiss }: SystemNotificationBannerProps) {
 
   useEffect(() => {
     const t = setTimeout(() => setVisible(true), 50);
+    playNotificationSound();
     return () => clearTimeout(t);
   }, []);
 
@@ -67,7 +69,7 @@ function Banner({ notification, onDismiss }: SystemNotificationBannerProps) {
         ${c.bg} ${c.border} border rounded-2xl shadow-2xl p-4 flex items-start gap-3
         transform transition-all duration-400 ease-out
         ${visible && !leaving ? 'translate-y-0 opacity-100 scale-100' : '-translate-y-4 opacity-0 scale-95'}
-        max-w-sm w-full
+        max-w-sm w-full ring-1 ring-white/25
       `}
       style={{ minWidth: '300px' }}
     >
@@ -81,6 +83,7 @@ function Banner({ notification, onDismiss }: SystemNotificationBannerProps) {
         </div>
         <p className="text-white font-black text-sm leading-tight">{notification.title}</p>
         <p className="text-white/90 text-xs mt-1 leading-relaxed">{notification.message}</p>
+        <p className="text-[10px] text-white/70 mt-2">Yeni • Okunmadı</p>
       </div>
       <button
         onClick={dismiss}

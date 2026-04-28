@@ -8,6 +8,7 @@ interface StaffStat {
   name: string;
   role: string;
   branchName: string;
+  totalTables: number;
   totalOrders: number;
   completedOrders: number;
   cancelledOrders: number;
@@ -98,16 +99,20 @@ export function StaffReport({ selectedBranch }: StaffReportProps) {
     (profiles || []).forEach(p => { profileMap[p.id] = p; });
 
     const staffMap: Record<string, StaffStat> = {};
+    const userTablesMap: Record<string, Set<string>> = {};
 
     (orders || []).forEach((order: any) => {
       const uid = order.waiter_id || '__unknown__';
       const profile = profileMap[uid];
+      const role = profile?.role || 'waiter';
+      if (role !== 'waiter' && uid !== '__unknown__') return;
       if (!staffMap[uid]) {
         staffMap[uid] = {
           userId: uid,
           name: profile?.full_name || 'Bilinmeyen',
-          role: profile?.role || 'waiter',
+          role,
           branchName: (profile?.branches as any)?.name || '—',
+          totalTables: 0,
           totalOrders: 0,
           completedOrders: 0,
           cancelledOrders: 0,
@@ -116,8 +121,10 @@ export function StaffReport({ selectedBranch }: StaffReportProps) {
           firstOrder: null,
           lastOrder: null,
         };
+        userTablesMap[uid] = new Set<string>();
       }
       const s = staffMap[uid];
+      if (order.table_id) userTablesMap[uid].add(order.table_id);
       s.totalOrders += 1;
       if (order.status === 'completed') {
         s.completedOrders += 1;
@@ -130,6 +137,7 @@ export function StaffReport({ selectedBranch }: StaffReportProps) {
 
     const staffList = Object.values(staffMap).map(s => ({
       ...s,
+      totalTables: userTablesMap[s.userId]?.size || 0,
       avgOrderValue: s.completedOrders > 0 ? s.totalRevenue / s.completedOrders : 0,
     })).sort((a, b) => sortBy === 'revenue' ? b.totalRevenue - a.totalRevenue : b.totalOrders - a.totalOrders);
 
@@ -181,10 +189,10 @@ export function StaffReport({ selectedBranch }: StaffReportProps) {
         <>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             {[
-              { label: 'Aktif Personel', value: staff.length, icon: Users, color: 'bg-blue-500', text: 'text-blue-700' },
+              { label: 'Aktif Garson', value: staff.length, icon: Users, color: 'bg-blue-500', text: 'text-blue-700' },
               { label: 'Toplam Sipariş', value: totalOrders, icon: ShoppingCart, color: 'bg-orange-500', text: 'text-orange-700' },
               { label: 'Toplam Ciro', value: fmt(totalRevenue) + ' ₺', icon: TrendingUp, color: 'bg-emerald-500', text: 'text-emerald-700' },
-              { label: 'En Yüksek', value: staff[0]?.name || '—', icon: Clock, color: 'bg-amber-500', text: 'text-amber-700' },
+              { label: 'En Çok Masa', value: staff.length ? `${Math.max(...staff.map(s => s.totalTables))} masa` : '—', icon: Clock, color: 'bg-amber-500', text: 'text-amber-700' },
             ].map(({ label, value, icon: Icon, color, text }) => (
               <div key={label} className="bg-white rounded-2xl shadow-sm border border-slate-100 p-4">
                 <div className="flex items-center justify-between mb-2">
@@ -206,7 +214,7 @@ export function StaffReport({ selectedBranch }: StaffReportProps) {
           ) : (
             <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
               <div className="px-5 py-4 border-b border-slate-100">
-                <h3 className="font-bold text-slate-700">Personel Performansı</h3>
+                <h3 className="font-bold text-slate-700">Garson Performansı</h3>
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
@@ -215,6 +223,7 @@ export function StaffReport({ selectedBranch }: StaffReportProps) {
                       <th className="text-left py-3 px-5 text-slate-500 font-semibold">#</th>
                       <th className="text-left py-3 px-5 text-slate-500 font-semibold">Personel</th>
                       <th className="text-left py-3 px-5 text-slate-500 font-semibold hidden md:table-cell">Şube</th>
+                      <th className="text-right py-3 px-5 text-slate-500 font-semibold">Masa</th>
                       <th className="text-right py-3 px-5 text-slate-500 font-semibold">Sipariş</th>
                       <th className="text-right py-3 px-5 text-slate-500 font-semibold hidden md:table-cell">Tamamlanan</th>
                       <th className="text-right py-3 px-5 text-slate-500 font-semibold hidden md:table-cell">İptal</th>
@@ -237,6 +246,7 @@ export function StaffReport({ selectedBranch }: StaffReportProps) {
                           </div>
                         </td>
                         <td className="py-3 px-5 text-slate-500 hidden md:table-cell">{s.branchName}</td>
+                        <td className="py-3 px-5 text-right font-semibold text-indigo-700">{s.totalTables}</td>
                         <td className="py-3 px-5 text-right font-semibold text-slate-700">{s.totalOrders}</td>
                         <td className="py-3 px-5 text-right text-emerald-600 font-semibold hidden md:table-cell">{s.completedOrders}</td>
                         <td className="py-3 px-5 text-right text-red-500 hidden md:table-cell">{s.cancelledOrders}</td>

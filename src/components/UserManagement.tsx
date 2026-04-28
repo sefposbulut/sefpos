@@ -16,6 +16,7 @@ interface ProfileWithRole extends Profile {
   roles?: Role;
   branches?: Branch;
   allowed_ips?: string | null;
+  is_active?: boolean | null;
 }
 
 interface PermissionDef {
@@ -548,6 +549,29 @@ export function UserManagement() {
 
   const handleDeleteUser = async (userId: string) => {
     try {
+      // Cleanup waiter/courier device access before profile delete.
+      const { data: targetProfile } = await supabase
+        .from('profiles')
+        .select('id, tenant_id, role')
+        .eq('id', userId)
+        .maybeSingle();
+
+      if (targetProfile?.tenant_id && ['waiter', 'courier'].includes((targetProfile as any).role || '')) {
+        await Promise.all([
+          supabase
+            .from('device_bindings')
+            .update({ status: 'inactive' } as any)
+            .eq('tenant_id', (targetProfile as any).tenant_id)
+            .eq('waiter_id', userId),
+          supabase
+            .from('device_binding_requests')
+            .update({ status: 'rejected' } as any)
+            .eq('tenant_id', (targetProfile as any).tenant_id)
+            .eq('waiter_id', userId)
+            .in('status', ['pending', 'accepted']),
+        ]);
+      }
+
       const { error } = await supabase.from('profiles').delete().eq('id', userId);
       if (error) throw error;
       alert('Kullanıcı başarıyla silindi');
@@ -556,6 +580,41 @@ export function UserManagement() {
       alert('Hata: ' + (err as Error).message);
     }
     setDeleteConfirm(null);
+  };
+
+  const handleToggleUserActive = async (userId: string, nextActive: boolean) => {
+    try {
+      const target = users.find(u => u.id === userId);
+      const { error } = await supabase
+        .from('profiles')
+        .update({ is_active: nextActive } as any)
+        .eq('id', userId);
+      if (error) throw error;
+
+      // Permanent rule: inactive waiter/courier cannot keep active device authorization.
+      if (target?.tenant_id && ['waiter', 'courier'].includes(target.role || '')) {
+        if (!nextActive) {
+          await Promise.all([
+            supabase
+              .from('device_bindings')
+              .update({ status: 'inactive' } as any)
+              .eq('tenant_id', target.tenant_id)
+              .eq('waiter_id', userId),
+            supabase
+              .from('device_binding_requests')
+              .update({ status: 'rejected' } as any)
+              .eq('tenant_id', target.tenant_id)
+              .eq('waiter_id', userId)
+              .in('status', ['pending', 'accepted']),
+          ]);
+        }
+      }
+
+      await loadUsers();
+      alert(nextActive ? 'Kullanıcı aktifleştirildi' : 'Kullanıcı pasife alındı');
+    } catch (err) {
+      alert('Durum güncellenemedi: ' + (err as Error).message);
+    }
   };
 
   const handleChangePassword = async (userId: string, password: string) => {
@@ -614,7 +673,10 @@ export function UserManagement() {
       if (!session?.access_token) { alert('Oturum bilgisi alınamadı, lütfen tekrar giriş yapın'); return; }
 
       const sanitized = newUser.username.toLowerCase().replace(/[^a-z0-9]/g, '');
-      const autoEmail = `${sanitized}@${tenant?.id?.slice(0, 8)}.shefpos.local`;
+      const waiterDigits = newUser.waiterPhone.replace(/\D/g, '');
+      const waiterEmail = `${waiterDigits}@sefpos.com.tr`;
+      const autoEmail = newUser.isWaiter ? waiterEmail : `${sanitized}@${tenant?.id?.slice(0, 8)}.shefpos.local`;
+      const accountPassword = newUser.isWaiter ? newUser.waiterPin : newUser.password;
 
       const response = await fetch(apiUrl, {
         method: 'POST',
@@ -625,7 +687,7 @@ export function UserManagement() {
         },
         body: JSON.stringify({
           email: autoEmail,
-          password: newUser.password,
+          password: accountPassword,
           full_name: newUser.full_name,
           role_id: newUser.role_id,
           tenant_id: tenant?.id,
@@ -892,6 +954,13 @@ export function UserManagement() {
                     </>
                   ) : (
                     <>
+                      <button
+                        onClick={() => handleToggleUserActive(u.id, (u as any).is_active === false)}
+                        className={`p-1.5 rounded-lg transition ${((u as any).is_active === false) ? 'text-emerald-600 bg-emerald-50 hover:bg-emerald-100' : 'text-amber-600 bg-amber-50 hover:bg-amber-100'}`}
+                        title={(u as any).is_active === false ? 'Aktifleştir' : 'Pasife Al'}
+                      >
+                        {(u as any).is_active === false ? <ShieldCheck className="w-4 h-4" /> : <ShieldOff className="w-4 h-4" />}
+                      </button>
                       <button onClick={() => setPasswordModal(u)} className="text-gray-600 hover:text-orange-600 p-1.5 bg-gray-100 hover:bg-orange-50 rounded-lg transition" title="Şifre Değiştir">
                         <KeyRound className="w-4 h-4" />
                       </button>
@@ -924,6 +993,11 @@ export function UserManagement() {
                     <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-orange-100 text-orange-800">
                       {u.roles?.name || 'Atanmamış'}
                     </span>
+                    {(u as any).is_active === false && (
+                      <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-red-100 text-red-700">
+                        Pasif
+                      </span>
+                    )}
                     {u.allowed_ips && (
                       <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-700">
                         <ShieldCheck className="w-3 h-3" />
@@ -961,6 +1035,11 @@ export function UserManagement() {
                   <td className="px-4 py-3 text-sm text-gray-900 font-medium">
                     <div className="flex items-center gap-2">
                       {u.full_name}
+                      {(u as any).is_active === false && (
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700">
+                          Pasif
+                        </span>
+                      )}
                       {u.allowed_ips && (
                         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700">
                           <ShieldCheck className="w-3 h-3" />
@@ -1016,6 +1095,13 @@ export function UserManagement() {
                       </div>
                     ) : (
                       <div className="flex justify-end items-center space-x-1">
+                        <button
+                          onClick={() => handleToggleUserActive(u.id, (u as any).is_active === false)}
+                          className={`p-1.5 rounded-lg transition ${((u as any).is_active === false) ? 'text-emerald-600 bg-emerald-50 hover:bg-emerald-100' : 'text-amber-600 bg-amber-50 hover:bg-amber-100'}`}
+                          title={(u as any).is_active === false ? 'Aktifleştir' : 'Pasife Al'}
+                        >
+                          {(u as any).is_active === false ? <ShieldCheck className="w-4 h-4" /> : <ShieldOff className="w-4 h-4" />}
+                        </button>
                         <button onClick={() => setPasswordModal(u)} className="text-gray-500 hover:text-orange-600 p-1.5 hover:bg-orange-50 rounded-lg transition" title="Şifre Değiştir">
                           <KeyRound className="w-4 h-4" />
                         </button>

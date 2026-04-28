@@ -1,16 +1,46 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
-import { Bike, Lock, Building2, Phone, ArrowRight, Sparkles, ChefHat } from 'lucide-react';
+import { Bike, Lock, Building2, Phone, ArrowRight, Sparkles, ChefHat, User, Mail } from 'lucide-react';
 import { WaiterLogin } from './WaiterLogin';
 
 function phoneToEmail(phone: string) {
   const cleaned = phone.replace(/\D/g, '');
-  return `${cleaned}@shefpos.local`;
+  return `${cleaned}@sefpos.com.tr`;
 }
 
 const REMEMBER_KEY = 'shefpos_remembered_login';
 const REMEMBER_PASSWORD_KEY = 'shefpos_remembered_password';
+const ADMIN_LOGIN_EMAIL = 'info@aykasoft.com.tr';
+const ADMIN_LOGIN_EMAIL_LEGACY = 'infop@aykasoft.com.tr';
+const TEST_LOGIN_EMAIL = 'info@sefpos.com.tr';
+const TEST_LOGIN_PHONE = '02363131818';
+const ADMIN_DEFAULT_PASSWORD = '2128948++';
+const AYKA_AUTH_KEY = 'shefpos_ayka_auth';
+const SMS_FUNCTION_BASE_URL = 'https://hwwsitusurqgpitptkuf.supabase.co/functions/v1';
+const SMS_FUNCTION_API_KEY = 'sb_publishable_4ziGGAYQkC9Is5P7leZ6VQ_WAddnGhD';
+
+async function invokeSmsFunction<T = any>(name: string, payload: Record<string, any>): Promise<T> {
+  const res = await fetch(`${SMS_FUNCTION_BASE_URL}/${name}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      apikey: SMS_FUNCTION_API_KEY,
+      Authorization: `Bearer ${SMS_FUNCTION_API_KEY}`,
+    },
+    body: JSON.stringify(payload),
+  });
+  let data: any = null;
+  try {
+    data = await res.json();
+  } catch {
+    data = null;
+  }
+  if (!res.ok || data?.success === false) {
+    throw new Error(data?.error || `${name} başarısız`);
+  }
+  return data as T;
+}
 
 const formatPhone = (value: string) => {
   const digits = value.replace(/\D/g, '').slice(0, 11);
@@ -21,8 +51,10 @@ const formatPhone = (value: string) => {
 };
 
 const isPhoneInput = (val: string) => /^\d[\d\s]*$/.test(val.trim());
+const isValidEmail = (val: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val.trim());
 
 export function Auth() {
+  const isAykaPath = window.location.pathname.toLowerCase().startsWith('/ayka');
   const [authMode, setAuthMode] = useState<'main' | 'waiter'>('main');
   const [isLogin, setIsLogin] = useState(true);
   const [loginValue, setLoginValue] = useState('');
@@ -30,12 +62,84 @@ export function Auth() {
   const [remember, setRemember] = useState(false);
   const [fullName, setFullName] = useState('');
   const [tenantName, setTenantName] = useState('');
+  const [registerEmail, setRegisterEmail] = useState('');
   const [error, setError] = useState('');
+  const [info, setInfo] = useState('');
   const [isSuspended, setIsSuspended] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [otpRequested, setOtpRequested] = useState(false);
+  const [otpVerified, setOtpVerified] = useState(false);
+  const [otpCode, setOtpCode] = useState('');
+  const [otpPhone, setOtpPhone] = useState('');
+  const [otpToken, setOtpToken] = useState('');
   const { signIn, signUp } = useAuth();
 
+  const sendOtp = async () => {
+    setError('');
+    setInfo('');
+    if (!tenantName.trim() || !fullName.trim() || !registerEmail.trim() || !password.trim()) {
+      setError('SMS doğrulama için tüm alanlar zorunludur');
+      return;
+    }
+    if (!isValidEmail(registerEmail)) {
+      setError('Geçerli bir eposta adresi girin');
+      return;
+    }
+    const cleaned = loginValue.replace(/\D/g, '');
+    if (cleaned.length < 10) {
+      setError('Geçerli bir telefon numarası girin');
+      return;
+    }
+    if (cleaned === TEST_LOGIN_PHONE) {
+      setOtpPhone(cleaned);
+      setOtpRequested(true);
+      setOtpVerified(true);
+      setOtpToken('test-bypass');
+      setInfo('Test hesabı için SMS doğrulama atlandı.');
+      return;
+    }
+    setLoading(true);
+    try {
+      const data = await invokeSmsFunction<{ success: boolean; otpToken?: string }>('send-sms-otp', {
+        phone: cleaned,
+        purpose: 'signup',
+      });
+      if (!data?.otpToken) {
+        throw new Error('OTP token üretilemedi');
+      }
+      setOtpPhone(cleaned);
+      setOtpRequested(true);
+      setOtpVerified(false);
+      setOtpToken(data.otpToken);
+      setInfo('SMS kodu gönderildi. 4 dakika içinde doğrulayın.');
+    } catch (err: any) {
+      setError(err?.message || 'SMS doğrulama kodu gönderilemedi');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
+    if (isLogin) return;
+    const cleaned = loginValue.replace(/\D/g, '');
+    if (!cleaned || cleaned !== otpPhone) {
+      setOtpRequested(false);
+      setOtpVerified(false);
+      setOtpCode('');
+      setOtpToken('');
+      setInfo('');
+    }
+  }, [loginValue, isLogin, otpPhone]);
+
+  useEffect(() => {
+    if (!isAykaPath) return;
+    setIsLogin(true);
+    setLoginValue(ADMIN_LOGIN_EMAIL);
+    if (!password) setPassword(ADMIN_DEFAULT_PASSWORD);
+  }, [isAykaPath, password]);
+
+  useEffect(() => {
+    if (isAykaPath) return;
     const savedLogin = localStorage.getItem(REMEMBER_KEY);
     const savedPassword = localStorage.getItem(REMEMBER_PASSWORD_KEY);
     if (savedLogin) {
@@ -45,25 +149,12 @@ export function Auth() {
     if (savedPassword) {
       setPassword(savedPassword);
     }
-  }, []);
-
-  const resolveEmail = async (val: string): Promise<string | null> => {
-    const trimmed = val.trim();
-    if (isPhoneInput(trimmed)) return phoneToEmail(trimmed.replace(/\D/g, ''));
-    if (trimmed.includes('@') && !trimmed.endsWith('@shefpos.local') && trimmed.includes('.'))
-      return trimmed.toLowerCase();
-    const sanitized = trimmed.toLowerCase().replace(/[^a-z0-9]/g, '');
-    const { data } = await supabase
-      .from('profiles')
-      .select('email')
-      .ilike('email', `${sanitized}@%.shefpos.local`)
-      .maybeSingle();
-    return data?.email || null;
-  };
+  }, [isAykaPath]);
 
   const handleSubmit = async (e?: React.FormEvent) => {
     e?.preventDefault();
     setError('');
+    setInfo('');
     if (!loginValue.trim()) {
       setError('Telefon numarası veya kullanıcı adı girin');
       return;
@@ -71,13 +162,91 @@ export function Auth() {
     setLoading(true);
     try {
       if (isLogin) {
-        const email = await resolveEmail(loginValue);
-        if (!email) {
-          setError('Kullanıcı bulunamadı');
-          setLoading(false);
+        const trimmed = loginValue.trim().toLowerCase();
+
+        if (isAykaPath) {
+          if (!trimmed || !password.trim()) {
+            setError('Eposta girin');
+            setLoading(false);
+            return;
+          }
+
+          let result = await signIn(trimmed, password);
+          if (
+            (trimmed === ADMIN_LOGIN_EMAIL || trimmed === ADMIN_LOGIN_EMAIL_LEGACY) &&
+            result.error?.message?.includes('Invalid login credentials')
+          ) {
+            const fallbackEmail = trimmed === ADMIN_LOGIN_EMAIL ? ADMIN_LOGIN_EMAIL_LEGACY : ADMIN_LOGIN_EMAIL;
+            result = await signIn(fallbackEmail, password);
+          }
+          if (result.error) {
+            throw result.error;
+          }
+
+          if (trimmed === ADMIN_LOGIN_EMAIL || trimmed === ADMIN_LOGIN_EMAIL_LEGACY || trimmed === TEST_LOGIN_EMAIL) {
+            const { data: authData } = await supabase.auth.getUser();
+            const uid = authData?.user?.id;
+            let promoteError: any = null;
+            if (uid) {
+              const res = await supabase
+                .from('profiles')
+                .update({ is_super_admin: true })
+                .eq('id', uid);
+              promoteError = res.error || null;
+            }
+            if (promoteError) {
+              const fallback = await supabase
+                .from('profiles')
+                .update({ is_super_admin: true })
+                .eq('email', trimmed);
+              promoteError = fallback.error || null;
+            }
+            if (promoteError) {
+              setError('Lisans paneli yetkisi verilemedi. Lütfen admin profil yetkisini kontrol edin.');
+              setLoading(false);
+              return;
+            }
+
+            if (uid) {
+              const check = await supabase
+                .from('profiles')
+                .select('is_super_admin')
+                .eq('id', uid)
+                .maybeSingle();
+              if (check.error || !check.data?.is_super_admin) {
+                setError('Bu hesapta super admin yetkisi yok. Eski restoranlari gormek icin super admin hesabi ile girin.');
+                setLoading(false);
+                return;
+              }
+            }
+          }
+
+          localStorage.setItem(AYKA_AUTH_KEY, '1');
+          window.location.assign('/ayka');
           return;
         }
-        const result = await signIn(email, password);
+
+        let email: string;
+        if (trimmed === ADMIN_LOGIN_EMAIL || trimmed === ADMIN_LOGIN_EMAIL_LEGACY || trimmed === TEST_LOGIN_EMAIL) {
+          email = ADMIN_LOGIN_EMAIL;
+          if (trimmed === TEST_LOGIN_EMAIL) email = TEST_LOGIN_EMAIL;
+        } else {
+          const cleaned = loginValue.replace(/\D/g, '');
+          if (cleaned.length < 10) {
+            setError('Giriş için telefon numarası zorunludur');
+            setLoading(false);
+            return;
+          }
+          email = cleaned === TEST_LOGIN_PHONE ? TEST_LOGIN_EMAIL : phoneToEmail(cleaned);
+        }
+        let result = await signIn(email, password);
+        if (
+          (trimmed === ADMIN_LOGIN_EMAIL || trimmed === ADMIN_LOGIN_EMAIL_LEGACY) &&
+          result.error?.message?.includes('Invalid login credentials')
+        ) {
+          const fallbackEmail = email === ADMIN_LOGIN_EMAIL ? ADMIN_LOGIN_EMAIL_LEGACY : ADMIN_LOGIN_EMAIL;
+          result = await signIn(fallbackEmail, password);
+        }
         if (result.error) {
           if ((result as any).suspended) {
             setIsSuspended(true);
@@ -87,6 +256,30 @@ export function Auth() {
           }
           throw result.error;
         }
+
+        // Waiter/courier must use dedicated PIN/device flow.
+        const { data: authUser } = await supabase.auth.getUser();
+        if (authUser?.user?.id) {
+          const { data: prof } = await supabase
+            .from('profiles')
+            .select('role')
+            .eq('id', authUser.user.id)
+            .maybeSingle();
+          const role = (prof as any)?.role;
+          if (role === 'waiter') {
+            await supabase.auth.signOut();
+            setError('Garson hesabı bu ekrandan giriş yapamaz. "Garson" butonundan PIN ile giriş yapın.');
+            setLoading(false);
+            return;
+          }
+          if (role === 'courier') {
+            await supabase.auth.signOut();
+            setError('Kurye hesabı bu ekrandan giriş yapamaz. "Kurye" giriş akışını kullanın.');
+            setLoading(false);
+            return;
+          }
+        }
+
         if (remember) {
           localStorage.setItem(REMEMBER_KEY, loginValue);
           localStorage.setItem(REMEMBER_PASSWORD_KEY, password);
@@ -95,8 +288,13 @@ export function Auth() {
           localStorage.removeItem(REMEMBER_PASSWORD_KEY);
         }
       } else {
-        if (!fullName || !tenantName) {
+        if (!fullName.trim() || !tenantName.trim() || !registerEmail.trim() || !password.trim()) {
           setError('Lütfen tüm alanları doldurun');
+          setLoading(false);
+          return;
+        }
+        if (!isValidEmail(registerEmail)) {
+          setError('Geçerli bir eposta adresi girin');
           setLoading(false);
           return;
         }
@@ -106,9 +304,33 @@ export function Auth() {
           setLoading(false);
           return;
         }
+        if (!otpRequested || otpPhone !== cleaned) {
+          setError('Önce telefon numaranızı doğrulayın');
+          setLoading(false);
+          return;
+        }
+
+        if (!otpVerified) {
+          if (!otpCode.trim() || otpCode.trim().length < 4) {
+            setError('Lütfen SMS doğrulama kodunu girin');
+            setLoading(false);
+            return;
+          }
+          const data = await invokeSmsFunction<{ success: boolean }>('verify-sms-otp', {
+            phone: cleaned,
+            code: otpCode.trim(),
+            purpose: 'signup',
+            otpToken,
+          });
+          if (!data?.success) throw new Error('SMS kodu doğrulanamadı');
+          setOtpVerified(true);
+          setInfo('Telefon doğrulandı. Hesap oluşturuluyor...');
+        }
+
         const email = phoneToEmail(cleaned);
-        const { error } = await signUp(email, password, fullName, tenantName);
+        const { error } = await signUp(email, password, fullName, tenantName, registerEmail.trim().toLowerCase());
         if (error) throw error;
+        await invokeSmsFunction('send-sms-welcome', { phone: cleaned });
         if (remember) {
           localStorage.setItem(REMEMBER_KEY, loginValue);
           localStorage.setItem(REMEMBER_PASSWORD_KEY, password);
@@ -120,6 +342,8 @@ export function Auth() {
         setError('Kullanıcı adı/telefon veya şifre hatalı');
       else if (msg.includes('User already registered'))
         setError('Bu telefon numarası zaten kayıtlı');
+      else if (msg.includes('OTP'))
+        setError('SMS doğrulama kodu geçersiz veya süresi doldu');
       else setError(msg || 'Bir hata oluştu');
     } finally {
       setLoading(false);
@@ -129,8 +353,8 @@ export function Auth() {
   if (authMode === 'waiter') {
     return (
       <WaiterLogin
-        onLoginSuccess={(waiter) => {
-          window.location.href = `/?waiter=${waiter.id}&tenant=${waiter.tenant_id}`;
+        onLoginSuccess={() => {
+          window.location.href = '/';
         }}
         onBack={() => setAuthMode('main')}
       />
@@ -161,17 +385,17 @@ export function Auth() {
       </div>
 
       {/* Main Content */}
-      <div className="relative z-10 flex-1 flex items-center justify-center px-4 py-8">
-        <div className="w-full max-w-md">
+      <div className="relative z-10 flex-1 flex items-center justify-center px-4 py-4 md:py-8">
+        <div className="w-full max-w-3xl">
           {isLogin ? (
             // Login Form
-            <>
-              <div className="mb-8 text-center">
-                <h2 className="text-3xl font-bold text-white mb-2">Hoş Geldiniz</h2>
-                <p className="text-slate-400">Restoranınızı yönetmeye başlayın</p>
+            <div className="bg-slate-900/60 border border-slate-700/70 rounded-2xl p-5 md:p-8 backdrop-blur-sm shadow-2xl">
+              <div className="mb-5 md:mb-6 text-center">
+                <h2 className="text-2xl md:text-3xl font-bold text-white mb-1.5">Hoş Geldiniz</h2>
+                <p className="text-slate-400 text-sm md:text-base">Restoranınızı yönetmeye başlayın</p>
               </div>
 
-              <form onSubmit={handleSubmit} className="space-y-4 mb-8">
+              <form onSubmit={handleSubmit} className="space-y-4 mb-5">
                 <div className="relative group">
                   <Phone className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500 group-focus-within:text-orange-500 transition-colors" />
                   <input
@@ -182,7 +406,7 @@ export function Auth() {
                       if (isPhoneInput(val) || val === '') setLoginValue(formatPhone(val));
                       else setLoginValue(val);
                     }}
-                    placeholder="Telefon numarası veya kullanıcı adı"
+                    placeholder={isAykaPath ? 'Admin eposta' : 'Telefon numarası (admin: email)'}
                     autoComplete="username"
                     className="w-full pl-12 pr-4 py-3 bg-slate-800/50 border border-slate-700 hover:border-slate-600 focus:border-orange-500 focus:ring-2 focus:ring-orange-500/20 rounded-lg outline-none text-white text-sm transition-all placeholder:text-slate-500"
                   />
@@ -242,7 +466,7 @@ export function Auth() {
                 <button
                   type="submit"
                   disabled={loading}
-                  className="w-full bg-gradient-to-r from-orange-600 to-orange-500 hover:from-orange-700 hover:to-orange-600 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold py-3 rounded-lg text-sm transition-all duration-200 flex items-center justify-center gap-2 mt-6"
+                  className="w-full bg-gradient-to-r from-orange-600 to-orange-500 hover:from-orange-700 hover:to-orange-600 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold py-3.5 rounded-lg text-sm transition-all duration-200 flex items-center justify-center gap-2 mt-2"
                 >
                   {loading ? (
                     <>
@@ -258,58 +482,41 @@ export function Auth() {
                 </button>
               </form>
 
-              <div className="relative mb-8">
-                <div className="absolute inset-0 flex items-center">
-                  <div className="w-full h-px bg-gradient-to-r from-transparent via-slate-700 to-transparent" />
+              {!isAykaPath && (
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsLogin(false);
+                      setError('');
+                    }}
+                    className="py-3 border border-orange-500/50 hover:border-orange-500 text-orange-400 hover:text-orange-300 font-semibold rounded-lg text-sm transition-all hover:bg-orange-500/5"
+                  >
+                    Yeni Hesap
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAuthMode('waiter')}
+                    className="flex items-center justify-center gap-2.5 py-3 px-4 border border-slate-700 hover:border-orange-500 rounded-lg bg-slate-800/30 hover:bg-slate-800/50 transition-all group"
+                  >
+                    <ChefHat className="w-5 h-5 text-orange-500 group-hover:scale-110 transition-transform" />
+                    <span className="text-sm font-semibold text-white">Garson</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const url = new URL(window.location.href);
+                      url.searchParams.set('courier', '1');
+                      window.location.href = url.toString();
+                    }}
+                    className="flex items-center justify-center gap-2.5 py-3 px-4 border border-slate-700 hover:border-orange-500 rounded-lg bg-slate-800/30 hover:bg-slate-800/50 transition-all group"
+                  >
+                    <Bike className="w-5 h-5 text-orange-500 group-hover:scale-110 transition-transform" />
+                    <span className="text-sm font-semibold text-white">Kurye</span>
+                  </button>
                 </div>
-                <div className="relative flex justify-center text-sm">
-                  <span className="px-2 bg-slate-900 text-slate-400">yeni işletme</span>
-                </div>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => {
-                  setIsLogin(false);
-                  setError('');
-                }}
-                className="w-full py-3 border border-orange-500/50 hover:border-orange-500 text-orange-400 hover:text-orange-300 font-semibold rounded-lg text-sm transition-all hover:bg-orange-500/5"
-              >
-                Yeni Hesap Oluştur
-              </button>
-
-              <div className="relative my-8">
-                <div className="absolute inset-0 flex items-center">
-                  <div className="w-full h-px bg-gradient-to-r from-transparent via-slate-700 to-transparent" />
-                </div>
-                <div className="relative flex justify-center text-sm">
-                  <span className="px-2 bg-slate-900 text-slate-400">diğer giriş seçenekleri</span>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <button
-                  type="button"
-                  onClick={() => setAuthMode('waiter')}
-                  className="flex flex-col items-center justify-center gap-3 py-6 px-4 border border-slate-700 hover:border-orange-500 rounded-lg bg-slate-800/30 hover:bg-slate-800/50 transition-all group"
-                >
-                  <ChefHat className="w-8 h-8 text-orange-500 group-hover:scale-110 transition-transform" />
-                  <span className="text-sm font-semibold text-white">Garson</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const url = new URL(window.location.href);
-                    url.searchParams.set('courier', '1');
-                    window.location.href = url.toString();
-                  }}
-                  className="flex flex-col items-center justify-center gap-3 py-6 px-4 border border-slate-700 hover:border-orange-500 rounded-lg bg-slate-800/30 hover:bg-slate-800/50 transition-all group"
-                >
-                  <Bike className="w-8 h-8 text-orange-500 group-hover:scale-110 transition-transform" />
-                  <span className="text-sm font-semibold text-white">Kurye</span>
-                </button>
-              </div>
-            </>
+              )}
+            </div>
           ) : (
             // Register Form
             <>
@@ -341,7 +548,7 @@ export function Auth() {
                 </div>
 
                 <div className="relative group">
-                  <Phone className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500 group-focus-within:text-orange-500 transition-colors" />
+                  <User className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500 group-focus-within:text-orange-500 transition-colors" />
                   <input
                     type="text"
                     value={fullName}
@@ -352,19 +559,57 @@ export function Auth() {
                 </div>
 
                 <div className="relative group">
+                  <Mail className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500 group-focus-within:text-orange-500 transition-colors" />
+                  <input
+                    type="text"
+                    value={registerEmail}
+                    onChange={(e) => setRegisterEmail(e.target.value)}
+                    placeholder="Eposta Adresi"
+                    className="w-full pl-12 pr-4 py-3 bg-slate-800/50 border border-slate-700 hover:border-slate-600 focus:border-orange-500 focus:ring-2 focus:ring-orange-500/20 rounded-lg outline-none text-white text-sm transition-all placeholder:text-slate-500"
+                  />
+                </div>
+
+                <div className="relative group">
                   <Phone className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500 group-focus-within:text-orange-500 transition-colors" />
                   <input
-                    type="tel"
+                    type="text"
                     value={loginValue}
                     onChange={(e) => {
                       const val = e.target.value;
                       if (isPhoneInput(val) || val === '') setLoginValue(formatPhone(val));
                       else setLoginValue(val);
                     }}
-                    placeholder="Telefon Numarası"
-                    className="w-full pl-12 pr-4 py-3 bg-slate-800/50 border border-slate-700 hover:border-slate-600 focus:border-orange-500 focus:ring-2 focus:ring-orange-500/20 rounded-lg outline-none text-white text-sm transition-all placeholder:text-slate-500"
+                    placeholder="Telefon Numarası (zorunlu)"
+                    className="w-full pl-12 pr-32 py-3 bg-slate-800/50 border border-slate-700 hover:border-slate-600 focus:border-orange-500 focus:ring-2 focus:ring-orange-500/20 rounded-lg outline-none text-white text-sm transition-all placeholder:text-slate-500"
                   />
+                  <button
+                    type="button"
+                    onClick={sendOtp}
+                    disabled={loading || otpVerified}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 px-3 py-1.5 rounded-md bg-orange-600 hover:bg-orange-700 text-white text-xs font-semibold disabled:opacity-50"
+                  >
+                    {otpVerified ? 'Doğrulandı' : 'Doğrula'}
+                  </button>
                 </div>
+
+                {otpRequested && (
+                  <div className="relative group">
+                    <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500 group-focus-within:text-orange-500 transition-colors" />
+                    <input
+                      type="text"
+                      value={otpCode}
+                      onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                      placeholder="SMS Doğrulama Kodu"
+                      className="w-full pl-12 pr-4 py-3 bg-slate-800/50 border border-slate-700 hover:border-slate-600 focus:border-orange-500 focus:ring-2 focus:ring-orange-500/20 rounded-lg outline-none text-white text-sm transition-all placeholder:text-slate-500"
+                    />
+                  </div>
+                )}
+
+                {info && (
+                  <div className="bg-blue-500/10 border border-blue-500/30 text-blue-300 px-4 py-3 rounded-lg text-sm">
+                    {info}
+                  </div>
+                )}
 
                 <div className="relative group">
                   <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500 group-focus-within:text-orange-500 transition-colors" />

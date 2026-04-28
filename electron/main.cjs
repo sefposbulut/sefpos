@@ -61,6 +61,7 @@ function setupAutoUpdater() {
 }
 
 let bcryptjs = null;
+let pgModule = null;
 
 function getBcrypt() {
   if (!bcryptjs) {
@@ -77,6 +78,50 @@ function getBcrypt() {
     }
   }
   return bcryptjs;
+}
+
+function getPg() {
+  if (!pgModule) {
+    const appPath = (() => { try { return app.getAppPath(); } catch { return __dirname; } })();
+    const resourcesPath = process.resourcesPath || path.join(appPath, '..');
+    const candidates = [
+      path.join(appPath, 'node_modules', 'pg'),
+      path.join(resourcesPath, 'app.asar.unpacked', 'node_modules', 'pg'),
+      path.join(__dirname, '..', 'node_modules', 'pg'),
+      'pg',
+    ];
+    for (const p of candidates) {
+      try { pgModule = require(p); if (pgModule) break; } catch {}
+    }
+  }
+  return pgModule;
+}
+
+function normalizePgConfig(cfg) {
+  return {
+    host: (cfg?.host || 'localhost').trim(),
+    port: Number(cfg?.port || 5432),
+    database: (cfg?.database || 'sefpos45').trim(),
+    user: (cfg?.username || cfg?.user || 'postgres').trim(),
+    password: String(cfg?.password || ''),
+  };
+}
+
+async function pgConnect(cfg, dbOverride) {
+  const pg = getPg();
+  if (!pg?.Client) throw new Error('pg paketi yuklenemedi. Uygulamayi yeniden yukleyin.');
+  const normalized = normalizePgConfig(cfg);
+  const client = new pg.Client({
+    host: normalized.host,
+    port: normalized.port,
+    database: dbOverride || normalized.database,
+    user: normalized.user,
+    password: normalized.password,
+    connectionTimeoutMillis: 10000,
+    statement_timeout: 30000,
+  });
+  await client.connect();
+  return client;
 }
 
 function getTedious() {
@@ -473,8 +518,8 @@ let mainWindow;
 let printAgentServer = null;
 const PRINT_AGENT_PORT = 7878;
 
-const SUPABASE_URL = 'https://hwwsitusurqgpitptkuf.supabase.co';
-const SUPABASE_ANON_KEY = 'sb_publishable_4ziGGAYQkC9Is5P7leZ6VQ_WAddnGhD';
+const SUPABASE_URL = 'https://orlydeyxshsdusxukhuu.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9ybHlkZXl4c2hzZHVzeHVraHV1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ0NjI0MTcsImV4cCI6MjA5MDAzODQxN30.tbFxkDsVyw0b97l8bop5prHlxDhmmfnsc8rC8zP8FqI';
 
 const isDev = process.env.NODE_ENV === 'development';
 const settingsPath = path.join(app.getPath('userData'), 'settings.json');
@@ -989,8 +1034,12 @@ let realtimeReconnectTimer = null;
 let realtimeConnected = false;
 let currentTenantId = null;
 let currentUserJwt = null;
+let connectivityLastOnline = null;
 
 function connectRealtimePrintAgent() {
+  // Do not open realtime socket before authenticated tenant context exists.
+  if (!currentTenantId || !currentUserJwt) return;
+
   if (realtimeWs) {
     try { realtimeWs.close(); } catch {}
     realtimeWs = null;
@@ -1143,7 +1192,7 @@ function startPrintAgent() {
 
   try {
     require('ws');
-    connectRealtimePrintAgent();
+    // Realtime is started lazily after register-printers call with tenant + jwt.
   } catch {
     console.warn('ws paketi bulunamadı, Realtime devre dışı. Sadece local HTTP agent aktif.');
   }
@@ -1174,14 +1223,16 @@ function removeOfflineBanner() {
 }
 
 function watchConnectivity() {
+  if (!mainWindow) return;
+  connectivityLastOnline = net.isOnline();
+
   setInterval(() => {
     const online = net.isOnline();
-    if (!online) {
-      injectOfflineBanner();
-    } else {
-      removeOfflineBanner();
-    }
-  }, 5000);
+    if (online === connectivityLastOnline) return;
+    connectivityLastOnline = online;
+    if (!online) injectOfflineBanner();
+    else removeOfflineBanner();
+  }, 15000);
 }
 
 function createWindow() {
@@ -1196,6 +1247,7 @@ function createWindow() {
       contextIsolation: true,
       preload: path.join(__dirname, 'preload.cjs'),
       partition: 'persist:shefpos',
+      backgroundThrottling: false,
     },
     icon: path.join(__dirname, '../public/SEFPOS.png'),
     title: 'Sefpos',
@@ -1413,7 +1465,7 @@ ipcMain.handle('register-printers', async (_, { tenantId, branchId, userJwt }) =
       );
     }
 
-    if (tenantChanged) {
+    if (tenantChanged || !realtimeConnected) {
       console.log('Tenant değişti, Realtime yeniden bağlanıyor...');
       processingJobIds.clear();
       connectRealtimePrintAgent();
@@ -1439,6 +1491,99 @@ ipcMain.handle('sql-test-connection', async (_, config) => {
     return { success: true };
   } catch (err) {
     return { success: false, error: err.message || 'Bağlantı başarısız' };
+  }
+});
+
+ipcMain.handle('postgres-test-connection', async (_, config) => {
+  try {
+    const client = await pgConnect(config);
+    try {
+      await client.query('SELECT 1 AS ok');
+    } finally {
+      await client.end();
+    }
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err.message || 'Bağlantı başarısız' };
+  }
+});
+
+ipcMain.handle('postgres-init-database', async (_, config) => {
+  try {
+    const norm = normalizePgConfig(config);
+    const adminClient = await pgConnect(norm, 'postgres');
+    try {
+      const exists = await adminClient.query('SELECT 1 FROM pg_database WHERE datname = $1 LIMIT 1', [norm.database]);
+      if ((exists?.rows || []).length === 0) {
+        await adminClient.query(`CREATE DATABASE "${norm.database.replace(/"/g, '""')}"`);
+      }
+    } finally {
+      await adminClient.end();
+    }
+
+    const appClient = await pgConnect(norm, norm.database);
+    try {
+      await appClient.query(`
+        CREATE TABLE IF NOT EXISTS app_users (
+          id uuid PRIMARY KEY,
+          email text UNIQUE NOT NULL,
+          password_hash text NOT NULL,
+          tenant_id uuid NOT NULL,
+          created_at timestamptz NOT NULL DEFAULT now()
+        )
+      `);
+      await appClient.query(`
+        CREATE TABLE IF NOT EXISTS tenants (
+          id uuid PRIMARY KEY,
+          name text NOT NULL,
+          slug text NOT NULL,
+          subscription_status text NOT NULL DEFAULT 'active',
+          deployment_mode text,
+          onboarding_completed boolean DEFAULT false,
+          created_at timestamptz NOT NULL DEFAULT now()
+        )
+      `);
+      await appClient.query(`
+        CREATE TABLE IF NOT EXISTS branches (
+          id uuid PRIMARY KEY,
+          tenant_id uuid NOT NULL,
+          name text NOT NULL,
+          is_main boolean DEFAULT true,
+          is_active boolean DEFAULT true,
+          created_at timestamptz NOT NULL DEFAULT now()
+        )
+      `);
+      await appClient.query(`
+        CREATE TABLE IF NOT EXISTS roles (
+          id uuid PRIMARY KEY,
+          tenant_id uuid NOT NULL,
+          name text NOT NULL,
+          permissions jsonb,
+          created_at timestamptz NOT NULL DEFAULT now()
+        )
+      `);
+      await appClient.query(`
+        CREATE TABLE IF NOT EXISTS profiles (
+          id uuid PRIMARY KEY,
+          user_id uuid NOT NULL,
+          tenant_id uuid NOT NULL,
+          branch_id uuid,
+          role_id uuid,
+          role text NOT NULL DEFAULT 'owner',
+          full_name text,
+          email text,
+          onboarding_completed boolean DEFAULT true,
+          is_super_admin boolean DEFAULT false,
+          created_at timestamptz NOT NULL DEFAULT now()
+        )
+      `);
+    } finally {
+      await appClient.end();
+    }
+
+    return { success: true, output: `${norm.database} veritabanı hazırlandı.` };
+  } catch (err) {
+    return { success: false, error: err.message || 'PostgreSQL kurulum hatası' };
   }
 });
 

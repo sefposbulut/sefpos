@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { Plus, CreditCard as Edit2, Trash2, Search, Printer, Ban, Save, X, Download, Barcode, Upload, CheckCircle, AlertCircle, FileSpreadsheet } from 'lucide-react';
+import { Plus, CreditCard as Edit2, Trash2, Search, Printer, Ban, Save, X, Download, Barcode, Upload, CheckCircle, AlertCircle, FileSpreadsheet, ArrowDownCircle, ArrowRightLeft, History } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { loadPrintSettings, savePrintSettings } from '../lib/printService';
@@ -122,12 +122,60 @@ interface ImportRow {
   matchedCategoryName?: string;
 }
 
+interface StockEntryLine {
+  product_id: string;
+  quantity: string;
+  unit_cost: string;
+}
+
+interface StockTransferLine {
+  product_id: string;
+  quantity: string;
+}
+
+interface StockReceiptLine {
+  product_id: string;
+  product_name: string;
+  quantity: number;
+  unit_cost?: number | null;
+}
+
+interface StockReceipt {
+  type: 'entry' | 'transfer';
+  reference_no: string;
+  created_at: string;
+  source_branch_name?: string;
+  target_branch_name?: string;
+  supplier_name?: string;
+  note?: string;
+  lines: StockReceiptLine[];
+}
+
+interface StockMovementRow {
+  id: string;
+  movement_type: 'in' | 'out' | 'adjustment';
+  quantity: number;
+  unit_cost: number | null;
+  total_cost: number | null;
+  supplier_name: string | null;
+  source_branch_id: string | null;
+  target_branch_id: string | null;
+  reference_type: string | null;
+  reference_no: string | null;
+  note: string | null;
+  created_at: string;
+}
+
 export function Products() {
-  const { tenant } = useAuth();
+  const { tenant, activeBranch, branches } = useAuth();
   const [categories, setCategories] = useState<Category[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [search, setSearch] = useState('');
   const [showAddProduct, setShowAddProduct] = useState(false);
+  const [showStockEntry, setShowStockEntry] = useState(false);
+  const [showStockTransfer, setShowStockTransfer] = useState(false);
+  const [showReceipt, setShowReceipt] = useState(false);
+  const [showStockMovements, setShowStockMovements] = useState(false);
   const [showAddCategory, setShowAddCategory] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [editingProduct, setEditingProduct] = useState<string | null>(null);
@@ -158,6 +206,39 @@ export function Products() {
     variants: [] as ProductVariant[],
   });
 
+  const [stockEntry, setStockEntry] = useState({
+    branch_id: '',
+    supplier_name: '',
+    note: '',
+  });
+  const [stockEntrySearch, setStockEntrySearch] = useState('');
+  const [stockEntryBarcode, setStockEntryBarcode] = useState('');
+  const [stockEntryLines, setStockEntryLines] = useState<StockEntryLine[]>([
+    { product_id: '', quantity: '', unit_cost: '' },
+  ]);
+
+  const [stockTransfer, setStockTransfer] = useState({
+    source_branch_id: '',
+    target_branch_id: '',
+    note: '',
+  });
+  const [stockTransferSearch, setStockTransferSearch] = useState('');
+  const [stockTransferBarcode, setStockTransferBarcode] = useState('');
+  const [stockTransferLines, setStockTransferLines] = useState<StockTransferLine[]>([
+    { product_id: '', quantity: '' },
+  ]);
+  const [branchStockMap, setBranchStockMap] = useState<Record<string, number>>({});
+  const [branchStockFeatureAvailable, setBranchStockFeatureAvailable] = useState(true);
+  const [latestReceipt, setLatestReceipt] = useState<StockReceipt | null>(null);
+  const [movementProduct, setMovementProduct] = useState<Product | null>(null);
+  const [movementRows, setMovementRows] = useState<StockMovementRow[]>([]);
+  const [movementLoading, setMovementLoading] = useState(false);
+  const [movementAutoExpanded, setMovementAutoExpanded] = useState(false);
+  const [movementTypeFilter, setMovementTypeFilter] = useState<'all' | 'in' | 'out' | 'transfer' | 'sale'>('all');
+  const [movementBranchFilter, setMovementBranchFilter] = useState<string>('all');
+  const [movementDateFrom, setMovementDateFrom] = useState('');
+  const [movementDateTo, setMovementDateTo] = useState('');
+
   const handlePluCodeChange = (plu: string) => {
     const clean = plu.replace(/[^0-9]/g, '').slice(0, 5);
     const barcode = clean ? generateScaleBarcode(clean, newProduct.scale_prefix) : '';
@@ -187,6 +268,11 @@ export function Products() {
   const [categoryPrinterMap, setCategoryPrinterMap] = useState<Record<string, string>>({});
   const [disabledCategoryIds, setDisabledCategoryIds] = useState<string[]>([]);
   const [availablePrinters, setAvailablePrinters] = useState<{ name: string; label: string }[]>([]);
+
+  const safeMoney = (value: unknown) => {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : 0;
+  };
 
   useEffect(() => {
     const ps = loadPrintSettings();
@@ -237,6 +323,10 @@ export function Products() {
     };
   }, [tenant]);
 
+  useEffect(() => {
+    loadBranchStocks();
+  }, [tenant?.id, activeBranch?.id, products.length]);
+
   const loadCategories = async (forceRefresh = false) => {
     if (!tenant) return;
     const { categories: prefetchedCategories } = await queryCache.getProductsAndCategories(tenant.id, undefined, forceRefresh);
@@ -248,6 +338,157 @@ export function Products() {
     const { products: prefetchedProducts } = await queryCache.getProductsAndCategories(tenant.id, undefined, forceRefresh);
     const sortedProducts = ([...(prefetchedProducts || [])] as Product[]).sort((a, b) => a.name.localeCompare(b.name, 'tr'));
     setProducts(sortedProducts);
+  };
+
+  const loadBranchStocks = async () => {
+    if (!tenant || !activeBranch) {
+      setBranchStockMap({});
+      return;
+    }
+    const { data, error } = await supabase
+      .from('branch_product_stocks')
+      .select('product_id, quantity')
+      .eq('tenant_id', tenant.id)
+      .eq('branch_id', activeBranch.id);
+
+    if (error) {
+      const msg = String((error as any)?.message || '');
+      if (msg.includes('branch_product_stocks')) {
+        setBranchStockFeatureAvailable(false);
+        setBranchStockMap({});
+        return;
+      }
+      return;
+    }
+
+    setBranchStockFeatureAvailable(true);
+
+    const nextMap: Record<string, number> = {};
+    (data || []).forEach((row: any) => {
+      nextMap[row.product_id] = Number(row.quantity || 0);
+    });
+    setBranchStockMap(nextMap);
+  };
+
+  const upsertBranchStock = async (branchId: string, productId: string, nextQuantity: number) => {
+    if (!tenant) return;
+    if (!branchStockFeatureAvailable) return;
+    const { error } = await supabase
+      .from('branch_product_stocks')
+      .upsert({
+        tenant_id: tenant.id,
+        branch_id: branchId,
+        product_id: productId,
+        quantity: Number(nextQuantity.toFixed(2)),
+      }, { onConflict: 'tenant_id,branch_id,product_id' });
+    if (error) throw error;
+  };
+
+  const getVisibleStock = (product: Product) => {
+    if (!branchStockFeatureAvailable) return Number(product.stock_quantity || 0);
+    const branchQty = branchStockMap[product.id];
+    if (branchQty !== undefined) return Number(branchQty || 0);
+    // Multi-branch mode: never mirror global stock to every branch view.
+    if ((branches?.length || 0) > 1 && activeBranch) return 0;
+    // Single-branch / legacy mode fallback.
+    return Number(product.stock_quantity || 0);
+  };
+
+  const loadStockMovements = async (productId: string) => {
+    if (!tenant) return;
+    setMovementLoading(true);
+    let query = supabase
+      .from('stock_movements')
+      .select('id,movement_type,quantity,unit_cost,total_cost,supplier_name,source_branch_id,target_branch_id,reference_type,reference_no,note,created_at')
+      .eq('tenant_id', tenant.id)
+      .eq('product_id', productId);
+
+    if (movementTypeFilter === 'in') query = query.eq('movement_type', 'in');
+    if (movementTypeFilter === 'out') query = query.eq('movement_type', 'out');
+    if (movementTypeFilter === 'transfer') query = query.eq('reference_type', 'branch_transfer');
+    if (movementTypeFilter === 'sale') query = query.eq('reference_type', 'sale_order');
+    if (movementBranchFilter !== 'all') {
+      query = query.or(`source_branch_id.eq.${movementBranchFilter},target_branch_id.eq.${movementBranchFilter}`);
+    }
+    if (movementDateFrom) {
+      const fromIso = new Date(`${movementDateFrom}T00:00:00`).toISOString();
+      query = query.gte('created_at', fromIso);
+    }
+    if (movementDateTo) {
+      const toIso = new Date(`${movementDateTo}T23:59:59.999`).toISOString();
+      query = query.lte('created_at', toIso);
+    }
+
+    const { data } = await query.order('created_at', { ascending: false }).limit(500);
+    let rows = (data || []) as any[];
+    let expanded = false;
+
+    // If today's filter has no rows, auto-expand to all dates so user still sees history.
+    if (rows.length === 0 && movementDateFrom && movementDateTo) {
+      const { data: allData } = await supabase
+        .from('stock_movements')
+        .select('id,movement_type,quantity,unit_cost,total_cost,supplier_name,source_branch_id,target_branch_id,reference_type,reference_no,note,created_at')
+        .eq('tenant_id', tenant.id)
+        .eq('product_id', productId)
+        .order('created_at', { ascending: false })
+        .limit(500);
+      rows = (allData || []) as any[];
+      expanded = rows.length > 0;
+    }
+
+    setMovementAutoExpanded(expanded);
+    setMovementRows(rows as any);
+    setMovementLoading(false);
+  };
+
+  const openStockMovements = async (product: Product) => {
+    if (!tenant) return;
+    const today = new Date().toISOString().slice(0, 10);
+    setMovementDateFrom(today);
+    setMovementDateTo(today);
+    setMovementTypeFilter('all');
+    setMovementBranchFilter(activeBranch?.id || 'all');
+    setMovementProduct(product);
+    setShowStockMovements(true);
+    await loadStockMovements(product.id);
+  };
+
+  useEffect(() => {
+    if (!showStockMovements || !movementProduct) return;
+    loadStockMovements(movementProduct.id);
+  }, [showStockMovements, movementProduct?.id, movementTypeFilter, movementBranchFilter, movementDateFrom, movementDateTo]);
+
+  const createReferenceNo = (prefix: 'ENT' | 'TRF') => {
+    const t = new Date();
+    const y = t.getFullYear();
+    const m = String(t.getMonth() + 1).padStart(2, '0');
+    const d = String(t.getDate()).padStart(2, '0');
+    const hh = String(t.getHours()).padStart(2, '0');
+    const mm = String(t.getMinutes()).padStart(2, '0');
+    const ss = String(t.getSeconds()).padStart(2, '0');
+    return `${prefix}-${y}${m}${d}-${hh}${mm}${ss}`;
+  };
+
+  const appendStockEntryLineByProduct = (productId: string) => {
+    if (!productId) return;
+    setStockEntryLines(prev => {
+      const existingIndex = prev.findIndex(l => l.product_id === productId);
+      if (existingIndex >= 0) {
+        return prev.map((l, i) => i === existingIndex ? { ...l, quantity: String((Number(l.quantity) || 0) + 1) } : l);
+      }
+      return [...prev, { product_id: productId, quantity: '1', unit_cost: '' }];
+    });
+  };
+
+  const appendStockTransferLineByProduct = (productId: string) => {
+    if (!productId) return;
+    setStockTransferLines(prev => {
+      const existingIndex = prev.findIndex(l => l.product_id === productId);
+      if (existingIndex >= 0) {
+        return prev.map((l, i) => i === existingIndex ? { ...l, quantity: String((Number(l.quantity) || 0) + 1) } : l);
+      }
+      return [...prev, { product_id: productId, quantity: '1' }];
+    });
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -490,6 +731,192 @@ export function Products() {
     setShowAddProduct(false);
   };
 
+  const handleStockEntry = async () => {
+    if (!tenant || !stockEntry.branch_id) return;
+    const validLines = stockEntryLines.filter((l) => l.product_id && Number(l.quantity) > 0);
+    if (validLines.length === 0) {
+      alert('En az bir urun ve miktar girmelisiniz');
+      return;
+    }
+
+    const referenceNo = createReferenceNo('ENT');
+    const receiptLines: StockReceiptLine[] = [];
+
+    for (const line of validLines) {
+      const qty = Number(line.quantity);
+      const selected = products.find(p => p.id === line.product_id);
+      if (!selected) continue;
+
+      const unitCost = line.unit_cost === '' ? null : Number(line.unit_cost);
+      if (unitCost !== null && (!Number.isFinite(unitCost) || unitCost < 0)) continue;
+
+      const nextQuantity = Number(selected.stock_quantity || 0) + qty;
+      const nextCost = unitCost !== null ? unitCost : Number(selected.cost || 0);
+
+      const { error: updateErr } = await supabase
+        .from('products')
+        .update({
+          stock_quantity: nextQuantity,
+          cost: nextCost,
+        })
+        .eq('id', selected.id)
+        .eq('tenant_id', tenant.id);
+
+      if (updateErr) {
+        alert(`Stok guncellenemedi (${selected.name}): ${updateErr.message}`);
+        return;
+      }
+
+      const selectedBranchQty = stockEntry.branch_id === activeBranch?.id
+        ? Number(branchStockMap[selected.id] || 0)
+        : Number((await supabase
+            .from('branch_product_stocks')
+            .select('quantity')
+            .eq('tenant_id', tenant.id)
+            .eq('branch_id', stockEntry.branch_id)
+            .eq('product_id', selected.id)
+            .maybeSingle()).data?.quantity || 0);
+      try {
+        await upsertBranchStock(stockEntry.branch_id, selected.id, selectedBranchQty + qty);
+      } catch (e: any) {
+        alert(`Sube stogu guncellenemedi (${selected.name}): ${e?.message || 'bilinmeyen hata'}`);
+        return;
+      }
+
+      await supabase.from('stock_movements').insert({
+        tenant_id: tenant.id,
+        product_id: selected.id,
+        movement_type: 'in',
+        quantity: qty,
+        unit_cost: unitCost,
+        total_cost: unitCost !== null ? Number((unitCost * qty).toFixed(2)) : null,
+        supplier_name: stockEntry.supplier_name || null,
+        note: stockEntry.note || null,
+        target_branch_id: stockEntry.branch_id,
+        reference_type: 'purchase_entry',
+        reference_no: referenceNo,
+      } as any);
+      receiptLines.push({
+        product_id: selected.id,
+        product_name: selected.name,
+        quantity: qty,
+        unit_cost: unitCost,
+      });
+    }
+
+    setStockEntry({
+      branch_id: activeBranch?.id || '',
+      supplier_name: '',
+      note: '',
+    });
+    setStockEntrySearch('');
+    setStockEntryBarcode('');
+    setStockEntryLines([{ product_id: '', quantity: '', unit_cost: '' }]);
+    setShowStockEntry(false);
+    const targetBranchName = branches.find(b => b.id === stockEntry.branch_id)?.name || 'Secili sube';
+    alert(`${receiptLines.length} urun stogu "${targetBranchName}" subesine islendi.`);
+    setLatestReceipt({
+      type: 'entry',
+      reference_no: referenceNo,
+      created_at: new Date().toISOString(),
+      target_branch_name: branches.find(b => b.id === stockEntry.branch_id)?.name,
+      supplier_name: stockEntry.supplier_name || undefined,
+      note: stockEntry.note || undefined,
+      lines: receiptLines,
+    });
+    setShowReceipt(true);
+    await loadProducts(true);
+    await loadBranchStocks();
+  };
+
+  const handleStockTransfer = async () => {
+    if (!branchStockFeatureAvailable) {
+      alert('Sube stok tablosu bulunamadi. Once branch stok migrationini uygulayin.');
+      return;
+    }
+    if (!tenant || !stockTransfer.source_branch_id || !stockTransfer.target_branch_id) return;
+    if (stockTransfer.source_branch_id === stockTransfer.target_branch_id) {
+      alert('Kaynak ve hedef sube ayni olamaz');
+      return;
+    }
+    const validLines = stockTransferLines.filter((l) => l.product_id && Number(l.quantity) > 0);
+    if (validLines.length === 0) {
+      alert('En az bir urun ve miktar girmelisiniz');
+      return;
+    }
+
+    const referenceNo = createReferenceNo('TRF');
+    const receiptLines: StockReceiptLine[] = [];
+
+    for (const line of validLines) {
+      const qty = Number(line.quantity);
+      const { data: src } = await supabase
+        .from('branch_product_stocks')
+        .select('quantity')
+        .eq('tenant_id', tenant.id)
+        .eq('branch_id', stockTransfer.source_branch_id)
+        .eq('product_id', line.product_id)
+        .maybeSingle();
+      const sourceQty = Number((src as any)?.quantity || 0);
+      if (sourceQty < qty) {
+        const pName = products.find((p) => p.id === line.product_id)?.name || 'urun';
+        alert(`Kaynak subede yeterli stok yok: ${pName}`);
+        return;
+      }
+
+      const { data: dst } = await supabase
+        .from('branch_product_stocks')
+        .select('quantity')
+        .eq('tenant_id', tenant.id)
+        .eq('branch_id', stockTransfer.target_branch_id)
+        .eq('product_id', line.product_id)
+        .maybeSingle();
+      const targetQty = Number((dst as any)?.quantity || 0);
+
+      await upsertBranchStock(stockTransfer.source_branch_id, line.product_id, sourceQty - qty);
+      await upsertBranchStock(stockTransfer.target_branch_id, line.product_id, targetQty + qty);
+
+      await supabase.from('stock_movements').insert({
+        tenant_id: tenant.id,
+        product_id: line.product_id,
+        movement_type: 'out',
+        quantity: qty,
+        source_branch_id: stockTransfer.source_branch_id,
+        target_branch_id: stockTransfer.target_branch_id,
+        note: stockTransfer.note || null,
+        reference_type: 'branch_transfer',
+        reference_no: referenceNo,
+      } as any);
+      const pName = products.find((p) => p.id === line.product_id)?.name || 'Urun';
+      receiptLines.push({
+        product_id: line.product_id,
+        product_name: pName,
+        quantity: qty,
+      });
+    }
+
+    setStockTransfer({
+      source_branch_id: activeBranch?.id || '',
+      target_branch_id: '',
+      note: '',
+    });
+    setStockTransferSearch('');
+    setStockTransferBarcode('');
+    setStockTransferLines([{ product_id: '', quantity: '' }]);
+    setShowStockTransfer(false);
+    setLatestReceipt({
+      type: 'transfer',
+      reference_no: referenceNo,
+      created_at: new Date().toISOString(),
+      source_branch_name: branches.find(b => b.id === stockTransfer.source_branch_id)?.name,
+      target_branch_name: branches.find(b => b.id === stockTransfer.target_branch_id)?.name,
+      note: stockTransfer.note || undefined,
+      lines: receiptLines,
+    });
+    setShowReceipt(true);
+    await loadBranchStocks();
+  };
+
   const startEdit = async (product: Product) => {
     const { data: variants } = await supabase
       .from('product_variants')
@@ -513,7 +940,6 @@ export function Products() {
         name: editForm.name,
         price: editForm.price,
         cost: editForm.cost,
-        stock_quantity: editForm.stock_quantity,
         unit: editForm.unit,
         tax_rate: editForm.tax_rate,
         image_url: editForm.image_url || null,
@@ -657,6 +1083,38 @@ export function Products() {
               <span className="hidden md:inline">Kategori</span>
             </button>
             <button
+              onClick={() => {
+                setStockEntry({
+                  branch_id: activeBranch?.id || '',
+                  supplier_name: '',
+                  note: '',
+                });
+                setStockEntryLines([{ product_id: '', quantity: '', unit_cost: '' }]);
+                setShowStockEntry(true);
+              }}
+              className="px-3 py-2 md:px-4 md:py-3 bg-white border-2 border-blue-200 text-blue-700 rounded-lg md:rounded-xl hover:shadow-lg hover:border-blue-300 transition-all active:scale-95 text-sm md:text-base flex items-center gap-1.5"
+              title="Tedarikci urun girisi"
+            >
+              <ArrowDownCircle size={15} />
+              <span className="hidden md:inline text-sm">Stok Girisi</span>
+            </button>
+            <button
+              onClick={() => {
+                setStockTransfer({
+                  source_branch_id: activeBranch?.id || '',
+                  target_branch_id: '',
+                  note: '',
+                });
+                setStockTransferLines([{ product_id: '', quantity: '' }]);
+                setShowStockTransfer(true);
+              }}
+              className="px-3 py-2 md:px-4 md:py-3 bg-white border-2 border-purple-200 text-purple-700 rounded-lg md:rounded-xl hover:shadow-lg hover:border-purple-300 transition-all active:scale-95 text-sm md:text-base flex items-center gap-1.5"
+              title="Subeler arasi urun transferi"
+            >
+              <ArrowRightLeft size={15} />
+              <span className="hidden md:inline text-sm">Stok Transfer</span>
+            </button>
+            <button
               onClick={() => setShowAddProduct(true)}
               className="px-3 py-2 md:px-6 md:py-3 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-lg md:rounded-xl hover:shadow-lg transition-all active:scale-95 text-sm md:text-base"
             >
@@ -670,10 +1128,16 @@ export function Products() {
           <div className="flex-1 relative">
             <Search className="absolute left-3 md:left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
             <input
-              type="text"
+              type="search"
               placeholder="Ürün ara..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
+              autoComplete="new-password"
+              autoCorrect="off"
+              autoCapitalize="off"
+              spellCheck={false}
+              name="product-search-no-autofill"
+              data-lpignore="true"
               className="w-full pl-10 md:pl-12 pr-3 md:pr-4 py-2.5 md:py-3 bg-white border-2 border-slate-200 rounded-lg md:rounded-xl focus:border-blue-500 focus:outline-none text-sm md:text-lg"
             />
           </div>
@@ -926,9 +1390,10 @@ export function Products() {
                       />
                       <input
                         type="number"
-                        value={editForm.stock_quantity}
-                        onChange={(e) => setEditForm({ ...editForm, stock_quantity: parseFloat(e.target.value) })}
-                        className="px-3 py-2 border-2 border-slate-200 rounded-lg focus:border-blue-500 focus:outline-none"
+                        value={getVisibleStock(product)}
+                        readOnly
+                        className="px-3 py-2 border-2 border-slate-200 rounded-lg bg-slate-100 text-slate-500 cursor-not-allowed"
+                        title="Stok elle degistirilemez. Stok Girisi / Stok Transfer kullanin."
                         placeholder="Stok"
                       />
                       <select
@@ -1099,6 +1564,13 @@ export function Products() {
                         </div>
                         <div className="flex gap-1 ml-2">
                           <button
+                            onClick={() => openStockMovements(product)}
+                            className="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all"
+                            title="Stok hareketleri"
+                          >
+                            <History size={16} />
+                          </button>
+                          <button
                             onClick={() => startEdit(product)}
                             className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition-all"
                           >
@@ -1119,12 +1591,20 @@ export function Products() {
                         </div>
                         <div className="bg-slate-50 p-2 rounded">
                           <div className="text-slate-500">Stok</div>
-                          <div className="font-medium text-slate-700">{product.stock_quantity} {product.unit}</div>
+                          <div className="font-medium text-slate-700">
+                            {getVisibleStock(product)} {product.unit}
+                            <span className="text-[10px] text-slate-400 ml-1">({activeBranch?.name || 'Sube'})</span>
+                          </div>
                         </div>
                         <div className="bg-blue-50 p-2 rounded">
                           <div className="text-slate-500">Kar</div>
                           <div className="font-bold text-blue-600">
-                            {((product.price - product.cost) / product.price * 100).toFixed(0)}%
+                            {(() => {
+                              const price = safeMoney(product.price);
+                              const cost = safeMoney(product.cost);
+                              if (price <= 0) return '0%';
+                              return `${(((price - cost) / price) * 100).toFixed(0)}%`;
+                            })()}
                           </div>
                         </div>
                       </div>
@@ -1159,15 +1639,18 @@ export function Products() {
                         </div>
                         <div className="text-center">
                           <div className="text-xs text-slate-500">Fiyat</div>
-                          <div className="font-bold text-green-600 text-base">{product.price.toFixed(2)} ₺</div>
+                          <div className="font-bold text-green-600 text-base">{safeMoney(product.price).toFixed(2)} ₺</div>
                         </div>
                         <div className="text-center">
                           <div className="text-xs text-slate-500">Maliyet</div>
-                          <div className="font-medium text-slate-700 text-base">{product.cost.toFixed(2)} ₺</div>
+                          <div className="font-medium text-slate-700 text-base">{safeMoney(product.cost).toFixed(2)} ₺</div>
                         </div>
                         <div className="text-center">
                           <div className="text-xs text-slate-500">Stok</div>
-                          <div className="font-medium text-slate-700 text-base">{product.stock_quantity} {product.unit}</div>
+                          <div className="font-medium text-slate-700 text-base">
+                            {getVisibleStock(product)} {product.unit}
+                          </div>
+                          <div className="text-[10px] text-slate-400">{activeBranch?.name || 'Sube stogu'}</div>
                         </div>
                         <div className="text-center">
                           <div className="text-xs text-slate-500">Fiyat</div>
@@ -1176,11 +1659,23 @@ export function Products() {
                         <div className="text-center">
                           <div className="text-xs text-slate-500">Kar</div>
                           <div className="font-bold text-blue-600 text-base">
-                            {((product.price - product.cost) / product.price * 100).toFixed(0)}%
+                            {(() => {
+                              const price = safeMoney(product.price);
+                              const cost = safeMoney(product.cost);
+                              if (price <= 0) return '0%';
+                              return `${(((price - cost) / price) * 100).toFixed(0)}%`;
+                            })()}
                           </div>
                         </div>
                       </div>
                       <div className="flex gap-2">
+                        <button
+                          onClick={() => openStockMovements(product)}
+                          className="p-2 text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all"
+                          title="Stok hareketleri"
+                        >
+                          <History size={18} />
+                        </button>
                         <button
                           onClick={() => startEdit(product)}
                           className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-all"
@@ -1582,6 +2077,489 @@ export function Products() {
                 </button>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {showStockEntry && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl p-8 max-w-xl w-full">
+            <h2 className="text-2xl font-bold mb-6">Stok Girisi (Tedarik)</h2>
+            <div className="space-y-4">
+              {!branchStockFeatureAvailable && (
+                <div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                  Uyari: Subeye ozel stok tablosu henuz kurulmadigi icin su an global stok isleniyor.
+                </div>
+              )}
+              <div className="text-xs text-slate-500 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
+                Aktif sube: <span className="font-semibold text-slate-700">{activeBranch?.name || '-'}</span>
+              </div>
+              <select
+                value={stockEntry.branch_id}
+                onChange={(e) => setStockEntry({ ...stockEntry, branch_id: e.target.value })}
+                className="w-full px-4 py-3 border-2 border-slate-200 rounded-xl focus:border-blue-500 focus:outline-none text-base"
+              >
+                <option value="">Sube secin</option>
+                {branches.map((b) => (
+                  <option key={b.id} value={b.id}>{b.name}{b.is_main ? ' (Ana Sube)' : ''}</option>
+                ))}
+              </select>
+
+              <div className="space-y-2 max-h-64 overflow-y-auto">
+                <div className="grid grid-cols-2 gap-2">
+                  <input
+                    type="text"
+                    value={stockEntrySearch}
+                    onChange={(e) => setStockEntrySearch(e.target.value)}
+                    placeholder="Urun ara ve Enter"
+                    autoComplete="new-password"
+                    data-lpignore="true"
+                    onKeyDown={(e) => {
+                      if (e.key !== 'Enter') return;
+                      const q = stockEntrySearch.trim().toLowerCase();
+                      if (!q) return;
+                      const hit = products.find((p) => p.name.toLowerCase().includes(q));
+                      if (hit) {
+                        appendStockEntryLineByProduct(hit.id);
+                        setStockEntrySearch('');
+                      }
+                    }}
+                    className="px-3 py-2 border-2 border-slate-200 rounded-xl focus:border-blue-500 focus:outline-none text-sm"
+                  />
+                  <input
+                    type="text"
+                    value={stockEntryBarcode}
+                    onChange={(e) => setStockEntryBarcode(e.target.value)}
+                    placeholder="Barkod okut / gir"
+                    autoComplete="off"
+                    data-lpignore="true"
+                    onKeyDown={(e) => {
+                      if (e.key !== 'Enter') return;
+                      const code = stockEntryBarcode.trim();
+                      if (!code) return;
+                      const hit = products.find((p) => p.barcode === code);
+                      if (hit) {
+                        appendStockEntryLineByProduct(hit.id);
+                        setStockEntryBarcode('');
+                      } else {
+                        alert('Barkod ile urun bulunamadi');
+                      }
+                    }}
+                    className="px-3 py-2 border-2 border-slate-200 rounded-xl focus:border-blue-500 focus:outline-none text-sm"
+                  />
+                </div>
+                {stockEntryLines.map((line, idx) => (
+                  <div key={idx} className="grid grid-cols-12 gap-2 items-center">
+                    <select
+                      value={line.product_id}
+                      onChange={(e) => setStockEntryLines(prev => prev.map((r, i) => i === idx ? { ...r, product_id: e.target.value } : r))}
+                      className="col-span-6 px-3 py-2 border-2 border-slate-200 rounded-xl focus:border-blue-500 focus:outline-none text-sm"
+                    >
+                      <option value="">Urun secin</option>
+                      {products.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name} (Mevcut: {getVisibleStock(p)} {p.unit})
+                        </option>
+                      ))}
+                    </select>
+                    <input
+                      type="number"
+                      min="0.01"
+                      step="0.01"
+                      placeholder="Miktar"
+                      value={line.quantity}
+                      onChange={(e) => setStockEntryLines(prev => prev.map((r, i) => i === idx ? { ...r, quantity: e.target.value } : r))}
+                      className="col-span-2 px-3 py-2 border-2 border-slate-200 rounded-xl focus:border-blue-500 focus:outline-none text-sm"
+                    />
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      placeholder="Maliyet"
+                      value={line.unit_cost}
+                      onChange={(e) => setStockEntryLines(prev => prev.map((r, i) => i === idx ? { ...r, unit_cost: e.target.value } : r))}
+                      className="col-span-3 px-3 py-2 border-2 border-slate-200 rounded-xl focus:border-blue-500 focus:outline-none text-sm"
+                    />
+                    <button
+                      onClick={() => setStockEntryLines(prev => prev.length === 1 ? prev : prev.filter((_, i) => i !== idx))}
+                      className="col-span-1 p-2 text-red-600 hover:bg-red-50 rounded-lg"
+                      title="Satir sil"
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
+                ))}
+                <button
+                  onClick={() => setStockEntryLines(prev => [...prev, { product_id: '', quantity: '', unit_cost: '' }])}
+                  className="w-full px-3 py-2 border border-blue-200 text-blue-700 rounded-xl hover:bg-blue-50 text-sm"
+                >
+                  + Satir Ekle
+                </button>
+              </div>
+
+              <input
+                type="text"
+                placeholder="Tedarikci/Firma (opsiyonel)"
+                value={stockEntry.supplier_name}
+                onChange={(e) => setStockEntry({ ...stockEntry, supplier_name: e.target.value })}
+                className="w-full px-4 py-3 border-2 border-slate-200 rounded-xl focus:border-blue-500 focus:outline-none"
+              />
+
+              <textarea
+                placeholder="Not (irsaliye/fatura no vb.)"
+                value={stockEntry.note}
+                onChange={(e) => setStockEntry({ ...stockEntry, note: e.target.value })}
+                className="w-full px-4 py-3 border-2 border-slate-200 rounded-xl focus:border-blue-500 focus:outline-none"
+                rows={3}
+              />
+
+              <div className="flex gap-3 mt-2">
+                <button
+                  onClick={() => setShowStockEntry(false)}
+                  className="flex-1 px-6 py-3 bg-slate-200 text-slate-700 rounded-xl hover:bg-slate-300 transition-all"
+                >
+                  Iptal
+                </button>
+                <button
+                  onClick={handleStockEntry}
+                  className="flex-1 px-6 py-3 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-xl hover:shadow-lg transition-all"
+                >
+                  Stok Girisi Kaydet
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showStockTransfer && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl p-8 max-w-xl w-full">
+            <h2 className="text-2xl font-bold mb-6">Subeler Arasi Stok Transferi</h2>
+            <div className="space-y-4">
+              <select
+                value={stockTransfer.source_branch_id}
+                onChange={(e) => setStockTransfer({ ...stockTransfer, source_branch_id: e.target.value })}
+                className="w-full px-4 py-3 border-2 border-slate-200 rounded-xl focus:border-purple-500 focus:outline-none text-base"
+              >
+                <option value="">Kaynak sube secin</option>
+                {branches.map((b) => (
+                  <option key={b.id} value={b.id}>{b.name}{b.is_main ? ' (Ana Sube)' : ''}</option>
+                ))}
+              </select>
+
+              <select
+                value={stockTransfer.target_branch_id}
+                onChange={(e) => setStockTransfer({ ...stockTransfer, target_branch_id: e.target.value })}
+                className="w-full px-4 py-3 border-2 border-slate-200 rounded-xl focus:border-purple-500 focus:outline-none text-base"
+              >
+                <option value="">Hedef sube secin</option>
+                {branches.filter((b) => b.id !== stockTransfer.source_branch_id).map((b) => (
+                  <option key={b.id} value={b.id}>{b.name}</option>
+                ))}
+              </select>
+
+              <div className="space-y-2 max-h-64 overflow-y-auto">
+                <div className="grid grid-cols-2 gap-2">
+                  <input
+                    type="text"
+                    value={stockTransferSearch}
+                    onChange={(e) => setStockTransferSearch(e.target.value)}
+                    placeholder="Urun ara ve Enter"
+                    autoComplete="new-password"
+                    data-lpignore="true"
+                    onKeyDown={(e) => {
+                      if (e.key !== 'Enter') return;
+                      const q = stockTransferSearch.trim().toLowerCase();
+                      if (!q) return;
+                      const hit = products.find((p) => p.name.toLowerCase().includes(q));
+                      if (hit) {
+                        appendStockTransferLineByProduct(hit.id);
+                        setStockTransferSearch('');
+                      }
+                    }}
+                    className="px-3 py-2 border-2 border-slate-200 rounded-xl focus:border-purple-500 focus:outline-none text-sm"
+                  />
+                  <input
+                    type="text"
+                    value={stockTransferBarcode}
+                    onChange={(e) => setStockTransferBarcode(e.target.value)}
+                    placeholder="Barkod okut / gir"
+                    autoComplete="off"
+                    data-lpignore="true"
+                    onKeyDown={(e) => {
+                      if (e.key !== 'Enter') return;
+                      const code = stockTransferBarcode.trim();
+                      if (!code) return;
+                      const hit = products.find((p) => p.barcode === code);
+                      if (hit) {
+                        appendStockTransferLineByProduct(hit.id);
+                        setStockTransferBarcode('');
+                      } else {
+                        alert('Barkod ile urun bulunamadi');
+                      }
+                    }}
+                    className="px-3 py-2 border-2 border-slate-200 rounded-xl focus:border-purple-500 focus:outline-none text-sm"
+                  />
+                </div>
+                {stockTransferLines.map((line, idx) => (
+                  <div key={idx} className="grid grid-cols-12 gap-2 items-center">
+                    <select
+                      value={line.product_id}
+                      onChange={(e) => setStockTransferLines(prev => prev.map((r, i) => i === idx ? { ...r, product_id: e.target.value } : r))}
+                      className="col-span-8 px-3 py-2 border-2 border-slate-200 rounded-xl focus:border-purple-500 focus:outline-none text-sm"
+                    >
+                      <option value="">Transfer urunu</option>
+                      {products.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name} (Kaynak stok: {getVisibleStock(p)} {p.unit})
+                        </option>
+                      ))}
+                    </select>
+                    <input
+                      type="number"
+                      min="0.01"
+                      step="0.01"
+                      placeholder="Miktar"
+                      value={line.quantity}
+                      onChange={(e) => setStockTransferLines(prev => prev.map((r, i) => i === idx ? { ...r, quantity: e.target.value } : r))}
+                      className="col-span-3 px-3 py-2 border-2 border-slate-200 rounded-xl focus:border-purple-500 focus:outline-none text-sm"
+                    />
+                    <button
+                      onClick={() => setStockTransferLines(prev => prev.length === 1 ? prev : prev.filter((_, i) => i !== idx))}
+                      className="col-span-1 p-2 text-red-600 hover:bg-red-50 rounded-lg"
+                      title="Satir sil"
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
+                ))}
+                <button
+                  onClick={() => setStockTransferLines(prev => [...prev, { product_id: '', quantity: '' }])}
+                  className="w-full px-3 py-2 border border-purple-200 text-purple-700 rounded-xl hover:bg-purple-50 text-sm"
+                >
+                  + Satir Ekle
+                </button>
+              </div>
+
+              <textarea
+                placeholder="Transfer notu (opsiyonel)"
+                value={stockTransfer.note}
+                onChange={(e) => setStockTransfer({ ...stockTransfer, note: e.target.value })}
+                className="w-full px-4 py-3 border-2 border-slate-200 rounded-xl focus:border-purple-500 focus:outline-none"
+                rows={3}
+              />
+
+              <div className="flex gap-3 mt-2">
+                <button
+                  onClick={() => setShowStockTransfer(false)}
+                  className="flex-1 px-6 py-3 bg-slate-200 text-slate-700 rounded-xl hover:bg-slate-300 transition-all"
+                >
+                  Iptal
+                </button>
+                <button
+                  onClick={handleStockTransfer}
+                  className="flex-1 px-6 py-3 bg-gradient-to-r from-purple-600 to-purple-700 text-white rounded-xl hover:shadow-lg transition-all"
+                >
+                  Transferi Kaydet
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showReceipt && latestReceipt && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-xl font-bold text-slate-800">
+                {latestReceipt.type === 'entry' ? 'Toplu Urun Giris Fisi' : 'Subeler Arasi Transfer Fisi'}
+              </h2>
+              <button onClick={() => setShowReceipt(false)} className="p-2 rounded-lg hover:bg-slate-100 text-slate-500">
+                <X size={18} />
+              </button>
+            </div>
+            <div className="grid grid-cols-2 gap-3 text-sm mb-4">
+              <div><span className="text-slate-500">Fis No:</span> <span className="font-semibold">{latestReceipt.reference_no}</span></div>
+              <div><span className="text-slate-500">Tarih:</span> <span className="font-semibold">{new Date(latestReceipt.created_at).toLocaleString('tr-TR')}</span></div>
+              {latestReceipt.source_branch_name ? <div><span className="text-slate-500">Kaynak:</span> <span className="font-semibold">{latestReceipt.source_branch_name}</span></div> : null}
+              {latestReceipt.target_branch_name ? <div><span className="text-slate-500">Hedef:</span> <span className="font-semibold">{latestReceipt.target_branch_name}</span></div> : null}
+              {latestReceipt.supplier_name ? <div><span className="text-slate-500">Tedarikci:</span> <span className="font-semibold">{latestReceipt.supplier_name}</span></div> : null}
+            </div>
+            <div className="border rounded-xl overflow-hidden mb-4">
+              <table className="w-full text-sm">
+                <thead className="bg-slate-100">
+                  <tr>
+                    <th className="text-left p-2">Urun</th>
+                    <th className="text-right p-2">Miktar</th>
+                    <th className="text-right p-2">Birim Maliyet</th>
+                    <th className="text-right p-2">Tutar</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {latestReceipt.lines.map((l, i) => (
+                    <tr key={i} className="border-t">
+                      <td className="p-2">{l.product_name}</td>
+                      <td className="p-2 text-right">{l.quantity}</td>
+                      <td className="p-2 text-right">{l.unit_cost != null ? `${l.unit_cost.toFixed(2)} ₺` : '-'}</td>
+                      <td className="p-2 text-right">{l.unit_cost != null ? `${(l.quantity * l.unit_cost).toFixed(2)} ₺` : '-'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {latestReceipt.note ? (
+              <div className="text-sm text-slate-600 bg-slate-50 border border-slate-200 rounded-lg p-3 mb-4">
+                <strong>Not:</strong> {latestReceipt.note}
+              </div>
+            ) : null}
+            <div className="flex gap-3">
+              <button
+                onClick={() => window.print()}
+                className="flex-1 px-5 py-2.5 bg-blue-600 text-white rounded-xl hover:bg-blue-700"
+              >
+                YAZDIR
+              </button>
+              <button
+                onClick={() => setShowReceipt(false)}
+                className="flex-1 px-5 py-2.5 bg-slate-200 text-slate-700 rounded-xl hover:bg-slate-300"
+              >
+                Kapat
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showStockMovements && movementProduct && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl p-6 max-w-6xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-center mb-4">
+              <div>
+                <h2 className="text-xl font-bold text-slate-800">Stok Hareketleri</h2>
+                <p className="text-sm text-slate-500">{movementProduct.name}</p>
+              </div>
+              <button onClick={() => {
+                setShowStockMovements(false);
+                setMovementTypeFilter('all');
+                setMovementBranchFilter('all');
+                const today = new Date().toISOString().slice(0, 10);
+                setMovementDateFrom(today);
+                setMovementDateTo(today);
+                setMovementAutoExpanded(false);
+              }} className="p-2 rounded-lg hover:bg-slate-100 text-slate-500">
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-5 gap-2 mb-4">
+              <select
+                value={movementTypeFilter}
+                onChange={(e) => setMovementTypeFilter(e.target.value as any)}
+                className="px-3 py-2 border border-slate-300 rounded-lg text-sm"
+              >
+                <option value="all">Tum Hareketler</option>
+                <option value="in">Sadece Giris</option>
+                <option value="out">Sadece Cikis</option>
+                <option value="transfer">Transferler</option>
+                <option value="sale">Satis Cikislari</option>
+              </select>
+              <select
+                value={movementBranchFilter}
+                onChange={(e) => setMovementBranchFilter(e.target.value)}
+                className="px-3 py-2 border border-slate-300 rounded-lg text-sm"
+              >
+                <option value="all">Tum Subeler</option>
+                {branches.map((b) => (
+                  <option key={b.id} value={b.id}>{b.name}</option>
+                ))}
+              </select>
+              <input
+                type="date"
+                value={movementDateFrom}
+                onChange={(e) => setMovementDateFrom(e.target.value)}
+                className="px-3 py-2 border border-slate-300 rounded-lg text-sm"
+              />
+              <input
+                type="date"
+                value={movementDateTo}
+                onChange={(e) => setMovementDateTo(e.target.value)}
+                className="px-3 py-2 border border-slate-300 rounded-lg text-sm"
+              />
+              <button
+                onClick={() => {
+                  setMovementTypeFilter('all');
+                  setMovementBranchFilter('all');
+                  setMovementDateFrom('');
+                  setMovementDateTo('');
+                }}
+                className="px-3 py-2 border border-slate-300 rounded-lg text-sm hover:bg-slate-50"
+              >
+                Filtreyi Temizle
+              </button>
+            </div>
+            <div className="text-xs text-slate-500 mb-3">
+              Not: Varsayilan olarak bugunun hareketleri listelenir. Tum zaman icin "Filtreyi Temizle" kullanabilirsiniz.
+            </div>
+            {movementAutoExpanded && (
+              <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-3">
+                Bugun kayit bulunamadigi icin tum tarih araligindaki hareketler gosterildi.
+              </div>
+            )}
+
+            {movementLoading ? (
+              <div className="py-10 text-center text-slate-500">Yukleniyor...</div>
+            ) : movementRows.length === 0 ? (
+              <div className="py-10 text-center text-slate-500">Bu urun icin stok hareketi yok.</div>
+            ) : (
+              <div className="border rounded-xl overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead className="bg-slate-100">
+                    <tr>
+                      <th className="text-left p-2">Tarih</th>
+                      <th className="text-left p-2">Islem</th>
+                      <th className="text-left p-2">Sube</th>
+                      <th className="text-left p-2">Firma</th>
+                      <th className="text-right p-2">Miktar</th>
+                      <th className="text-right p-2">Birim</th>
+                      <th className="text-right p-2">Tutar</th>
+                      <th className="text-left p-2">Fis No</th>
+                      <th className="text-left p-2">Not</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {movementRows.map((row) => {
+                      const sourceBranch = branches.find(b => b.id === row.source_branch_id)?.name || '-';
+                      const targetBranch = branches.find(b => b.id === row.target_branch_id)?.name || '-';
+                      const opLabel = row.reference_type === 'branch_transfer'
+                        ? 'Transfer Cikis'
+                        : row.movement_type === 'in'
+                          ? 'Stok Girisi'
+                          : row.movement_type === 'out'
+                            ? 'Stok Cikisi'
+                            : 'Duzeltme';
+                      const branchLabel = row.reference_type === 'branch_transfer'
+                        ? `${sourceBranch} -> ${targetBranch}`
+                        : targetBranch !== '-' ? targetBranch : sourceBranch;
+                      return (
+                        <tr key={row.id} className="border-t">
+                          <td className="p-2 whitespace-nowrap">{new Date(row.created_at).toLocaleString('tr-TR')}</td>
+                          <td className="p-2">{opLabel}</td>
+                          <td className="p-2">{branchLabel}</td>
+                          <td className="p-2">{row.supplier_name || '-'}</td>
+                          <td className="p-2 text-right">{Number(row.quantity || 0)}</td>
+                          <td className="p-2 text-right">{row.unit_cost != null ? `${Number(row.unit_cost).toFixed(2)} ₺` : '-'}</td>
+                          <td className="p-2 text-right">{row.total_cost != null ? `${Number(row.total_cost).toFixed(2)} ₺` : '-'}</td>
+                          <td className="p-2">{row.reference_no || '-'}</td>
+                          <td className="p-2">{row.note || '-'}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         </div>
       )}

@@ -19,6 +19,14 @@ interface CategoryStat {
   productCount: number;
 }
 
+interface StockFlowStat {
+  product: string;
+  inQty: number;
+  outQty: number;
+  transferQty: number;
+  saleOutQty: number;
+}
+
 interface ProductReportProps {
   selectedBranch: string;
 }
@@ -36,6 +44,7 @@ export function ProductReport({ selectedBranch }: ProductReportProps) {
   const [customEnd, setCustomEnd] = useState('');
   const [view, setView] = useState<'products' | 'categories'>('products');
   const [sortBy, setSortBy] = useState<'revenue' | 'quantity'>('revenue');
+  const [stockFlows, setStockFlows] = useState<StockFlowStat[]>([]);
 
   const fmt = (n: number) =>
     new Intl.NumberFormat('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n);
@@ -75,7 +84,18 @@ export function ProductReport({ selectedBranch }: ProductReportProps) {
       ordersQ = ordersQ.eq('branch_id', effectiveBranch);
     }
 
-    const { data: orders } = await ordersQ;
+    let stockQ = supabase
+      .from('stock_movements')
+      .select('product_id, movement_type, quantity, reference_type, source_branch_id, target_branch_id')
+      .eq('tenant_id', tenant.id)
+      .gte('created_at', start)
+      .lte('created_at', end);
+
+    if (effectiveBranch !== 'all') {
+      stockQ = stockQ.or(`source_branch_id.eq.${effectiveBranch},target_branch_id.eq.${effectiveBranch}`);
+    }
+
+    const [{ data: orders }, { data: stockMoves }] = await Promise.all([ordersQ, stockQ]);
 
     const productMap: Record<string, ProductStat> = {};
     const categoryMap: Record<string, CategoryStat> = {};
@@ -113,8 +133,40 @@ export function ProductReport({ selectedBranch }: ProductReportProps) {
     const categoryList = Object.values(categoryMap)
       .sort((a, b) => sortBy === 'revenue' ? b.revenue - a.revenue : b.quantity - a.quantity);
 
+    const productNameById: Record<string, string> = {};
+    (orders || []).forEach((order: any) => {
+      (order.order_items || []).forEach((item: any) => {
+        if (item.product_id && item.products?.name) productNameById[item.product_id] = item.products.name;
+      });
+    });
+
+    const stockFlowMap: Record<string, StockFlowStat> = {};
+    (stockMoves || []).forEach((m: any) => {
+      const pid = m.product_id;
+      if (!pid) return;
+      if (!stockFlowMap[pid]) {
+        stockFlowMap[pid] = {
+          product: productNameById[pid] || `Urun (${pid.slice(0, 8)})`,
+          inQty: 0,
+          outQty: 0,
+          transferQty: 0,
+          saleOutQty: 0,
+        };
+      }
+      const qty = Number(m.quantity || 0);
+      if (m.movement_type === 'in') stockFlowMap[pid].inQty += qty;
+      if (m.movement_type === 'out') stockFlowMap[pid].outQty += qty;
+      if (m.reference_type === 'branch_transfer') stockFlowMap[pid].transferQty += qty;
+      if (m.reference_type === 'sale_order') stockFlowMap[pid].saleOutQty += qty;
+    });
+
+    const stockFlowList = Object.values(stockFlowMap).sort((a, b) =>
+      (b.inQty + b.outQty) - (a.inQty + a.outQty)
+    );
+
     setProducts(productList);
     setCategories(categoryList);
+    setStockFlows(stockFlowList);
     setLoading(false);
   };
 
@@ -243,6 +295,40 @@ export function ProductReport({ selectedBranch }: ProductReportProps) {
                             </tr>
                           );
                         })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+
+              <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+                <div className="px-5 py-4 border-b border-slate-100">
+                  <h3 className="font-bold text-slate-700">Şube Bazlı Stok Hareket Özeti</h3>
+                </div>
+                {stockFlows.length === 0 ? (
+                  <div className="p-8 text-center text-slate-500">Seçili aralıkta stok hareketi bulunamadı</div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead className="bg-slate-50">
+                        <tr>
+                          <th className="text-left py-3 px-5 text-slate-500 font-semibold">Ürün</th>
+                          <th className="text-right py-3 px-5 text-slate-500 font-semibold">Giriş</th>
+                          <th className="text-right py-3 px-5 text-slate-500 font-semibold">Çıkış</th>
+                          <th className="text-right py-3 px-5 text-slate-500 font-semibold">Transfer</th>
+                          <th className="text-right py-3 px-5 text-slate-500 font-semibold">Satış Çıkışı</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {stockFlows.map((s) => (
+                          <tr key={s.product} className="border-t border-slate-50 hover:bg-slate-50 transition">
+                            <td className="py-3 px-5 font-semibold text-slate-800">{s.product}</td>
+                            <td className="py-3 px-5 text-right font-semibold text-emerald-700">{s.inQty}</td>
+                            <td className="py-3 px-5 text-right font-semibold text-red-700">{s.outQty}</td>
+                            <td className="py-3 px-5 text-right font-semibold text-purple-700">{s.transferQty}</td>
+                            <td className="py-3 px-5 text-right font-semibold text-blue-700">{s.saleOutQty}</td>
+                          </tr>
+                        ))}
                       </tbody>
                     </table>
                   </div>

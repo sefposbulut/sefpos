@@ -8,7 +8,7 @@ import {
 import { supabase } from '../lib/supabase';
 
 interface Props {
-  onModeSelect: (mode: 'cloud' | 'sqlserver' | 'terminal' | 'local') => void;
+  onModeSelect: (mode: 'cloud' | 'sqlserver' | 'postgres' | 'terminal' | 'local') => void;
 }
 
 type Step = 'welcome' | 'mode' | 'reseller' | 'sqlserver' | 'done';
@@ -22,14 +22,14 @@ interface SqlServerConfig {
 
 const defaultSqlConfig: SqlServerConfig = {
   host: 'localhost',
-  port: '1433',
-  username: 'sa',
-  password: '',
+  port: '5432',
+  username: 'postgres',
+  password: '1578',
 };
 
 export function SetupWizard({ onModeSelect }: Props) {
   const [step, setStep] = useState<Step>('welcome');
-  const [selectedMode, setSelectedMode] = useState<'cloud' | 'sqlserver' | null>(null);
+  const [selectedMode, setSelectedMode] = useState<'cloud' | 'sqlserver' | 'postgres' | null>(null);
   const [isReseller, setIsReseller] = useState<boolean | null>(null);
   const [resellerCode, setResellerCode] = useState('');
   const [resellerCodeStatus, setResellerCodeStatus] = useState<'idle' | 'checking' | 'ok' | 'error'>('idle');
@@ -49,7 +49,7 @@ export function SetupWizard({ onModeSelect }: Props) {
   const [resellerSubmitting, setResellerSubmitting] = useState(false);
   const [resellerSubmitted, setResellerSubmitted] = useState(false);
 
-  const handleModeSelect = (mode: 'cloud' | 'sqlserver' | 'terminal' | 'local') => {
+  const handleModeSelect = (mode: 'cloud' | 'sqlserver' | 'postgres' | 'terminal' | 'local') => {
     if (mode === 'terminal') {
       onModeSelect('terminal');
       return;
@@ -58,7 +58,7 @@ export function SetupWizard({ onModeSelect }: Props) {
       onModeSelect('local');
       return;
     }
-    setSelectedMode(mode as 'cloud' | 'sqlserver');
+    setSelectedMode(mode as 'cloud' | 'sqlserver' | 'postgres');
     if (mode === 'cloud') {
       setStep('reseller');
     } else {
@@ -112,6 +112,29 @@ export function SetupWizard({ onModeSelect }: Props) {
 
   const handleSqlServerImport = async () => {
     const api = (window as any).electronAPI;
+    const isPostgres = selectedMode === 'postgres';
+    if (isPostgres) {
+      if (!api?.postgresInitDatabase) {
+        setImportStatus('error');
+        setImportMessage('PostgreSQL kurulumu bu sürümde yok.');
+        return;
+      }
+      setImportStatus('importing');
+      setImportMessage('');
+      const result = await api.postgresInitDatabase({
+        ...sqlConfig,
+        database: 'sefpos45',
+      });
+      if (result.success) {
+        setImportStatus('ok');
+        setImportMessage(result.output || 'PostgreSQL veritabanı hazırlandı!');
+      } else {
+        setImportStatus('error');
+        setImportMessage(result.error || 'Kurulum başarısız oldu.');
+      }
+      return;
+    }
+
     if (!api?.importSqlServerSchema) {
       setImportStatus('error');
       setImportMessage('Bu özellik sadece Electron uygulamasında çalışır.');
@@ -147,7 +170,7 @@ export function SetupWizard({ onModeSelect }: Props) {
         trustServerCertificate: true,
       });
     }
-    onModeSelect('sqlserver');
+    onModeSelect(selectedMode === 'postgres' ? 'postgres' : 'sqlserver');
   };
 
   return (
@@ -266,8 +289,8 @@ function WelcomeStep({ onNext }: { onNext: () => void }) {
   );
 }
 
-function ModeStep({ onSelect, onBack }: { onSelect: (m: 'cloud' | 'sqlserver' | 'terminal' | 'local') => void; onBack: () => void }) {
-  const [hovered, setHovered] = useState<'cloud' | 'sqlserver' | 'terminal' | 'local' | null>(null);
+function ModeStep({ onSelect, onBack }: { onSelect: (m: 'cloud' | 'sqlserver' | 'postgres' | 'terminal' | 'local') => void; onBack: () => void }) {
+  const [hovered, setHovered] = useState<'cloud' | 'sqlserver' | 'postgres' | 'terminal' | 'local' | null>(null);
 
   return (
     <div className="w-full max-w-4xl">
@@ -333,8 +356,8 @@ function ModeStep({ onSelect, onBack }: { onSelect: (m: 'cloud' | 'sqlserver' | 
         </button>
 
         <button
-          onClick={() => onSelect('sqlserver')}
-          onMouseEnter={() => setHovered('sqlserver')}
+          onClick={() => onSelect('postgres')}
+          onMouseEnter={() => setHovered('postgres')}
           onMouseLeave={() => setHovered(null)}
           className="group bg-white/5 hover:bg-emerald-600/15 border border-white/10 hover:border-emerald-500/50 rounded-2xl p-6 text-left transition-all duration-300 cursor-pointer"
         >
@@ -342,14 +365,14 @@ function ModeStep({ onSelect, onBack }: { onSelect: (m: 'cloud' | 'sqlserver' | 
             <div className="w-12 h-12 bg-emerald-500/20 group-hover:bg-emerald-500/30 rounded-xl flex items-center justify-center transition-colors">
               <Server className="w-6 h-6 text-emerald-400" />
             </div>
-            <ArrowRight className={`w-4 h-4 transition-all duration-300 ${hovered === 'sqlserver' ? 'translate-x-1 text-emerald-400' : 'text-slate-600'}`} />
+            <ArrowRight className={`w-4 h-4 transition-all duration-300 ${hovered === 'postgres' ? 'translate-x-1 text-emerald-400' : 'text-slate-600'}`} />
           </div>
-          <h3 className="text-lg font-bold text-white mb-1.5">Yerel (SQL Server)</h3>
+          <h3 className="text-lg font-bold text-white mb-1.5">Yerel (PostgreSQL)</h3>
           <p className="text-slate-400 text-sm leading-relaxed mb-4">
-            Verileriniz yerel sunucuda. SQL Server kurulumu gerektirir.
+            Verileriniz yerel PostgreSQL sunucusunda. Kurulum ve yapılandırma gerektirir.
           </p>
           <ul className="space-y-1.5">
-            {['SQL Server gerektirir', 'Tam kontrol', 'Düşük gecikme', 'Tek lokasyon'].map(f => (
+            {['PostgreSQL gerektirir', 'Tam kontrol', 'Düşük gecikme', 'Tek lokasyon'].map(f => (
               <li key={f} className="flex items-center gap-2 text-xs text-slate-300">
                 <WifiOff className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />
                 {f}

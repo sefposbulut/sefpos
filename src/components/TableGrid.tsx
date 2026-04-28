@@ -4,7 +4,6 @@ import { useAuth } from '../contexts/AuthContext';
 import { Database } from '../lib/supabase';
 import { Plus, Clock, ShoppingCart, Lock, ZoomIn, ZoomOut } from 'lucide-react';
 import { isLocalMode } from '../lib/sqlDb';
-import { queryCache } from '../lib/queryCache';
 
 type Table = Database['public']['Tables']['restaurant_tables']['Row'] & {
   branch_id?: string | null;
@@ -26,34 +25,64 @@ interface TableGridProps {
   onSelectTable: (table: Table) => void;
   onRefresh?: (fn: () => void) => void;
   onNavigate?: (page: string) => void;
+  showTakeawayButton?: boolean;
 }
 
 const naturalSort = (a: TableWithOrder, b: TableWithOrder) =>
   String(a.table_number).localeCompare(String(b.table_number), undefined, { numeric: true, sensitivity: 'base' });
 
-export function TableGrid({ onSelectTable, onRefresh, onNavigate }: TableGridProps) {
+const tableGridRuntimeCache = new Map<string, { tables: TableWithOrder[]; groups: TableGroup[] }>();
+
+export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayButton = true }: TableGridProps) {
   const { tenant, user, activeBranch } = useAuth();
+  const mobileColsStorageKey = useMemo(() => {
+    if (!tenant?.id || !activeBranch?.id || !user?.id) return 'mobileTableCols';
+    return `mobileTableCols:${tenant.id}:${activeBranch.id}:${user.id}`;
+  }, [tenant?.id, activeBranch?.id, user?.id]);
+  const desktopColsStorageKey = useMemo(() => {
+    if (!tenant?.id || !activeBranch?.id || !user?.id) return 'desktopTableCols';
+    return `desktopTableCols:${tenant.id}:${activeBranch.id}:${user.id}`;
+  }, [tenant?.id, activeBranch?.id, user?.id]);
+
   const [tables, setTables] = useState<TableWithOrder[]>([]);
   const [tableGroups, setTableGroups] = useState<TableGroup[]>([]);
   const [selectedGroup, setSelectedGroup] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [currentTime, setCurrentTime] = useState(new Date());
-  const [mobileTableCols, setMobileTableCols] = useState<number>(() => {
-    const saved = localStorage.getItem('mobileTableCols');
-    return saved ? parseInt(saved) : 3;
-  });
+  const [mobileTableCols, setMobileTableCols] = useState<number>(3);
   const [mobileZoomOpen, setMobileZoomOpen] = useState(false);
-  const [desktopTableCols, setDesktopTableCols] = useState<number>(() => {
-    const saved = localStorage.getItem('desktopTableCols');
-    return saved ? parseInt(saved) : 6;
-  });
+  const [desktopTableCols, setDesktopTableCols] = useState<number>(6);
+  const [mobileColsTouched, setMobileColsTouched] = useState(false);
+  const [desktopColsTouched, setDesktopColsTouched] = useState(false);
+  const [colsPrefsReady, setColsPrefsReady] = useState(false);
   const channelsRef = useRef<ReturnType<typeof supabase.channel>[]>([]);
   const pendingUpdatesRef = useRef<Set<string>>(new Set());
   const updateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const getAutoMobileCols = useCallback((_count: number) => {
+    // Default mobile layout should be consistently 3 columns.
+    return 3;
+  }, []);
+
+  const getAutoDesktopCols = useCallback((count: number) => {
+    if (count >= 60) return 10;
+    if (count >= 40) return 9;
+    if (count >= 25) return 8;
+    if (count >= 13) return 7;
+    return 6;
+  }, []);
+
   const loadAll = useCallback(async (resetGroup = false) => {
     if (!tenant || !activeBranch) return;
-    setLoading(true);
+    const cacheKey = `${tenant.id}:${activeBranch.id}`;
+    const cached = tableGridRuntimeCache.get(cacheKey);
+    if (cached && !resetGroup) {
+      setTableGroups(cached.groups);
+      setTables(cached.tables);
+      setLoading(false);
+    } else {
+      setLoading(true);
+    }
     if (resetGroup) setSelectedGroup(null);
 
     if (isLocalMode()) {
@@ -92,6 +121,7 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate }: TableGridPro
         }));
         mapped.sort(naturalSort);
         setTables(mapped);
+        tableGridRuntimeCache.set(cacheKey, { tables: mapped, groups });
       } catch (e) {
         console.error('TableGrid local load error:', e);
         setTables([]);
@@ -113,17 +143,21 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate }: TableGridPro
       .eq('branch_id', activeBranch.id)
       .order('table_number');
 
-    const [cachedGroups, tablesRes] = await Promise.all([
-      queryCache.getTableGroups(tenant.id, activeBranch.id),
-      tableQ,
-    ]);
+    const groupQ = supabase
+      .from('table_groups')
+      .select('id, name, color, branch_id, prefix')
+      .eq('tenant_id', tenant.id)
+      .or(`branch_id.eq.${activeBranch.id},branch_id.is.null`)
+      .order('name');
 
-    if (cachedGroups) {
-      setTableGroups(cachedGroups as TableGroup[]);
-      if (cachedGroups.length > 0) {
+    const [groupsRes, tablesRes] = await Promise.all([groupQ, tableQ]);
+
+    if (groupsRes.data) {
+      setTableGroups(groupsRes.data as TableGroup[]);
+      if (groupsRes.data.length > 0) {
         setSelectedGroup(prev => {
-          if (prev && cachedGroups.find(g => g.id === prev)) return prev;
-          return cachedGroups[0].id;
+          if (prev && groupsRes.data!.find(g => g.id === prev)) return prev;
+          return groupsRes.data![0].id;
         });
       }
     }
@@ -135,6 +169,7 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate }: TableGridPro
       }));
       mapped.sort(naturalSort);
       setTables(mapped);
+      tableGridRuntimeCache.set(cacheKey, { tables: mapped, groups: (groupsRes.data || []) as TableGroup[] });
     } else {
       setTables([]);
     }
@@ -169,6 +204,49 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate }: TableGridPro
     if (updateTimerRef.current) clearTimeout(updateTimerRef.current);
     updateTimerRef.current = setTimeout(flushPendingUpdates, 120);
   }, [flushPendingUpdates]);
+
+  useEffect(() => {
+    setColsPrefsReady(false);
+    const userScopedMobile = localStorage.getItem(mobileColsStorageKey);
+    const userScopedDesktop = localStorage.getItem(desktopColsStorageKey);
+    const parsedMobile = parseInt(userScopedMobile || '', 10);
+    const parsedDesktop = parseInt(userScopedDesktop || '', 10);
+
+    if (Number.isFinite(parsedMobile)) {
+      setMobileTableCols(Math.min(6, Math.max(2, parsedMobile)));
+      setMobileColsTouched(true);
+    } else {
+      setMobileColsTouched(false);
+    }
+
+    if (Number.isFinite(parsedDesktop)) {
+      setDesktopTableCols(Math.min(12, Math.max(3, parsedDesktop)));
+      setDesktopColsTouched(true);
+    } else {
+      setDesktopColsTouched(false);
+    }
+    setColsPrefsReady(true);
+  }, [mobileColsStorageKey, desktopColsStorageKey]);
+
+  useEffect(() => {
+    if (!mobileColsTouched) return;
+    localStorage.setItem(mobileColsStorageKey, String(mobileTableCols));
+  }, [mobileColsStorageKey, mobileTableCols, mobileColsTouched]);
+
+  useEffect(() => {
+    if (!desktopColsTouched) return;
+    localStorage.setItem(desktopColsStorageKey, String(desktopTableCols));
+  }, [desktopColsStorageKey, desktopTableCols, desktopColsTouched]);
+
+  useEffect(() => {
+    if (!colsPrefsReady) return;
+    if (!mobileColsTouched) {
+      setMobileTableCols(getAutoMobileCols(tables.length));
+    }
+    if (!desktopColsTouched) {
+      setDesktopTableCols(getAutoDesktopCols(tables.length));
+    }
+  }, [tables.length, mobileColsTouched, desktopColsTouched, colsPrefsReady, getAutoMobileCols, getAutoDesktopCols]);
 
   useEffect(() => {
     if (!tenant || !activeBranch) return;
@@ -365,8 +443,9 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate }: TableGridPro
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-64">
+      <div className="flex flex-col items-center justify-center h-64 gap-3">
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-orange-600"></div>
+        <p className="text-slate-500 font-medium">Yukleniyor...</p>
       </div>
     );
   }
@@ -374,7 +453,7 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate }: TableGridPro
   if (!activeBranch) {
     return (
       <div className="flex items-center justify-center h-64">
-        <p className="text-gray-500 text-lg">Şube yükleniyor...</p>
+        <p className="text-gray-500 text-lg">Yukleniyor...</p>
       </div>
     );
   }
@@ -416,13 +495,15 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate }: TableGridPro
                   ({groupStats.get(null)?.occupied ?? 0})
                 </span>
               </button>
-              <button
-                onClick={() => onNavigate ? onNavigate('takeaway') : createTakeawayOrder()}
-                className="px-4 py-2.5 md:px-6 md:py-3.5 rounded-lg md:rounded-xl font-black whitespace-nowrap transition-all text-sm md:text-base active:scale-95 border-2 bg-gradient-to-r from-green-500 to-green-600 text-white shadow-lg border-green-700 hover:from-green-600 hover:to-green-700 flex items-center gap-1.5 md:gap-2 shrink-0"
-              >
-                <ShoppingCart className="w-4 h-4 md:w-5 md:h-5" />
-                PAKET SERVİS
-              </button>
+              {showTakeawayButton && (
+                <button
+                  onClick={() => onNavigate ? onNavigate('takeaway') : createTakeawayOrder()}
+                  className="px-4 py-2.5 md:px-6 md:py-3.5 rounded-lg md:rounded-xl font-black whitespace-nowrap transition-all text-sm md:text-base active:scale-95 border-2 bg-gradient-to-r from-green-500 to-green-600 text-white shadow-lg border-green-700 hover:from-green-600 hover:to-green-700 flex items-center gap-1.5 md:gap-2 shrink-0"
+                >
+                  <ShoppingCart className="w-4 h-4 md:w-5 md:h-5" />
+                  PAKET SERVİS
+                </button>
+              )}
               {tableGroups.map((group) => {
                 const stats = groupStats.get(group.id) || { available: 0, occupied: 0, total: 0 };
                 return (
@@ -448,7 +529,7 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate }: TableGridPro
 
             <div className="hidden md:flex items-center gap-1 bg-gray-100 rounded-lg p-1 shrink-0">
               <button
-                onClick={() => setDesktopTableCols(prev => { const n = Math.min(12, prev + 1); localStorage.setItem('desktopTableCols', String(n)); return n; })}
+                onClick={() => { setDesktopColsTouched(true); setDesktopTableCols(prev => Math.min(12, prev + 1)); }}
                 disabled={desktopTableCols >= 12}
                 className="w-7 h-7 flex items-center justify-center rounded-md bg-white shadow text-gray-600 hover:bg-gray-50 active:scale-90 disabled:opacity-30"
                 title="Küçült"
@@ -457,7 +538,7 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate }: TableGridPro
               </button>
               <span className="text-xs font-bold text-gray-600 w-4 text-center">{desktopTableCols}</span>
               <button
-                onClick={() => setDesktopTableCols(prev => { const n = Math.max(3, prev - 1); localStorage.setItem('desktopTableCols', String(n)); return n; })}
+                onClick={() => { setDesktopColsTouched(true); setDesktopTableCols(prev => Math.max(3, prev - 1)); }}
                 disabled={desktopTableCols <= 3}
                 className="w-7 h-7 flex items-center justify-center rounded-md bg-white shadow text-gray-600 hover:bg-gray-50 active:scale-90 disabled:opacity-30"
                 title="Büyüt"
@@ -486,7 +567,7 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate }: TableGridPro
           </button>
           <div className="bg-white shadow-2xl rounded-l-2xl flex flex-col items-center py-4 px-3 gap-3 border border-gray-200">
             <button
-              onClick={() => setMobileTableCols(prev => { const n = Math.max(2, prev - 1); localStorage.setItem('mobileTableCols', String(n)); return n; })}
+              onClick={() => { setMobileColsTouched(true); setMobileTableCols(prev => Math.max(2, prev - 1)); }}
               disabled={mobileTableCols <= 2}
               className="w-11 h-11 flex items-center justify-center rounded-xl bg-orange-50 border-2 border-orange-200 text-orange-600 active:scale-90 disabled:opacity-30 shadow"
             >
@@ -494,7 +575,7 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate }: TableGridPro
             </button>
             <span className="text-base font-black text-gray-700 w-6 text-center">{mobileTableCols}</span>
             <button
-              onClick={() => setMobileTableCols(prev => { const n = Math.min(6, prev + 1); localStorage.setItem('mobileTableCols', String(n)); return n; })}
+              onClick={() => { setMobileColsTouched(true); setMobileTableCols(prev => Math.min(6, prev + 1)); }}
               disabled={mobileTableCols >= 6}
               className="w-11 h-11 flex items-center justify-center rounded-xl bg-gray-50 border-2 border-gray-200 text-gray-600 active:scale-90 disabled:opacity-30 shadow"
             >

@@ -10,11 +10,71 @@ export function LandingPage({ onLogin }: LandingPageProps) {
   const [scrolled, setScrolled] = useState(false);
   const [showResellerForm, setShowResellerForm] = useState(false);
   const [showDemo, setShowDemo] = useState(false);
+  const [resellerNetwork, setResellerNetwork] = useState<Array<{
+    id: string;
+    company_name: string;
+    contact_name?: string;
+    phone?: string;
+    email?: string;
+    city?: string;
+    notes?: string;
+  }>>([]);
 
   useEffect(() => {
     const handleScroll = () => setScrolled(window.scrollY > 20);
     window.addEventListener('scroll', handleScroll);
     return () => window.removeEventListener('scroll', handleScroll);
+  }, []);
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const { supabase } = await import('../../lib/supabase');
+        const { data: resellerData } = await supabase
+          .from('resellers')
+          .select('id, company_name, contact_name, phone, email, notes')
+          .order('created_at', { ascending: false })
+          .limit(12);
+
+        const { data: appData } = await supabase
+          .from('reseller_applications')
+          .select('id, company_name, contact_name, phone, email, city, status')
+          .eq('status', 'approved')
+          .order('created_at', { ascending: false })
+          .limit(12);
+
+        const merged = [
+          ...((resellerData || []) as any[]).map((r) => ({
+            id: `r-${r.id}`,
+            company_name: r.company_name,
+            contact_name: r.contact_name,
+            phone: r.phone,
+            email: r.email,
+            notes: r.notes,
+          })),
+          ...((appData || []) as any[]).map((a) => ({
+            id: `a-${a.id}`,
+            company_name: a.company_name,
+            contact_name: a.contact_name,
+            phone: a.phone,
+            email: a.email,
+            notes: a.city ? `${a.city}` : '',
+          })),
+        ];
+
+        const dedup = Array.from(
+          new Map(merged.map((x) => [x.company_name?.toLowerCase?.() || x.id, x])).values(),
+        ).slice(0, 12);
+
+        if (mounted) setResellerNetwork(dedup as any);
+      } catch {
+        if (mounted) setResellerNetwork([]);
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
   }, []);
 
   const scrollTo = (id: string) => {
@@ -26,7 +86,7 @@ export function LandingPage({ onLogin }: LandingPageProps) {
     { label: 'Özellikler', id: 'features' },
     { label: 'Nasıl Çalışır', id: 'how' },
     { label: 'Fiyatlar', id: 'pricing' },
-    { label: 'Bayilik', id: 'reseller' },
+    { label: 'Bayilerimiz', id: 'reseller' },
     { label: 'İndirme', id: 'download' },
     { label: 'İletişim', id: 'contact' },
   ];
@@ -136,18 +196,15 @@ export function LandingPage({ onLogin }: LandingPageProps) {
   const plans = [
     {
       name: 'Başlangıç',
-      price: '499',
       features: ['1 Şube', '3 Kullanıcı', 'Masa & Sipariş Yönetimi', 'Temel Raporlar', 'WhatsApp Destek'],
     },
     {
       name: 'Profesyonel',
-      price: '899',
       highlight: true,
       features: ['3 Şube', '10 Kullanıcı', 'Tüm Özellikler', 'Online Sipariş', 'Öncelikli Destek'],
     },
     {
       name: 'Kurumsal',
-      price: 'Özel',
       features: ['Sınırsız Şube', 'Sınırsız Kullanıcı', 'API Erişimi', '7/24 Destek', 'SLA Garantisi'],
     },
   ];
@@ -187,6 +244,16 @@ export function LandingPage({ onLogin }: LandingPageProps) {
               >
                 Giriş Yap
               </button>
+              <button
+                onClick={() => scrollTo('reseller')}
+                className={`font-semibold px-6 py-2.5 rounded-lg transition-colors border ${
+                  scrolled
+                    ? 'border-orange-200 text-orange-600 hover:bg-orange-50'
+                    : 'border-white/30 text-white hover:bg-white/10'
+                }`}
+              >
+                Bayimiz Olun
+              </button>
             </div>
 
             <button className="md:hidden p-2" onClick={() => setMenuOpen(!menuOpen)}>
@@ -216,6 +283,12 @@ export function LandingPage({ onLogin }: LandingPageProps) {
                 className="w-full bg-orange-600 hover:bg-orange-700 text-white font-semibold py-3 rounded-lg mt-2"
               >
                 Giriş Yap
+              </button>
+              <button
+                onClick={() => scrollTo('reseller')}
+                className="w-full border border-orange-200 text-orange-600 font-semibold py-3 rounded-lg mt-2 hover:bg-orange-50"
+              >
+                Bayimiz Olun
               </button>
             </div>
           </div>
@@ -384,11 +457,9 @@ export function LandingPage({ onLogin }: LandingPageProps) {
       <section id="pricing" className="py-24 md:py-32 bg-slate-50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="text-center mb-20">
-            <h2 className="text-4xl md:text-5xl font-black text-slate-900 mb-6">
-              Basit Fiyatlandırma
-            </h2>
+            <h2 className="text-4xl md:text-5xl font-black text-slate-900 mb-6">Paketler</h2>
             <p className="text-xl text-slate-600 max-w-2xl mx-auto">
-              Tüm planlarda 14 gün ücretsiz deneme. Kredi kartı gerekmez.
+              Size uygun paket için arayınız. Tüm planlarda 14 gün ücretsiz deneme bulunur.
             </p>
           </div>
 
@@ -410,13 +481,10 @@ export function LandingPage({ onLogin }: LandingPageProps) {
                 <h3 className={`text-2xl font-bold mb-2 ${plan.highlight ? 'text-white' : 'text-slate-900'}`}>
                   {plan.name}
                 </h3>
-                <div className="flex items-end gap-1 mb-8">
-                  <span className={`text-4xl font-black ${plan.highlight ? 'text-white' : 'text-slate-900'}`}>
-                    {plan.price === 'Özel' ? 'Özel' : `₺${plan.price}`}
+                <div className="mb-8">
+                  <span className={`text-lg font-black ${plan.highlight ? 'text-white' : 'text-slate-900'}`}>
+                    Fiyat için arayınız
                   </span>
-                  {plan.price !== 'Özel' && (
-                    <span className={`mb-1 ${plan.highlight ? 'text-white/80' : 'text-slate-500'}`}>/ay</span>
-                  )}
                 </div>
                 <ul className={`space-y-3 mb-8 ${plan.highlight ? 'text-white/90' : 'text-slate-600'}`}>
                   {plan.features.map((f, j) => (
@@ -427,14 +495,14 @@ export function LandingPage({ onLogin }: LandingPageProps) {
                   ))}
                 </ul>
                 <button
-                  onClick={onLogin}
+                  onClick={() => scrollTo('contact')}
                   className={`w-full py-3 rounded-lg font-bold transition-colors ${
                     plan.highlight
                       ? 'bg-white text-orange-600 hover:bg-orange-50'
                       : 'bg-orange-600 text-white hover:bg-orange-700'
                   }`}
                 >
-                  {plan.price === 'Özel' ? 'Bize Ulaşın' : 'Ücretsiz Başla'}
+                  Bizi Arayın
                 </button>
               </div>
             ))}
@@ -667,6 +735,72 @@ export function LandingPage({ onLogin }: LandingPageProps) {
                   </div>
                 );
               })}
+            </div>
+          </div>
+
+          <div className="mt-12 bg-white border-2 border-slate-200 rounded-2xl p-6 md:p-8">
+            <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-3 mb-6">
+              <div>
+                <h3 className="text-2xl font-bold text-slate-900">Bayilerimiz Türkiye Ağı</h3>
+                <p className="text-slate-600 text-sm">Aktif bayilerimizin iletişim bilgilerini ve bölgesel dağılımını inceleyin.</p>
+              </div>
+              {resellerNetwork.length > 0 && (
+                <span className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-orange-50 text-orange-700 text-xs font-bold border border-orange-200">
+                  {resellerNetwork.length} aktif bayi
+                </span>
+              )}
+            </div>
+
+            <div className="grid lg:grid-cols-2 gap-6">
+              <div className="relative rounded-2xl border border-slate-200 bg-gradient-to-br from-sky-50 via-white to-orange-50 min-h-[320px] p-4 overflow-hidden">
+                <div className="absolute inset-0 opacity-20 pointer-events-none">
+                  <svg viewBox="0 0 800 380" className="w-full h-full">
+                    <path d="M29 176l34-33 46-6 38 11 41-23 50 4 39-21 63 19 46-11 49 18 46-8 58 24 32 31-24 33-37 12-55 0-39 17-48 0-61-13-55 16-58-13-42 14-59-11-42-34z" fill="#94a3b8" />
+                  </svg>
+                </div>
+                {resellerNetwork.length === 0 ? (
+                  <div className="h-full flex items-center justify-center text-sm text-slate-500 font-medium">
+                    Bayi harita görünümü için aktif bayi kaydı bekleniyor.
+                  </div>
+                ) : (
+                  resellerNetwork.map((r, i) => {
+                    const points = [
+                      { x: 16, y: 40 }, { x: 26, y: 34 }, { x: 34, y: 46 }, { x: 44, y: 39 },
+                      { x: 54, y: 47 }, { x: 62, y: 42 }, { x: 70, y: 50 }, { x: 22, y: 56 },
+                      { x: 31, y: 62 }, { x: 48, y: 60 }, { x: 60, y: 58 }, { x: 74, y: 62 },
+                    ];
+                    const p = points[i % points.length];
+                    return (
+                      <div
+                        key={r.id}
+                        className="absolute -translate-x-1/2 -translate-y-1/2 group"
+                        style={{ left: `${p.x}%`, top: `${p.y}%` }}
+                        title={r.company_name}
+                      >
+                        <div className="w-3.5 h-3.5 rounded-full bg-orange-600 ring-2 ring-orange-200 animate-pulse" />
+                        <div className="absolute mt-1 left-1/2 -translate-x-1/2 whitespace-nowrap bg-slate-900 text-white text-[10px] px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition">
+                          {r.company_name}
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+
+              <div className="space-y-3 max-h-[320px] overflow-y-auto pr-1">
+                {resellerNetwork.length === 0 ? (
+                  <div className="h-full min-h-[320px] rounded-xl border border-slate-200 bg-slate-50 flex items-center justify-center text-sm text-slate-500">
+                    Aktif bayi listesi bulunamadı.
+                  </div>
+                ) : resellerNetwork.map((r) => (
+                  <div key={r.id} className="rounded-xl border border-slate-200 bg-slate-50 p-3.5">
+                    <p className="font-bold text-slate-900">{r.company_name}</p>
+                    <p className="text-xs text-slate-500 mt-0.5">{r.contact_name || 'Yetkili'} {r.phone ? `• ${r.phone}` : ''}</p>
+                    <p className="text-xs text-slate-500">{r.email || 'E-posta bilgisi yok'}</p>
+                    <p className="text-xs text-slate-600 mt-1">{r.notes || 'Adres bilgisi bayi tarafından paylaşılacaktır.'}</p>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         </div>
@@ -1040,18 +1174,24 @@ function ResellerForm({ onClose }: { onClose: () => void }) {
     try {
       const { supabase } = await import('../../lib/supabase');
 
-      const { error } = await supabase
-        .from('resellers')
-        .insert([{
-          company_name: formData.company,
-          contact_name: formData.name,
-          phone: formData.phone,
-          email: formData.email,
-          city: formData.city,
-          status: 'pending',
-        }]);
+      const payload: Record<string, any> = {
+        company_name: formData.company,
+        contact_name: formData.name,
+        phone: formData.phone,
+        email: formData.email,
+        status: 'pending',
+      };
 
-      if (error) throw error;
+      // Some deployments may not include optional columns like city/message yet.
+      payload.city = formData.city;
+      const first = await supabase.from('reseller_applications').insert([payload]);
+      if (first.error && first.error.message?.toLowerCase().includes('city')) {
+        delete payload.city;
+        const retry = await supabase.from('reseller_applications').insert([payload]);
+        if (retry.error) throw retry.error;
+      } else if (first.error) {
+        throw first.error;
+      }
 
       setSuccess(true);
       setTimeout(() => {

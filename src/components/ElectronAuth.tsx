@@ -8,11 +8,15 @@ const logoSrc = new URL('../../public/logo.png', import.meta.url).href;
 
 function phoneToEmail(phone: string) {
   const cleaned = phone.replace(/\D/g, '');
-  return `${cleaned}@shefpos.local`;
+  return `${cleaned}@sefpos.com.tr`;
 }
 
 const REMEMBER_KEY = 'shefpos_remembered_login';
 const REMEMBER_PASSWORD_KEY = 'shefpos_remembered_password';
+const ADMIN_LOGIN_EMAIL = 'info@aykasoft.com.tr';
+const ADMIN_LOGIN_EMAIL_LEGACY = 'infop@aykasoft.com.tr';
+const TEST_LOGIN_EMAIL = 'info@sefpos.com.tr';
+const TEST_LOGIN_PHONE = '02363131818';
 
 const isPhoneInput = (val: string) => /^\d[\d\s]*$/.test(val.trim());
 
@@ -60,7 +64,7 @@ const numpadRows = [
 interface ElectronAuthProps {
   onCourierMode?: () => void;
   onSwitchMode?: () => void;
-  currentDbMode?: 'cloud' | 'sqlserver' | 'local' | null;
+  currentDbMode?: 'cloud' | 'sqlserver' | 'postgres' | 'local' | null;
 }
 
 export function ElectronAuth({ onCourierMode, onSwitchMode, currentDbMode }: ElectronAuthProps) {
@@ -149,9 +153,35 @@ export function ElectronAuth({ onCourierMode, onSwitchMode, currentDbMode }: Ele
     if (step === 'phone') { setStep('password'); return; }
     setLoading(true);
     try {
-      const email = await resolveEmail(loginValue);
+      let email: string | null = null;
+      const trimmed = loginValue.trim().toLowerCase();
+      const cloudMode = !isSqlServerMode() && !isLocalMode();
+      if (cloudMode) {
+        if (trimmed === ADMIN_LOGIN_EMAIL || trimmed === ADMIN_LOGIN_EMAIL_LEGACY || trimmed === TEST_LOGIN_EMAIL) {
+          email = ADMIN_LOGIN_EMAIL;
+          if (trimmed === TEST_LOGIN_EMAIL) email = TEST_LOGIN_EMAIL;
+        } else {
+          const cleaned = loginValue.replace(/\D/g, '');
+          if (cleaned.length < 10) {
+            setError('Giriş için telefon numarası zorunludur');
+            setLoading(false);
+            return;
+          }
+          email = cleaned === TEST_LOGIN_PHONE ? TEST_LOGIN_EMAIL : phoneToEmail(cleaned);
+        }
+      } else {
+        email = await resolveEmail(loginValue);
+      }
       if (!email) { setError('Kullanıcı bulunamadı'); setLoading(false); return; }
-      const result = await signIn(email, password);
+      let result = await signIn(email, password);
+      if (
+        cloudMode &&
+        (trimmed === ADMIN_LOGIN_EMAIL || trimmed === ADMIN_LOGIN_EMAIL_LEGACY) &&
+        result.error?.message?.includes('Invalid login credentials')
+      ) {
+        const fallbackEmail = email === ADMIN_LOGIN_EMAIL ? ADMIN_LOGIN_EMAIL_LEGACY : ADMIN_LOGIN_EMAIL;
+        result = await signIn(fallbackEmail, password);
+      }
       if (result.error) {
         if ((result as any).suspended) { setIsSuspended(true); setError(result.error.message); setLoading(false); return; }
         const msg = (result.error as any).message || '';
@@ -393,7 +423,7 @@ export function ElectronAuth({ onCourierMode, onSwitchMode, currentDbMode }: Ele
     );
   }
 
-  const sqlMode = currentDbMode === 'sqlserver' || isSqlServerMode();
+  const sqlMode = currentDbMode === 'sqlserver' || currentDbMode === 'postgres' || isSqlServerMode();
   const localMode = currentDbMode === 'local' || isLocalMode();
   const offlineMode = sqlMode || localMode;
 
@@ -426,7 +456,7 @@ export function ElectronAuth({ onCourierMode, onSwitchMode, currentDbMode }: Ele
                   : 'bg-blue-500/10 border-blue-500/30 text-blue-400'
             }`}>
               {sqlMode ? <Server className="w-3.5 h-3.5" /> : localMode ? <HardDrive className="w-3.5 h-3.5" /> : <Cloud className="w-3.5 h-3.5" />}
-              {sqlMode ? 'SQL Server Modu' : localMode ? 'Yerel Mod' : 'Bulut Modu'}
+              {sqlMode ? 'PostgreSQL Modu' : localMode ? 'Yerel Mod' : 'Bulut Modu'}
             </div>
           </div>
         )}

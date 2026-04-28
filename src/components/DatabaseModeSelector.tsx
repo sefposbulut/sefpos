@@ -2,11 +2,11 @@ import { useState } from 'react';
 import { Cloud, Server, ArrowRight, CheckCircle, Monitor, HardDrive } from 'lucide-react';
 
 interface Props {
-  onSelect: (mode: 'cloud' | 'sqlserver' | 'terminal' | 'local') => void;
+  onSelect: (mode: 'cloud' | 'sqlserver' | 'postgres' | 'terminal' | 'local') => void;
 }
 
 export function DatabaseModeSelector({ onSelect }: Props) {
-  const [hovered, setHovered] = useState<'cloud' | 'sqlserver' | 'terminal' | 'local' | null>(null);
+  const [hovered, setHovered] = useState<'cloud' | 'sqlserver' | 'postgres' | 'terminal' | 'local' | null>(null);
 
   const modes = [
     {
@@ -27,12 +27,12 @@ export function DatabaseModeSelector({ onSelect }: Props) {
       recommended: true,
     },
     {
-      key: 'sqlserver' as const,
+      key: 'postgres' as const,
       icon: Server,
       color: 'emerald',
-      title: 'Offline (SQL Server)',
-      desc: 'Yerel SQL Server. Kurulum ve yapılandırma gerektirir.',
-      features: ['SQL Server gerektirir', 'Tam yerel kontrol', 'Düşük gecikme'],
+      title: 'Offline (PostgreSQL)',
+      desc: 'Yerel PostgreSQL. Kurulum ve yapılandırma gerektirir.',
+      features: ['PostgreSQL gerektirir', 'Tam yerel kontrol', 'Düşük gecikme'],
     },
     {
       key: 'terminal' as const,
@@ -40,7 +40,7 @@ export function DatabaseModeSelector({ onSelect }: Props) {
       color: 'cyan',
       title: 'Terminal (2. PC)',
       desc: 'Ana kasaya bağlı masa terminali. Sadece masalar görünür.',
-      features: ['Sadece masa ekranı', 'SQL Server\'a bağlanır', 'Garson ekranı'],
+      features: ['Sadece masa ekranı', 'Yerel veritabanına bağlanır', 'Garson ekranı'],
     },
   ];
 

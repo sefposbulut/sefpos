@@ -77,6 +77,10 @@ export function Settings({ onClose }: SettingsProps) {
   const [showPin, setShowPin] = useState(false);
   const [currentPin, setCurrentPin] = useState('');
   const [pinLoaded, setPinLoaded] = useState(false);
+  const [inventoryResetPin, setInventoryResetPin] = useState('');
+  const [inventoryResetBranchId, setInventoryResetBranchId] = useState('');
+  const [inventoryResetLoading, setInventoryResetLoading] = useState(false);
+  const [inventoryResetMessage, setInventoryResetMessage] = useState('');
 
   const [branchProductSync, setBranchProductSync] = useState<Record<string, boolean>>({});
   const [branchSyncSaving, setBranchSyncSaving] = useState(false);
@@ -166,6 +170,73 @@ export function Settings({ onClose }: SettingsProps) {
   const handleToggleBranchSync = async (branchId: string, val: boolean) => {
     setBranchProductSync(prev => ({ ...prev, [branchId]: val }));
     await supabase.from('branches').update({ use_central_products: val } as any).eq('id', branchId);
+  };
+
+  const handleResetBranchInventory = async () => {
+    if (!tenant) return;
+    const isCenterUser = !!activeBranch?.is_main && profile?.role === 'owner';
+    if (!isCenterUser) {
+      setInventoryResetMessage('Bu islem yalnizca merkez kullanici (ana sube owner) tarafindan yapilabilir.');
+      return;
+    }
+    if (!inventoryResetBranchId) {
+      setInventoryResetMessage('Lutfen sifirlanacak subeyi secin.');
+      return;
+    }
+    if (!currentPin) {
+      setInventoryResetMessage('Once Guvenlik ekranindan PIN tanimlayin.');
+      return;
+    }
+    if (inventoryResetPin !== currentPin) {
+      setInventoryResetMessage('PIN kodu hatali.');
+      return;
+    }
+
+    setInventoryResetLoading(true);
+    setInventoryResetMessage('');
+    const resetNote = `Sube envanteri sifirlama (${new Date().toLocaleString('tr-TR')})`;
+
+    const { data: rows, error: readErr } = await supabase
+      .from('branch_product_stocks')
+      .select('product_id, quantity')
+      .eq('tenant_id', tenant.id)
+      .eq('branch_id', inventoryResetBranchId)
+      .gt('quantity', 0);
+
+    if (readErr) {
+      setInventoryResetLoading(false);
+      setInventoryResetMessage('Sube stok tablosu okunamadi: ' + readErr.message);
+      return;
+    }
+
+    for (const row of (rows || [])) {
+      const qty = Number((row as any).quantity || 0);
+      if (qty <= 0) continue;
+      await supabase.from('stock_movements').insert({
+        tenant_id: tenant.id,
+        product_id: (row as any).product_id,
+        movement_type: 'adjustment',
+        quantity: qty,
+        source_branch_id: inventoryResetBranchId,
+        reference_type: 'inventory_reset',
+        note: resetNote,
+      } as any);
+    }
+
+    const { error: zeroErr } = await supabase
+      .from('branch_product_stocks')
+      .update({ quantity: 0 } as any)
+      .eq('tenant_id', tenant.id)
+      .eq('branch_id', inventoryResetBranchId);
+
+    setInventoryResetLoading(false);
+    if (zeroErr) {
+      setInventoryResetMessage('Sifirlama basarisiz: ' + zeroErr.message);
+      return;
+    }
+
+    setInventoryResetPin('');
+    setInventoryResetMessage('Sube stogu basariyla sifirlandi.');
   };
 
   const handleSaveAccount = async () => {
@@ -2074,6 +2145,56 @@ export function Settings({ onClose }: SettingsProps) {
               {branchSyncSaving && (
                 <div className="text-center text-sm text-gray-500">Kaydediliyor...</div>
               )}
+
+              {(() => {
+                const isCenterUser = !!activeBranch?.is_main && profile?.role === 'owner';
+                return (
+                  <div className={`rounded-xl border-2 p-5 ${isCenterUser ? 'border-red-200 bg-red-50/40' : 'border-slate-200 bg-slate-50'}`}>
+                    <div className="flex items-center gap-2 mb-2">
+                      <AlertCircle className={`w-5 h-5 ${isCenterUser ? 'text-red-600' : 'text-slate-400'}`} />
+                      <h4 className={`font-bold ${isCenterUser ? 'text-red-800' : 'text-slate-600'}`}>Merkez Sube Stok Sifirlama</h4>
+                    </div>
+                    <p className={`text-sm mb-4 ${isCenterUser ? 'text-red-700' : 'text-slate-500'}`}>
+                      Bu islem secilen subedeki tum urun stoklarini sifirlar. Sadece merkez kullanici (ana sube owner) yapabilir.
+                    </p>
+                    <div className="grid md:grid-cols-3 gap-3">
+                      <select
+                        value={inventoryResetBranchId}
+                        onChange={(e) => setInventoryResetBranchId(e.target.value)}
+                        disabled={!isCenterUser || inventoryResetLoading}
+                        className="px-3 py-2 rounded-lg border border-slate-300 text-sm bg-white disabled:bg-slate-100"
+                      >
+                        <option value="">Sube secin</option>
+                        {branches.map((b) => (
+                          <option key={b.id} value={b.id}>{b.name}{b.is_main ? ' (Ana Sube)' : ''}</option>
+                        ))}
+                      </select>
+                      <input
+                        type="password"
+                        inputMode="numeric"
+                        maxLength={6}
+                        value={inventoryResetPin}
+                        onChange={(e) => setInventoryResetPin(e.target.value.replace(/\D/g, ''))}
+                        disabled={!isCenterUser || inventoryResetLoading}
+                        placeholder="Merkez PIN"
+                        className="px-3 py-2 rounded-lg border border-slate-300 text-sm bg-white disabled:bg-slate-100"
+                      />
+                      <button
+                        onClick={handleResetBranchInventory}
+                        disabled={!isCenterUser || inventoryResetLoading}
+                        className="px-4 py-2 rounded-lg bg-red-600 text-white text-sm font-semibold hover:bg-red-700 disabled:opacity-50"
+                      >
+                        {inventoryResetLoading ? 'Sifirlaniyor...' : 'Stogu Sifirla'}
+                      </button>
+                    </div>
+                    {inventoryResetMessage && (
+                      <div className={`mt-3 text-sm ${inventoryResetMessage.includes('basariyla') ? 'text-green-700' : 'text-red-700'}`}>
+                        {inventoryResetMessage}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
             </div>
           ) : activeTab === 'devices' ? (
             <DeviceManagement />

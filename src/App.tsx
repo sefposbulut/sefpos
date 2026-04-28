@@ -29,7 +29,8 @@ import { PinLockScreen } from './components/PinLockScreen';
 import { Database, supabase } from './lib/supabase';
 import { isSqlServerMode, isLocalMode } from './lib/sqlDb';
 import { SystemNotificationContainer } from './components/SystemNotificationBanner';
-import { usePrefetchData } from './hooks/usePrefetchData';
+import { getDeviceBindingCode } from './lib/deviceBinding';
+import { queryCache } from './lib/queryCache';
 
 interface SystemNotification {
   id: string;
@@ -49,6 +50,9 @@ const isDemoMode = () => {
   const params = new URLSearchParams(window.location.search);
   return params.has('demo');
 };
+
+const isAykaPath = () => window.location.pathname.toLowerCase().startsWith('/ayka');
+const AYKA_AUTH_KEY = 'shefpos_ayka_auth';
 
 function UpdateBanner() {
   const [updateInfo, setUpdateInfo] = useState<{ version: string } | null>(null);
@@ -116,7 +120,20 @@ function UpdateBanner() {
   );
 }
 
+function FastLoadingScreen({ message = 'Yukleniyor...' }: { message?: string }) {
+  return (
+    <div className="min-h-screen flex items-center justify-center" style={{ background: 'linear-gradient(160deg, #0f172a 0%, #1e3a5f 55%, #0f2744 100%)' }}>
+      <div className="text-center">
+        <div className="mx-auto mb-3 animate-spin rounded-full h-10 w-10 border-b-2 border-blue-400" />
+        <p className="text-white/90 text-sm md:text-base font-medium">{message}</p>
+      </div>
+    </div>
+  );
+}
+
 function App() {
+  const aykaPath = isAykaPath();
+  const aykaAuthorized = localStorage.getItem(AYKA_AUTH_KEY) === '1';
   const [courierMode, setCourierMode] = useState(isCourierMode);
   const [terminalSetup, setTerminalSetup] = useState<'login' | 'app' | null>(() => {
     if (isTerminalMode()) return 'app';
@@ -126,7 +143,7 @@ function App() {
   const { user, profile, tenant, loading, refreshProfile, activeBranch, signOut, profileLoadFailed } = useAuth();
   const [selectedTable, setSelectedTable] = useState<Table | null>(null);
   const [currentPage, setCurrentPage] = useState('tables');
-  const [dbMode, setDbMode] = useState<'cloud' | 'sqlserver' | 'local' | null | 'loading'>('loading');
+  const [dbMode, setDbMode] = useState<'cloud' | 'sqlserver' | 'postgres' | 'local' | null | 'loading'>('loading');
   const [sqlServerConfigured, setSqlServerConfigured] = useState(false);
   const [showSqlServerSettings, setShowSqlServerSettings] = useState(false);
   const [showAuthModal, setShowAuthModal] = useState(false);
@@ -138,11 +155,46 @@ function App() {
   const [systemNotifications, setSystemNotifications] = useState<SystemNotification[]>([]);
   const [isLocked, setIsLocked] = useState(false);
   const [showDeviceBinding, setShowDeviceBinding] = useState(false);
+  const [waiterKicked, setWaiterKicked] = useState(false);
+  const waiterUnauthorizedCountRef = useRef(0);
   const seenNotifIds = useRef<Set<string>>(new Set());
   const tableRefreshRef = useRef<(() => void) | null>(null);
-  usePrefetchData(tenant?.id ?? null, activeBranch?.id ?? null);
+  const presenceChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
 
   const isElectron = !!(window as any).electronAPI;
+
+  useEffect(() => {
+    if (!tenant || !user || !profile) return;
+    if (isSqlServerMode() || isLocalMode()) return;
+
+    const channel = supabase.channel(`tenant-presence-${tenant.id}`, {
+      config: { presence: { key: user.id } },
+    });
+    presenceChannelRef.current = channel;
+
+    const trackPresence = () =>
+      channel.track({
+        user_id: user.id,
+        tenant_id: tenant.id,
+        full_name: profile.full_name,
+        role: profile.role,
+        branch_id: activeBranch?.id || null,
+        at: new Date().toISOString(),
+      }).catch(() => {});
+
+    channel.subscribe((status) => {
+      if (status === 'SUBSCRIBED') trackPresence();
+    });
+
+    const heartbeat = setInterval(trackPresence, 30000);
+
+    return () => {
+      clearInterval(heartbeat);
+      channel.untrack().catch(() => {});
+      supabase.removeChannel(channel);
+      if (presenceChannelRef.current === channel) presenceChannelRef.current = null;
+    };
+  }, [tenant?.id, user?.id, profile?.id, activeBranch?.id]);
 
   useEffect(() => {
     if (!isElectron) {
@@ -151,23 +203,23 @@ function App() {
     }
     const api = (window as any).electronAPI;
     const timeout = setTimeout(() => {
-      const savedMode = localStorage.getItem('dbMode') as 'cloud' | 'sqlserver' | null;
+      const savedMode = localStorage.getItem('dbMode') as 'cloud' | 'sqlserver' | 'postgres' | null;
       setDbMode(savedMode);
     }, 3000);
     Promise.race([
       api.getDbMode(),
       new Promise<null>(resolve => setTimeout(() => resolve(null), 4000))
-    ]).then(async (mode: 'cloud' | 'sqlserver' | 'local' | null) => {
+    ]).then(async (mode: 'cloud' | 'sqlserver' | 'postgres' | 'local' | null) => {
       clearTimeout(timeout);
-      if (mode === 'sqlserver' || mode === 'local') {
+      if (mode === 'sqlserver' || mode === 'postgres' || mode === 'local') {
         localStorage.setItem('dbMode', mode);
       } else if (mode !== null) {
         localStorage.removeItem('dbMode');
       } else {
-        mode = localStorage.getItem('dbMode') as 'cloud' | 'sqlserver' | 'local' | null;
+        mode = localStorage.getItem('dbMode') as 'cloud' | 'sqlserver' | 'postgres' | 'local' | null;
       }
       setDbMode(mode);
-      if (mode === 'sqlserver') {
+      if (mode === 'sqlserver' || mode === 'postgres') {
         try {
           const cfg = await api.getSqlServerConfig?.();
           const isConfigured = !!(cfg?.host && cfg?.username);
@@ -182,15 +234,45 @@ function App() {
     });
   }, [isElectron]);
 
-  const showNewNotification = useCallback((n: { id: string; title: string; message: string; type: string }) => {
+  const showNewNotification = useCallback((n: { id: string; title: string; message: string; type: string; created_at?: string }) => {
+    if (!tenant?.id) return;
+    const dismissedKey = `notif_dismissed_${tenant.id}`;
+    const dismissedIds = new Set(JSON.parse(localStorage.getItem(dismissedKey) || '[]') as string[]);
+    const deletedBeforeKey = `notif_deleted_before_${tenant.id}`;
+    const deletedBefore = localStorage.getItem(deletedBeforeKey);
+
+    if (n.type === 'revoke') {
+      const msg = String(n.message || '');
+      if (msg.startsWith('delete:')) {
+        const targetId = msg.replace('delete:', '').trim();
+        if (targetId) {
+          dismissedIds.add(targetId);
+          localStorage.setItem(dismissedKey, JSON.stringify(Array.from(dismissedIds).slice(-500)));
+          setSystemNotifications(prev => prev.filter(x => x.id !== targetId));
+        }
+      }
+      if (msg.startsWith('delete_all:')) {
+        const ts = msg.replace('delete_all:', '').trim() || new Date().toISOString();
+        localStorage.setItem(deletedBeforeKey, ts);
+        setSystemNotifications([]);
+      }
+      return;
+    }
+
+    if (deletedBefore && n.created_at && n.created_at <= deletedBefore) return;
+    if (dismissedIds.has(n.id)) return;
     if (seenNotifIds.current.has(n.id)) return;
     seenNotifIds.current.add(n.id);
     setSystemNotifications(prev => [...prev, { id: n.id, title: n.title, message: n.message, type: n.type || 'info' }]);
-  }, []);
+  }, [tenant?.id]);
 
   useEffect(() => {
     if (!tenant || !user) return;
     if (isSqlServerMode()) return;
+
+    const sessionStartKey = `notif_session_start_${tenant.id}_${user.id}`;
+    const sessionStart = new Date().toISOString();
+    localStorage.setItem(sessionStartKey, sessionStart);
 
     const lastSeenKey = `notif_last_seen_${tenant.id}`;
     const lastCheckedRef = { value: localStorage.getItem(lastSeenKey) || new Date(Date.now() - 60000).toISOString() };
@@ -215,7 +297,7 @@ function App() {
             .from('support_notifications')
             .select('id, title, message, type, tenant_id, created_at')
             .or(`tenant_id.eq.${tenant.id},tenant_id.is.null`)
-            .gt('created_at', lastCheckedRef.value)
+            .gte('created_at', sessionStart)
             .order('created_at', { ascending: true });
           if (data && data.length > 0) {
             data.forEach((n: any) => showNewNotification(n));
@@ -225,7 +307,20 @@ function App() {
         }
       });
 
+    const fallbackSync = setInterval(async () => {
+      const { data } = await supabase
+        .from('support_notifications')
+        .select('id, title, message, type, tenant_id, created_at')
+        .or(`tenant_id.eq.${tenant.id},tenant_id.is.null`)
+        .gte('created_at', sessionStart)
+        .order('created_at', { ascending: true });
+      if (data && data.length > 0) {
+        data.forEach((n: any) => showNewNotification(n));
+      }
+    }, 12000);
+
     return () => {
+      clearInterval(fallbackSync);
       supabase.removeChannel(channel);
     };
   }, [tenant, user, showNewNotification]);
@@ -243,9 +338,138 @@ function App() {
     }
   }, [user, profile]);
 
+  useEffect(() => {
+    if (!user || !profile || profile.role !== 'waiter') return;
+    if (waiterKicked) return;
+
+    const raw = localStorage.getItem('waiter_session');
+    if (!raw) {
+      setWaiterKicked(true);
+      signOut();
+      return;
+    }
+
+    let waiterSession: { id: string; tenant_id: string } | null = null;
+    try {
+      waiterSession = JSON.parse(raw);
+    } catch {
+      waiterSession = null;
+    }
+    if (!waiterSession?.id) {
+      localStorage.removeItem('waiter_session');
+      setWaiterKicked(true);
+      signOut();
+      return;
+    }
+
+    const deviceId = getDeviceBindingCode();
+    let alive = true;
+
+    const kickIfUnauthorized = async () => {
+      const { data: waiterRow } = await supabase
+        .from('waiters')
+        .select('id, status')
+        .eq('id', waiterSession!.id)
+        .eq('tenant_id', waiterSession!.tenant_id || tenant?.id || '')
+        .maybeSingle();
+
+      if (!alive) return;
+      if (!waiterRow?.id || (waiterRow as any).status === 'inactive') {
+        localStorage.removeItem('waiter_session');
+        setWaiterKicked(true);
+        alert('Garson hesabi pasife alinmis veya silinmis. Lutfen yoneticinize basvurun.');
+        await signOut();
+        return;
+      }
+
+      const { data: currentProfile } = await supabase
+        .from('profiles')
+        .select('id, is_active, role')
+        .eq('id', user.id)
+        .maybeSingle();
+
+      if (!alive) return;
+      // Some waiter flows may authenticate without a strict waiter role on profiles.
+      // Only enforce kick when profile is explicitly inactive.
+      if (currentProfile?.id && (currentProfile as any).is_active === false) {
+        localStorage.removeItem('waiter_session');
+        setWaiterKicked(true);
+        alert('Hesabiniz pasife alinmis veya silinmis. Lutfen yoneticinize basvurun.');
+        await signOut();
+        return;
+      }
+
+      const { data } = await supabase
+        .from('device_bindings')
+        .select('id, status')
+        .eq('tenant_id', waiterSession!.tenant_id || tenant?.id || '')
+        .eq('waiter_id', waiterSession!.id)
+        .eq('device_id', deviceId)
+        .eq('status', 'active')
+        .maybeSingle();
+
+      if (!alive) return;
+      if (data?.id) {
+        waiterUnauthorizedCountRef.current = 0;
+        return;
+      }
+
+      // Avoid false-positive kick on transient replication delays.
+      waiterUnauthorizedCountRef.current += 1;
+      if (waiterUnauthorizedCountRef.current < 3) return;
+
+      waiterUnauthorizedCountRef.current = 0;
+      if (!data?.id) {
+        localStorage.removeItem('waiter_session');
+        setWaiterKicked(true);
+        alert('Cihaz yetkisi kaldırıldı. Lütfen yöneticinize başvurun.');
+        await signOut();
+      }
+    };
+
+    kickIfUnauthorized();
+    const watch = supabase
+      .channel(`waiter-binding-watch-${waiterSession.id}-${deviceId}`)
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'device_bindings',
+        filter: `waiter_id=eq.${waiterSession.id}`,
+      }, () => { kickIfUnauthorized(); })
+      .on('postgres_changes', {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'profiles',
+        filter: `id=eq.${user.id}`,
+      }, () => { kickIfUnauthorized(); })
+      .on('postgres_changes', {
+        event: 'DELETE',
+        schema: 'public',
+        table: 'profiles',
+        filter: `id=eq.${user.id}`,
+      }, () => { kickIfUnauthorized(); })
+      .subscribe();
+    const timer = setInterval(kickIfUnauthorized, 3000);
+
+    return () => {
+      alive = false;
+      waiterUnauthorizedCountRef.current = 0;
+      clearInterval(timer);
+      supabase.removeChannel(watch);
+    };
+  }, [user?.id, profile?.role, waiterKicked]);
+
   const handleTableGridRefresh = useCallback((fn: () => void) => {
     tableRefreshRef.current = fn;
   }, []);
+
+  const handleSelectTable = useCallback((nextTable: Table) => {
+    if (tenant?.id) {
+      // Warm menu cache in background so OrderPanel opens instantly.
+      void queryCache.getProductsAndCategories(tenant.id, activeBranch?.id || undefined).catch(() => {});
+    }
+    setSelectedTable(nextTable);
+  }, [tenant?.id, activeBranch?.id]);
 
   const handleNavigate = useCallback((page: string) => {
     if (page === 'cashier') {
@@ -255,7 +479,7 @@ function App() {
     setCurrentPage(page);
   }, []);
 
-  const handleDbModeSelect = async (mode: 'cloud' | 'sqlserver' | 'terminal' | 'local') => {
+  const handleDbModeSelect = async (mode: 'cloud' | 'sqlserver' | 'postgres' | 'terminal' | 'local') => {
     if (mode === 'terminal') {
       localStorage.setItem('shefpos_pending_terminal', 'true');
       setTerminalSetup('login');
@@ -263,9 +487,9 @@ function App() {
     }
     const api = (window as any).electronAPI;
     await api.setDbMode(mode);
-    if (mode === 'sqlserver') {
-      localStorage.setItem('dbMode', 'sqlserver');
-      setDbMode('sqlserver');
+    if (mode === 'sqlserver' || mode === 'postgres') {
+      localStorage.setItem('dbMode', mode === 'sqlserver' ? 'sqlserver' : 'postgres');
+      setDbMode(mode === 'sqlserver' ? 'sqlserver' : 'postgres');
       setSqlServerConfigured(false);
       setShowSqlServerSettings(true);
     } else if (mode === 'local') {
@@ -317,18 +541,14 @@ function App() {
   }
 
   if (isElectron && dbMode === 'loading') {
-    return (
-      <div className="min-h-screen flex items-center justify-center" style={{ background: 'linear-gradient(160deg, #0f172a 0%, #1e3a5f 55%, #0f2744 100%)' }}>
-        <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-blue-400" />
-      </div>
-    );
+    return <FastLoadingScreen message="Yukleniyor..." />;
   }
 
   if (isElectron && dbMode === null) {
     return <SetupWizard onModeSelect={handleDbModeSelect} />;
   }
 
-  if (isElectron && dbMode === 'sqlserver' && (showSqlServerSettings || !sqlServerConfigured)) {
+  if (isElectron && (dbMode === 'sqlserver' || dbMode === 'postgres') && (showSqlServerSettings || !sqlServerConfigured)) {
     return (
       <SqlServerSettings
         showBack={true}
@@ -351,7 +571,7 @@ function App() {
     );
   }
 
-  if (loading) return null;
+  if (loading) return <FastLoadingScreen message="Yukleniyor..." />;
 
   if (user && !profile && profileLoadFailed) {
     const api = (window as any).electronAPI;
@@ -387,7 +607,7 @@ function App() {
             localStorage.removeItem('dbMode');
             setDbMode(null);
           }}
-          currentDbMode={dbMode as 'cloud' | 'sqlserver' | 'local' | null}
+          currentDbMode={dbMode as 'cloud' | 'sqlserver' | 'postgres' | 'local' | null}
         />
       );
     }
@@ -409,7 +629,17 @@ function App() {
         </div>
       );
     }
+    if (aykaPath) {
+      return <Auth />;
+    }
     return <LandingPage onLogin={() => setShowAuthModal(true)} />;
+  }
+
+  if (user && aykaPath) {
+    return <AdminPanel onExit={() => {
+      localStorage.removeItem(AYKA_AUTH_KEY);
+      window.location.assign('/');
+    }} />;
   }
 
   if (profile?.is_super_admin && showAdminPanel) {
@@ -428,6 +658,68 @@ function App() {
   }
 
   const show = (page: string) => currentPage === page;
+  const isWaiterProfile = profile?.role === 'waiter';
+  const hasWaiterSession = !!localStorage.getItem('waiter_session');
+  const waiterDisplayName =
+    profile?.full_name?.trim()
+    || profile?.email?.split('@')[0]
+    || user?.email?.split('@')[0]
+    || 'Garson';
+
+  if (isWaiterProfile) {
+    if (!hasWaiterSession) {
+      return (
+        <div className="min-h-screen flex items-center justify-center bg-slate-900 p-6">
+          <div className="max-w-md w-full bg-slate-800 border border-slate-700 rounded-2xl p-6 text-center">
+            <p className="text-white font-bold text-lg mb-2">Garson Girişi Zorunlu</p>
+            <p className="text-slate-300 text-sm mb-5">Bu hesap sadece Garson PIN akışıyla giriş yapabilir.</p>
+            <button
+              onClick={signOut}
+              className="w-full py-2.5 rounded-lg bg-orange-600 hover:bg-orange-700 text-white font-semibold"
+            >
+              Giriş Ekranına Dön
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return (
+      <div className="min-h-screen bg-slate-50">
+        {isLocked && <PinLockScreen onUnlock={() => setIsLocked(false)} />}
+
+        <div className="h-14 md:h-16 px-4 md:px-6 bg-white border-b border-slate-200 flex items-center justify-between">
+          <div>
+            <p className="text-sm font-semibold text-slate-800">
+              Garson: <span className="text-orange-600">{waiterDisplayName}</span>
+            </p>
+            <p className="text-xs text-slate-500">Sadece masalar gorunur</p>
+          </div>
+          <button
+            onClick={signOut}
+            className="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-medium"
+          >
+            Çıkış
+          </button>
+        </div>
+
+        <div className="fixed inset-0 top-14 md:top-16 bg-gradient-to-br from-slate-50 to-slate-100 overflow-auto">
+          <div className="p-3 md:p-6">
+            <TableGrid onSelectTable={handleSelectTable} onRefresh={handleTableGridRefresh} onNavigate={() => {}} showTakeawayButton={false} />
+          </div>
+        </div>
+
+        {selectedTable && (
+          <OrderPanel
+            table={selectedTable}
+            onClose={() => {
+              setSelectedTable(null);
+              tableRefreshRef.current?.();
+            }}
+          />
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -444,7 +736,7 @@ function App() {
       {/* Always-mounted pages - hidden via display:none for instant switching */}
       <div style={{ display: show('tables') ? undefined : 'none' }} className="fixed inset-0 top-14 md:top-20 bg-gradient-to-br from-slate-50 to-slate-100 overflow-auto">
         <div className="p-3 md:p-6">
-          <TableGrid onSelectTable={setSelectedTable} onRefresh={handleTableGridRefresh} onNavigate={handleNavigate} />
+          <TableGrid onSelectTable={handleSelectTable} onRefresh={handleTableGridRefresh} onNavigate={handleNavigate} />
         </div>
       </div>
 
@@ -503,7 +795,14 @@ function App() {
 
       <SystemNotificationContainer
         notifications={systemNotifications}
-        onDismiss={(id) => setSystemNotifications(prev => prev.filter(n => n.id !== id))}
+        onDismiss={(id) => {
+          setSystemNotifications(prev => prev.filter(n => n.id !== id));
+          if (!tenant?.id) return;
+          const dismissedKey = `notif_dismissed_${tenant.id}`;
+          const current = new Set(JSON.parse(localStorage.getItem(dismissedKey) || '[]') as string[]);
+          current.add(id);
+          localStorage.setItem(dismissedKey, JSON.stringify(Array.from(current).slice(-500)));
+        }}
       />
       {isElectron && <UpdateBanner />}
     </div>

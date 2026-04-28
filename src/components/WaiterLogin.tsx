@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { getDeviceBindingCode } from '../lib/deviceBinding';
 import { Phone, Lock, ArrowRight, Sparkles, LogOut, Key, Copy, Check } from 'lucide-react';
@@ -7,7 +7,10 @@ interface Waiter {
   id: string;
   name: string;
   tenant_id: string;
+  branch_id?: string | null;
 }
+
+const phoneToEmail = (phone: string) => `${phone.replace(/\D/g, '')}@sefpos.com.tr`;
 
 const formatPhone = (value: string) => {
   const digits = value.replace(/\D/g, '').slice(0, 11);
@@ -25,6 +28,50 @@ export function WaiterLogin({ onLoginSuccess, onBack }: { onLoginSuccess: (waite
   const [showBindingInfo, setShowBindingInfo] = useState(false);
   const [copied, setCopied] = useState(false);
   const [bindingRequested, setBindingRequested] = useState(false);
+  const [networkWarning, setNetworkWarning] = useState('');
+  const [info, setInfo] = useState('');
+  const [pendingApprove, setPendingApprove] = useState<{ requestId: string; waiterId: string; waiterName: string; tenantId: string; phone: string } | null>(null);
+
+  const getPublicIp = async () => {
+    try {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 3000);
+      const res = await fetch('https://api.ipify.org?format=json', { signal: ctrl.signal });
+      clearTimeout(timer);
+      const data = await res.json();
+      return (data?.ip as string) || '';
+    } catch {
+      return '';
+    }
+  };
+
+  const toIpPrefix = (ip: string) => {
+    const parts = (ip || '').split('.');
+    if (parts.length !== 4) return '';
+    return `${parts[0]}.${parts[1]}.${parts[2]}`;
+  };
+
+  const authenticateWaiterProfile = async (phoneToSearch: string, tenantId: string) => {
+    const authEmail = phoneToEmail(phoneToSearch);
+    const authRes = await supabase.auth.signInWithPassword({ email: authEmail, password: pin });
+    if (authRes.error || !authRes.data.user?.id) {
+      throw new Error('Garson auth hesabı bulunamadı. Restoran panelinden garsonu yeniden oluşturun.');
+    }
+
+    const { data: prof, error: profErr } = await supabase
+      .from('profiles')
+      .select('tenant_id, branch_id, role')
+      .eq('id', authRes.data.user.id)
+      .maybeSingle();
+
+    if (profErr || !prof || (prof as any).tenant_id !== tenantId) {
+      throw new Error('Garson hesabı tenant/şube eşleşmedi. Lütfen kullanıcıyı yeniden oluşturun.');
+    }
+    if (!['waiter', 'manager', 'cashier', 'admin', 'owner'].includes((prof as any).role || '')) {
+      throw new Error('Bu hesap garson girişi için yetkili değil.');
+    }
+    return (prof as any).branch_id || null;
+  };
 
   const requestBinding = async (waiterId: string, tenantId: string) => {
     try {
@@ -36,6 +83,24 @@ export function WaiterLogin({ onLoginSuccess, onBack }: { onLoginSuccess: (waite
       }
 
       const deviceCode = getDeviceBindingCode();
+      const publicIp = await getPublicIp();
+      const ipPrefix = toIpPrefix(publicIp);
+
+      const { data: existingPending } = await supabase
+        .from('device_binding_requests')
+        .select('id')
+        .eq('waiter_id', waiterId)
+        .eq('tenant_id', tenantId)
+        .eq('device_id', deviceCode)
+        .eq('status', 'pending')
+        .gt('expires_at', new Date().toISOString())
+        .limit(1)
+        .maybeSingle();
+
+      if (existingPending?.id) {
+        setBindingRequested(true);
+        return true;
+      }
 
       // Create binding request
       const { data: requestData, error: insertError } = await supabase
@@ -48,6 +113,9 @@ export function WaiterLogin({ onLoginSuccess, onBack }: { onLoginSuccess: (waite
           device_info: {
             userAgent: navigator.userAgent,
             timestamp: new Date().toISOString(),
+            publicIp,
+            ipPrefix,
+            lockMode: 'ip_prefix',
           },
         })
         .select();
@@ -64,24 +132,6 @@ export function WaiterLogin({ onLoginSuccess, onBack }: { onLoginSuccess: (waite
 
       console.log('Binding request created successfully:', requestData);
 
-      // Auto-accept: create device binding immediately
-      const { error: bindingError } = await supabase
-        .from('device_bindings')
-        .insert({
-          device_id: deviceCode,
-          waiter_id: waiterId,
-          tenant_id: tenantId,
-          status: 'active',
-          device_info: {
-            userAgent: navigator.userAgent,
-            timestamp: new Date().toISOString(),
-          },
-        });
-
-      if (bindingError) {
-        console.error('Device binding error (non-critical):', bindingError);
-      }
-
       localStorage.setItem('binding_request_code', code);
       localStorage.setItem('binding_request_time', Date.now().toString());
       setBindingRequested(true);
@@ -95,6 +145,7 @@ export function WaiterLogin({ onLoginSuccess, onBack }: { onLoginSuccess: (waite
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    setNetworkWarning('');
 
     if (!phone.trim()) {
       setError('Telefon numarası girin');
@@ -147,19 +198,45 @@ export function WaiterLogin({ onLoginSuccess, onBack }: { onLoginSuccess: (waite
       // Check if device is already bound to this waiter
       const { data: deviceBinding } = await supabase
         .from('device_bindings')
-        .select('id, status')
+        .select('*')
         .eq('device_id', deviceCode)
         .eq('waiter_id', waiter.id)
         .eq('status', 'active')
         .maybeSingle();
 
       if (deviceBinding) {
-        // Device already bound - login successful
+        // Network lock control (read from last accepted binding request for compatibility)
+        const { data: acceptedReq } = await supabase
+          .from('device_binding_requests')
+          .select('device_info')
+          .eq('waiter_id', waiter.id)
+          .eq('device_id', deviceCode)
+          .eq('status', 'accepted')
+          .order('accepted_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        const bindingInfo: any = (acceptedReq as any)?.device_info || {};
+        const lockMode = bindingInfo?.lockMode || bindingInfo?.lock_mode || '';
+        if (lockMode === 'ip_prefix' || bindingInfo?.ipPrefix || bindingInfo?.ip_prefix) {
+          const currentIp = await getPublicIp();
+          const currentPrefix = toIpPrefix(currentIp);
+          const allowedPrefix = bindingInfo?.ipPrefix || bindingInfo?.ip_prefix || '';
+          if (!currentPrefix || !allowedPrefix || currentPrefix !== allowedPrefix) {
+            setNetworkWarning('Restoranda değilsiniz. Bu cihaz sadece kayıtlı restoran ağında çalışır.');
+            setError('Ağ doğrulaması başarısız. Lütfen restoran Wi-Fi ağına bağlanın.');
+            setLoading(false);
+            return;
+          }
+        }
+
+        const profileBranchId = await authenticateWaiterProfile(phoneToSearch, waiter.tenant_id);
         localStorage.setItem('waiter_session', JSON.stringify({
           id: waiter.id,
           name: waiter.name,
-          phone: cleaned,
+          phone: phoneToSearch,
           tenant_id: waiter.tenant_id,
+          branch_id: profileBranchId,
           loginTime: new Date().toISOString(),
         }));
 
@@ -167,6 +244,7 @@ export function WaiterLogin({ onLoginSuccess, onBack }: { onLoginSuccess: (waite
           id: waiter.id,
           name: waiter.name,
           tenant_id: waiter.tenant_id,
+          branch_id: profileBranchId,
         });
         return;
       }
@@ -174,35 +252,124 @@ export function WaiterLogin({ onLoginSuccess, onBack }: { onLoginSuccess: (waite
       // Device not bound - request binding
       const requested = await requestBinding(waiter.id, waiter.tenant_id);
       if (!requested) {
-        console.error('Binding request failed with error:', error);
+        console.error('Binding request failed');
         setLoading(false);
         return;
       }
 
-      // Binding request successful - set session and login
-      localStorage.setItem('waiter_session', JSON.stringify({
-        id: waiter.id,
-        name: waiter.name,
+      // Request sent; waiter waits for manager approval
+      const { data: pendingReq } = await supabase
+        .from('device_binding_requests')
+        .select('id')
+        .eq('waiter_id', waiter.id)
+        .eq('tenant_id', waiter.tenant_id)
+        .eq('device_id', deviceCode)
+        .eq('status', 'pending')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      await supabase.auth.signOut();
+      setPendingApprove({
+        requestId: (pendingReq as any)?.id || '',
+        waiterId: waiter.id,
+        waiterName: waiter.name,
+        tenantId: waiter.tenant_id,
         phone: phoneToSearch,
-        tenant_id: waiter.tenant_id,
-        loginTime: new Date().toISOString(),
-      }));
-
-      onLoginSuccess({
-        id: waiter.id,
-        name: waiter.name,
-        tenant_id: waiter.tenant_id,
       });
-
-      // Clear form
-      setPhone('');
-      setPin('');
+      setInfo('İstek gönderildi. Yönetici onayladığında ekran otomatik açılacak.');
+      return;
     } catch (err: any) {
       setError(err.message || 'Bir hata oluştu');
     } finally {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    if (!bindingRequested || !pendingApprove) return;
+    let alive = true;
+    const deviceCode = getDeviceBindingCode();
+
+    const checkApproved = async () => {
+      const { data: binding } = await supabase
+        .from('device_bindings')
+        .select('id, status')
+        .eq('device_id', deviceCode)
+        .eq('waiter_id', pendingApprove.waiterId)
+        .eq('tenant_id', pendingApprove.tenantId)
+        .eq('status', 'active')
+        .maybeSingle();
+
+      let approved = !!binding?.id;
+      if (!approved && pendingApprove.requestId) {
+        const { data: reqAccepted } = await supabase
+          .from('device_binding_requests')
+          .select('id, status')
+          .eq('id', pendingApprove.requestId)
+          .eq('status', 'accepted')
+          .maybeSingle();
+
+        approved = !!reqAccepted?.id;
+        if (approved) {
+          // Accept flow guarantee: ensure binding exists once at approval time.
+          // This runs only in pending-approval login flow, not during normal app runtime.
+          const { data: existingBinding } = await supabase
+            .from('device_bindings')
+            .select('id, status')
+            .eq('device_id', deviceCode)
+            .eq('waiter_id', pendingApprove.waiterId)
+            .eq('tenant_id', pendingApprove.tenantId)
+            .maybeSingle();
+
+          if (existingBinding?.id) {
+            approved = (existingBinding as any).status === 'active';
+          } else {
+            const { error: insertErr } = await supabase
+              .from('device_bindings')
+              .insert({
+                device_id: deviceCode,
+                waiter_id: pendingApprove.waiterId,
+                tenant_id: pendingApprove.tenantId,
+                status: 'active',
+              });
+            if (insertErr) {
+              approved = false;
+            }
+          }
+        }
+      }
+
+      if (!alive || !approved) return;
+
+      try {
+        const profileBranchId = await authenticateWaiterProfile(pendingApprove.phone, pendingApprove.tenantId);
+        localStorage.setItem('waiter_session', JSON.stringify({
+          id: pendingApprove.waiterId,
+          name: pendingApprove.waiterName,
+          phone: pendingApprove.phone,
+          tenant_id: pendingApprove.tenantId,
+          branch_id: profileBranchId,
+          loginTime: new Date().toISOString(),
+        }));
+        onLoginSuccess({
+          id: pendingApprove.waiterId,
+          name: pendingApprove.waiterName,
+          tenant_id: pendingApprove.tenantId,
+          branch_id: profileBranchId,
+        });
+      } catch (e: any) {
+        if (alive) setError(e?.message || 'Giriş tamamlanamadı');
+      }
+    };
+
+    checkApproved();
+    const timer = setInterval(checkApproved, 3000);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, [bindingRequested, pendingApprove]);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex flex-col overflow-hidden relative">
@@ -322,6 +489,13 @@ export function WaiterLogin({ onLoginSuccess, onBack }: { onLoginSuccess: (waite
             {error && (
               <div className="bg-red-500/10 border border-red-500/30 text-red-400 px-4 py-3 rounded-lg text-sm">
                 {error}
+              </div>
+            )}
+
+            {networkWarning && (
+              <div className="bg-amber-500/10 border border-amber-500/30 text-amber-300 px-4 py-3 rounded-lg text-sm">
+                <p className="font-semibold mb-1">Restoran ağı dışında giriş engellendi</p>
+                <p>{networkWarning}</p>
               </div>
             )}
 

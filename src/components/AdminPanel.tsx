@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { supabase } from '../lib/supabase';
 import { Shield, Search, Building2, Users, CheckCircle, XCircle, Clock, AlertTriangle, RefreshCw, ChevronDown, ChevronUp, X, Save, Calendar, CreditCard, TrendingUp, LogOut, Bell, Send, TicketCheck, MessageCircle, Trash2, Eye, EyeOff, Ban, Play, ChevronRight, Mail, Phone, MapPin, Hash, UserCheck, AlertCircle, Info, Headphones, BarChart3, Banknote, Package2, Server, Handshake, Key, Plus, CreditCard as Edit2 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
@@ -273,14 +273,18 @@ function EditModal({ tenant, onClose, onSaved }: EditModalProps) {
 
 interface TenantDetailProps {
   tenant: TenantRow;
+  onlineUserIds: string[];
   onClose: () => void;
   onEdit: () => void;
   onDelete: () => void;
+  onImpersonate: () => void;
+  onApplyPlan: (plan: 'trial' | 'starter' | 'professional' | 'enterprise', durationDays: number) => void;
+  planUpdating: boolean;
   onStatusChange: (status: string) => void;
   statusChanging: boolean;
 }
 
-function TenantDetailPanel({ tenant, onClose, onEdit, onDelete, onStatusChange, statusChanging }: TenantDetailProps) {
+function TenantDetailPanel({ tenant, onlineUserIds, onClose, onEdit, onDelete, onImpersonate, onApplyPlan, planUpdating, onStatusChange, statusChanging }: TenantDetailProps) {
   const [showUsers, setShowUsers] = useState(true);
 
   return (
@@ -408,6 +412,9 @@ function TenantDetailPanel({ tenant, onClose, onEdit, onDelete, onStatusChange, 
                       <p className="text-xs text-slate-400 truncate">
                         {p.email?.includes('.shefpos.local') ? `@${p.email.split('@')[0]}` : p.email}
                       </p>
+                      <p className={`text-[10px] font-bold mt-0.5 ${onlineUserIds.includes(p.id) ? 'text-emerald-600' : 'text-slate-400'}`}>
+                        {onlineUserIds.includes(p.id) ? 'Online' : 'Offline'}
+                      </p>
                     </div>
                     <span className={`text-xs font-bold px-2 py-0.5 rounded-full shrink-0 ${
                       p.role === 'owner' ? 'bg-orange-100 text-orange-700' :
@@ -434,6 +441,39 @@ function TenantDetailPanel({ tenant, onClose, onEdit, onDelete, onStatusChange, 
           <div className="border-t border-slate-100 pt-4">
             <p className="text-xs font-bold text-slate-400 uppercase mb-3">Hızlı Aksiyonlar</p>
             <div className="space-y-2">
+              <div className="p-3 rounded-xl border border-slate-200 bg-slate-50 mb-2">
+                <p className="text-[11px] font-bold text-slate-500 uppercase mb-2">Planlama (Manuel)</p>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    onClick={() => onApplyPlan('trial', 3)}
+                    disabled={planUpdating}
+                    className="px-2 py-2 bg-blue-50 hover:bg-blue-100 border border-blue-200 text-blue-700 rounded-lg text-xs font-semibold disabled:opacity-50"
+                  >
+                    Deneme 3 Gun
+                  </button>
+                  <button
+                    onClick={() => onApplyPlan('starter', 30)}
+                    disabled={planUpdating}
+                    className="px-2 py-2 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-700 rounded-lg text-xs font-semibold disabled:opacity-50"
+                  >
+                    Baslangic 30 Gun
+                  </button>
+                  <button
+                    onClick={() => onApplyPlan('professional', 30)}
+                    disabled={planUpdating}
+                    className="px-2 py-2 bg-orange-50 hover:bg-orange-100 border border-orange-200 text-orange-700 rounded-lg text-xs font-semibold disabled:opacity-50"
+                  >
+                    Profesyonel 30 Gun
+                  </button>
+                  <button
+                    onClick={() => onApplyPlan('enterprise', 365)}
+                    disabled={planUpdating}
+                    className="px-2 py-2 bg-purple-50 hover:bg-purple-100 border border-purple-200 text-purple-700 rounded-lg text-xs font-semibold disabled:opacity-50"
+                  >
+                    Kurumsal 365 Gun
+                  </button>
+                </div>
+              </div>
               {tenant.subscription_status !== 'active' && (
                 <button
                   onClick={() => onStatusChange('active')}
@@ -469,6 +509,13 @@ function TenantDetailPanel({ tenant, onClose, onEdit, onDelete, onStatusChange, 
         </div>
 
         <div className="px-6 py-4 border-t border-slate-100 flex gap-3 shrink-0">
+          <button
+            onClick={onImpersonate}
+            className="flex items-center gap-2 px-4 py-2.5 bg-blue-50 hover:bg-blue-100 border border-blue-200 text-blue-700 rounded-xl font-semibold text-sm transition"
+          >
+            <UserCheck className="w-4 h-4" />
+            Oturum Aç
+          </button>
           <button
             onClick={onDelete}
             className="flex items-center gap-2 px-4 py-2.5 bg-red-50 hover:bg-red-100 border border-red-200 text-red-600 rounded-xl font-semibold text-sm transition"
@@ -513,11 +560,49 @@ interface SupportNotification {
   created_at: string;
 }
 
+const SMS_FUNCTION_BASE_URL = 'https://hwwsitusurqgpitptkuf.supabase.co/functions/v1';
+const SMS_FUNCTION_API_KEY = 'sb_publishable_4ziGGAYQkC9Is5P7leZ6VQ_WAddnGhD';
+
+function normalizeSmsPhone(input: string | null | undefined) {
+  const digits = (input || '').replace(/\D/g, '');
+  if (digits.length === 10) return digits;
+  if (digits.length === 11 && digits.startsWith('0')) return digits.slice(1);
+  if (digits.length === 12 && digits.startsWith('90')) return digits.slice(2);
+  if (digits.length > 10) return digits.slice(-10);
+  return '';
+}
+
+function extractPhoneFromEmail(email: string | null | undefined) {
+  const value = (email || '').trim().toLowerCase();
+  if (!value || !value.includes('@')) return '';
+  const local = value.split('@')[0] || '';
+  // Phone-based accounts are stored like 5XXXXXXXXX@sefpos.com.tr
+  if (!/^\d{10,12}$/.test(local)) return '';
+  return normalizeSmsPhone(local);
+}
+
+async function invokeSmsFunction(name: string, payload: Record<string, any>) {
+  const res = await fetch(`${SMS_FUNCTION_BASE_URL}/${name}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      apikey: SMS_FUNCTION_API_KEY,
+      Authorization: `Bearer ${SMS_FUNCTION_API_KEY}`,
+    },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data?.success === false) throw new Error(data?.error || `${name} basarisiz`);
+  return data;
+}
+
 function SupportPanel({ tenants }: { tenants: TenantRow[] }) {
   const { user } = useAuth();
   const [activeTab, setActiveTab] = useState<'tickets' | 'notifications'>('tickets');
   const [tickets, setTickets] = useState<SupportTicket[]>([]);
   const [notifications, setNotifications] = useState<SupportNotification[]>([]);
+  const [deletingTicketId, setDeletingTicketId] = useState<string | null>(null);
+  const [deletingNotificationId, setDeletingNotificationId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedTicket, setSelectedTicket] = useState<SupportTicket | null>(null);
   const [replyText, setReplyText] = useState('');
@@ -526,6 +611,13 @@ function SupportPanel({ tenants }: { tenants: TenantRow[] }) {
   const [notifForm, setNotifForm] = useState({ tenant_id: '', title: '', message: '', type: 'info' });
   const [sendingNotif, setSendingNotif] = useState(false);
   const [notifSuccess, setNotifSuccess] = useState(false);
+  const [smsForm, setSmsForm] = useState({ tenant_id: '', title: '', message: '' });
+  const [sendingSms, setSendingSms] = useState(false);
+  const [smsResult, setSmsResult] = useState('');
+  const hiddenTicketKey = 'shefpos_hidden_admin_tickets';
+  const hiddenTicketBeforeKey = 'shefpos_hidden_admin_tickets_before';
+  const hiddenNotifKey = 'shefpos_hidden_admin_notifications';
+  const hiddenBeforeKey = 'shefpos_hidden_admin_notifications_before';
 
   useEffect(() => { loadData(); }, [activeTab]);
 
@@ -536,13 +628,26 @@ function SupportPanel({ tenants }: { tenants: TenantRow[] }) {
         .from('support_tickets')
         .select('*, tenants(name, email)')
         .order('created_at', { ascending: false });
-      setTickets((data || []) as SupportTicket[]);
+      const hiddenTicketIds = new Set(JSON.parse(localStorage.getItem(hiddenTicketKey) || '[]') as string[]);
+      const hiddenTicketBefore = localStorage.getItem(hiddenTicketBeforeKey);
+      setTickets(((data || []) as SupportTicket[]).filter((t) => {
+        if (hiddenTicketIds.has(t.id)) return false;
+        if (hiddenTicketBefore && t.created_at && t.created_at <= hiddenTicketBefore) return false;
+        return true;
+      }));
     } else {
       const { data } = await supabase
         .from('support_notifications')
         .select('*')
+        .neq('type', 'revoke')
         .order('created_at', { ascending: false });
-      setNotifications(data || []);
+      const hiddenIds = new Set(JSON.parse(localStorage.getItem(hiddenNotifKey) || '[]') as string[]);
+      const hiddenBefore = localStorage.getItem(hiddenBeforeKey);
+      setNotifications((data || []).filter((n: any) => {
+        if (hiddenIds.has(n.id)) return false;
+        if (hiddenBefore && n.created_at && n.created_at <= hiddenBefore) return false;
+        return true;
+      }));
     }
     setLoading(false);
   };
@@ -570,21 +675,126 @@ function SupportPanel({ tenants }: { tenants: TenantRow[] }) {
     loadData();
   };
 
+  const handleDeleteTicket = async (id: string) => {
+    if (!confirm('Bu destek talebi kalici silinsin mi?')) return;
+    setDeletingTicketId(id);
+    const hiddenTicketIds = new Set(JSON.parse(localStorage.getItem(hiddenTicketKey) || '[]') as string[]);
+    hiddenTicketIds.add(id);
+    localStorage.setItem(hiddenTicketKey, JSON.stringify(Array.from(hiddenTicketIds).slice(-1000)));
+    setTickets(prev => prev.filter(t => t.id !== id));
+    try {
+      const { error } = await supabase
+        .from('support_tickets')
+        .delete()
+        .eq('id', id);
+      if (error) throw error;
+    } catch (e: any) {
+      alert('Destek talebi silinemedi: ' + (e?.message || 'hata'));
+    } finally {
+      setDeletingTicketId(null);
+    }
+  };
+
   const handleSendNotification = async () => {
     if (!notifForm.title.trim() || !notifForm.message.trim()) return;
     setSendingNotif(true);
-    await supabase.from('support_notifications').insert({
+    const { error } = await supabase.from('support_notifications').insert({
       tenant_id: notifForm.tenant_id || null,
       title: notifForm.title,
       message: notifForm.message,
       type: notifForm.type,
       created_by: user?.id,
     });
+    if (error) {
+      alert('Bildirim gonderilemedi: ' + error.message);
+      setSendingNotif(false);
+      return;
+    }
     setSendingNotif(false);
     setNotifForm({ tenant_id: '', title: '', message: '', type: 'info' });
     setNotifSuccess(true);
     setTimeout(() => setNotifSuccess(false), 3000);
     loadData();
+  };
+
+  const handleDeleteNotification = async (id: string) => {
+    setDeletingNotificationId(id);
+    const hiddenIds = new Set(JSON.parse(localStorage.getItem(hiddenNotifKey) || '[]') as string[]);
+    hiddenIds.add(id);
+    localStorage.setItem(hiddenNotifKey, JSON.stringify(Array.from(hiddenIds).slice(-1000)));
+    setNotifications(prev => prev.filter(n => n.id !== id));
+    try {
+      const { error } = await supabase
+        .from('support_notifications')
+        .delete()
+        .eq('id', id);
+      if (error) throw error;
+      setDeletingNotificationId(null);
+    } catch (e: any) {
+      alert('Bildirim kalici silinemedi: ' + (e?.message || 'hata'));
+      setDeletingNotificationId(null);
+    }
+  };
+
+  const handleDeleteAllNotifications = async () => {
+    if (!confirm('Tum gonderilmis bildirimler silinsin mi?')) return;
+    setDeletingNotificationId('__all__');
+    localStorage.setItem(hiddenBeforeKey, new Date().toISOString());
+    setNotifications([]);
+    try {
+      const ids = notifications.map(n => n.id);
+      if (ids.length > 0) {
+        const { error } = await supabase
+          .from('support_notifications')
+          .delete()
+          .in('id', ids);
+        if (error) throw error;
+      }
+      setDeletingNotificationId(null);
+    } catch (e: any) {
+      alert('Tum bildirimler kalici silinemedi: ' + (e?.message || 'hata'));
+      setDeletingNotificationId(null);
+    }
+  };
+
+  const handleSendSms = async () => {
+    if (!smsForm.message.trim()) return;
+    setSendingSms(true);
+    setSmsResult('');
+    try {
+      const targets = smsForm.tenant_id ? tenants.filter(t => t.id === smsForm.tenant_id) : tenants;
+      const phones = Array.from(new Set(
+        targets.flatMap((t) => {
+          const fromTenant = normalizeSmsPhone(t.phone);
+          const fromProfiles = (t._profiles || [])
+            .map((p) => extractPhoneFromEmail(p.email))
+            .filter(Boolean);
+          return [fromTenant, ...fromProfiles].filter(Boolean);
+        }),
+      ));
+      if (phones.length === 0) throw new Error('SMS gonderilecek gecerli telefon bulunamadi');
+
+      let ok = 0;
+      let fail = 0;
+      for (const phone of phones) {
+        try {
+          await invokeSmsFunction('send-sms-custom', {
+            phone,
+            title: smsForm.title.trim() || 'Bilgilendirme',
+            message: smsForm.message.trim(),
+          });
+          ok += 1;
+        } catch {
+          fail += 1;
+        }
+      }
+      setSmsResult(`SMS tamamlandi: ${ok} basarili, ${fail} hatali`);
+      if (ok > 0) setSmsForm(p => ({ ...p, title: '', message: '' }));
+    } catch (e: any) {
+      setSmsResult(e?.message || 'SMS gonderilemedi');
+    } finally {
+      setSendingSms(false);
+    }
   };
 
   const ticketStatusColor = (s: string) => {
@@ -683,22 +893,36 @@ function SupportPanel({ tenants }: { tenants: TenantRow[] }) {
                 </div>
                 <div className="flex flex-col items-end gap-2 shrink-0">
                   <span className="text-xs text-slate-400">{new Date(ticket.created_at).toLocaleDateString('tr-TR')}</span>
-                  {ticket.status !== 'closed' && (
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => { setSelectedTicket(ticket); setReplyText(ticket.admin_reply || ''); }}
-                        className="px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-lg text-xs font-semibold transition flex items-center gap-1"
-                      >
-                        <MessageCircle className="w-3.5 h-3.5" /> Yanıtla
-                      </button>
-                      <button
-                        onClick={() => handleCloseTicket(ticket.id)}
-                        className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-lg text-xs font-semibold transition flex items-center gap-1"
-                      >
-                        <CheckCircle className="w-3.5 h-3.5" /> Kapat
-                      </button>
-                    </div>
-                  )}
+                  <div className="flex gap-2">
+                    {ticket.status !== 'closed' && (
+                      <>
+                        <button
+                          onClick={() => { setSelectedTicket(ticket); setReplyText(ticket.admin_reply || ''); }}
+                          className="px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-lg text-xs font-semibold transition flex items-center gap-1"
+                        >
+                          <MessageCircle className="w-3.5 h-3.5" /> Yanıtla
+                        </button>
+                        <button
+                          onClick={() => handleCloseTicket(ticket.id)}
+                          className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-lg text-xs font-semibold transition flex items-center gap-1"
+                        >
+                          <CheckCircle className="w-3.5 h-3.5" /> Kapat
+                        </button>
+                      </>
+                    )}
+                    <button
+                      onClick={() => handleDeleteTicket(ticket.id)}
+                      disabled={deletingTicketId === ticket.id}
+                      className="px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-700 rounded-lg text-xs font-semibold transition flex items-center gap-1 disabled:opacity-50"
+                    >
+                      {deletingTicketId === ticket.id ? (
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <Trash2 className="w-3.5 h-3.5" />
+                      )}
+                      Sil
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -709,6 +933,56 @@ function SupportPanel({ tenants }: { tenants: TenantRow[] }) {
       {activeTab === 'notifications' && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <div>
+            <h3 className="font-bold text-slate-700 mb-4 flex items-center gap-2">
+              <MessageCircle className="w-4 h-4" /> SMS Duyuru
+            </h3>
+            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-6 space-y-4 mb-6">
+              <div>
+                <label className="block text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wide">Alıcı</label>
+                <select
+                  value={smsForm.tenant_id}
+                  onChange={e => setSmsForm(p => ({ ...p, tenant_id: e.target.value }))}
+                  className="w-full px-3 py-2.5 rounded-xl border border-slate-200 focus:ring-2 focus:ring-emerald-400 outline-none text-sm"
+                >
+                  <option value="">Tüm Restoranlar</option>
+                  {tenants.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wide">Konu</label>
+                <input
+                  type="text"
+                  value={smsForm.title}
+                  onChange={e => setSmsForm(p => ({ ...p, title: e.target.value }))}
+                  placeholder="Bayram, kampanya, duyuru..."
+                  className="w-full px-3 py-2.5 rounded-xl border border-slate-200 focus:ring-2 focus:ring-emerald-400 outline-none text-sm"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wide">SMS Mesajı</label>
+                <textarea
+                  value={smsForm.message}
+                  onChange={e => setSmsForm(p => ({ ...p, message: e.target.value }))}
+                  rows={3}
+                  placeholder="Restoranlara gidecek SMS metni..."
+                  className="w-full px-3 py-2.5 rounded-xl border border-slate-200 focus:ring-2 focus:ring-emerald-400 outline-none text-sm resize-none"
+                />
+              </div>
+              <button
+                onClick={handleSendSms}
+                disabled={sendingSms || !smsForm.message.trim()}
+                className="w-full bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold py-3 rounded-xl flex items-center justify-center gap-2 transition"
+              >
+                <Send className="w-4 h-4" />
+                {sendingSms ? 'SMS Gönderiliyor...' : (smsForm.tenant_id ? 'Seçili Restorana SMS Gönder' : 'Tüm Restoranlara SMS Gönder')}
+              </button>
+              {smsResult && (
+                <div className="bg-slate-50 border border-slate-200 text-slate-700 px-4 py-3 rounded-xl text-sm font-semibold">
+                  {smsResult}
+                </div>
+              )}
+            </div>
+
             <h3 className="font-bold text-slate-700 mb-4 flex items-center gap-2">
               <Send className="w-4 h-4" /> Yeni Bildirim Gönder
             </h3>
@@ -783,9 +1057,19 @@ function SupportPanel({ tenants }: { tenants: TenantRow[] }) {
           </div>
 
           <div>
-            <h3 className="font-bold text-slate-700 mb-4 flex items-center gap-2">
-              <Bell className="w-4 h-4" /> Gönderilmiş Bildirimler
-            </h3>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-bold text-slate-700 flex items-center gap-2">
+                <Bell className="w-4 h-4" /> Gönderilmiş Bildirimler
+              </h3>
+              <button
+                onClick={handleDeleteAllNotifications}
+                disabled={deletingNotificationId === '__all__' || notifications.length === 0}
+                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-red-50 hover:bg-red-100 text-red-600 text-xs font-semibold transition disabled:opacity-50"
+              >
+                {deletingNotificationId === '__all__' ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />}
+                Tümü Sil
+              </button>
+            </div>
             <div className="space-y-3 max-h-[600px] overflow-y-auto pr-1">
               {loading ? (
                 <div className="bg-white rounded-2xl p-8 text-center border border-slate-100">
@@ -808,7 +1092,21 @@ function SupportPanel({ tenants }: { tenants: TenantRow[] }) {
                       </p>
                       <p className="text-sm text-slate-700 mt-1.5">{notif.message}</p>
                     </div>
-                    <span className="text-xs text-slate-400 shrink-0">{new Date(notif.created_at).toLocaleDateString('tr-TR')}</span>
+                    <div className="flex flex-col items-end gap-2 shrink-0">
+                      <span className="text-xs text-slate-400">{new Date(notif.created_at).toLocaleDateString('tr-TR')}</span>
+                      <button
+                        onClick={() => handleDeleteNotification(notif.id)}
+                        disabled={deletingNotificationId === notif.id}
+                        className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-red-50 hover:bg-red-100 text-red-600 text-xs font-semibold transition disabled:opacity-50"
+                      >
+                        {deletingNotificationId === notif.id ? (
+                          <RefreshCw className="w-3 h-3 animate-spin" />
+                        ) : (
+                          <Trash2 className="w-3 h-3" />
+                        )}
+                        Sil
+                      </button>
+                    </div>
                   </div>
                 </div>
               ))}
@@ -870,8 +1168,9 @@ interface AdminPanelProps {
 }
 
 export function AdminPanel({ onExit }: AdminPanelProps) {
-  const { signOut } = useAuth();
+  const { signOut, refreshProfile, profile } = useAuth();
   const [tenants, setTenants] = useState<TenantRow[]>([]);
+  const [loadError, setLoadError] = useState('');
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [filterStatus, setFilterStatus] = useState('all');
@@ -886,13 +1185,23 @@ export function AdminPanel({ onExit }: AdminPanelProps) {
   const [activeTab, setActiveTab] = useState<'restaurants' | 'support' | 'sales' | 'resellers' | 'licenses'>('restaurants');
   const [salesData, setSalesData] = useState<any[]>([]);
   const [salesLoading, setSalesLoading] = useState(false);
+  const [onlineByTenant, setOnlineByTenant] = useState<Record<string, string[]>>({});
+  const [planUpdating, setPlanUpdating] = useState(false);
+  const presenceChannelsRef = useRef<ReturnType<typeof supabase.channel>[]>([]);
 
   const loadTenants = async () => {
     setLoading(true);
-    const { data } = await supabase
+    setLoadError('');
+    const { data, error } = await supabase
       .from('tenants')
       .select('*')
       .order(sortField, { ascending: sortDir === 'asc' });
+
+    if (error) {
+      setLoadError(error.message || 'Restoranlar yuklenemedi');
+      setLoading(false);
+      return;
+    }
 
     if (data) {
       const tenantIds = data.map(t => t.id);
@@ -982,6 +1291,47 @@ export function AdminPanel({ onExit }: AdminPanelProps) {
     if (activeTab === 'sales' && tenants.length > 0) loadSalesData();
   }, [activeTab, tenants]);
 
+  useEffect(() => {
+    presenceChannelsRef.current.forEach(ch => supabase.removeChannel(ch));
+    presenceChannelsRef.current = [];
+    setOnlineByTenant({});
+
+    if (activeTab !== 'restaurants' || tenants.length === 0) return;
+
+    const refreshTenantPresence = (tenantId: string, channel: ReturnType<typeof supabase.channel>) => {
+      const state = channel.presenceState() as Record<string, any[]>;
+      const activeIds = new Set<string>();
+      const now = Date.now();
+      Object.values(state).forEach((entries: any[]) => {
+        entries.forEach((e: any) => {
+          if (!e?.user_id) return;
+          const seenAt = e?.at ? new Date(e.at).getTime() : now;
+          if (now - seenAt <= 70000) {
+            activeIds.add(e.user_id);
+          }
+        });
+      });
+      setOnlineByTenant(prev => ({ ...prev, [tenantId]: Array.from(activeIds) }));
+    };
+
+    const channels = tenants.map((t) => {
+      const ch = supabase
+        .channel(`tenant-presence-${t.id}`)
+        .on('presence', { event: 'sync' }, () => refreshTenantPresence(t.id, ch))
+        .on('presence', { event: 'join' }, () => refreshTenantPresence(t.id, ch))
+        .on('presence', { event: 'leave' }, () => refreshTenantPresence(t.id, ch));
+      ch.subscribe();
+      return ch;
+    });
+
+    presenceChannelsRef.current = channels;
+
+    return () => {
+      channels.forEach(ch => supabase.removeChannel(ch));
+      presenceChannelsRef.current = [];
+    };
+  }, [activeTab, tenants]);
+
   const handleDeleteTenant = async () => {
     if (!deletingTenant) return;
     setDeleteLoading(true);
@@ -1010,6 +1360,43 @@ export function AdminPanel({ onExit }: AdminPanelProps) {
     await loadTenants();
     setDetailTenant(prev => prev ? { ...prev, subscription_status: status } : null);
     setStatusChanging(false);
+  };
+
+  const handleImpersonateTenant = async (tenantId: string) => {
+    localStorage.setItem('shefpos_admin_tenant_impersonation', tenantId);
+    await refreshProfile();
+    onExit();
+  };
+
+  const handleApplyPlan = async (plan: 'trial' | 'starter' | 'professional' | 'enterprise', durationDays: number) => {
+    if (!detailTenant) return;
+    setPlanUpdating(true);
+    const expiresAt = new Date(Date.now() + durationDays * 24 * 60 * 60 * 1000).toISOString();
+    const status = plan === 'trial' ? 'trial' : 'active';
+
+    const { error } = await supabase
+      .from('tenants')
+      .update({
+        subscription_plan: plan,
+        subscription_status: status,
+        subscription_expires_at: expiresAt,
+      })
+      .eq('id', detailTenant.id);
+
+    if (error) {
+      alert('Plan güncellenemedi: ' + error.message);
+      setPlanUpdating(false);
+      return;
+    }
+
+    await loadTenants();
+    setDetailTenant(prev => prev ? {
+      ...prev,
+      subscription_plan: plan,
+      subscription_status: status,
+      subscription_expires_at: expiresAt,
+    } : null);
+    setPlanUpdating(false);
   };
 
   const filtered = tenants.filter(t => {
@@ -1044,33 +1431,76 @@ export function AdminPanel({ onExit }: AdminPanelProps) {
 
   return (
     <div className="min-h-screen bg-slate-50">
-      <div className="bg-gradient-to-r from-slate-900 to-slate-800 text-white px-6 py-4 flex items-center justify-between shadow-xl">
+      <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 text-white px-4 md:px-6 py-3 flex items-center justify-between shadow-xl border-b border-white/10">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 bg-gradient-to-br from-orange-400 to-red-500 rounded-xl flex items-center justify-center shadow-lg">
-            <Shield className="w-5 h-5 text-white" />
+          <div className="w-9 h-9 bg-gradient-to-br from-orange-400 to-red-500 rounded-xl flex items-center justify-center shadow-lg ring-1 ring-orange-300/30">
+            <Shield className="w-4 h-4 text-white" />
           </div>
           <div>
-            <h1 className="font-black text-lg tracking-tight">ŞefPOS Admin</h1>
-            <p className="text-slate-400 text-xs">{stats.total} restoran · {stats.active} aktif</p>
+            <h1 className="font-black text-base tracking-tight">ŞefPOS Admin</h1>
+            <p className="text-slate-300 text-[11px]">{stats.total} restoran · {stats.active} aktif</p>
+          </div>
+        </div>
+        <div className="hidden lg:flex items-center gap-2.5 bg-white/10 border border-white/15 rounded-xl px-3 py-1.5">
+          <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-emerald-400 to-cyan-500 text-white flex items-center justify-center font-black text-xs">
+            AK
+          </div>
+          <div>
+            <p className="text-xs font-bold text-white leading-tight">Alper Karaaslan Hos Geldiniz</p>
+            <p className="text-[10px] text-emerald-200 font-semibold">Kurucu</p>
           </div>
         </div>
         <div className="flex items-center gap-2">
           <button
             onClick={onExit}
-            className="px-4 py-2 bg-white/10 hover:bg-white/20 rounded-xl text-sm font-semibold transition flex items-center gap-2"
+            className="px-3 py-1.5 bg-white/10 hover:bg-white/20 rounded-lg text-xs md:text-sm font-semibold transition flex items-center gap-1.5"
           >
             <Building2 className="w-4 h-4" /> Panelime Dön
           </button>
           <button
             onClick={signOut}
-            className="px-4 py-2 bg-red-500/20 hover:bg-red-500/30 rounded-xl text-sm font-semibold transition flex items-center gap-2 text-red-300"
+            className="px-3 py-1.5 bg-red-500/20 hover:bg-red-500/30 rounded-lg text-xs md:text-sm font-semibold transition flex items-center gap-1.5 text-red-300"
           >
             <LogOut className="w-4 h-4" /> Çıkış
           </button>
         </div>
       </div>
 
-      <div className="bg-slate-800/40 backdrop-blur-sm px-6 py-2.5 flex gap-1 border-t border-white/5">
+      <div className="mx-4 md:mx-6 mt-2.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600 flex flex-wrap items-center gap-x-4 gap-y-1">
+        <span><b>Proje:</b> {(import.meta as any).env?.VITE_SUPABASE_URL || '-'}</span>
+        <span><b>Rol:</b> {profile?.role || '-'}</span>
+        <span className={profile?.is_super_admin ? 'text-emerald-700 font-semibold' : 'text-red-600 font-semibold'}>
+          <b>Super Admin:</b> {profile?.is_super_admin ? 'Evet' : 'Hayir'}
+        </span>
+      </div>
+
+      {!profile?.is_super_admin && (
+        <div className="mx-4 md:mx-6 mt-2 p-2.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs md:text-sm font-semibold">
+          Bu hesap super-admin degil. Eski restoran/lisans listesinin tamami gorunmez. /ayka icin super-admin hesapla giris yapin.
+        </div>
+      )}
+
+      <div className="px-6 py-4 bg-white border-b border-slate-200">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+          {[
+            { label: 'Toplam Restoran', value: stats.total, color: 'text-slate-700', bg: 'bg-slate-100' },
+            { label: 'Aktif Lisans', value: stats.active, color: 'text-emerald-700', bg: 'bg-emerald-100' },
+            { label: 'Deneme', value: stats.trial, color: 'text-blue-700', bg: 'bg-blue-100' },
+            { label: 'Askıda', value: stats.suspended, color: 'text-red-700', bg: 'bg-red-100' },
+            { label: 'Süresi Yaklaşan', value: stats.expiringSoon, color: 'text-amber-700', bg: 'bg-amber-100' },
+          ].map((item) => (
+            <div key={item.label} className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 flex items-center justify-between">
+              <div>
+                <p className="text-[11px] uppercase tracking-wide text-slate-400 font-semibold">{item.label}</p>
+                <p className={`text-xl font-black ${item.color}`}>{item.value}</p>
+              </div>
+              <div className={`w-8 h-8 rounded-lg ${item.bg}`} />
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="sticky top-0 z-20 bg-slate-800/95 backdrop-blur-sm px-6 py-2.5 flex gap-1 border-t border-white/5">
         {[
           { key: 'restaurants', label: 'Restoranlar', icon: Building2 },
           { key: 'sales', label: 'Satışlar', icon: BarChart3 },
@@ -1089,6 +1519,12 @@ export function AdminPanel({ onExit }: AdminPanelProps) {
           </button>
         ))}
       </div>
+
+      {loadError && (
+        <div className="mx-6 mt-4 p-3 rounded-xl bg-red-50 border border-red-200 text-red-700 text-sm font-semibold">
+          {loadError}
+        </div>
+      )}
 
       {activeTab === 'resellers' && <ResellersPanel />}
       {activeTab === 'licenses' && <LicensesPanel tenants={tenants} />}
@@ -1310,6 +1746,9 @@ export function AdminPanel({ onExit }: AdminPanelProps) {
                             <span className="flex items-center gap-1 text-slate-600">
                               <Building2 className="w-3.5 h-3.5 text-slate-400" /> {tenant._branchCount}
                             </span>
+                            <span className="flex items-center gap-1 text-emerald-600 font-semibold">
+                              <span className="w-2 h-2 rounded-full bg-emerald-500" /> {(onlineByTenant[tenant.id] || []).length} online
+                            </span>
                           </div>
                         </td>
                         <td className="px-4 py-4">
@@ -1335,9 +1774,13 @@ export function AdminPanel({ onExit }: AdminPanelProps) {
       {detailTenant && (
         <TenantDetailPanel
           tenant={detailTenant}
+          onlineUserIds={onlineByTenant[detailTenant.id] || []}
           onClose={() => setDetailTenant(null)}
           onEdit={() => setEditingTenant(detailTenant)}
           onDelete={() => setDeletingTenant(detailTenant)}
+          onImpersonate={() => handleImpersonateTenant(detailTenant.id)}
+          onApplyPlan={handleApplyPlan}
+          planUpdating={planUpdating}
           onStatusChange={handleStatusChange}
           statusChanging={statusChanging}
         />
@@ -1397,6 +1840,9 @@ function ResellersPanel() {
   const [tab, setTab] = useState<'resellers' | 'applications'>('resellers');
   const [showAddForm, setShowAddForm] = useState(false);
   const [newReseller, setNewReseller] = useState({ email: '', company_name: '', contact_name: '', phone: '', commission_rate: '0', notes: '' });
+  const [editResellerId, setEditResellerId] = useState<string | null>(null);
+  const [editReseller, setEditReseller] = useState({ email: '', company_name: '', contact_name: '', phone: '', commission_rate: '0', notes: '' });
+  const [deletingResellerId, setDeletingResellerId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
   const load = async () => {
@@ -1433,6 +1879,60 @@ function ResellersPanel() {
   const handleUpdateStatus = async (id: string, status: string) => {
     await supabase.from('resellers').update({ status }).eq('id', id);
     load();
+  };
+
+  const handleStartEditReseller = (r: ResellerRow) => {
+    setEditResellerId(r.id);
+    setEditReseller({
+      email: r.email || '',
+      company_name: r.company_name || '',
+      contact_name: r.contact_name || '',
+      phone: r.phone || '',
+      commission_rate: String(r.commission_rate ?? 0),
+      notes: r.notes || '',
+    });
+  };
+
+  const handleSaveReseller = async () => {
+    if (!editResellerId || !editReseller.company_name.trim() || !editReseller.email.trim()) return;
+    setSaving(true);
+    try {
+      const { error } = await supabase
+        .from('resellers')
+        .update({
+          email: editReseller.email.trim(),
+          company_name: editReseller.company_name.trim(),
+          contact_name: editReseller.contact_name.trim(),
+          phone: editReseller.phone.trim(),
+          commission_rate: parseFloat(editReseller.commission_rate) || 0,
+          notes: editReseller.notes.trim(),
+        })
+        .eq('id', editResellerId);
+      if (error) throw error;
+      setEditResellerId(null);
+      await load();
+    } catch (e: any) {
+      alert('Bayi guncellenemedi: ' + (e?.message || 'hata'));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDeleteReseller = async (id: string) => {
+    if (!confirm('Bu bayi kalici silinsin mi?')) return;
+    setDeletingResellerId(id);
+    try {
+      const { error } = await supabase
+        .from('resellers')
+        .delete()
+        .eq('id', id);
+      if (error) throw error;
+      setResellers(prev => prev.filter(r => r.id !== id));
+    } catch (e: any) {
+      alert('Bayi silinemedi: ' + (e?.message || 'hata'));
+    } finally {
+      setDeletingResellerId(null);
+    }
   };
 
   const handleApproveApplication = async (app: ApplicationRow) => {
@@ -1541,19 +2041,118 @@ function ResellersPanel() {
               {resellers.map(r => (
                 <tr key={r.id} className="hover:bg-slate-50 transition-colors">
                   <td className="px-6 py-4">
-                    <div className="font-semibold text-slate-800">{r.company_name}</div>
-                    <div className="text-xs text-slate-400">{r.email}</div>
+                    {editResellerId === r.id ? (
+                      <div className="space-y-2">
+                        <input
+                          type="text"
+                          value={editReseller.company_name}
+                          onChange={e => setEditReseller(prev => ({ ...prev, company_name: e.target.value }))}
+                          className="w-full border border-slate-200 rounded-lg px-2.5 py-1.5 text-sm focus:outline-none focus:border-amber-400"
+                          placeholder="Firma adı"
+                        />
+                        <input
+                          type="email"
+                          value={editReseller.email}
+                          onChange={e => setEditReseller(prev => ({ ...prev, email: e.target.value }))}
+                          className="w-full border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs focus:outline-none focus:border-amber-400"
+                          placeholder="E-posta"
+                        />
+                      </div>
+                    ) : (
+                      <>
+                        <div className="font-semibold text-slate-800">{r.company_name}</div>
+                        <div className="text-xs text-slate-400">{r.email}</div>
+                      </>
+                    )}
                   </td>
-                  <td className="px-4 py-4 text-slate-600">{r.contact_name || '-'}<br /><span className="text-xs text-slate-400">{r.phone}</span></td>
+                  <td className="px-4 py-4 text-slate-600">
+                    {editResellerId === r.id ? (
+                      <div className="space-y-2">
+                        <input
+                          type="text"
+                          value={editReseller.contact_name}
+                          onChange={e => setEditReseller(prev => ({ ...prev, contact_name: e.target.value }))}
+                          className="w-full border border-slate-200 rounded-lg px-2.5 py-1.5 text-sm focus:outline-none focus:border-amber-400"
+                          placeholder="İletişim kişi"
+                        />
+                        <input
+                          type="text"
+                          value={editReseller.phone}
+                          onChange={e => setEditReseller(prev => ({ ...prev, phone: e.target.value }))}
+                          className="w-full border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs focus:outline-none focus:border-amber-400"
+                          placeholder="Telefon"
+                        />
+                      </div>
+                    ) : (
+                      <>{r.contact_name || '-'}<br /><span className="text-xs text-slate-400">{r.phone}</span></>
+                    )}
+                  </td>
                   <td className="px-4 py-4">{statusBadge(r.status)}</td>
-                  <td className="px-4 py-4 text-slate-700 font-semibold">%{r.commission_rate}</td>
+                  <td className="px-4 py-4 text-slate-700 font-semibold">
+                    {editResellerId === r.id ? (
+                      <div className="space-y-2">
+                        <input
+                          type="number"
+                          step="0.1"
+                          value={editReseller.commission_rate}
+                          onChange={e => setEditReseller(prev => ({ ...prev, commission_rate: e.target.value }))}
+                          className="w-24 border border-slate-200 rounded-lg px-2.5 py-1.5 text-sm focus:outline-none focus:border-amber-400"
+                        />
+                        <input
+                          type="text"
+                          value={editReseller.notes}
+                          onChange={e => setEditReseller(prev => ({ ...prev, notes: e.target.value }))}
+                          className="w-full border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs focus:outline-none focus:border-amber-400"
+                          placeholder="Not"
+                        />
+                      </div>
+                    ) : (
+                      `%${r.commission_rate}`
+                    )}
+                  </td>
                   <td className="px-4 py-4 text-slate-400 text-xs">{new Date(r.created_at).toLocaleDateString('tr-TR')}</td>
                   <td className="px-6 py-4 text-right">
                     <div className="flex items-center justify-end gap-2">
-                      {r.status === 'active' ? (
-                        <button onClick={() => handleUpdateStatus(r.id, 'suspended')} className="px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-600 rounded-lg text-xs font-semibold transition-colors">Askıya Al</button>
+                      {editResellerId === r.id ? (
+                        <>
+                          <button
+                            onClick={handleSaveReseller}
+                            disabled={saving}
+                            className="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 rounded-lg text-xs font-semibold transition-colors disabled:opacity-50 flex items-center gap-1"
+                          >
+                            {saving ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                            Kaydet
+                          </button>
+                          <button
+                            onClick={() => setEditResellerId(null)}
+                            className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                            İptal
+                          </button>
+                        </>
                       ) : (
-                        <button onClick={() => handleUpdateStatus(r.id, 'active')} className="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-600 rounded-lg text-xs font-semibold transition-colors">Aktifleştir</button>
+                        <>
+                          {r.status === 'active' ? (
+                            <button onClick={() => handleUpdateStatus(r.id, 'suspended')} className="px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-600 rounded-lg text-xs font-semibold transition-colors">Askıya Al</button>
+                          ) : (
+                            <button onClick={() => handleUpdateStatus(r.id, 'active')} className="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-600 rounded-lg text-xs font-semibold transition-colors">Aktifleştir</button>
+                          )}
+                          <button
+                            onClick={() => handleStartEditReseller(r)}
+                            className="px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-lg text-xs font-semibold transition-colors"
+                          >
+                            Düzenle
+                          </button>
+                          <button
+                            onClick={() => handleDeleteReseller(r.id)}
+                            disabled={deletingResellerId === r.id}
+                            className="px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-700 rounded-lg text-xs font-semibold transition-colors disabled:opacity-50 flex items-center gap-1"
+                          >
+                            {deletingResellerId === r.id ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                            Sil
+                          </button>
+                        </>
                       )}
                     </div>
                   </td>

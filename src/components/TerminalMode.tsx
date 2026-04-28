@@ -96,8 +96,8 @@ export function TerminalLogin({ onBack, onConnected }: TerminalLoginProps) {
   const [config, setConfig] = useState<TerminalConfig>(() => {
     try {
       const saved = localStorage.getItem(TERMINAL_SQL_CONFIG);
-      return saved ? JSON.parse(saved) : { host: 'localhost', port: '1433', database: 'sefpos45', username: 'sa', password: '' };
-    } catch { return { host: 'localhost', port: '1433', database: 'sefpos45', username: 'sa', password: '' }; }
+      return saved ? JSON.parse(saved) : { host: 'localhost', port: '1433', database: 'sefpos45', username: 'sa', password: '1578' };
+    } catch { return { host: 'localhost', port: '1433', database: 'sefpos45', username: 'sa', password: '1578' }; }
   });
   const [users, setUsers] = useState<TerminalUser[]>([]);
   const [selectedUser, setSelectedUser] = useState<TerminalUser | null>(null);

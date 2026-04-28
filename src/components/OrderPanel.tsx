@@ -7,6 +7,7 @@ import { PaymentModal } from './PaymentModal';
 import { ScaleWeighingModal } from './ScaleWeighingModal';
 import { loadPrintSettings, printKitchenReceipts, printHtml, buildReceiptHtml, printTakeawayReceipt } from '../lib/printService';
 import { sendSaleToHugin } from '../lib/huginTps';
+import { queryCache } from '../lib/queryCache';
 
 interface ScaleBarcodeResult {
   pluCode: string;
@@ -126,7 +127,7 @@ export function OrderPanel({ table, onClose }: OrderPanelProps) {
   const [products, setProducts] = useState<Product[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [cart, setCart] = useState<CartItem[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [currentOrder, setCurrentOrder] = useState<Order | null>(null);
   const [existingOrderItems, setExistingOrderItems] = useState<(OrderItem & { products: Product })[]>([]);
   const [showPayment, setShowPayment] = useState(false);
@@ -215,6 +216,85 @@ export function OrderPanel({ table, onClose }: OrderPanelProps) {
     await supabase.from('restaurant_tables').update({ payment_locked: false, payment_locked_at: null }).eq('id', table.id);
   };
 
+  const applyOrderStockMovements = useCallback(async (orderId: string, items: (OrderItem & { products: Product })[]) => {
+    if (!tenant) return;
+
+    const branchId = (table as any).branch_id || activeBranch?.id || null;
+    const qtyByProduct = new Map<string, number>();
+    const productById = new Map<string, Product>();
+
+    items.forEach((item) => {
+      const qty = Number(item.quantity || 0);
+      if (!item.product_id || qty <= 0) return;
+      qtyByProduct.set(item.product_id, (qtyByProduct.get(item.product_id) || 0) + qty);
+      if ((item as any).products) productById.set(item.product_id, (item as any).products);
+    });
+
+    for (const [productId, qty] of qtyByProduct.entries()) {
+      const { data: existingMove } = await supabase
+        .from('stock_movements')
+        .select('id')
+        .eq('tenant_id', tenant.id)
+        .eq('product_id', productId)
+        .eq('reference_type', 'sale_order')
+        .eq('reference_no', orderId)
+        .maybeSingle();
+      if (existingMove?.id) continue;
+
+      const { data: productRow } = await supabase
+        .from('products')
+        .select('id, stock_quantity, cost')
+        .eq('id', productId)
+        .eq('tenant_id', tenant.id)
+        .maybeSingle();
+
+      if (productRow?.id) {
+        const current = Number((productRow as any).stock_quantity || 0);
+        const next = Math.max(0, current - qty);
+        await supabase
+          .from('products')
+          .update({ stock_quantity: next })
+          .eq('id', productId)
+          .eq('tenant_id', tenant.id);
+      }
+
+      if (branchId) {
+        const { data: branchStock } = await supabase
+          .from('branch_product_stocks')
+          .select('quantity')
+          .eq('tenant_id', tenant.id)
+          .eq('branch_id', branchId)
+          .eq('product_id', productId)
+          .maybeSingle();
+        const currentBranchQty = Number((branchStock as any)?.quantity || 0);
+        const nextBranchQty = Math.max(0, currentBranchQty - qty);
+        await supabase
+          .from('branch_product_stocks')
+          .upsert({
+            tenant_id: tenant.id,
+            branch_id: branchId,
+            product_id: productId,
+            quantity: nextBranchQty,
+          }, { onConflict: 'tenant_id,branch_id,product_id' });
+      }
+
+      const p = productById.get(productId);
+      const unitCost = Number((productRow as any)?.cost ?? p?.cost ?? 0);
+      await supabase.from('stock_movements').insert({
+        tenant_id: tenant.id,
+        product_id: productId,
+        movement_type: 'out',
+        quantity: qty,
+        unit_cost: unitCost,
+        total_cost: Number((unitCost * qty).toFixed(2)),
+        source_branch_id: branchId,
+        reference_type: 'sale_order',
+        reference_no: orderId,
+        note: `Satis siparisi #${(currentOrder as any)?.order_number || ''}`,
+      } as any);
+    }
+  }, [tenant?.id, table?.id, (table as any)?.branch_id, activeBranch?.id, currentOrder?.id, (currentOrder as any)?.order_number]);
+
   const openTableTransfer = async () => {
     if (!tenant || !currentOrder) return;
     const { data } = await supabase
@@ -280,16 +360,35 @@ export function OrderPanel({ table, onClose }: OrderPanelProps) {
     };
   }, [table.id]);
 
+  const loadMenuData = useCallback(async (forceRefresh = false) => {
+    if (!tenant) return;
+    if (!forceRefresh) setLoading(true);
+    try {
+      const { products: productsData, categories: categoriesData, productVariants: variantData } =
+        await queryCache.getProductsAndCategories(tenant.id, activeBranch?.id || undefined, forceRefresh);
+
+      setProducts(productsData as any);
+      setCategories(categoriesData as any);
+      setProductVariants(variantData as any);
+      setSelectedCategory(prev => {
+        if (prev && categoriesData.some(c => c.id === prev)) return prev;
+        return categoriesData[0]?.id ?? null;
+      });
+    } catch (error) {
+      console.error('OrderPanel menu load error:', error);
+    } finally {
+      setLoading(false);
+    }
+  }, [tenant?.id, activeBranch?.id]);
+
   useEffect(() => {
     if (tenant) {
-      loadCategories();
-      loadProducts();
-      loadProductVariants();
+      void loadMenuData();
       supabase.from('tenants').select('require_cancel_reason').eq('id', tenant.id).maybeSingle().then(({ data }) => {
         if (data) setRequireCancelReason(!!(data as any).require_cancel_reason);
       });
     }
-  }, [tenant]);
+  }, [tenant?.id, loadMenuData]);
 
   const processBarcodeString = useCallback((barcode: string) => {
     const clean = barcode.trim();
@@ -408,10 +507,8 @@ export function OrderPanel({ table, onClose }: OrderPanelProps) {
 
   useEffect(() => {
     if (tenant && table) {
-      loadCategories();
-      loadProducts();
+      void loadMenuData();
       loadExistingOrder();
-      loadProductVariants();
 
       let catTimer: ReturnType<typeof setTimeout>;
       let prodTimer: ReturnType<typeof setTimeout>;
@@ -421,15 +518,24 @@ export function OrderPanel({ table, onClose }: OrderPanelProps) {
         .channel(`order-panel-menu-${tenant.id}`)
         .on('postgres_changes', { event: '*', schema: 'public', table: 'categories', filter: `tenant_id=eq.${tenant.id}` }, () => {
           clearTimeout(catTimer);
-          catTimer = setTimeout(() => loadCategories(), 2000);
+          catTimer = setTimeout(() => {
+            queryCache.invalidate('categories', tenant.id);
+            void loadMenuData(true);
+          }, 2000);
         })
         .on('postgres_changes', { event: '*', schema: 'public', table: 'products', filter: `tenant_id=eq.${tenant.id}` }, () => {
           clearTimeout(prodTimer);
-          prodTimer = setTimeout(() => loadProducts(), 2000);
+          prodTimer = setTimeout(() => {
+            queryCache.invalidate('products', tenant.id);
+            void loadMenuData(true);
+          }, 2000);
         })
         .on('postgres_changes', { event: '*', schema: 'public', table: 'product_variants', filter: `tenant_id=eq.${tenant.id}` }, () => {
           clearTimeout(varTimer);
-          varTimer = setTimeout(() => loadProductVariants(), 2000);
+          varTimer = setTimeout(() => {
+            queryCache.invalidate('product_variants', tenant.id);
+            void loadMenuData(true);
+          }, 2000);
         })
         .subscribe();
 
@@ -440,7 +546,7 @@ export function OrderPanel({ table, onClose }: OrderPanelProps) {
         supabase.removeChannel(menuChannel);
       };
     }
-  }, [tenant, table]);
+  }, [tenant?.id, table.id, loadMenuData]);
 
   const loadExistingOrder = async () => {
     if (!tenant) return;
@@ -462,51 +568,6 @@ export function OrderPanel({ table, onClose }: OrderPanelProps) {
     if (orderRes.data) setCurrentOrder(orderRes.data);
     if (itemsRes.data) setExistingOrderItems(itemsRes.data as any);
     if (paymentsRes.data) setPaymentTransactions(paymentsRes.data);
-  };
-
-  const loadCategories = async () => {
-    if (!tenant) return;
-
-    const { data } = await supabase
-      .from('categories')
-      .select('*')
-      .eq('tenant_id', tenant.id)
-      .order('sort_order');
-
-    if (data && data.length > 0) {
-      setCategories(data);
-      setSelectedCategory(data[0].id);
-    }
-  };
-
-  const loadProducts = async () => {
-    if (!tenant) return;
-
-    const { data } = await supabase
-      .from('products')
-      .select('id, name, price, cost, category_id, image_url, barcode, tax_rate, printer_name, unit, stock_quantity, scale_enabled')
-      .eq('tenant_id', tenant.id)
-      .eq('is_active', true)
-      .order('name');
-
-    if (data) {
-      setProducts(data as any);
-    }
-  };
-
-  const loadProductVariants = async () => {
-    if (!tenant) return;
-
-    const { data } = await supabase
-      .from('product_variants')
-      .select('*')
-      .eq('tenant_id', tenant.id)
-      .eq('is_active', true)
-      .order('sort_order');
-
-    if (data) {
-      setProductVariants(data);
-    }
   };
 
   const getCartKey = useCallback((item: CartItem) =>
@@ -992,6 +1053,8 @@ export function OrderPanel({ table, onClose }: OrderPanelProps) {
           : Promise.resolve(),
       ]);
 
+      await applyOrderStockMovements(currentOrder.id, existingOrderItems);
+
       const huginPayments = payments
         .filter((p: any) => p.payment_method === 'cash' || p.payment_method === 'credit_card')
         .map((p: any) => ({ method: p.payment_method as 'cash' | 'credit_card', amount: p.amount }));
@@ -1101,6 +1164,15 @@ export function OrderPanel({ table, onClose }: OrderPanelProps) {
 
   return (
     <>
+      {loading && (
+        <div className="fixed inset-0 z-[120] bg-slate-950/20 backdrop-blur-[1px] flex items-center justify-center pointer-events-none">
+          <div className="bg-white/95 rounded-2xl shadow-xl border border-slate-200 px-5 py-4 flex items-center gap-3">
+            <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-orange-600" />
+            <p className="text-slate-700 font-semibold">Yukleniyor...</p>
+          </div>
+        </div>
+      )}
+
       {scaleWeighingProduct && (
         <ScaleWeighingModal
           product={{
