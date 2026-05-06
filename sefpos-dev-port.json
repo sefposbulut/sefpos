@@ -1,0 +1,5 @@
+{
+  "port": 5180,
+  "supabaseDevUrl": "https://xdfnozfuuzctubijbnds.supabase.co",
+  "_not": "port: yerel dev sunucu. supabaseDevUrl: Vite, .env okunamazsa (UTF-16 vb.) SMS Edge proxy hedefi; isteğe bağlı, .env ile aynı projeyi göstermeli."
+}

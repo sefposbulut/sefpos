@@ -43,7 +43,7 @@ export function MainMenu({ onNavigate, currentPage, onOpenSettings, onLockScreen
 
         {menuOpen && (
           <div
-            className="fixed inset-0 bg-black/40 backdrop-blur-sm z-40"
+            className="fixed inset-0 bg-black/50 z-40"
             onClick={() => setMenuOpen(false)}
           />
         )}
@@ -120,7 +120,7 @@ export function MainMenu({ onNavigate, currentPage, onOpenSettings, onLockScreen
 
       {menuOpen && (
         <div
-          className="fixed inset-0 bg-slate-950/70 backdrop-blur-md z-40"
+          className="fixed inset-0 bg-slate-950/80 z-40"
           onClick={() => setMenuOpen(false)}
         />
       )}

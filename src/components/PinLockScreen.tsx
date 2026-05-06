@@ -19,7 +19,7 @@ function ResetConfirmModal({ onConfirm, onCancel }: { onConfirm: () => void; onC
   };
 
   return (
-    <div className="fixed inset-0 z-[10000] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-[10000] bg-black/85 flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6">
         <div className="flex items-center gap-3 mb-4">
           <div className="w-10 h-10 bg-red-100 rounded-xl flex items-center justify-center">

@@ -209,20 +209,60 @@ export function LandingPage({ onLogin }: LandingPageProps) {
     },
   ];
 
+  const downloadCards = [
+    {
+      icon: Laptop,
+      title: 'Windows',
+      desc: 'En çok tercih edilen POS sistemi',
+      size: '245 MB',
+      version: 'v1.2.5',
+      action: 'SEFPOS Setup (Yakında)',
+      disabled: true,
+      onClick: () => {},
+    },
+    {
+      icon: Globe,
+      title: 'Web Uygulaması',
+      desc: 'Tarayıcıdan kullanın, yüklemeye gerek yok',
+      size: 'Yükleme Yok',
+      version: 'Güncel',
+      action: 'Başla',
+      onClick: () => onLogin(),
+    },
+    {
+      icon: Smartphone,
+      title: 'Mobil Kurye',
+      desc: 'Kurye ekranını webden açın',
+      size: 'Hızlı Erişim',
+      version: 'v1.0.2',
+      action: 'Kurye Aç',
+      onClick: () => {
+        const url = new URL(window.location.href);
+        url.searchParams.set('courier', '1');
+        window.location.href = url.toString();
+      },
+    },
+  ] as const;
+
   return (
     <div className="min-h-screen bg-white font-sans">
       {/* Navbar */}
       <nav className={`fixed top-0 left-0 right-0 z-50 transition-all duration-300 ${scrolled ? 'bg-white shadow-sm' : 'bg-transparent'}`}>
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-16 md:h-20">
-            <div className="flex items-center gap-2.5">
+            <button
+              type="button"
+              onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+              className="flex items-center gap-2.5"
+              aria-label="Ana sayfaya dön"
+            >
               <div className="w-9 h-9 bg-gradient-to-br from-orange-500 to-orange-600 rounded-lg flex items-center justify-center">
                 <ChefHat className="w-5 h-5 text-white" />
               </div>
               <span className={`text-xl font-bold tracking-tight ${scrolled ? 'text-slate-900' : 'text-white'}`}>
                 ŞefPOS
               </span>
-            </div>
+            </button>
 
             <div className="hidden md:flex items-center gap-8">
               {navLinks.map(item => (
@@ -523,32 +563,7 @@ export function LandingPage({ onLogin }: LandingPageProps) {
           </div>
 
           <div className="grid md:grid-cols-3 gap-8 max-w-4xl mx-auto">
-            {[
-              {
-                icon: Laptop,
-                title: 'Windows',
-                desc: 'En çok tercih edilen POS sistemi',
-                size: '245 MB',
-                version: 'v1.2.5',
-                action: 'İndir',
-              },
-              {
-                icon: Globe,
-                title: 'Web Uygulaması',
-                desc: 'Tarayıcıdan kullanın, yüklemeye gerek yok',
-                size: 'Yükleme Yok',
-                version: 'Güncel',
-                action: 'Başla',
-              },
-              {
-                icon: Smartphone,
-                title: 'Mobil Kurye',
-                desc: 'Kuriye uygulaması iOS ve Android',
-                size: '85 MB',
-                version: 'v1.0.2',
-                action: 'İndir',
-              },
-            ].map((item, i) => {
+            {downloadCards.map((item, i) => {
               const Icon = item.icon;
               return (
                 <div key={i} className="bg-slate-800 border border-slate-700 rounded-2xl p-8 text-center hover:border-orange-400 transition-all">
@@ -567,7 +582,15 @@ export function LandingPage({ onLogin }: LandingPageProps) {
                       <span className="text-white font-bold">{item.version}</span>
                     </div>
                   </div>
-                  <button className="w-full bg-orange-600 hover:bg-orange-700 text-white font-bold py-3 rounded-lg transition-colors flex items-center justify-center gap-2">
+                  <button
+                    onClick={item.onClick}
+                    disabled={(item as any).disabled}
+                    className={`w-full font-bold py-3 rounded-lg transition-colors flex items-center justify-center gap-2 ${
+                      (item as any).disabled
+                        ? 'bg-slate-600 text-slate-300 cursor-not-allowed'
+                        : 'bg-orange-600 hover:bg-orange-700 text-white'
+                    }`}
+                  >
                     <Download className="w-4 h-4" />
                     {item.action}
                   </button>

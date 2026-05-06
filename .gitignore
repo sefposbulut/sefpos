@@ -23,3 +23,8 @@ dist-ssr
 .env
 release/
 release-new/
+
+.cursor/
+.vs/
+old_release/
+old_release_extracted/

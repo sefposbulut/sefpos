@@ -1,8 +1,36 @@
 const { app, BrowserWindow, shell, ipcMain, net, dialog } = require('electron');
 const path = require('path');
+
+/**
+ * Bazı sürücü + Windows DWM kombinasyonlarında ekranda sürekli titreme / yeniden boyama olur.
+ * Kalıcı iyileştirme: Chromium anahtarları + pencereyi önce gösterip sonra büyütme.
+ * Hâlâ titreme varsa: SEFPOS_DISABLE_HARDWARE_ACCELERATION=1 (veya ELECTRON_DISABLE_GPU=1) ile GPU kapatılabilir.
+ */
+if (
+  process.platform === 'win32' &&
+  (process.env.SEFPOS_DISABLE_HARDWARE_ACCELERATION === '1' || process.env.ELECTRON_DISABLE_GPU === '1')
+) {
+  app.disableHardwareAcceleration();
+}
+if (process.platform === 'win32') {
+  app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
+  app.commandLine.appendSwitch('disable-background-timer-throttling');
+  app.commandLine.appendSwitch('disable-renderer-backgrounding');
+}
 const fs = require('fs');
 const os = require('os');
 const https = require('https');
+
+/** Repo kökündeki sefpos-dev-port.json — tek kaynak (Vite ile aynı) */
+function readSefposDevServerPort() {
+  try {
+    const fp = path.join(__dirname, '..', 'sefpos-dev-port.json');
+    const j = JSON.parse(fs.readFileSync(fp, 'utf8'));
+    const n = Number(j.port);
+    if (Number.isInteger(n) && n >= 1 && n <= 65535) return n;
+  } catch (_) {}
+  return 5180;
+}
 
 let autoUpdater = null;
 try {
@@ -860,11 +888,15 @@ async function doPrint(html, printerName, silent) {
       width: 400,
       height: 800,
       show: false,
+      autoHideMenuBar: true,
       webPreferences: {
         nodeIntegration: false,
         contextIsolation: true,
       },
     });
+    try {
+      if (typeof printWin.removeMenu === 'function') printWin.removeMenu();
+    } catch (_) {}
 
     printWindows.push(printWin);
 
@@ -1237,11 +1269,13 @@ function watchConnectivity() {
 
 function createWindow() {
   const settings = loadSettings();
+  let mainLoadRetried = false;
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
     minWidth: 1024,
     minHeight: 600,
+    autoHideMenuBar: true,
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -1254,18 +1288,32 @@ function createWindow() {
     show: false,
     backgroundColor: '#0f172a',
   });
+  try {
+    if (typeof mainWindow.removeMenu === 'function') {
+      mainWindow.removeMenu();
+    }
+  } catch (_) {}
 
   mainWindow.once('ready-to-show', () => {
-    mainWindow.show();
-    mainWindow.maximize();
     if (settings.zoomFactor) {
       mainWindow.webContents.setZoomFactor(settings.zoomFactor);
+    }
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.show();
+      // Windows: önce show sonra maximize — DWM'de sık görülen titreme / çift boyama azalır
+      if (process.platform === 'win32') {
+        setImmediate(() => {
+          if (mainWindow && !mainWindow.isDestroyed()) mainWindow.maximize();
+        });
+      } else {
+        mainWindow.maximize();
+      }
     }
     watchConnectivity();
   });
 
   if (isDev) {
-    mainWindow.loadURL('http://localhost:5173');
+    mainWindow.loadURL(`http://localhost:${readSefposDevServerPort()}`);
     mainWindow.webContents.openDevTools();
   } else {
     const indexPath = path.join(app.getAppPath(), 'dist', 'index.html');
@@ -1273,7 +1321,8 @@ function createWindow() {
   }
 
   mainWindow.webContents.on('did-fail-load', (_event, errorCode, _errorDescription) => {
-    if (!isDev && errorCode !== -3) {
+    if (!isDev && errorCode !== -3 && !mainLoadRetried) {
+      mainLoadRetried = true;
       const indexPath = path.join(app.getAppPath(), 'dist', 'index.html');
       mainWindow.loadFile(indexPath);
     }
@@ -2038,22 +2087,157 @@ let scaleComPort = null;
 let scaleWeighingSession = null;
 const scaleBuffer = { data: '', lastUpdate: 0 };
 
+/**
+ * Terazi metninden gram çıkar (eski release ile uyumlu: ST,GS, STX/ETX, +/-, son sayı fallback).
+ * Uzun satırlarda da çalışır; sadece newline ile bölünmüş parçalara uygulanmamalıdır — caller satır/chunk verir.
+ */
+function parseScaleChunkToGrams(chunk) {
+  const clean = String(chunk || '').replace(/\u0002|\u0003/g, '').trim();
+  if (!clean) return null;
+
+  const kgMatch = clean.match(/([+-]?\d+(?:[.,]\d+)?)\s*kg/i);
+  if (kgMatch) {
+    const v = parseFloat(kgMatch[1].replace(',', '.'));
+    if (!Number.isNaN(v)) return v * 1000;
+  }
+
+  const gMatch = clean.match(/([+-]?\d+(?:[.,]\d+)?)\s*g(?!r)/i);
+  if (gMatch) {
+    const v = parseFloat(gMatch[1].replace(',', '.'));
+    if (!Number.isNaN(v)) return v;
+  }
+
+  const nums = clean.match(/([+-]?\d+(?:[.,]\d+)?)/g);
+  if (!nums || nums.length === 0) return null;
+  const lastToken = String(nums[nums.length - 1]);
+  const last = parseFloat(lastToken.replace(',', '.'));
+  if (Number.isNaN(last)) return null;
+  if (lastToken.includes('.') || lastToken.includes(',')) {
+    return last * 1000;
+  }
+  return last;
+}
+
+/** Satır sonu gelmeden tamponun sonunda tam bir kg / g çerçevesi varsa oku */
+function tryParseSuffixWeightFrame(buf) {
+  if (!buf || buf.length > 512) return null;
+  let m = buf.match(/([+-]?\d+(?:[.,]\d+)?)\s*kg\s*$/i);
+  if (m) {
+    const v = parseFloat(m[1].replace(',', '.'));
+    if (!Number.isFinite(v)) return null;
+    return { grams: v * 1000, matchedLen: m[0].length };
+  }
+  m = buf.match(/([+-]?\d+(?:[.,]\d+)?)\s*g(?!r)\s*$/i);
+  if (m) {
+    const v = parseFloat(m[1].replace(',', '.'));
+    if (!Number.isFinite(v)) return null;
+    return { grams: v, matchedLen: m[0].length };
+  }
+  return null;
+}
+
+function pushScaleNetSample(sess, grossGrams) {
+  const tare = sess.tareBaseGrams || 0;
+  const net = Math.max(0, grossGrams - tare);
+  sess.lastGrossGrams = grossGrams;
+  sess.lastNetGrams = net;
+  sess.lastWeight = net;
+
+  const h = sess.history;
+  const now = Date.now();
+  h.push({ value: net, time: now });
+  if (h.length > 5) h.shift();
+
+  const SPREAD_G = 48;
+  const STABLE_MS = 110;
+  let stabilized = false;
+  if (h.length >= 2) {
+    const vals = h.map((x) => x.value);
+    const spread = Math.max(...vals) - Math.min(...vals);
+    if (spread <= SPREAD_G) {
+      if (!sess.stableSince) sess.stableSince = now;
+      stabilized = now - sess.stableSince >= STABLE_MS;
+    } else {
+      sess.stableSince = null;
+      stabilized = false;
+    }
+  } else {
+    sess.stableSince = null;
+  }
+  sess.stabilized = stabilized;
+
+  const stabChanged = sess.lastIpcStabilized !== stabilized;
+  const elapsed = now - (sess.lastIpcAt || 0);
+  const netDelta = sess.lastIpcNet == null ? Infinity : Math.abs(net - sess.lastIpcNet);
+  if (!stabChanged && elapsed < 90 && netDelta < 8) {
+    return;
+  }
+  sess.lastIpcAt = now;
+  sess.lastIpcNet = net;
+  sess.lastIpcStabilized = stabilized;
+
+  mainWindow?.webContents.send('scale-weight-update', {
+    weight: net,
+    stabilized: sess.stabilized,
+    timestamp: now,
+  });
+}
+
 ipcMain.handle('scale-list-ports', async () => {
   try {
-    if (process.platform !== 'win32') return [];
-    const ports = [];
-    for (let i = 1; i <= 9; i++) {
-      ports.push({ path: `COM${i}`, name: `COM${i}` });
+    let SerialPort;
+    try {
+      SerialPort = require('serialport').SerialPort;
+    } catch {
+      return [];
     }
-    return ports;
+    const ports = await SerialPort.list();
+    const normalized = (ports || [])
+      .filter((p) => !!p.path)
+      .map((p) => ({
+        path: p.path,
+        name: p.friendlyName || p.manufacturer || p.path,
+        manufacturer: p.manufacturer || null,
+        serialNumber: p.serialNumber || null,
+      }));
+    if (normalized.length > 0) return normalized;
+
+    if (process.platform === 'win32') {
+      return Array.from({ length: 16 }, (_, i) => {
+        const n = i + 1;
+        return { path: `COM${n}`, name: `COM${n}` };
+      });
+    }
+    return [];
   } catch {
     return [];
   }
 });
 
-ipcMain.handle('scale-start-weighing', (_, { port, baudRate = 9600 }) => {
+function closeScaleWeighingPortAsync(portInstance) {
+  return new Promise((resolve) => {
+    if (!portInstance) return resolve();
+    try {
+      if (portInstance.isOpen) {
+        portInstance.close(() => resolve());
+      } else {
+        resolve();
+      }
+    } catch {
+      resolve();
+    }
+  });
+}
+
+ipcMain.handle('scale-start-weighing', async (_, { port, baudRate = 9600 }) => {
+  let scalePort;
   try {
-    if (scaleWeighingSession) return { error: 'Weighing in progress' };
+    if (scaleWeighingSession) {
+      const prevPort = scaleWeighingSession.port;
+      scaleWeighingSession = null;
+      await closeScaleWeighingPortAsync(prevPort);
+      await new Promise((r) => setTimeout(r, 200));
+    }
 
     let SerialPort;
     try {
@@ -2062,99 +2246,221 @@ ipcMain.handle('scale-start-weighing', (_, { port, baudRate = 9600 }) => {
       return { error: 'SerialPort module required: npm install serialport' };
     }
 
-    const scalePort = new SerialPort({
+    scalePort = new SerialPort({
       path: port,
       baudRate,
       dataBits: 8,
       parity: 'none',
-      stopBits: 1
+      stopBits: 1,
+      autoOpen: false,
     });
     scaleBuffer.data = '';
     scaleBuffer.lastUpdate = 0;
 
-    scaleWeighingSession = {
+    const session = {
       port: scalePort,
       startTime: Date.now(),
+      lastGrossGrams: null,
       lastWeight: null,
+      lastNetGrams: null,
       stabilized: false,
-      history: []
+      /** Son N net gram ölçümü — sadece kararlılık için */
+      history: [],
+      tareBaseGrams: 0,
+      stableSince: null,
+      /** IPC seyreltme — aşırı setState / GPU titremesini önler */
+      lastIpcAt: 0,
+      lastIpcNet: null,
+      lastIpcStabilized: undefined,
     };
 
-    let lastStableTime = 0;
-
     scalePort.on('data', (data) => {
+      if (scaleWeighingSession !== session) return;
       const str = data.toString();
       scaleBuffer.data += str;
       scaleBuffer.lastUpdate = Date.now();
 
-      let value = null;
-      let kgMatch = scaleBuffer.data.match(/(\d+[.,]\d+|\d+)\s*kg/i);
-      if (kgMatch) {
-        value = parseFloat(kgMatch[1].replace(',', '.')) * 1000;
-      } else {
-        let gMatch = scaleBuffer.data.match(/(\d+[.,]\d+|\d+)\s*g(?!r)/i) || scaleBuffer.data.match(/(\d+[.,]\d+|\d+)/);
-        if (gMatch) {
-          value = parseFloat(gMatch[1].replace(',', '.'));
+      if (scaleBuffer.data.length > 8192) {
+        scaleBuffer.data = scaleBuffer.data.slice(-4096);
+      }
+
+      let normalized = scaleBuffer.data.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+      const parts = normalized.split('\n');
+      let incomplete = parts.pop() || '';
+
+      let lastGrossThisChunk = null;
+      for (const line of parts) {
+        const g = parseScaleChunkToGrams(line);
+        if (g !== null && !Number.isNaN(g) && g >= 0 && g <= 500000) {
+          lastGrossThisChunk = g;
         }
       }
 
-      if (value !== null && !isNaN(value) && value >= 0 && value <= 50000) {
-        scaleWeighingSession.history.push({ value, time: Date.now() });
-        if (scaleWeighingSession.history.length > 3) {
-          scaleWeighingSession.history.shift();
+      if (lastGrossThisChunk !== null) {
+        pushScaleNetSample(session, lastGrossThisChunk);
+      }
+
+      const suffix = tryParseSuffixWeightFrame(incomplete);
+      if (suffix) {
+        if (suffix.grams >= 0 && suffix.grams <= 500000) {
+          pushScaleNetSample(session, suffix.grams);
         }
+        incomplete = incomplete.slice(0, incomplete.length - suffix.matchedLen);
+      }
 
-        const avgValue = scaleWeighingSession.history.reduce((a, b) => a + b.value, 0) / scaleWeighingSession.history.length;
-        scaleWeighingSession.lastWeight = avgValue;
-        scaleBuffer.data = '';
-
-        // Stabilize after 1 second of stable readings
-        const now = Date.now();
-        if (scaleWeighingSession.history.every(h => Math.abs(h.value - avgValue) < 10)) {
-          if (now - lastStableTime > 1000) {
-            scaleWeighingSession.stabilized = true;
-          }
-        } else {
-          lastStableTime = now;
-          scaleWeighingSession.stabilized = false;
-        }
-
-        mainWindow?.webContents.send('scale-weight-update', {
-          weight: avgValue,
-          stabilized: scaleWeighingSession.stabilized,
-          timestamp: Date.now()
-        });
-
-        // Clear after newline
-        if (scaleBuffer.data.includes('\n')) {
-          scaleBuffer.data = '';
+      // Bazı cihazlar satır sonu göndermez; eski release gibi uzun tamponda bir kez dene.
+      if (incomplete.length > 40) {
+        const g = parseScaleChunkToGrams(incomplete);
+        if (g !== null && !Number.isNaN(g) && g >= 0 && g <= 500000) {
+          pushScaleNetSample(session, g);
+          incomplete = '';
         }
       }
+
+      scaleBuffer.data = incomplete.slice(-2048);
     });
 
     scalePort.on('error', (err) => {
       console.error('Scale port error:', err);
       mainWindow?.webContents.send('scale-weighing-error', { error: err.message });
-      if (scaleWeighingSession?.port) {
-        try { scaleWeighingSession.port.close(); } catch {}
+      if (scaleWeighingSession === session) {
+        scaleWeighingSession = null;
+        try {
+          if (scalePort.isOpen) scalePort.close(() => {});
+        } catch {}
       }
-      scaleWeighingSession = null;
     });
 
+    await new Promise((resolve, reject) => {
+      scalePort.open((openErr) => (openErr ? reject(openErr) : resolve()));
+    });
+
+    scaleWeighingSession = session;
     return { success: true, port, sessionId: Date.now() };
   } catch (err) {
     scaleWeighingSession = null;
-    return { error: err.message };
+    const msg = err?.message || String(err);
+    try {
+      if (scalePort && scalePort.isOpen) {
+        await closeScaleWeighingPortAsync(scalePort);
+      }
+    } catch {}
+    mainWindow?.webContents.send('scale-weighing-error', { error: msg });
+    return { error: msg };
   }
 });
 
-ipcMain.handle('scale-stop-weighing', () => {
+function scalePortWriteDrain(port, buf, timeoutMs = 400) {
+  return new Promise((resolve) => {
+    const finish = () => resolve();
+    if (!buf || !buf.length) return finish();
+    const t = setTimeout(finish, timeoutMs);
+    port.write(buf, (wErr) => {
+      if (wErr) {
+        clearTimeout(t);
+        return finish();
+      }
+      try {
+        port.drain(() => {
+          clearTimeout(t);
+          finish();
+        });
+      } catch {
+        clearTimeout(t);
+        finish();
+      }
+    });
+  });
+}
+
+/** Yeni tartım / ürün değişiminde yazılım 0 + çoğu RS232 terazide donanım dara (özel hex veya varsayılan T+CRLF) */
+ipcMain.handle('scale-initial-zero', async (_, opts = {}) => {
   try {
-    if (scaleWeighingSession?.port) {
-      scaleWeighingSession.port.close();
+    if (!scaleWeighingSession?.port?.isOpen) {
+      return { success: false, error: 'Terazi oturumu yok' };
     }
-    const result = scaleWeighingSession?.lastWeight || null;
+    const sess = scaleWeighingSession;
+    sess.history = [];
+    sess.stableSince = null;
+    sess.stabilized = false;
+    sess.tareBaseGrams = 0;
+    sess.lastNetGrams = 0;
+    sess.lastWeight = 0;
+    sess.lastIpcAt = 0;
+    sess.lastIpcNet = null;
+    sess.lastIpcStabilized = undefined;
+
+    const disableHardwareTare = opts.disableHardwareTare === true;
+    const hex = typeof opts?.tareCommandHex === 'string' ? opts.tareCommandHex.trim() : '';
+
+    await new Promise((r) => setTimeout(r, 60));
+
+    if (!disableHardwareTare) {
+      let buf = null;
+      if (hex.length >= 2 && /^[0-9a-fA-F\s]+$/.test(hex)) {
+        try {
+          buf = Buffer.from(hex.replace(/\s+/g, ''), 'hex');
+        } catch (_) {
+          buf = null;
+        }
+      }
+      if (!buf || !buf.length) {
+        buf = Buffer.from('T\r\n', 'ascii');
+      }
+      try {
+        await scalePortWriteDrain(sess.port, buf);
+      } catch (_) {
+        /* bazı sürücüler drain farklı davranır; yine de yazılım sıfırı uygulanır */
+      }
+    }
+
+    mainWindow?.webContents.send('scale-weight-update', {
+      weight: 0,
+      stabilized: false,
+      timestamp: Date.now(),
+    });
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('scale-tare-weighing', () => {
+  try {
+    if (!scaleWeighingSession) {
+      return { success: false, error: 'Terazi oturumu yok' };
+    }
+    const gross = scaleWeighingSession.lastGrossGrams;
+    if (gross == null || Number.isNaN(gross)) {
+      return { success: false, error: 'Teraziden veri yok; bir an bekleyip tekrar deneyin' };
+    }
+    scaleWeighingSession.tareBaseGrams = gross;
+    scaleWeighingSession.history = [];
+    scaleWeighingSession.stableSince = null;
+    scaleWeighingSession.stabilized = false;
+    scaleWeighingSession.lastNetGrams = 0;
+    scaleWeighingSession.lastWeight = 0;
+    scaleWeighingSession.lastIpcAt = 0;
+    scaleWeighingSession.lastIpcNet = null;
+    scaleWeighingSession.lastIpcStabilized = undefined;
+    mainWindow?.webContents.send('scale-weight-update', {
+      weight: 0,
+      stabilized: false,
+      timestamp: Date.now(),
+    });
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('scale-stop-weighing', async () => {
+  try {
+    const sess = scaleWeighingSession;
+    const result = sess?.lastWeight ?? null;
+    const p = sess?.port;
     scaleWeighingSession = null;
+    await closeScaleWeighingPortAsync(p);
     return { success: true, weight: result };
   } catch (err) {
     scaleWeighingSession = null;
@@ -2165,7 +2471,7 @@ ipcMain.handle('scale-stop-weighing', () => {
 ipcMain.handle('scale-get-weight', () => {
   if (!scaleWeighingSession) return { error: 'No weighing session' };
   return {
-    weight: scaleWeighingSession.lastWeight,
+    weight: scaleWeighingSession.lastNetGrams ?? scaleWeighingSession.lastWeight,
     stabilized: scaleWeighingSession.stabilized,
     history: scaleWeighingSession.history.slice(-5)
   };

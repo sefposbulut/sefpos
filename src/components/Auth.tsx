@@ -1,8 +1,18 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase } from '../lib/supabase';
+import { supabase, invokeEdgeFunction } from '../lib/supabase';
+import { isCapacitorNative } from '../lib/capacitorPlatform';
 import { Bike, Lock, Building2, Phone, ArrowRight, Sparkles, ChefHat, User, Mail } from 'lucide-react';
 import { WaiterLogin } from './WaiterLogin';
+
+function getInitialAuthMode(): 'main' | 'waiter' {
+  if (typeof window === 'undefined') return 'main';
+  if (window.location.pathname.toLowerCase().startsWith('/ayka')) return 'main';
+  const sp = new URLSearchParams(window.location.search);
+  if (sp.has('waiter') || sp.has('garson')) return 'waiter';
+  if (isCapacitorNative()) return 'waiter';
+  return 'main';
+}
 
 function phoneToEmail(phone: string) {
   const cleaned = phone.replace(/\D/g, '');
@@ -17,30 +27,6 @@ const TEST_LOGIN_EMAIL = 'info@sefpos.com.tr';
 const TEST_LOGIN_PHONE = '02363131818';
 const ADMIN_DEFAULT_PASSWORD = '2128948++';
 const AYKA_AUTH_KEY = 'shefpos_ayka_auth';
-const SMS_FUNCTION_BASE_URL = 'https://hwwsitusurqgpitptkuf.supabase.co/functions/v1';
-const SMS_FUNCTION_API_KEY = 'sb_publishable_4ziGGAYQkC9Is5P7leZ6VQ_WAddnGhD';
-
-async function invokeSmsFunction<T = any>(name: string, payload: Record<string, any>): Promise<T> {
-  const res = await fetch(`${SMS_FUNCTION_BASE_URL}/${name}`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      apikey: SMS_FUNCTION_API_KEY,
-      Authorization: `Bearer ${SMS_FUNCTION_API_KEY}`,
-    },
-    body: JSON.stringify(payload),
-  });
-  let data: any = null;
-  try {
-    data = await res.json();
-  } catch {
-    data = null;
-  }
-  if (!res.ok || data?.success === false) {
-    throw new Error(data?.error || `${name} başarısız`);
-  }
-  return data as T;
-}
 
 const formatPhone = (value: string) => {
   const digits = value.replace(/\D/g, '').slice(0, 11);
@@ -55,7 +41,7 @@ const isValidEmail = (val: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val.trim
 
 export function Auth() {
   const isAykaPath = window.location.pathname.toLowerCase().startsWith('/ayka');
-  const [authMode, setAuthMode] = useState<'main' | 'waiter'>('main');
+  const [authMode, setAuthMode] = useState<'main' | 'waiter'>(getInitialAuthMode);
   const [isLogin, setIsLogin] = useState(true);
   const [loginValue, setLoginValue] = useState('');
   const [password, setPassword] = useState('');
@@ -100,7 +86,7 @@ export function Auth() {
     }
     setLoading(true);
     try {
-      const data = await invokeSmsFunction<{ success: boolean; otpToken?: string }>('send-sms-otp', {
+      const data = await invokeEdgeFunction<{ success: boolean; otpToken?: string }>('send-sms-otp', {
         phone: cleaned,
         purpose: 'signup',
       });
@@ -316,7 +302,7 @@ export function Auth() {
             setLoading(false);
             return;
           }
-          const data = await invokeSmsFunction<{ success: boolean }>('verify-sms-otp', {
+          const data = await invokeEdgeFunction<{ success: boolean }>('verify-sms-otp', {
             phone: cleaned,
             code: otpCode.trim(),
             purpose: 'signup',
@@ -330,7 +316,7 @@ export function Auth() {
         const email = phoneToEmail(cleaned);
         const { error } = await signUp(email, password, fullName, tenantName, registerEmail.trim().toLowerCase());
         if (error) throw error;
-        await invokeSmsFunction('send-sms-welcome', { phone: cleaned });
+        await invokeEdgeFunction('send-sms-welcome', { phone: cleaned });
         if (remember) {
           localStorage.setItem(REMEMBER_KEY, loginValue);
           localStorage.setItem(REMEMBER_PASSWORD_KEY, password);

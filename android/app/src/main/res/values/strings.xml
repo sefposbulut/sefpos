@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Sefpos Garson</string>
+    <string name="title_activity_main">Sefpos Garson</string>
+    <string name="package_name">com.sefpos.waiter</string>
+    <string name="custom_url_scheme">com.sefpos.waiter</string>
+</resources>

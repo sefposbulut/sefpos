@@ -1,12 +1,13 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { supabase } from '../lib/supabase';
+import { USER_DELETE_HARD_RESET_SQL } from '../lib/userDeleteHardResetSql';
 import { useAuth } from '../contexts/AuthContext';
 import { Database } from '../lib/supabase';
 import { Branch } from '../contexts/AuthContext';
 import {
   Users, Plus, Trash2, CreditCard as Edit2, Save, X, MapPin, Building2,
   KeyRound, Shield, ShieldOff, ShieldCheck, Info, Wifi, WifiOff, AlertTriangle,
-  ChevronDown, ChevronUp, ToggleLeft, ToggleRight, Pencil
+  ChevronDown, ChevronUp, ToggleLeft, ToggleRight, Pencil, Copy, Check
 } from 'lucide-react';
 
 type Profile = Database['public']['Tables']['profiles']['Row'];
@@ -78,6 +79,91 @@ function ConfirmModal({ message, onConfirm, onCancel }: ConfirmModalProps) {
           </button>
           <button onClick={onConfirm} className="flex-1 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-xl font-bold transition text-sm">
             Sil
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DeleteDbFixModal({
+  errorMessage,
+  sql,
+  onClose,
+}: {
+  errorMessage: string;
+  sql: string;
+  onClose: () => void;
+}) {
+  const taRef = useRef<HTMLTextAreaElement>(null);
+  const [copied, setCopied] = useState(false);
+
+  const copySql = async () => {
+    setCopied(false);
+    try {
+      await navigator.clipboard.writeText(sql);
+      setCopied(true);
+      return;
+    } catch {
+      /* http / izin */
+    }
+    const el = taRef.current;
+    if (el) {
+      el.focus();
+      el.select();
+      try {
+        document.execCommand('copy');
+        setCopied(true);
+      } catch {
+        /* kullanıcı Ctrl+C */
+      }
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[70] p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col">
+        <div className="p-5 border-b border-slate-100 flex items-start gap-3">
+          <div className="w-11 h-11 bg-amber-100 rounded-full flex items-center justify-center flex-shrink-0">
+            <AlertTriangle className="w-5 h-5 text-amber-700" />
+          </div>
+          <div className="min-w-0">
+            <h3 className="font-bold text-slate-900 text-lg">Kullanıcı silinemedi</h3>
+            <p className="text-sm text-slate-600 mt-1 leading-relaxed">{errorMessage}</p>
+            <p className="text-xs text-slate-500 mt-2">
+              Aşağıdaki SQL, Türkçe rol adları (Yönetici, Şube Müdürü) ve <code className="text-slate-700">can_manage_users</code> ile
+              silme kuralını düzeltir. Supabase Dashboard → SQL → yapıştır → Run; sayfayı yenileyip tekrar silin.
+              İsteğe bağlı: <code className="text-slate-700">update-user</code> edge deploy ile auth kaydı da silinir.
+            </p>
+          </div>
+        </div>
+        <div className="p-4 flex-1 min-h-0 flex flex-col gap-2">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-xs font-bold text-slate-500 uppercase tracking-wide">Tamir SQL</span>
+            <button
+              type="button"
+              onClick={() => void copySql()}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-orange-600 hover:bg-orange-700 text-white text-sm font-semibold transition"
+            >
+              {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+              {copied ? 'Kopyalandı' : 'Panoya kopyala'}
+            </button>
+          </div>
+          <textarea
+            ref={taRef}
+            readOnly
+            value={sql}
+            className="w-full flex-1 min-h-[200px] max-h-[45vh] p-3 rounded-xl border border-slate-200 bg-slate-50 text-xs font-mono text-slate-800 leading-snug resize-y focus:outline-none focus:ring-2 focus:ring-orange-400"
+            spellCheck={false}
+          />
+        </div>
+        <div className="p-4 border-t border-slate-100 flex justify-end">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-5 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-semibold text-sm transition"
+          >
+            Kapat
           </button>
         </div>
       </div>
@@ -455,6 +541,7 @@ export function UserManagement() {
   const [passwordModal, setPasswordModal] = useState<ProfileWithRole | null>(null);
   const [ipLockModal, setIpLockModal] = useState<ProfileWithRole | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<ProfileWithRole | null>(null);
+  const [deleteDbFixModal, setDeleteDbFixModal] = useState<string | null>(null);
   const [editingRole, setEditingRole] = useState<Role | null>(null);
   const [rolesExpanded, setRolesExpanded] = useState(true);
   const [newUser, setNewUser] = useState({
@@ -517,23 +604,85 @@ export function UserManagement() {
   };
 
   const callUpdateUser = async (payload: Record<string, unknown>) => {
-    const apiUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/update-user`;
     const { data: { session } } = await supabase.auth.getSession();
     if (!session?.access_token) throw new Error('Oturum bilgisi alınamadı');
 
-    const response = await fetch(apiUrl, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${session.access_token}`,
-        'apikey': import.meta.env.VITE_SUPABASE_ANON_KEY,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(payload),
-    });
+    try {
+      const { data, error } = await supabase.functions.invoke<{ success?: boolean; error?: string }>(
+        'update-user',
+        { body: payload },
+      );
+      if (error) {
+        throw new Error(error.message || 'Edge fonksiyonu çağrılamadı');
+      }
+      const result = data ?? {};
+      if (!result.success) {
+        throw new Error(result.error || 'İşlem başarısız');
+      }
+      return result;
+    } catch (e) {
+      if (e instanceof TypeError || (e as Error).message?.includes('Failed to fetch')) {
+        throw new Error(
+          'Sunucuya bağlanılamadı. İnternet veya güvenlik duvarını kontrol edin; update-user edge fonksiyonunun yayında olduğundan emin olun.',
+        );
+      }
+      throw e;
+    }
+  };
 
-    const result = await response.json();
-    if (!response.ok || !result.success) throw new Error(result.error || 'İşlem başarısız');
-    return result;
+  const callDeleteUser = async (target_user_id: string) => {
+    await callUpdateUser({ target_user_id, delete_user: true });
+  };
+
+  /** Edge deploy yoksa / eski sürüm: RLS ile profiles satırını sil (auth.users hayalet kalabilir; tam temizlik için update-user deploy). */
+  const deleteProfileViaDatabase = async (userId: string): Promise<boolean> => {
+    const { data: targetProfile } = await supabase
+      .from('profiles')
+      .select('id, tenant_id, role')
+      .eq('id', userId)
+      .maybeSingle();
+
+    if (!targetProfile?.id) return true;
+
+    if (targetProfile.tenant_id && ['waiter', 'courier'].includes(String((targetProfile as { role?: string }).role || ''))) {
+      await Promise.all([
+        supabase
+          .from('device_bindings')
+          .update({ status: 'inactive' } as Record<string, unknown>)
+          .eq('tenant_id', targetProfile.tenant_id)
+          .eq('waiter_id', userId),
+        supabase
+          .from('device_binding_requests')
+          .update({ status: 'rejected' } as Record<string, unknown>)
+          .eq('tenant_id', targetProfile.tenant_id)
+          .eq('waiter_id', userId)
+          .in('status', ['pending', 'accepted']),
+      ]);
+    }
+
+    const { data: deleted, error } = await supabase.from('profiles').delete().eq('id', userId).select('id');
+    if (error) throw error;
+    return (deleted?.length ?? 0) > 0;
+  };
+
+  /** DB RPC delete_tenant_user; skipped = migration yok; denied = yetki/yasak. */
+  const tryDeleteTenantUserRpc = async (userId: string): Promise<'deleted' | 'skipped' | 'denied'> => {
+    const { data, error } = await supabase.rpc('delete_tenant_user', { p_target_user_id: userId });
+    if (error) {
+      const msg = error.message || '';
+      const missingFn =
+        error.code === 'PGRST202' ||
+        error.code === '42883' ||
+        /could not find|does not exist|schema cache|function public\.delete_tenant_user/i.test(msg);
+      if (missingFn) return 'skipped';
+      if (/permission denied|cannot delete self|cross-tenant|caller profile not found|not authenticated/i.test(msg)) {
+        return 'denied';
+      }
+      throw new Error(msg);
+    }
+    // PostgREST returns JSON boolean; avoid strict === only (some clients coerce).
+    if (data === true || data === 'true') return 'deleted';
+    return 'skipped';
   };
 
   const handleUpdateUser = async (userId: string) => {
@@ -549,35 +698,59 @@ export function UserManagement() {
 
   const handleDeleteUser = async (userId: string) => {
     try {
-      // Cleanup waiter/courier device access before profile delete.
-      const { data: targetProfile } = await supabase
-        .from('profiles')
-        .select('id, tenant_id, role')
-        .eq('id', userId)
-        .maybeSingle();
-
-      if (targetProfile?.tenant_id && ['waiter', 'courier'].includes((targetProfile as any).role || '')) {
-        await Promise.all([
-          supabase
-            .from('device_bindings')
-            .update({ status: 'inactive' } as any)
-            .eq('tenant_id', (targetProfile as any).tenant_id)
-            .eq('waiter_id', userId),
-          supabase
-            .from('device_binding_requests')
-            .update({ status: 'rejected' } as any)
-            .eq('tenant_id', (targetProfile as any).tenant_id)
-            .eq('waiter_id', userId)
-            .in('status', ['pending', 'accepted']),
-        ]);
+      const rpc = await tryDeleteTenantUserRpc(userId);
+      if (rpc === 'denied') {
+        throw new Error('Bu kullanıcıyı silmek için yetkiniz yok veya bu işlem yasak.');
+      }
+      if (rpc === 'deleted') {
+        let { data: stillRpc } = await supabase.from('profiles').select('id').eq('id', userId).maybeSingle();
+        if (!stillRpc) {
+          try {
+            await callUpdateUser({ target_user_id: userId, delete_user: true });
+          } catch {
+            /* Profil gitti; auth kaydı edge ile temizlenemezse sorun değil */
+          }
+          alert('Kullanıcı başarıyla silindi');
+          await loadUsers();
+          setDeleteConfirm(null);
+          return;
+        }
       }
 
-      const { error } = await supabase.from('profiles').delete().eq('id', userId);
-      if (error) throw error;
+      try {
+        await callDeleteUser(userId);
+      } catch (e) {
+        const msg = (e as Error).message;
+        if (msg.includes('Kendi hesabınızı')) throw e;
+      }
+
+      let { data: still } = await supabase.from('profiles').select('id').eq('id', userId).maybeSingle();
+      if (!still) {
+        alert('Kullanıcı başarıyla silindi');
+        await loadUsers();
+        setDeleteConfirm(null);
+        return;
+      }
+
+      const removed = await deleteProfileViaDatabase(userId);
+      if (!removed) {
+        ({ data: still } = await supabase.from('profiles').select('id').eq('id', userId).maybeSingle());
+        if (still) {
+          throw new Error(
+            'Kullanıcı silinemedi. Ağ bağlantınızı kontrol edin; sorun sürerse veritabanında silme kuralı (RLS) veya delete_tenant_user RPC henüz uygulanmamış olabilir.',
+          );
+        }
+      }
+
       alert('Kullanıcı başarıyla silindi');
-      loadUsers();
+      await loadUsers();
     } catch (err) {
-      alert('Hata: ' + (err as Error).message);
+      const msg = (err as Error).message || '';
+      if (msg.includes('silinemedi')) {
+        setDeleteDbFixModal(msg);
+      } else {
+        alert('Hata: ' + msg);
+      }
     }
     setDeleteConfirm(null);
   };
@@ -1215,6 +1388,14 @@ export function UserManagement() {
           message={`"${deleteConfirm.full_name}" adlı kullanıcıyı silmek istediğinizden emin misiniz?`}
           onConfirm={() => handleDeleteUser(deleteConfirm.id)}
           onCancel={() => setDeleteConfirm(null)}
+        />
+      )}
+
+      {deleteDbFixModal && (
+        <DeleteDbFixModal
+          errorMessage={deleteDbFixModal}
+          sql={USER_DELETE_HARD_RESET_SQL}
+          onClose={() => setDeleteDbFixModal(null)}
         />
       )}
 

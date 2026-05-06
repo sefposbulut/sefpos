@@ -56,13 +56,19 @@ function CustomerPicker({ tenantId, selected, onSelect, amount }: CustomerPicker
   const [expanded, setExpanded] = useState(!selected);
 
   const load = useCallback(async () => {
+    if (!tenantId) return;
     setLoading(true);
-    const cached = sessionStorage.getItem(`customers_${tenantId}`);
+    // Cache TTL: 5 dakika
+    const cacheKey = `customers_${tenantId}`;
+    const cached = sessionStorage.getItem(cacheKey);
     if (cached) {
       try {
-        setCustomers(JSON.parse(cached));
-        setLoading(false);
-        return;
+        const { data, timestamp } = JSON.parse(cached);
+        if (Date.now() - timestamp < 5 * 60 * 1000) {
+          setCustomers(data);
+          setLoading(false);
+          return;
+        }
       } catch (e) {}
     }
     const { data } = await (supabase.from('customers' as any) as any)
@@ -71,7 +77,7 @@ function CustomerPicker({ tenantId, selected, onSelect, amount }: CustomerPicker
       .eq('is_active', true)
       .order('name');
     if (data) {
-      sessionStorage.setItem(`customers_${tenantId}`, JSON.stringify(data));
+      sessionStorage.setItem(cacheKey, JSON.stringify({ data, timestamp: Date.now() }));
       setCustomers(data as unknown as Customer[]);
     }
     setLoading(false);
@@ -352,7 +358,7 @@ export function PaymentModal({
     && !hasInvalidOpenAccount;
 
   return (
-    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center p-2 z-[60]">
+    <div className="fixed inset-0 bg-black/75 flex items-center justify-center p-2 z-[60]">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md flex flex-col max-h-[calc(100vh-16px)] overflow-hidden">
         <div className="bg-gradient-to-r from-green-600 to-green-700 px-4 py-3 flex items-center justify-between rounded-t-2xl flex-shrink-0">
           <h3 className="text-xl font-bold text-white">Ödeme Al</h3>

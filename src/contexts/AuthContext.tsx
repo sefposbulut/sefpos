@@ -3,6 +3,7 @@ import { User } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
 import { Database } from '../lib/supabase';
 import { isSqlServerMode, isLocalMode } from '../lib/sqlDb';
+import { fetchCloudTableGridSnapshot, prefetchCloudTableGrid } from '../lib/tableGridData';
 import { setPrintAgentBranchId, setPrintAgentTenantId, registerElectronPrinters, isElectron } from '../lib/printService';
 
 type Profile = Database['public']['Tables']['profiles']['Row'];
@@ -170,12 +171,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setBranches(branchList);
 
       const savedBranchId = localStorage.getItem('shefpos_active_branch');
+      let nextBranch: Branch | null = null;
       if (savedBranchId) {
         const saved = branchList.find((b) => b.id === savedBranchId);
-        if (saved) { setActiveBranchState(saved); return; }
+        if (saved) nextBranch = saved;
       }
-      const main = branchList.find((b) => b.is_main) || branchList[0] || null;
-      setActiveBranchState(main);
+      if (!nextBranch) {
+        nextBranch = branchList.find((b) => b.is_main) || branchList[0] || null;
+      }
+      if (nextBranch && !isLocalMode() && !isSqlServerMode()) {
+        try {
+          await fetchCloudTableGridSnapshot(tenantId, nextBranch.id);
+        } catch {
+          prefetchCloudTableGrid(tenantId, nextBranch.id);
+        }
+      }
+      setActiveBranchState(nextBranch);
     } catch {
       setActiveBranchState(null);
       setBranches([]);

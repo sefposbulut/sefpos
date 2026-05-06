@@ -1,16 +1,25 @@
 -- Permanent cleanup rules for waiter/courier deactivation/deletion.
--- This migration supports both schemas:
--- 1) profiles-based waiter users
--- 2) legacy waiters table
+-- Requires profiles.role and profiles.is_active (skip on legacy schemas without those columns).
 
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'profiles' AND column_name = 'is_active'
+  ) OR NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'profiles' AND column_name = 'role'
+  ) THEN
+    NULL;
+  ELSE
+    EXECUTE $setup$
 create or replace function public.cleanup_waiter_device_access_on_profile_change()
 returns trigger
 language plpgsql
 security definer
 set search_path = public
-as $$
+as $fn$
 begin
-  -- Trigger only for waiter/courier profile deactivation or deletion.
   if tg_op = 'UPDATE' then
     if coalesce(new.role, '') not in ('waiter', 'courier') then
       return new;
@@ -61,7 +70,7 @@ begin
 
   return coalesce(new, old);
 end;
-$$;
+$fn$;
 
 drop trigger if exists trg_cleanup_waiter_device_access_on_profile_update on public.profiles;
 create trigger trg_cleanup_waiter_device_access_on_profile_update
@@ -74,10 +83,22 @@ create trigger trg_cleanup_waiter_device_access_on_profile_delete
 after delete on public.profiles
 for each row
 execute function public.cleanup_waiter_device_access_on_profile_change();
+$setup$;
+  END IF;
+END $$;
 
 do $$
 begin
-  if exists (select 1 from information_schema.tables where table_schema = 'public' and table_name = 'device_bindings') then
+  if exists (select 1 from information_schema.tables where table_schema = 'public' and table_name = 'device_bindings')
+     and exists (
+       select 1 from information_schema.columns
+       where table_schema = 'public' and table_name = 'profiles' and column_name = 'is_active'
+     )
+     and exists (
+       select 1 from information_schema.columns
+       where table_schema = 'public' and table_name = 'profiles' and column_name = 'role'
+     )
+  then
     create or replace function public.guard_active_waiter_binding()
     returns trigger
     language plpgsql
@@ -91,7 +112,6 @@ begin
         return new;
       end if;
 
-      -- If this waiter_id belongs to profiles schema, block active binding for inactive profile.
       if exists (select 1 from information_schema.tables where table_schema = 'public' and table_name = 'profiles') then
         select id, role, is_active
           into v_profile

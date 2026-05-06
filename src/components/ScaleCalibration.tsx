@@ -10,6 +10,10 @@ export function ScaleCalibration({ onClose }: ScaleCalibrationProps) {
   const [baudRate, setBaudRate] = useState('9600');
   const [format, setFormat] = useState('grams'); // 'grams', 'kg', 'oz'
   const [multiplier, setMultiplier] = useState('1');
+  /** İsteğe bağlı: tartım ekranı açılınca seri porta gönderilecek dara komutu (hex, örn. CAS için üretici dokümanına göre) */
+  const [tareCommandHex, setTareCommandHex] = useState('');
+  /** false ise ana süreç varsayılan T+CRLF veya özel hex göndermez */
+  const [sendHardwareTare, setSendHardwareTare] = useState(true);
   const [currentReading, setCurrentReading] = useState<number | null>(null);
   const [isCalibrating, setIsCalibrating] = useState(false);
   const [status, setStatus] = useState<'idle' | 'reading' | 'success' | 'error'>('idle');
@@ -40,11 +44,20 @@ export function ScaleCalibration({ onClose }: ScaleCalibrationProps) {
       setBaudRate(config.baudRate || '9600');
       setFormat(config.format || 'grams');
       setMultiplier(config.multiplier || '1');
+      setTareCommandHex(typeof config.tareCommandHex === 'string' ? config.tareCommandHex : '');
+      setSendHardwareTare(config.disableHardwareTare !== true);
     }
   };
 
   const saveCalibrationSettings = () => {
-    const config = { port: scalePort, baudRate, format, multiplier };
+    const config = {
+      port: scalePort,
+      baudRate,
+      format,
+      multiplier,
+      tareCommandHex,
+      disableHardwareTare: !sendHardwareTare,
+    };
     localStorage.setItem('scale_calibration', JSON.stringify(config));
     setStatus('success');
     setMessage('Kalibrasyonayarları kaydedildi');
@@ -176,6 +189,34 @@ export function ScaleCalibration({ onClose }: ScaleCalibrationProps) {
             <option value="57600">57600</option>
             <option value="115200">115200</option>
           </select>
+        </div>
+
+        {/* Seri dara komutu (isteğe bağlı) */}
+        <div className="space-y-2">
+          <label className="block text-sm font-bold text-slate-700">
+            Dara seri komutu (hex, isteğe bağlı)
+          </label>
+          <input
+            type="text"
+            value={tareCommandHex}
+            onChange={(e) => setTareCommandHex(e.target.value.replace(/[^0-9a-fA-F\s]/g, ''))}
+            disabled={isCalibrating}
+            placeholder="Örn: 02 54 0D (cihaz kılavuzuna göre)"
+            className="w-full px-4 py-2 border-2 border-slate-300 rounded-lg focus:outline-none focus:border-blue-500 font-mono text-sm"
+          />
+          <p className="text-xs text-slate-500">
+            Boş bırakırsanız her yeni tartımda varsayılan <span className="font-mono">T + CR LF</span> gönderilir. Üretici farklı komut istiyorsa hex girin; yanlış komut cihazı şaşırtabilir.
+          </p>
+          <label className="flex items-center gap-2 cursor-pointer text-sm text-slate-700">
+            <input
+              type="checkbox"
+              checked={sendHardwareTare}
+              onChange={(e) => setSendHardwareTare(e.target.checked)}
+              disabled={isCalibrating}
+              className="rounded border-slate-300 w-4 h-4"
+            />
+            <span>Teraziye seri dara komutu gönder (önerilir)</span>
+          </label>
         </div>
 
         {/* Format */}

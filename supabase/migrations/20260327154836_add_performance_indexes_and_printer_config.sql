@@ -49,6 +49,106 @@ BEGIN
   END IF;
 END $$;
 
+-- Compatibility guards for legacy schemas
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.tables
+    WHERE table_name = 'products'
+  ) AND NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'products' AND column_name = 'is_active'
+  ) THEN
+    ALTER TABLE products ADD COLUMN is_active boolean DEFAULT true;
+  END IF;
+
+  IF EXISTS (
+    SELECT 1 FROM information_schema.tables
+    WHERE table_name = 'orders'
+  ) AND NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'orders' AND column_name = 'order_type'
+  ) THEN
+    ALTER TABLE orders ADD COLUMN order_type text DEFAULT 'dine_in';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1 FROM information_schema.tables
+    WHERE table_name = 'orders'
+  ) AND NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'orders' AND column_name = 'payment_status'
+  ) THEN
+    ALTER TABLE orders ADD COLUMN payment_status text DEFAULT 'unpaid';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1 FROM information_schema.tables
+    WHERE table_name = 'orders'
+  ) AND NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'orders' AND column_name = 'completed_at'
+  ) THEN
+    ALTER TABLE orders ADD COLUMN completed_at timestamptz;
+  END IF;
+
+  IF EXISTS (
+    SELECT 1 FROM information_schema.tables
+    WHERE table_name = 'product_variants'
+  ) AND NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'product_variants' AND column_name = 'is_active'
+  ) THEN
+    ALTER TABLE product_variants ADD COLUMN is_active boolean DEFAULT true;
+  END IF;
+
+  -- Legacy order_items had no tenant_id; indexes expect it
+  IF EXISTS (
+    SELECT 1 FROM information_schema.tables
+    WHERE table_schema = 'public' AND table_name = 'order_items'
+  ) AND NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'order_items' AND column_name = 'tenant_id'
+  ) THEN
+    ALTER TABLE order_items ADD COLUMN tenant_id uuid REFERENCES tenants(id) ON DELETE CASCADE;
+    UPDATE order_items oi
+    SET tenant_id = o.tenant_id
+    FROM orders o
+    WHERE oi.order_id = o.id;
+  END IF;
+
+  -- Legacy categories used display_order; newer code uses sort_order
+  IF EXISTS (
+    SELECT 1 FROM information_schema.tables
+    WHERE table_schema = 'public' AND table_name = 'categories'
+  ) AND NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'categories' AND column_name = 'sort_order'
+  ) THEN
+    ALTER TABLE categories ADD COLUMN sort_order integer DEFAULT 0;
+    IF EXISTS (
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'categories' AND column_name = 'display_order'
+    ) THEN
+      UPDATE categories SET sort_order = display_order;
+    END IF;
+  END IF;
+
+  -- Table groups migration may be missing on some DBs
+  IF EXISTS (
+    SELECT 1 FROM information_schema.tables
+    WHERE table_schema = 'public' AND table_name = 'restaurant_tables'
+  ) AND NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'restaurant_tables' AND column_name = 'group_id'
+  ) AND EXISTS (
+    SELECT 1 FROM information_schema.tables
+    WHERE table_schema = 'public' AND table_name = 'table_groups'
+  ) THEN
+    ALTER TABLE restaurant_tables ADD COLUMN group_id uuid REFERENCES table_groups(id) ON DELETE SET NULL;
+  END IF;
+END $$;
+
 -- Critical Performance Indexes
 -- Most queries filter by tenant_id first, then by other conditions
 
@@ -100,18 +200,29 @@ CREATE INDEX IF NOT EXISTS idx_restaurant_tables_tenant_status
 CREATE INDEX IF NOT EXISTS idx_restaurant_tables_tenant_group 
   ON restaurant_tables(tenant_id, group_id, status);
 
--- Customers: Fast lookup by phone and name
-CREATE INDEX IF NOT EXISTS idx_customers_tenant_phone 
-  ON customers(tenant_id, phone text_pattern_ops) 
-  WHERE phone IS NOT NULL;
-
-CREATE INDEX IF NOT EXISTS idx_customers_tenant_name 
-  ON customers(tenant_id, name text_pattern_ops);
-
--- Customer balance tracking
-CREATE INDEX IF NOT EXISTS idx_customers_tenant_balance 
-  ON customers(tenant_id, balance) 
-  WHERE balance != 0;
+-- Customers: optional table (legacy DBs may not have customers yet)
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.tables
+    WHERE table_schema = 'public' AND table_name = 'customers'
+  ) THEN
+    EXECUTE $idx$
+      CREATE INDEX IF NOT EXISTS idx_customers_tenant_phone
+      ON customers(tenant_id, phone text_pattern_ops)
+      WHERE phone IS NOT NULL
+    $idx$;
+    EXECUTE $idx$
+      CREATE INDEX IF NOT EXISTS idx_customers_tenant_name
+      ON customers(tenant_id, name text_pattern_ops)
+    $idx$;
+    EXECUTE $idx$
+      CREATE INDEX IF NOT EXISTS idx_customers_tenant_balance
+      ON customers(tenant_id, balance)
+      WHERE balance != 0
+    $idx$;
+  END IF;
+END $$;
 
 -- Cash Register Transactions: Fast shift reporting
 CREATE INDEX IF NOT EXISTS idx_cash_transactions_shift 
@@ -160,7 +271,15 @@ ANALYZE products;
 ANALYZE orders;
 ANALYZE order_items;
 ANALYZE restaurant_tables;
-ANALYZE customers;
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.tables
+    WHERE table_schema = 'public' AND table_name = 'customers'
+  ) THEN
+    EXECUTE 'ANALYZE customers';
+  END IF;
+END $$;
 ANALYZE payment_transactions;
 ANALYZE cash_register_transactions;
 ANALYZE online_orders;

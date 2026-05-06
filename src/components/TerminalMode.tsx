@@ -1,9 +1,10 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useCallback } from 'react';
 import { Monitor, LogOut, RefreshCw, Delete, AlertCircle, Wifi, User, ChevronRight, KeyRound, Eye, EyeOff } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { TableGrid } from './TableGrid';
 import { OrderPanel } from './OrderPanel';
+import { warmOrderItemsForPanel } from '../lib/orderPanelWarm';
 import { Database } from '../lib/supabase';
 type Table = Database['public']['Tables']['restaurant_tables']['Row'];
 
@@ -596,15 +597,15 @@ interface TerminalAppProps {
 export function TerminalApp({ onExit }: TerminalAppProps) {
   const { user, profile, tenant, activeBranch } = useAuth();
   const [selectedTable, setSelectedTable] = useState<Table | null>(null);
-  const tableRefreshRef = useRef<(() => void) | null>(null);
+
+  const handleAfterMergeNavigate = useCallback((next: Table) => {
+    if (next.current_order_id) warmOrderItemsForPanel(next.current_order_id);
+    setSelectedTable(next);
+  }, []);
 
   const terminalSession = (() => {
     try { return JSON.parse(localStorage.getItem(TERMINAL_SESSION) || 'null'); } catch { return null; }
   })();
-
-  const handleTableGridRefresh = useCallback((fn: () => void) => {
-    tableRefreshRef.current = fn;
-  }, []);
 
   const displayName = profile?.full_name || terminalSession?.full_name || user?.email || 'Terminal';
   const branchName = activeBranch?.name || terminalSession?.branch_name || '';
@@ -634,9 +635,12 @@ export function TerminalApp({ onExit }: TerminalAppProps) {
         <div className="p-3 md:p-6">
           {tenant ? (
             <TableGrid
-              onSelectTable={setSelectedTable}
-              onRefresh={handleTableGridRefresh}
+              onSelectTable={(t) => {
+                if (t.current_order_id) warmOrderItemsForPanel(t.current_order_id);
+                setSelectedTable(t);
+              }}
               onNavigate={() => {}}
+              onPrefetchTableOrder={warmOrderItemsForPanel}
             />
           ) : (
             <div className="flex items-center justify-center h-64 text-slate-400">
@@ -650,10 +654,8 @@ export function TerminalApp({ onExit }: TerminalAppProps) {
       {selectedTable && (
         <OrderPanel
           table={selectedTable}
-          onClose={() => {
-            setSelectedTable(null);
-            tableRefreshRef.current?.();
-          }}
+          onClose={() => setSelectedTable(null)}
+          onAfterMergeNavigate={handleAfterMergeNavigate}
         />
       )}
     </div>

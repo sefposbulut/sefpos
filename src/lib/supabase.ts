@@ -2,19 +2,84 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { sqlDb, localDb, isSqlServerMode, isLocalMode } from './sqlDb';
 
 const isElectronRuntime = !!(window as any).electronAPI;
+const runtimeDbUrl = localStorage.getItem('shefpos_db_url');
+const runtimeDbAnonKey = localStorage.getItem('shefpos_db_anon_key');
 
 const supabaseUrl =
-  (isElectronRuntime ? localStorage.getItem('shefpos_db_url') : null) ||
   import.meta.env.VITE_SUPABASE_URL ||
-  'https://placeholder.supabase.co';
+  runtimeDbUrl ||
+  'https://orlydeyxshsdusxukhuu.supabase.co';
 
 const supabaseAnonKey =
-  (isElectronRuntime ? localStorage.getItem('shefpos_db_anon_key') : null) ||
   import.meta.env.VITE_SUPABASE_ANON_KEY ||
-  'placeholder-key';
+  runtimeDbAnonKey ||
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9ybHlkZXl4c2hzZHVzeHVraHV1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ0NjI0MTcsImV4cCI6MjA5MDAzODQxN30.tbFxkDsVyw0b97l8bop5prHlxDhmmfnsc8rC8zP8FqI';
 
-if (!import.meta.env.VITE_SUPABASE_URL && !localStorage.getItem('shefpos_db_url')) {
+if (!import.meta.env.VITE_SUPABASE_URL && !runtimeDbUrl) {
   console.warn('Supabase environment variables missing - offline mode');
+}
+
+const edgeFunctionsBaseUrl = `${String(supabaseUrl).replace(/\/$/, '')}/functions/v1`;
+
+function edgeFunctionRequestBase(): string {
+  if (
+    import.meta.env.DEV &&
+    typeof window !== 'undefined' &&
+    (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') &&
+    (window.location.protocol === 'http:' || window.location.protocol === 'https:')
+  ) {
+    // Vite proxy: tarayıcıdan doğrudan *.supabase.co OPTIONS/CORS hatası olmadan
+    return `${window.location.origin}/__supabase-functions`;
+  }
+  return edgeFunctionsBaseUrl;
+}
+
+/** Edge Function — URL ve anahtar, üstteki createClient ile aynı (VITE_* / localStorage). */
+export async function invokeEdgeFunction<T = unknown>(
+  functionName: string,
+  payload: Record<string, unknown>,
+): Promise<T> {
+  const headers = {
+    'Content-Type': 'application/json',
+    apikey: supabaseAnonKey,
+    Authorization: `Bearer ${supabaseAnonKey}`,
+  };
+  const body = JSON.stringify(payload);
+  const primaryBase = edgeFunctionRequestBase();
+  let res = await fetch(`${primaryBase}/${functionName}`, { method: 'POST', headers, body });
+  // Vite proxy .env okunmadıysa /__supabase-functions 404 döner; doğrudan Supabase'e düş.
+  if (res.status === 404 && primaryBase.includes('__supabase-functions')) {
+    res = await fetch(`${edgeFunctionsBaseUrl}/${functionName}`, { method: 'POST', headers, body });
+  }
+  const rawText = await res.text();
+  let data: unknown = null;
+  if (rawText) {
+    try {
+      data = JSON.parse(rawText);
+    } catch {
+      data = null;
+    }
+  }
+  const respBody = data as { success?: boolean; error?: string; code?: string; message?: string } | null;
+  const notFound =
+    res.status === 404 ||
+    respBody?.code === 'NOT_FOUND' ||
+    (typeof respBody?.message === 'string' && respBody.message.includes('not found'));
+  if (notFound) {
+    throw new Error(
+      `Edge fonksiyon "${functionName}" bu Supabase projesinde yayında değil (404). ` +
+        `Dashboard → Edge Functions kontrol veya: npx supabase login && ` +
+        `npx supabase functions deploy ${functionName} --project-ref <proje-ref>`,
+    );
+  }
+  if (!res.ok || respBody?.success === false) {
+    throw new Error(
+      respBody?.error ||
+        respBody?.message ||
+        (rawText && rawText.length < 400 ? rawText : `${functionName} başarısız (${res.status})`),
+    );
+  }
+  return data as T;
 }
 
 const realSupabase = createClient(supabaseUrl, supabaseAnonKey, {
@@ -27,9 +92,8 @@ const realSupabase = createClient(supabaseUrl, supabaseAnonKey, {
       if (isSqlServerMode() || isLocalMode()) {
         return Promise.resolve(new Response(JSON.stringify([]), { status: 200, headers: { 'Content-Type': 'application/json' } }));
       }
-      return fetch(url, init).catch(() => {
-        return new Response(JSON.stringify([]), { status: 200, headers: { 'Content-Type': 'application/json' } });
-      });
+      // Do not swallow network errors into fake 200/[] — that breaks RPC booleans, deletes, and error handling.
+      return fetch(url, init);
     },
   },
 });
@@ -466,6 +530,12 @@ export type Database = {
           cancelled_at?: string | null;
           created_at?: string;
         };
+      };
+    };
+    Functions: {
+      delete_tenant_user: {
+        Args: { p_target_user_id: string };
+        Returns: boolean;
       };
     };
   };

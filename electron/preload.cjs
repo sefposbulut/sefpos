@@ -48,6 +48,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getIpAddress: () => ipcRenderer.invoke('get-ip-address'),
   getDeviceFingerprint: () => ipcRenderer.invoke('get-device-fingerprint'),
   scaleStartWeighing: (opts) => ipcRenderer.invoke('scale-start-weighing', opts),
+  scaleInitialZero: (opts) => ipcRenderer.invoke('scale-initial-zero', opts ?? {}),
+  scaleTareWeighing: () => ipcRenderer.invoke('scale-tare-weighing'),
   scaleStopWeighing: () => ipcRenderer.invoke('scale-stop-weighing'),
   scaleGetWeight: () => ipcRenderer.invoke('scale-get-weight'),
   scaleListPorts: () => ipcRenderer.invoke('scale-list-ports'),

@@ -1,8 +1,4 @@
-import { supabase, Database } from './supabase';
-
-type Category = Database['public']['Tables']['categories']['Row'];
-type Product = Database['public']['Tables']['products']['Row'];
-type TableGroup = Database['public']['Tables']['table_groups']['Row'];
+import { supabase } from './supabase';
 
 interface CacheEntry<T> {
   data: T[];
@@ -12,11 +8,11 @@ interface CacheEntry<T> {
 }
 
 const CACHE_TTL = {
-  PRODUCTS: 30 * 60 * 1000, // 30 minutes
-  CATEGORIES: 30 * 60 * 1000,
-  PRODUCT_VARIANTS: 30 * 60 * 1000,
-  TABLE_GROUPS: 15 * 60 * 1000,
-  TABLES: 2 * 60 * 1000, // 2 minutes (more frequent changes)
+  PRODUCTS: 60 * 60 * 1000, // 60 minutes (uzatıldı)
+  CATEGORIES: 60 * 60 * 1000, // 60 minutes (uzatıldı)
+  PRODUCT_VARIANTS: 60 * 60 * 1000, // 60 minutes (uzatıldı)
+  TABLE_GROUPS: 30 * 60 * 1000, // 30 minutes (uzatıldı)
+  TABLES: 10 * 60 * 1000, // 10 minutes (uzatıldı)
 };
 
 class QueryCache {
@@ -70,11 +66,8 @@ class QueryCache {
       catCache && !this.isExpired(catCache, CACHE_TTL.CATEGORIES) &&
       varCache && !this.isExpired(varCache, CACHE_TTL.PRODUCT_VARIANTS)
     ) {
-      console.log('[QueryCache] Hit - returning cached data');
       return { products: prodCache.data, categories: catCache.data, productVariants: varCache.data };
     }
-
-    console.log('[QueryCache] Miss - fetching from Supabase');
 
     // Batch fetch from Supabase (3 queries paralel)
     const dedup = `${tenantId}:batch`;
@@ -115,6 +108,28 @@ class QueryCache {
     promise.finally(() => this.pendingRequests.delete(dedup));
 
     return promise;
+  }
+
+  /** Synchronous read of in-memory menu cache when fresh — use to paint OrderPanel before network. */
+  peekProductsAndCategories(tenantId: string, _branchId?: string): {
+    products: any[];
+    categories: any[];
+    productVariants: any[];
+  } | null {
+    const prodKey = this.getCacheKey('products', tenantId);
+    const catKey = this.getCacheKey('categories', tenantId);
+    const varKey = this.getCacheKey('product_variants', tenantId);
+    const prodCache = this.cache.get(prodKey);
+    const catCache = this.cache.get(catKey);
+    const varCache = this.cache.get(varKey);
+    if (
+      prodCache && !this.isExpired(prodCache, CACHE_TTL.PRODUCTS) &&
+      catCache && !this.isExpired(catCache, CACHE_TTL.CATEGORIES) &&
+      varCache && !this.isExpired(varCache, CACHE_TTL.PRODUCT_VARIANTS)
+    ) {
+      return { products: prodCache.data, categories: catCache.data, productVariants: varCache.data };
+    }
+    return null;
   }
 
   async getTableGroups(tenantId: string, branchId: string, forceRefresh = false) {

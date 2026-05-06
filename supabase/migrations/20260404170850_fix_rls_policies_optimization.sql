@@ -153,40 +153,48 @@ CREATE POLICY "Owners and managers can manage products"
   );
 
 -- =====================================================
--- CUSTOMERS
+-- CUSTOMERS (optional table)
 -- =====================================================
-DROP POLICY IF EXISTS "Users can view own tenant customers" ON public.customers;
-CREATE POLICY "Users can view own tenant customers"
-  ON public.customers FOR SELECT
-  TO authenticated
-  USING (
-    tenant_id IN (
-      SELECT tenant_id FROM public.profiles WHERE id = (SELECT auth.uid())
-    )
-  );
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.tables
+    WHERE table_schema = 'public' AND table_name = 'customers'
+  ) THEN
+    DROP POLICY IF EXISTS "Users can view own tenant customers" ON public.customers;
+    CREATE POLICY "Users can view own tenant customers"
+      ON public.customers FOR SELECT
+      TO authenticated
+      USING (
+        tenant_id IN (
+          SELECT tenant_id FROM public.profiles WHERE id = (SELECT auth.uid())
+        )
+      );
 
-DROP POLICY IF EXISTS "Owners and managers can manage customers" ON public.customers;
-CREATE POLICY "Owners and managers can manage customers"
-  ON public.customers FOR ALL
-  TO authenticated
-  USING (
-    EXISTS (
-      SELECT 1 FROM public.profiles p
-      JOIN public.roles r ON p.role_id = r.id
-      WHERE p.id = (SELECT auth.uid())
-      AND p.tenant_id = customers.tenant_id
-      AND r.name IN ('owner', 'manager')
-    )
-  )
-  WITH CHECK (
-    EXISTS (
-      SELECT 1 FROM public.profiles p
-      JOIN public.roles r ON p.role_id = r.id
-      WHERE p.id = (SELECT auth.uid())
-      AND p.tenant_id = customers.tenant_id
-      AND r.name IN ('owner', 'manager')
-    )
-  );
+    DROP POLICY IF EXISTS "Owners and managers can manage customers" ON public.customers;
+    CREATE POLICY "Owners and managers can manage customers"
+      ON public.customers FOR ALL
+      TO authenticated
+      USING (
+        EXISTS (
+          SELECT 1 FROM public.profiles p
+          JOIN public.roles r ON p.role_id = r.id
+          WHERE p.id = (SELECT auth.uid())
+          AND p.tenant_id = customers.tenant_id
+          AND r.name IN ('owner', 'manager')
+        )
+      )
+      WITH CHECK (
+        EXISTS (
+          SELECT 1 FROM public.profiles p
+          JOIN public.roles r ON p.role_id = r.id
+          WHERE p.id = (SELECT auth.uid())
+          AND p.tenant_id = customers.tenant_id
+          AND r.name IN ('owner', 'manager')
+        )
+      );
+  END IF;
+END $$;
 
 -- =====================================================
 -- ORDERS
@@ -227,27 +235,35 @@ CREATE POLICY "Authenticated users can update own tenant orders"
   );
 
 -- =====================================================
--- CUSTOMER_TRANSACTIONS
+-- CUSTOMER_TRANSACTIONS (optional table)
 -- =====================================================
-DROP POLICY IF EXISTS "Users can view own tenant customer transactions" ON public.customer_transactions;
-CREATE POLICY "Users can view own tenant customer transactions"
-  ON public.customer_transactions FOR SELECT
-  TO authenticated
-  USING (
-    tenant_id IN (
-      SELECT tenant_id FROM public.profiles WHERE id = (SELECT auth.uid())
-    )
-  );
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.tables
+    WHERE table_schema = 'public' AND table_name = 'customer_transactions'
+  ) THEN
+    DROP POLICY IF EXISTS "Users can view own tenant customer transactions" ON public.customer_transactions;
+    CREATE POLICY "Users can view own tenant customer transactions"
+      ON public.customer_transactions FOR SELECT
+      TO authenticated
+      USING (
+        tenant_id IN (
+          SELECT tenant_id FROM public.profiles WHERE id = (SELECT auth.uid())
+        )
+      );
 
-DROP POLICY IF EXISTS "Authenticated users can create customer transactions" ON public.customer_transactions;
-CREATE POLICY "Authenticated users can create customer transactions"
-  ON public.customer_transactions FOR INSERT
-  TO authenticated
-  WITH CHECK (
-    tenant_id IN (
-      SELECT tenant_id FROM public.profiles WHERE id = (SELECT auth.uid())
-    )
-  );
+    DROP POLICY IF EXISTS "Authenticated users can create customer transactions" ON public.customer_transactions;
+    CREATE POLICY "Authenticated users can create customer transactions"
+      ON public.customer_transactions FOR INSERT
+      TO authenticated
+      WITH CHECK (
+        tenant_id IN (
+          SELECT tenant_id FROM public.profiles WHERE id = (SELECT auth.uid())
+        )
+      );
+  END IF;
+END $$;
 
 -- =====================================================
 -- ORDER_ITEMS
@@ -278,99 +294,123 @@ CREATE POLICY "Authenticated users can manage order items"
   );
 
 -- =====================================================
--- CASH_REGISTERS
+-- CASH_REGISTERS (optional table)
 -- =====================================================
-DROP POLICY IF EXISTS "Users can view own tenant cash registers" ON public.cash_registers;
-CREATE POLICY "Users can view own tenant cash registers"
-  ON public.cash_registers FOR SELECT
-  TO authenticated
-  USING (
-    tenant_id IN (
-      SELECT tenant_id FROM public.profiles WHERE id = (SELECT auth.uid())
-    )
-  );
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.tables
+    WHERE table_schema = 'public' AND table_name = 'cash_registers'
+  ) THEN
+    DROP POLICY IF EXISTS "Users can view own tenant cash registers" ON public.cash_registers;
+    CREATE POLICY "Users can view own tenant cash registers"
+      ON public.cash_registers FOR SELECT
+      TO authenticated
+      USING (
+        tenant_id IN (
+          SELECT tenant_id FROM public.profiles WHERE id = (SELECT auth.uid())
+        )
+      );
 
-DROP POLICY IF EXISTS "Owners and managers can manage cash registers" ON public.cash_registers;
-CREATE POLICY "Owners and managers can manage cash registers"
-  ON public.cash_registers FOR ALL
-  TO authenticated
-  USING (
-    EXISTS (
-      SELECT 1 FROM public.profiles p
-      JOIN public.roles r ON p.role_id = r.id
-      WHERE p.id = (SELECT auth.uid())
-      AND p.tenant_id = cash_registers.tenant_id
-      AND r.name IN ('owner', 'manager')
-    )
-  )
-  WITH CHECK (
-    EXISTS (
-      SELECT 1 FROM public.profiles p
-      JOIN public.roles r ON p.role_id = r.id
-      WHERE p.id = (SELECT auth.uid())
-      AND p.tenant_id = cash_registers.tenant_id
-      AND r.name IN ('owner', 'manager')
-    )
-  );
-
--- =====================================================
--- CASH_MOVEMENTS
--- =====================================================
-DROP POLICY IF EXISTS "Users can view own tenant cash movements" ON public.cash_movements;
-CREATE POLICY "Users can view own tenant cash movements"
-  ON public.cash_movements FOR SELECT
-  TO authenticated
-  USING (
-    tenant_id IN (
-      SELECT tenant_id FROM public.profiles WHERE id = (SELECT auth.uid())
-    )
-  );
-
-DROP POLICY IF EXISTS "Authenticated users can create cash movements" ON public.cash_movements;
-CREATE POLICY "Authenticated users can create cash movements"
-  ON public.cash_movements FOR INSERT
-  TO authenticated
-  WITH CHECK (
-    tenant_id IN (
-      SELECT tenant_id FROM public.profiles WHERE id = (SELECT auth.uid())
-    )
-  );
+    DROP POLICY IF EXISTS "Owners and managers can manage cash registers" ON public.cash_registers;
+    CREATE POLICY "Owners and managers can manage cash registers"
+      ON public.cash_registers FOR ALL
+      TO authenticated
+      USING (
+        EXISTS (
+          SELECT 1 FROM public.profiles p
+          JOIN public.roles r ON p.role_id = r.id
+          WHERE p.id = (SELECT auth.uid())
+          AND p.tenant_id = cash_registers.tenant_id
+          AND r.name IN ('owner', 'manager')
+        )
+      )
+      WITH CHECK (
+        EXISTS (
+          SELECT 1 FROM public.profiles p
+          JOIN public.roles r ON p.role_id = r.id
+          WHERE p.id = (SELECT auth.uid())
+          AND p.tenant_id = cash_registers.tenant_id
+          AND r.name IN ('owner', 'manager')
+        )
+      );
+  END IF;
+END $$;
 
 -- =====================================================
--- EXPENSES
+-- CASH_MOVEMENTS (optional table)
 -- =====================================================
-DROP POLICY IF EXISTS "Users can view own tenant expenses" ON public.expenses;
-CREATE POLICY "Users can view own tenant expenses"
-  ON public.expenses FOR SELECT
-  TO authenticated
-  USING (
-    tenant_id IN (
-      SELECT tenant_id FROM public.profiles WHERE id = (SELECT auth.uid())
-    )
-  );
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.tables
+    WHERE table_schema = 'public' AND table_name = 'cash_movements'
+  ) THEN
+    DROP POLICY IF EXISTS "Users can view own tenant cash movements" ON public.cash_movements;
+    CREATE POLICY "Users can view own tenant cash movements"
+      ON public.cash_movements FOR SELECT
+      TO authenticated
+      USING (
+        tenant_id IN (
+          SELECT tenant_id FROM public.profiles WHERE id = (SELECT auth.uid())
+        )
+      );
 
-DROP POLICY IF EXISTS "Owners and managers can manage expenses" ON public.expenses;
-CREATE POLICY "Owners and managers can manage expenses"
-  ON public.expenses FOR ALL
-  TO authenticated
-  USING (
-    EXISTS (
-      SELECT 1 FROM public.profiles p
-      JOIN public.roles r ON p.role_id = r.id
-      WHERE p.id = (SELECT auth.uid())
-      AND p.tenant_id = expenses.tenant_id
-      AND r.name IN ('owner', 'manager')
-    )
-  )
-  WITH CHECK (
-    EXISTS (
-      SELECT 1 FROM public.profiles p
-      JOIN public.roles r ON p.role_id = r.id
-      WHERE p.id = (SELECT auth.uid())
-      AND p.tenant_id = expenses.tenant_id
-      AND r.name IN ('owner', 'manager')
-    )
-  );
+    DROP POLICY IF EXISTS "Authenticated users can create cash movements" ON public.cash_movements;
+    CREATE POLICY "Authenticated users can create cash movements"
+      ON public.cash_movements FOR INSERT
+      TO authenticated
+      WITH CHECK (
+        tenant_id IN (
+          SELECT tenant_id FROM public.profiles WHERE id = (SELECT auth.uid())
+        )
+      );
+  END IF;
+END $$;
+
+-- =====================================================
+-- EXPENSES (optional table)
+-- =====================================================
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.tables
+    WHERE table_schema = 'public' AND table_name = 'expenses'
+  ) THEN
+    DROP POLICY IF EXISTS "Users can view own tenant expenses" ON public.expenses;
+    CREATE POLICY "Users can view own tenant expenses"
+      ON public.expenses FOR SELECT
+      TO authenticated
+      USING (
+        tenant_id IN (
+          SELECT tenant_id FROM public.profiles WHERE id = (SELECT auth.uid())
+        )
+      );
+
+    DROP POLICY IF EXISTS "Owners and managers can manage expenses" ON public.expenses;
+    CREATE POLICY "Owners and managers can manage expenses"
+      ON public.expenses FOR ALL
+      TO authenticated
+      USING (
+        EXISTS (
+          SELECT 1 FROM public.profiles p
+          JOIN public.roles r ON p.role_id = r.id
+          WHERE p.id = (SELECT auth.uid())
+          AND p.tenant_id = expenses.tenant_id
+          AND r.name IN ('owner', 'manager')
+        )
+      )
+      WITH CHECK (
+        EXISTS (
+          SELECT 1 FROM public.profiles p
+          JOIN public.roles r ON p.role_id = r.id
+          WHERE p.id = (SELECT auth.uid())
+          AND p.tenant_id = expenses.tenant_id
+          AND r.name IN ('owner', 'manager')
+        )
+      );
+  END IF;
+END $$;
 
 -- =====================================================
 -- PAYMENT_TRANSACTIONS
@@ -724,110 +764,137 @@ CREATE POLICY "Users can manage order items"
   );
 
 -- =====================================================
--- TERMINALS
+-- TERMINALS (optional table)
 -- =====================================================
-DROP POLICY IF EXISTS "Users can view own terminals" ON public.terminals;
-CREATE POLICY "Users can view own terminals"
-  ON public.terminals FOR SELECT
-  TO authenticated
-  USING (user_id = (SELECT auth.uid()));
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.tables
+    WHERE table_schema = 'public' AND table_name = 'terminals'
+  ) THEN
+    DROP POLICY IF EXISTS "Users can view own terminals" ON public.terminals;
+    CREATE POLICY "Users can view own terminals"
+      ON public.terminals FOR SELECT
+      TO authenticated
+      USING (user_id = (SELECT auth.uid()));
 
-DROP POLICY IF EXISTS "Users can insert own terminals" ON public.terminals;
-CREATE POLICY "Users can insert own terminals"
-  ON public.terminals FOR INSERT
-  TO authenticated
-  WITH CHECK (user_id = (SELECT auth.uid()));
+    DROP POLICY IF EXISTS "Users can insert own terminals" ON public.terminals;
+    CREATE POLICY "Users can insert own terminals"
+      ON public.terminals FOR INSERT
+      TO authenticated
+      WITH CHECK (user_id = (SELECT auth.uid()));
 
-DROP POLICY IF EXISTS "Users can update own terminals" ON public.terminals;
-CREATE POLICY "Users can update own terminals"
-  ON public.terminals FOR UPDATE
-  TO authenticated
-  USING (user_id = (SELECT auth.uid()))
-  WITH CHECK (user_id = (SELECT auth.uid()));
+    DROP POLICY IF EXISTS "Users can update own terminals" ON public.terminals;
+    CREATE POLICY "Users can update own terminals"
+      ON public.terminals FOR UPDATE
+      TO authenticated
+      USING (user_id = (SELECT auth.uid()))
+      WITH CHECK (user_id = (SELECT auth.uid()));
 
-DROP POLICY IF EXISTS "Users can delete own terminals" ON public.terminals;
-CREATE POLICY "Users can delete own terminals"
-  ON public.terminals FOR DELETE
-  TO authenticated
-  USING (user_id = (SELECT auth.uid()));
-
--- =====================================================
--- COMMANDS
--- =====================================================
-DROP POLICY IF EXISTS "Users can view commands of own terminals" ON public.commands;
-CREATE POLICY "Users can view commands of own terminals"
-  ON public.commands FOR SELECT
-  TO authenticated
-  USING (
-    terminal_id IN (
-      SELECT id FROM public.terminals WHERE user_id = (SELECT auth.uid())
-    )
-  );
-
-DROP POLICY IF EXISTS "Users can insert commands to own terminals" ON public.commands;
-CREATE POLICY "Users can insert commands to own terminals"
-  ON public.commands FOR INSERT
-  TO authenticated
-  WITH CHECK (
-    terminal_id IN (
-      SELECT id FROM public.terminals WHERE user_id = (SELECT auth.uid())
-    )
-  );
-
-DROP POLICY IF EXISTS "Users can delete commands from own terminals" ON public.commands;
-CREATE POLICY "Users can delete commands from own terminals"
-  ON public.commands FOR DELETE
-  TO authenticated
-  USING (
-    terminal_id IN (
-      SELECT id FROM public.terminals WHERE user_id = (SELECT auth.uid())
-    )
-  );
+    DROP POLICY IF EXISTS "Users can delete own terminals" ON public.terminals;
+    CREATE POLICY "Users can delete own terminals"
+      ON public.terminals FOR DELETE
+      TO authenticated
+      USING (user_id = (SELECT auth.uid()));
+  END IF;
+END $$;
 
 -- =====================================================
--- TABLE_GROUPS - Fix overly permissive policies
+-- COMMANDS (optional; policies reference terminals)
 -- =====================================================
-DROP POLICY IF EXISTS "Users can view table groups" ON public.table_groups;
-CREATE POLICY "Users can view table groups"
-  ON public.table_groups FOR SELECT
-  TO authenticated
-  USING (
-    tenant_id IN (
-      SELECT tenant_id FROM public.profiles WHERE id = (SELECT auth.uid())
-    )
-  );
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.tables
+    WHERE table_schema = 'public' AND table_name = 'commands'
+  ) AND EXISTS (
+    SELECT 1 FROM information_schema.tables
+    WHERE table_schema = 'public' AND table_name = 'terminals'
+  ) THEN
+    DROP POLICY IF EXISTS "Users can view commands of own terminals" ON public.commands;
+    CREATE POLICY "Users can view commands of own terminals"
+      ON public.commands FOR SELECT
+      TO authenticated
+      USING (
+        terminal_id IN (
+          SELECT id FROM public.terminals WHERE user_id = (SELECT auth.uid())
+        )
+      );
 
-DROP POLICY IF EXISTS "Users can create table groups" ON public.table_groups;
-CREATE POLICY "Users can create table groups"
-  ON public.table_groups FOR INSERT
-  TO authenticated
-  WITH CHECK (
-    tenant_id IN (
-      SELECT tenant_id FROM public.profiles WHERE id = (SELECT auth.uid())
-    )
-  );
+    DROP POLICY IF EXISTS "Users can insert commands to own terminals" ON public.commands;
+    CREATE POLICY "Users can insert commands to own terminals"
+      ON public.commands FOR INSERT
+      TO authenticated
+      WITH CHECK (
+        terminal_id IN (
+          SELECT id FROM public.terminals WHERE user_id = (SELECT auth.uid())
+        )
+      );
 
-DROP POLICY IF EXISTS "Users can update table groups" ON public.table_groups;
-CREATE POLICY "Users can update table groups"
-  ON public.table_groups FOR UPDATE
-  TO authenticated
-  USING (
-    tenant_id IN (
-      SELECT tenant_id FROM public.profiles WHERE id = (SELECT auth.uid())
-    )
-  )
-  WITH CHECK (
-    tenant_id IN (
-      SELECT tenant_id FROM public.profiles WHERE id = (SELECT auth.uid())
-    )
-  );
+    DROP POLICY IF EXISTS "Users can delete commands from own terminals" ON public.commands;
+    CREATE POLICY "Users can delete commands from own terminals"
+      ON public.commands FOR DELETE
+      TO authenticated
+      USING (
+        terminal_id IN (
+          SELECT id FROM public.terminals WHERE user_id = (SELECT auth.uid())
+        )
+      );
+  END IF;
+END $$;
 
-DROP POLICY IF EXISTS "Users can delete table groups" ON public.table_groups;
-CREATE POLICY "Users can delete table groups"
-  ON public.table_groups FOR DELETE
-  TO authenticated
-  USING (
-    tenant_id IN (
-      SELECT tenant_id FROM public.profiles WHERE id = (SELECT auth.uid())
-    )
-  );
+-- =====================================================
+-- TABLE_GROUPS - Fix overly permissive policies (optional table)
+-- =====================================================
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.tables
+    WHERE table_schema = 'public' AND table_name = 'table_groups'
+  ) THEN
+    DROP POLICY IF EXISTS "Users can view table groups" ON public.table_groups;
+    CREATE POLICY "Users can view table groups"
+      ON public.table_groups FOR SELECT
+      TO authenticated
+      USING (
+        tenant_id IN (
+          SELECT tenant_id FROM public.profiles WHERE id = (SELECT auth.uid())
+        )
+      );
+
+    DROP POLICY IF EXISTS "Users can create table groups" ON public.table_groups;
+    CREATE POLICY "Users can create table groups"
+      ON public.table_groups FOR INSERT
+      TO authenticated
+      WITH CHECK (
+        tenant_id IN (
+          SELECT tenant_id FROM public.profiles WHERE id = (SELECT auth.uid())
+        )
+      );
+
+    DROP POLICY IF EXISTS "Users can update table groups" ON public.table_groups;
+    CREATE POLICY "Users can update table groups"
+      ON public.table_groups FOR UPDATE
+      TO authenticated
+      USING (
+        tenant_id IN (
+          SELECT tenant_id FROM public.profiles WHERE id = (SELECT auth.uid())
+        )
+      )
+      WITH CHECK (
+        tenant_id IN (
+          SELECT tenant_id FROM public.profiles WHERE id = (SELECT auth.uid())
+        )
+      );
+
+    DROP POLICY IF EXISTS "Users can delete table groups" ON public.table_groups;
+    CREATE POLICY "Users can delete table groups"
+      ON public.table_groups FOR DELETE
+      TO authenticated
+      USING (
+        tenant_id IN (
+          SELECT tenant_id FROM public.profiles WHERE id = (SELECT auth.uid())
+        )
+      );
+  END IF;
+END $$;

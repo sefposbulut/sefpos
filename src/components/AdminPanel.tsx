@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { supabase } from '../lib/supabase';
+import { supabase, invokeEdgeFunction } from '../lib/supabase';
 import { Shield, Search, Building2, Users, CheckCircle, XCircle, Clock, AlertTriangle, RefreshCw, ChevronDown, ChevronUp, X, Save, Calendar, CreditCard, TrendingUp, LogOut, Bell, Send, TicketCheck, MessageCircle, Trash2, Eye, EyeOff, Ban, Play, ChevronRight, Mail, Phone, MapPin, Hash, UserCheck, AlertCircle, Info, Headphones, BarChart3, Banknote, Package2, Server, Handshake, Key, Plus, CreditCard as Edit2 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -560,9 +560,6 @@ interface SupportNotification {
   created_at: string;
 }
 
-const SMS_FUNCTION_BASE_URL = 'https://hwwsitusurqgpitptkuf.supabase.co/functions/v1';
-const SMS_FUNCTION_API_KEY = 'sb_publishable_4ziGGAYQkC9Is5P7leZ6VQ_WAddnGhD';
-
 function normalizeSmsPhone(input: string | null | undefined) {
   const digits = (input || '').replace(/\D/g, '');
   if (digits.length === 10) return digits;
@@ -579,21 +576,6 @@ function extractPhoneFromEmail(email: string | null | undefined) {
   // Phone-based accounts are stored like 5XXXXXXXXX@sefpos.com.tr
   if (!/^\d{10,12}$/.test(local)) return '';
   return normalizeSmsPhone(local);
-}
-
-async function invokeSmsFunction(name: string, payload: Record<string, any>) {
-  const res = await fetch(`${SMS_FUNCTION_BASE_URL}/${name}`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      apikey: SMS_FUNCTION_API_KEY,
-      Authorization: `Bearer ${SMS_FUNCTION_API_KEY}`,
-    },
-    body: JSON.stringify(payload),
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok || data?.success === false) throw new Error(data?.error || `${name} basarisiz`);
-  return data;
 }
 
 function SupportPanel({ tenants }: { tenants: TenantRow[] }) {
@@ -778,7 +760,7 @@ function SupportPanel({ tenants }: { tenants: TenantRow[] }) {
       let fail = 0;
       for (const phone of phones) {
         try {
-          await invokeSmsFunction('send-sms-custom', {
+          await invokeEdgeFunction('send-sms-custom', {
             phone,
             title: smsForm.title.trim() || 'Bilgilendirme',
             message: smsForm.message.trim(),

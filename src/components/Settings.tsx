@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { supabase } from '../lib/supabase';
 import { createClient } from '@supabase/supabase-js';
 import { useAuth } from '../contexts/AuthContext';
@@ -52,12 +52,18 @@ export function Settings({ onClose }: SettingsProps) {
   const [platformUsername, setPlatformUsername] = useState('');
   const [platformPassword, setPlatformPassword] = useState('');
   const [platformApiKey, setPlatformApiKey] = useState('');
+  const [platformAppSecretKey, setPlatformAppSecretKey] = useState('');
+  const [platformRestaurantSecretKey, setPlatformRestaurantSecretKey] = useState('');
+  const [platformWebhookSecret, setPlatformWebhookSecret] = useState('');
   const [platformCommission, setPlatformCommission] = useState('15');
   const [platformChainCode, setPlatformChainCode] = useState('');
   const [platformRemoteCode, setPlatformRemoteCode] = useState('');
   const [platformRestaurantId, setPlatformRestaurantId] = useState('');
   const [platformMiddlewareUrl, setPlatformMiddlewareUrl] = useState('');
   const [editingPlatformId, setEditingPlatformId] = useState<string | null>(null);
+  const selectedPlatformCode = platformCode.toLowerCase();
+  const isGetirPlatform = selectedPlatformCode === 'getir';
+  const isYemeksepetiPlatform = selectedPlatformCode === 'yemeksepeti';
 
   const [restaurantName, setRestaurantName] = useState('');
   const [restaurantAddress, setRestaurantAddress] = useState('');
@@ -657,6 +663,24 @@ export function Settings({ onClose }: SettingsProps) {
     }
   };
 
+  const resetPlatformForm = () => {
+    setPlatformName('');
+    setPlatformCode('');
+    setPlatformUsername('');
+    setPlatformPassword('');
+    setPlatformApiKey('');
+    setPlatformAppSecretKey('');
+    setPlatformRestaurantSecretKey('');
+    setPlatformWebhookSecret('');
+    setPlatformCommission('15');
+    setPlatformChainCode('');
+    setPlatformRemoteCode('');
+    setPlatformRestaurantId('');
+    setPlatformMiddlewareUrl('');
+    setEditingPlatformId(null);
+    setShowPlatformForm(false);
+  };
+
   const handleCreatePlatform = async (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -665,10 +689,28 @@ export function Settings({ onClose }: SettingsProps) {
       return;
     }
 
+    if (!platformCode) {
+      alert('Platform kodu seçmelisiniz.');
+      return;
+    }
+
+    if ((isGetirPlatform || isYemeksepetiPlatform) && !platformRestaurantId.trim()) {
+      alert('Bu platform için Platform Restaurant ID zorunludur.');
+      return;
+    }
+
+    if (isGetirPlatform && !platformRestaurantSecretKey.trim()) {
+      alert('Getir için Restaurant Secret Key zorunludur.');
+      return;
+    }
+
     const settings = {
       username: platformUsername,
       password: platformPassword,
       api_key: platformApiKey,
+      app_secret_key: platformAppSecretKey,
+      restaurant_secret_key: platformRestaurantSecretKey,
+      webhook_secret: platformWebhookSecret,
     };
 
     const platformData: any = {
@@ -685,6 +727,10 @@ export function Settings({ onClose }: SettingsProps) {
       middleware_url: platformMiddlewareUrl || null,
       middleware_username: platformUsername || null,
       middleware_password: platformPassword || null,
+      webhook_secret: (
+        platformWebhookSecret ||
+        (isGetirPlatform ? platformRestaurantSecretKey : '')
+      ) || null,
     };
 
     let error;
@@ -707,18 +753,7 @@ export function Settings({ onClose }: SettingsProps) {
     }
 
     alert(editingPlatformId ? 'Platform güncellendi!' : 'Platform başarıyla eklendi!');
-    setPlatformName('');
-    setPlatformCode('');
-    setPlatformUsername('');
-    setPlatformPassword('');
-    setPlatformApiKey('');
-    setPlatformCommission('15');
-    setPlatformChainCode('');
-    setPlatformRemoteCode('');
-    setPlatformRestaurantId('');
-    setPlatformMiddlewareUrl('');
-    setEditingPlatformId(null);
-    setShowPlatformForm(false);
+    resetPlatformForm();
     loadPlatforms();
   };
 
@@ -1519,33 +1554,64 @@ export function Settings({ onClose }: SettingsProps) {
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       <div>
                         <label className="block text-sm font-medium text-gray-700 mb-1">
-                          Kullanıcı Adı / Middleware Kullanıcısı
+                          {isGetirPlatform ? 'Getir Panel Kullanıcısı (E-posta)' : 'Kullanıcı Adı / Middleware Kullanıcısı'}
                         </label>
                         <input
                           type="text"
                           value={platformUsername}
                           onChange={(e) => setPlatformUsername(e.target.value)}
-                          placeholder="Middleware kullanıcı adı"
+                          placeholder={isGetirPlatform ? 'ornek@firma.com' : 'Middleware kullanıcı adı'}
                           className="w-full px-3 py-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-orange-500 focus:border-transparent"
                         />
                       </div>
                       <div>
                         <label className="block text-sm font-medium text-gray-700 mb-1">
-                          Şifre / Middleware Şifresi
+                          {isGetirPlatform ? 'Platform Şifresi / Servis Şifresi' : 'Şifre / Middleware Şifresi'}
                         </label>
                         <input
                           type="password"
                           value={platformPassword}
                           onChange={(e) => setPlatformPassword(e.target.value)}
-                          placeholder="Middleware şifresi"
+                          placeholder={isGetirPlatform ? 'Getir kullanıcı/servis şifresi' : 'Middleware şifresi'}
                           className="w-full px-3 py-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-orange-500 focus:border-transparent"
                         />
                       </div>
                     </div>
 
                     <div className="bg-orange-50 border border-orange-200 rounded-lg p-4 space-y-3">
-                      <h5 className="text-sm font-bold text-orange-800">Yemeksepeti / Delivery Hero Entegrasyon Bilgileri</h5>
+                      <h5 className="text-sm font-bold text-orange-800">
+                        {isGetirPlatform ? 'Getir Entegrasyon Bilgileri' : 'Platform Entegrasyon Bilgileri'}
+                      </h5>
+                      {isGetirPlatform && (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">
+                              App Secret Key
+                            </label>
+                            <input
+                              type="text"
+                              value={platformAppSecretKey}
+                              onChange={(e) => setPlatformAppSecretKey(e.target.value)}
+                              placeholder="Getir appSecretKey"
+                              className="w-full px-3 py-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">
+                              Restaurant Secret Key (Zorunlu)
+                            </label>
+                            <input
+                              type="password"
+                              value={platformRestaurantSecretKey}
+                              onChange={(e) => setPlatformRestaurantSecretKey(e.target.value)}
+                              placeholder="Getir restaurantSecretKey"
+                              className="w-full px-3 py-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+                            />
+                          </div>
+                        </div>
+                      )}
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        {!isGetirPlatform && (
                         <div>
                           <label className="block text-sm font-medium text-gray-700 mb-1">
                             Chain Code
@@ -1558,9 +1624,10 @@ export function Settings({ onClose }: SettingsProps) {
                             className="w-full px-3 py-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-orange-500 focus:border-transparent"
                           />
                         </div>
+                        )}
                         <div>
                           <label className="block text-sm font-medium text-gray-700 mb-1">
-                            Remote Code (Vendor Code)
+                            {isGetirPlatform ? 'Remote Code / Vendor Code (Opsiyonel)' : 'Remote Code (Vendor Code)'}
                           </label>
                           <input
                             type="text"
@@ -1574,7 +1641,7 @@ export function Settings({ onClose }: SettingsProps) {
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         <div>
                           <label className="block text-sm font-medium text-gray-700 mb-1">
-                            Platform Restaurant ID
+                            Platform Restaurant ID {(isGetirPlatform || isYemeksepetiPlatform) ? '(Zorunlu)' : ''}
                           </label>
                           <input
                             type="text"
@@ -1584,6 +1651,7 @@ export function Settings({ onClose }: SettingsProps) {
                             className="w-full px-3 py-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-orange-500 focus:border-transparent"
                           />
                         </div>
+                        {!isGetirPlatform && (
                         <div>
                           <label className="block text-sm font-medium text-gray-700 mb-1">
                             Middleware URL
@@ -1593,6 +1661,21 @@ export function Settings({ onClose }: SettingsProps) {
                             value={platformMiddlewareUrl}
                             onChange={(e) => setPlatformMiddlewareUrl(e.target.value)}
                             placeholder="https://middleware.example.com"
+                            className="w-full px-3 py-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+                          />
+                        </div>
+                        )}
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">
+                            Webhook Secret
+                          </label>
+                          <input
+                            type="password"
+                            value={platformWebhookSecret}
+                            onChange={(e) => setPlatformWebhookSecret(e.target.value)}
+                            placeholder="İstek doğrulama anahtarı"
                             className="w-full px-3 py-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-orange-500 focus:border-transparent"
                           />
                         </div>
@@ -1639,18 +1722,7 @@ export function Settings({ onClose }: SettingsProps) {
                       <button
                         type="button"
                         onClick={() => {
-                          setShowPlatformForm(false);
-                          setEditingPlatformId(null);
-                          setPlatformName('');
-                          setPlatformCode('');
-                          setPlatformUsername('');
-                          setPlatformPassword('');
-                          setPlatformApiKey('');
-                          setPlatformCommission('15');
-                          setPlatformChainCode('');
-                          setPlatformRemoteCode('');
-                          setPlatformRestaurantId('');
-                          setPlatformMiddlewareUrl('');
+                          resetPlatformForm();
                         }}
                         className="flex-1 bg-gray-200 hover:bg-gray-300 text-gray-700 py-2 rounded-lg transition"
                       >
@@ -1696,6 +1768,20 @@ export function Settings({ onClose }: SettingsProps) {
                                 <p className="text-gray-700 font-mono font-medium truncate">{platform.remote_id}</p>
                               </div>
                             )}
+                            {platform.platform_code === 'getir' && (
+                              <div>
+                                <span className="text-gray-400 text-xs">Getir Kimlik Bilgileri</span>
+                                <p className="text-gray-700 font-medium">
+                                  appSecret: {platform.settings?.app_secret_key ? 'Kayitli' : 'Yok'} / restaurantSecret: {platform.settings?.restaurant_secret_key ? 'Kayitli' : 'Yok'}
+                                </p>
+                              </div>
+                            )}
+                            {platform.webhook_secret && (
+                              <div>
+                                <span className="text-gray-400 text-xs">Webhook Secret</span>
+                                <p className="text-gray-700 font-medium">Kayitli</p>
+                              </div>
+                            )}
                             {platform.middleware_url && (
                               <div className="col-span-2">
                                 <span className="text-gray-400 text-xs">Middleware URL</span>
@@ -1724,6 +1810,9 @@ export function Settings({ onClose }: SettingsProps) {
                                 setPlatformUsername(platform.middleware_username || platform.settings?.username || '');
                                 setPlatformPassword(platform.middleware_password || platform.settings?.password || '');
                                 setPlatformApiKey(platform.api_key || '');
+                                setPlatformAppSecretKey(platform.settings?.app_secret_key || '');
+                                setPlatformRestaurantSecretKey(platform.settings?.restaurant_secret_key || '');
+                                setPlatformWebhookSecret(platform.webhook_secret || platform.settings?.webhook_secret || '');
                                 setPlatformCommission(String(platform.commission_rate));
                                 setPlatformChainCode(platform.middleware_chain_code || '');
                                 setPlatformRemoteCode(platform.middleware_vendor_code || '');
@@ -2454,6 +2543,14 @@ function ScaleTestSection() {
   const [stabilized, setStabilized] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [testLog, setTestLog] = useState<string[]>([]);
+  const testListenersCleanupRef = useRef<(() => void) | null>(null);
+
+  const clearTestListeners = () => {
+    testListenersCleanupRef.current?.();
+    testListenersCleanupRef.current = null;
+  };
+
+  useEffect(() => () => clearTestListeners(), []);
 
   const addLog = (msg: string) => {
     setTestLog(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`]);
@@ -2464,6 +2561,8 @@ function ScaleTestSection() {
       setError('Electron API yok - Bu işlem sadece Electron uygulamasında çalışır');
       return;
     }
+
+    clearTestListeners();
 
     setError(null);
     setTestLog([]);
@@ -2497,7 +2596,7 @@ function ScaleTestSection() {
         setIsConnected(false);
       });
 
-      return () => {
+      testListenersCleanupRef.current = () => {
         unsubWeight?.();
         unsubError?.();
       };
@@ -2509,6 +2608,7 @@ function ScaleTestSection() {
   };
 
   const stopTest = async () => {
+    clearTestListeners();
     try {
       await electronAPI.scaleStopWeighing?.();
       setIsConnected(false);
