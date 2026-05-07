@@ -1,5 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
-import { Bell, X, Check, Receipt, Droplets, HelpCircle, Clock } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Bell, BellOff, X, Check, Receipt, Droplets, HelpCircle, Clock,
+  CheckCircle2, History, Trash2,
+} from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
 
@@ -12,6 +15,7 @@ interface WaiterCall {
   message: string | null;
   status: 'pending' | 'seen' | 'resolved' | 'cancelled';
   created_at: string;
+  resolved_at?: string | null;
 }
 
 const ICONS: Record<WaiterCall['call_type'], any> = {
@@ -35,32 +39,30 @@ const COLORS: Record<WaiterCall['call_type'], string> = {
   help: 'from-violet-500 to-violet-600',
 };
 
+const HISTORY_LIMIT = 60;
+
 /**
  * POS için garson çağrı bildirim sistemi.
- * - Tenant scope'da realtime subscribe.
- * - Yeni 'pending' çağrı geldiğinde toast + sesli uyarı.
- * - Tek tıkla 'resolved' yapılır.
+ * - Sağ üstte ufak Bell ikonu + pending sayı badge'i.
+ * - Tıklayınca dropdown: Aktif çağrılar + Son geçmiş (resolved/cancelled).
+ * - Yeni çağrı geldiğinde: 3 sn'lik toast pop-up + ses + titreşim.
+ * - Tek tıkla "Tamamla" → status=resolved (geçmişe geçer).
  */
 export function WaiterCallToaster() {
   const { tenant, activeBranch } = useAuth();
   const [calls, setCalls] = useState<WaiterCall[]>([]);
-  const [collapsed, setCollapsed] = useState(false);
+  const [open, setOpen] = useState(false);
+  const [tab, setTab] = useState<'active' | 'history'>('active');
   const [muted, setMuted] = useState<boolean>(() => {
-    try {
-      return localStorage.getItem('sefpos_waiter_call_muted') === '1';
-    } catch {
-      return false;
-    }
+    try { return localStorage.getItem('sefpos_waiter_call_muted') === '1'; } catch { return false; }
   });
+  const [toast, setToast] = useState<WaiterCall | null>(null);
+
   const audioCtxRef = useRef<AudioContext | null>(null);
   const seenIdsRef = useRef<Set<string>>(new Set());
-  const tenantIdRef = useRef<string | null>(null);
+  const toastTimerRef = useRef<number | null>(null);
 
-  useEffect(() => {
-    tenantIdRef.current = tenant?.id || null;
-  }, [tenant?.id]);
-
-  // İlk yükleme: mevcut bekleyen çağrılar
+  // İlk yükleme: aktif + son geçmiş
   useEffect(() => {
     if (!tenant?.id) {
       setCalls([]);
@@ -73,9 +75,8 @@ export function WaiterCallToaster() {
         .from('waiter_calls')
         .select('*')
         .eq('tenant_id', tenant.id)
-        .in('status', ['pending', 'seen'])
         .order('created_at', { ascending: false })
-        .limit(20);
+        .limit(HISTORY_LIMIT);
       if (!cancel) {
         if (error) {
           console.error('[ŞefPOS] waiter_calls liste:', error);
@@ -90,51 +91,48 @@ export function WaiterCallToaster() {
     return () => { cancel = true; };
   }, [tenant?.id]);
 
-  // Realtime subscribe
+  // Realtime
   useEffect(() => {
     if (!tenant?.id) return;
     const channel = supabase
       .channel(`waiter-calls-${tenant.id}`)
       .on(
         'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'waiter_calls',
-          filter: `tenant_id=eq.${tenant.id}`,
-        },
+        { event: 'INSERT', schema: 'public', table: 'waiter_calls', filter: `tenant_id=eq.${tenant.id}` },
         (payload) => {
           const c = payload.new as WaiterCall;
           if (!c?.id || seenIdsRef.current.has(c.id)) return;
           seenIdsRef.current.add(c.id);
-          setCalls(prev => [c, ...prev].slice(0, 20));
-          setCollapsed(false);
+          setCalls(prev => [c, ...prev].slice(0, HISTORY_LIMIT));
           if (!muted) playBeep();
           showSystemNotification(c);
           vibrate();
+          // 3 sn'lik toast
+          setToast(c);
+          if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
+          toastTimerRef.current = window.setTimeout(() => setToast(null), 3500);
         }
       )
       .on(
         'postgres_changes',
-        {
-          event: 'UPDATE',
-          schema: 'public',
-          table: 'waiter_calls',
-          filter: `tenant_id=eq.${tenant.id}`,
-        },
+        { event: 'UPDATE', schema: 'public', table: 'waiter_calls', filter: `tenant_id=eq.${tenant.id}` },
         (payload) => {
           const c = payload.new as WaiterCall;
-          setCalls(prev => {
-            if (c.status === 'resolved' || c.status === 'cancelled') {
-              return prev.filter(x => x.id !== c.id);
-            }
-            return prev.map(x => x.id === c.id ? c : x);
-          });
+          setCalls(prev => prev.map(x => x.id === c.id ? c : x));
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: 'DELETE', schema: 'public', table: 'waiter_calls', filter: `tenant_id=eq.${tenant.id}` },
+        (payload) => {
+          const c = payload.old as WaiterCall;
+          setCalls(prev => prev.filter(x => x.id !== c.id));
         }
       )
       .subscribe();
     return () => {
       supabase.removeChannel(channel);
+      if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tenant?.id, muted]);
@@ -147,7 +145,6 @@ export function WaiterCallToaster() {
         audioCtxRef.current = new Ctx();
       }
       const ctx = audioCtxRef.current!;
-      // 2 hızlı ding
       const beep = (offset: number, freq: number) => {
         const osc = ctx.createOscillator();
         const gain = ctx.createGain();
@@ -187,7 +184,6 @@ export function WaiterCallToaster() {
     } catch { /* ignore */ }
   };
 
-  // İlk açılışta bildirim izni iste
   useEffect(() => {
     if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
       try { Notification.requestPermission(); } catch { /* ignore */ }
@@ -195,14 +191,41 @@ export function WaiterCallToaster() {
   }, []);
 
   const resolveCall = async (id: string) => {
-    setCalls(prev => prev.filter(x => x.id !== id));
+    setCalls(prev => prev.map(x => x.id === id ? { ...x, status: 'resolved', resolved_at: new Date().toISOString() } : x));
     const { error } = await supabase
       .from('waiter_calls')
       .update({ status: 'resolved', resolved_at: new Date().toISOString() })
       .eq('id', id);
-    if (error) {
-      console.error('[ŞefPOS] çağrıyı kapatma:', error);
-    }
+    if (error) console.error('[ŞefPOS] çağrıyı kapatma:', error);
+  };
+
+  const resolveAll = async () => {
+    if (!tenant?.id) return;
+    if (!confirm('Tüm bekleyen çağrılar tamamlandı olarak işaretlensin mi?')) return;
+    const now = new Date().toISOString();
+    setCalls(prev => prev.map(x => x.status === 'pending' || x.status === 'seen'
+      ? { ...x, status: 'resolved', resolved_at: now } : x));
+    await supabase
+      .from('waiter_calls')
+      .update({ status: 'resolved', resolved_at: now })
+      .eq('tenant_id', tenant.id)
+      .in('status', ['pending', 'seen']);
+  };
+
+  const deleteHistory = async (id: string) => {
+    setCalls(prev => prev.filter(x => x.id !== id));
+    await supabase.from('waiter_calls').delete().eq('id', id);
+  };
+
+  const clearHistory = async () => {
+    if (!tenant?.id) return;
+    if (!confirm('Tüm geçmiş çağrılar silinsin mi? (Bekleyenler etkilenmez)')) return;
+    setCalls(prev => prev.filter(x => x.status === 'pending' || x.status === 'seen'));
+    await supabase
+      .from('waiter_calls')
+      .delete()
+      .eq('tenant_id', tenant.id)
+      .in('status', ['resolved', 'cancelled']);
   };
 
   const toggleMute = () => {
@@ -211,94 +234,326 @@ export function WaiterCallToaster() {
     try { localStorage.setItem('sefpos_waiter_call_muted', next ? '1' : '0'); } catch { /* ignore */ }
   };
 
-  if (!tenant?.id || calls.length === 0) return null;
-
-  // Filter: aktif şube varsa onun çağrıları öne, diğer şubeler de görünür ama sönük
   const branchId = activeBranch?.id;
-  const sorted = [...calls].sort((a, b) => {
-    const aMine = !branchId || a.branch_id === branchId;
-    const bMine = !branchId || b.branch_id === branchId;
-    if (aMine !== bMine) return aMine ? -1 : 1;
-    return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
-  });
+  const { active, history } = useMemo(() => {
+    const sorted = [...calls].sort(
+      (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+    );
+    return {
+      active: sorted.filter(c => c.status === 'pending' || c.status === 'seen'),
+      history: sorted.filter(c => c.status === 'resolved' || c.status === 'cancelled'),
+    };
+  }, [calls]);
+
+  const myActive = useMemo(
+    () => active.filter(c => !branchId || c.branch_id === branchId),
+    [active, branchId]
+  );
+
+  if (!tenant?.id) return null;
+
+  const pendingCount = active.length;
 
   return (
-    <div className="fixed top-16 md:top-24 right-3 md:right-6 z-[60] w-[300px] sm:w-[340px] pointer-events-none">
-      <div className="pointer-events-auto bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden">
-        <div className="flex items-center justify-between px-3 py-2 bg-gradient-to-r from-orange-500 to-amber-500 text-white">
-          <div className="flex items-center gap-2 min-w-0">
+    <>
+      {/* SAĞ-ÜSTTE BELL BUTONU */}
+      <button
+        onClick={() => setOpen(o => !o)}
+        className={`fixed top-16 md:top-24 right-3 md:right-6 z-[60] inline-flex items-center justify-center w-11 h-11 md:w-12 md:h-12 rounded-full shadow-lg transition-all border-2 ${
+          pendingCount > 0
+            ? 'bg-gradient-to-br from-orange-500 to-amber-500 border-orange-300 text-white animate-pulse'
+            : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+        }`}
+        title={pendingCount > 0 ? `${pendingCount} bekleyen çağrı` : 'Garson çağrıları'}
+        aria-label="Garson çağrıları"
+      >
+        <Bell className="w-5 h-5" />
+        {pendingCount > 0 && (
+          <span className="absolute -top-1 -right-1 min-w-[20px] h-[20px] px-1 bg-red-600 border-2 border-white text-white text-[10px] font-extrabold rounded-full flex items-center justify-center shadow">
+            {pendingCount > 9 ? '9+' : pendingCount}
+          </span>
+        )}
+      </button>
+
+      {/* DROPDOWN */}
+      {open && (
+        <>
+          <div className="fixed inset-0 z-[60]" onClick={() => setOpen(false)} />
+          <div className="fixed top-[120px] md:top-[148px] right-3 md:right-6 z-[61] w-[320px] sm:w-[380px] bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col">
+            <div className="flex items-center justify-between px-3 py-2.5 bg-gradient-to-r from-orange-500 to-amber-500 text-white">
+              <div className="flex items-center gap-2 min-w-0">
+                <Bell className="w-4 h-4" />
+                <span className="font-extrabold text-sm">Garson Çağrıları</span>
+                {pendingCount > 0 && (
+                  <span className="bg-white/25 px-1.5 py-0.5 rounded-full text-[10px] font-bold">
+                    {pendingCount}
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-0.5">
+                <button
+                  onClick={toggleMute}
+                  title={muted ? 'Sesi Aç' : 'Sessize Al'}
+                  className="p-1.5 rounded hover:bg-white/20"
+                >
+                  {muted ? <BellOff className="w-4 h-4" /> : <Bell className="w-4 h-4" />}
+                </button>
+                <button
+                  onClick={() => setOpen(false)}
+                  className="p-1.5 rounded hover:bg-white/20"
+                  title="Kapat"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            {/* Sekmeler */}
+            <div className="flex border-b border-slate-200 bg-slate-50">
+              <button
+                onClick={() => setTab('active')}
+                className={`flex-1 px-3 py-2 text-xs font-bold transition flex items-center justify-center gap-1.5 ${
+                  tab === 'active'
+                    ? 'text-orange-700 border-b-2 border-orange-500 bg-white'
+                    : 'text-slate-500 hover:text-slate-700'
+                }`}
+              >
+                <Bell className="w-3.5 h-3.5" />
+                Aktif
+                {pendingCount > 0 && (
+                  <span className="bg-orange-100 text-orange-700 text-[10px] font-extrabold px-1.5 py-0.5 rounded-full">
+                    {pendingCount}
+                  </span>
+                )}
+              </button>
+              <button
+                onClick={() => setTab('history')}
+                className={`flex-1 px-3 py-2 text-xs font-bold transition flex items-center justify-center gap-1.5 ${
+                  tab === 'history'
+                    ? 'text-slate-700 border-b-2 border-slate-500 bg-white'
+                    : 'text-slate-500 hover:text-slate-700'
+                }`}
+              >
+                <History className="w-3.5 h-3.5" />
+                Geçmiş
+                {history.length > 0 && (
+                  <span className="bg-slate-200 text-slate-700 text-[10px] font-extrabold px-1.5 py-0.5 rounded-full">
+                    {history.length}
+                  </span>
+                )}
+              </button>
+            </div>
+
+            {/* Liste */}
+            <div className="max-h-[60vh] overflow-y-auto">
+              {tab === 'active' ? (
+                active.length === 0 ? (
+                  <EmptyState
+                    icon={<CheckCircle2 className="w-8 h-8 text-emerald-500" />}
+                    title="Bekleyen çağrı yok"
+                    text="Tüm masalar şu an sakin."
+                  />
+                ) : (
+                  <div className="divide-y divide-slate-100">
+                    {active.map(c => (
+                      <CallRow
+                        key={c.id}
+                        call={c}
+                        muted={!!branchId && c.branch_id !== branchId}
+                        onAction={() => resolveCall(c.id)}
+                        actionLabel="Tamamla"
+                        actionType="resolve"
+                      />
+                    ))}
+                  </div>
+                )
+              ) : history.length === 0 ? (
+                <EmptyState
+                  icon={<History className="w-8 h-8 text-slate-400" />}
+                  title="Henüz geçmiş yok"
+                  text="Tamamlanan çağrılar burada listelenir."
+                />
+              ) : (
+                <div className="divide-y divide-slate-100">
+                  {history.map(c => (
+                    <CallRow
+                      key={c.id}
+                      call={c}
+                      muted={!!branchId && c.branch_id !== branchId}
+                      onAction={() => deleteHistory(c.id)}
+                      actionLabel="Sil"
+                      actionType="delete"
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Footer aksiyonlar */}
+            <div className="border-t border-slate-200 px-2 py-1.5 flex items-center gap-1 bg-slate-50">
+              {tab === 'active' && pendingCount > 0 && (
+                <button
+                  onClick={resolveAll}
+                  className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-xs font-bold border border-emerald-200"
+                >
+                  <Check className="w-3.5 h-3.5" /> Tümünü Tamamla
+                </button>
+              )}
+              {tab === 'history' && history.length > 0 && (
+                <button
+                  onClick={clearHistory}
+                  className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-50 hover:bg-red-100 text-red-700 text-xs font-bold border border-red-200"
+                >
+                  <Trash2 className="w-3.5 h-3.5" /> Geçmişi Temizle
+                </button>
+              )}
+              {((tab === 'active' && pendingCount === 0) || (tab === 'history' && history.length === 0)) && (
+                <span className="flex-1 text-center text-[11px] text-slate-400 py-1.5">
+                  Bildirim sayısı: {calls.length}/{HISTORY_LIMIT}
+                </span>
+              )}
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* YENİ ÇAĞRI TOAST'I */}
+      {toast && !open && (
+        <div
+          onClick={() => { setOpen(true); setTab('active'); setToast(null); }}
+          className="fixed top-16 md:top-24 right-16 md:right-20 z-[59] w-[280px] sm:w-[320px] bg-white rounded-2xl shadow-2xl border border-orange-200 overflow-hidden cursor-pointer animate-[slideIn_0.3s_ease-out]"
+        >
+          <div className={`flex items-center gap-2.5 px-3 py-2 bg-gradient-to-r ${COLORS[toast.call_type]} text-white`}>
             <span className="relative flex w-2.5 h-2.5">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-70" />
               <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-white" />
             </span>
             <Bell className="w-4 h-4" />
-            <span className="font-extrabold text-sm">Garson Çağrısı</span>
-            <span className="bg-white/25 px-1.5 py-0.5 rounded-full text-[10px] font-bold">
-              {sorted.length}
+            <span className="font-extrabold text-sm">Yeni Çağrı</span>
+            <span className="ml-auto text-[10px] uppercase font-bold bg-white/25 px-1.5 py-0.5 rounded-full">
+              {LABELS[toast.call_type]}
             </span>
           </div>
-          <div className="flex items-center gap-1 flex-shrink-0">
-            <button
-              onClick={toggleMute}
-              title={muted ? 'Sesi Aç' : 'Sessize Al'}
-              className="p-1 rounded hover:bg-white/20"
-            >
-              {muted ? '🔕' : '🔔'}
-            </button>
-            <button
-              onClick={() => setCollapsed(v => !v)}
-              className="p-1 rounded hover:bg-white/20"
-              title={collapsed ? 'Aç' : 'Küçült'}
-            >
-              {collapsed ? '▾' : '▴'}
-            </button>
+          <div className="p-3">
+            <div className="font-bold text-slate-800 text-sm">
+              Masa: {toast.table_label || '-'}
+            </div>
+            {toast.message && (
+              <p className="text-xs text-slate-600 mt-1 line-clamp-2">{toast.message}</p>
+            )}
+            <p className="text-[11px] text-slate-400 mt-1.5">Bildirimi açmak için tıklayın</p>
           </div>
         </div>
-        {!collapsed && (
-          <div className="max-h-[60vh] overflow-y-auto divide-y divide-slate-100">
-            {sorted.map(c => {
-              const Icon = ICONS[c.call_type] || Bell;
-              const colorClass = COLORS[c.call_type];
-              const ts = new Date(c.created_at).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
-              const isOtherBranch = branchId && c.branch_id !== branchId;
-              return (
-                <div key={c.id} className={`px-3 py-2.5 flex items-start gap-2.5 ${isOtherBranch ? 'bg-slate-50 opacity-70' : ''}`}>
-                  <div className={`w-9 h-9 rounded-xl bg-gradient-to-br ${colorClass} text-white flex items-center justify-center flex-shrink-0 shadow-sm`}>
-                    <Icon className="w-4 h-4" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-bold text-slate-800 text-sm truncate">{c.table_label || '-'}</span>
-                      <span className="text-[10px] uppercase tracking-wide font-bold text-slate-500">
-                        {LABELS[c.call_type]}
-                      </span>
-                      {isOtherBranch && (
-                        <span className="text-[9px] uppercase font-bold text-slate-400 bg-slate-200 px-1 rounded">
-                          Diğer Şube
-                        </span>
-                      )}
-                    </div>
-                    {c.message && (
-                      <p className="text-xs text-slate-600 mt-0.5 line-clamp-2">{c.message}</p>
-                    )}
-                    <div className="flex items-center gap-1 text-[10px] text-slate-400 mt-1">
-                      <Clock className="w-3 h-3" />
-                      {ts}
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => resolveCall(c.id)}
-                    className="flex-shrink-0 inline-flex items-center gap-1 px-2 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-xs font-bold border border-emerald-200"
-                    title="Tamamla"
-                  >
-                    <Check className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-        )}
+      )}
+
+      {/* Animasyon keyframes (lokal) */}
+      <style>{`
+        @keyframes slideIn {
+          from { opacity: 0; transform: translateX(20px); }
+          to { opacity: 1; transform: translateX(0); }
+        }
+      `}</style>
+    </>
+  );
+}
+
+// =============================================================
+// CALL ROW
+// =============================================================
+function CallRow({
+  call,
+  muted,
+  onAction,
+  actionLabel,
+  actionType,
+}: {
+  call: WaiterCall;
+  muted: boolean;
+  onAction: () => void;
+  actionLabel: string;
+  actionType: 'resolve' | 'delete';
+}) {
+  const Icon = ICONS[call.call_type] || Bell;
+  const colorClass = COLORS[call.call_type];
+  const created = new Date(call.created_at);
+  const ts = created.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
+  const dt = created.toLocaleDateString('tr-TR', { day: '2-digit', month: '2-digit' });
+  const isResolved = call.status === 'resolved' || call.status === 'cancelled';
+
+  return (
+    <div className={`px-3 py-2.5 flex items-start gap-2.5 ${muted ? 'bg-slate-50 opacity-70' : ''} ${isResolved ? 'opacity-75' : ''}`}>
+      <div className={`w-9 h-9 rounded-xl bg-gradient-to-br ${colorClass} text-white flex items-center justify-center flex-shrink-0 shadow-sm ${isResolved ? 'grayscale' : ''}`}>
+        <Icon className="w-4 h-4" />
       </div>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className={`font-bold text-sm truncate ${isResolved ? 'text-slate-500 line-through' : 'text-slate-800'}`}>
+            {call.table_label || '-'}
+          </span>
+          <span className="text-[10px] uppercase tracking-wide font-bold text-slate-500">
+            {LABELS[call.call_type]}
+          </span>
+          {muted && (
+            <span className="text-[9px] uppercase font-bold text-slate-400 bg-slate-200 px-1 rounded">
+              Diğer Şube
+            </span>
+          )}
+          {isResolved && (
+            <span className="text-[9px] uppercase font-bold text-emerald-700 bg-emerald-100 px-1.5 rounded inline-flex items-center gap-0.5">
+              <CheckCircle2 className="w-2.5 h-2.5" />
+              Tamamlandı
+            </span>
+          )}
+        </div>
+        {call.message && (
+          <p className="text-xs text-slate-600 mt-0.5 line-clamp-2">{call.message}</p>
+        )}
+        <div className="flex items-center gap-2 text-[10px] text-slate-400 mt-1">
+          <span className="inline-flex items-center gap-0.5">
+            <Clock className="w-3 h-3" />
+            {ts}
+          </span>
+          <span>·</span>
+          <span>{dt}</span>
+          {call.resolved_at && (
+            <>
+              <span>·</span>
+              <span className="text-emerald-600">
+                Bitti: {new Date(call.resolved_at).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })}
+              </span>
+            </>
+          )}
+        </div>
+      </div>
+      <button
+        onClick={onAction}
+        className={`flex-shrink-0 inline-flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-bold border transition ${
+          actionType === 'resolve'
+            ? 'bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border-emerald-200'
+            : 'bg-red-50 hover:bg-red-100 text-red-700 border-red-200'
+        }`}
+        title={actionLabel}
+      >
+        {actionType === 'resolve' ? <Check className="w-3.5 h-3.5" /> : <Trash2 className="w-3.5 h-3.5" />}
+      </button>
+    </div>
+  );
+}
+
+function EmptyState({
+  icon,
+  title,
+  text,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  text: string;
+}) {
+  return (
+    <div className="flex flex-col items-center justify-center py-10 px-6 text-center">
+      <div className="mb-2">{icon}</div>
+      <p className="font-bold text-slate-700 text-sm">{title}</p>
+      <p className="text-xs text-slate-500 mt-0.5">{text}</p>
     </div>
   );
 }
