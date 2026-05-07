@@ -3,6 +3,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
 import { isSqlServerMode, isLocalMode } from '../lib/sqlDb';
 import { phoneToAuthEmail } from '../lib/phoneAuthEmail';
+import { resolvePanelUsernameToEmail } from '../lib/panelUserLoginResolve';
 import { Eye, EyeOff, ChevronLeft, User, Lock, Building2, Phone, Bike, Delete, Cloud, Server, Settings, HardDrive } from 'lucide-react';
 
 const logoSrc = new URL('../../public/logo.png', import.meta.url).href;
@@ -15,6 +16,7 @@ const TEST_LOGIN_EMAIL = 'info@sefpos.com.tr';
 const TEST_LOGIN_PHONE = '02363131818';
 
 const isPhoneInput = (val: string) => /^\d[\d\s]*$/.test(val.trim());
+const isValidEmail = (val: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val.trim());
 
 const formatPhone = (value: string) => {
   const digits = value.replace(/\D/g, '').slice(0, 11);
@@ -156,14 +158,28 @@ export function ElectronAuth({ onCourierMode, onSwitchMode, currentDbMode }: Ele
         if (trimmed === ADMIN_LOGIN_EMAIL || trimmed === ADMIN_LOGIN_EMAIL_LEGACY || trimmed === TEST_LOGIN_EMAIL) {
           email = ADMIN_LOGIN_EMAIL;
           if (trimmed === TEST_LOGIN_EMAIL) email = TEST_LOGIN_EMAIL;
+        } else if (isValidEmail(loginValue.trim())) {
+          email = loginValue.trim().toLowerCase();
         } else {
           const cleaned = loginValue.replace(/\D/g, '');
-          if (cleaned.length < 10) {
-            setError('Giriş için telefon numarası zorunludur');
-            setLoading(false);
-            return;
+          if (cleaned.length >= 10) {
+            email = cleaned === TEST_LOGIN_PHONE ? TEST_LOGIN_EMAIL : phoneToAuthEmail(cleaned);
+          } else {
+            const resolved = await resolvePanelUsernameToEmail(loginValue);
+            if (resolved.ok) {
+              email = resolved.email;
+            } else if (resolved.reason === 'ambiguous') {
+              setError('Bu kullanıcı adı birden fazla hesapla eşleşiyor. Tam e-posta adresinizi girin.');
+              setLoading(false);
+              return;
+            } else {
+              setError(
+                'Geçerli cep telefonu (05…), e-posta veya panelde oluşturduğunuz kullanıcı adını girin.',
+              );
+              setLoading(false);
+              return;
+            }
           }
-          email = cleaned === TEST_LOGIN_PHONE ? TEST_LOGIN_EMAIL : phoneToAuthEmail(cleaned);
         }
       } else {
         email = await resolveEmail(loginValue);

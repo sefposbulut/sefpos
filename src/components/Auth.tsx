@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, invokeEdgeFunction } from '../lib/supabase';
 import { normalizeTurkishMobileDigits, phoneToAuthEmail } from '../lib/phoneAuthEmail';
+import { resolvePanelUsernameToEmail } from '../lib/panelUserLoginResolve';
 import { isCapacitorNative } from '../lib/capacitorPlatform';
 import { Bike, Lock, Building2, Phone, ArrowRight, Sparkles, ChefHat, User, Mail } from 'lucide-react';
 import { WaiterLogin } from './WaiterLogin';
@@ -288,14 +289,28 @@ export function Auth() {
         if (trimmed === ADMIN_LOGIN_EMAIL || trimmed === ADMIN_LOGIN_EMAIL_LEGACY || trimmed === TEST_LOGIN_EMAIL) {
           email = ADMIN_LOGIN_EMAIL;
           if (trimmed === TEST_LOGIN_EMAIL) email = TEST_LOGIN_EMAIL;
+        } else if (isValidEmail(loginValue.trim())) {
+          email = loginValue.trim().toLowerCase();
         } else {
           const cleaned = loginValue.replace(/\D/g, '');
-          if (cleaned.length < 10) {
-            setError('Giriş için telefon numarası zorunludur');
-            setLoading(false);
-            return;
+          if (cleaned.length >= 10) {
+            email = cleaned === TEST_LOGIN_PHONE ? TEST_LOGIN_EMAIL : phoneToAuthEmail(cleaned);
+          } else {
+            const resolved = await resolvePanelUsernameToEmail(loginValue);
+            if (resolved.ok) {
+              email = resolved.email;
+            } else if (resolved.reason === 'ambiguous') {
+              setError('Bu kullanıcı adı birden fazla hesapla eşleşiyor. Tam e-posta adresinizi girin.');
+              setLoading(false);
+              return;
+            } else {
+              setError(
+                'Geçerli cep telefonu (05…), e-posta veya panelde oluşturduğunuz kullanıcı adını girin.',
+              );
+              setLoading(false);
+              return;
+            }
           }
-          email = cleaned === TEST_LOGIN_PHONE ? TEST_LOGIN_EMAIL : phoneToAuthEmail(cleaned);
         }
         let result = await signIn(email, password);
         if (
@@ -482,7 +497,9 @@ export function Auth() {
                       if (isPhoneInput(val) || val === '') setLoginValue(formatPhone(val));
                       else setLoginValue(val);
                     }}
-                    placeholder={isAykaPath ? 'Admin eposta' : 'Telefon numarası (admin: email)'}
+                    placeholder={
+                      isAykaPath ? 'Admin eposta' : 'Telefon, e-posta veya kullanıcı adı (ör. turgutlu)'
+                    }
                     autoComplete="username"
                     className="w-full pl-12 pr-4 py-3 bg-slate-800/50 border border-slate-700 hover:border-slate-600 focus:border-orange-500 focus:ring-2 focus:ring-orange-500/20 rounded-lg outline-none text-white text-sm transition-all placeholder:text-slate-500"
                   />
