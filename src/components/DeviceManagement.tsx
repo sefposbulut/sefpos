@@ -191,6 +191,9 @@ export function DeviceManagement() {
         .maybeSingle();
       if (reqErr) throw reqErr;
 
+      const di: any = (reqData as any)?.device_info || {};
+      const allowedIpPrefix = String(di.ipPrefix || di.ip_prefix || '').trim() || null;
+
       // Update request to accepted
       const { error: updateError } = await supabase
         .from('device_binding_requests')
@@ -211,7 +214,11 @@ export function DeviceManagement() {
       if (existingBinding?.id) {
         const { error: activateErr } = await supabase
           .from('device_bindings')
-          .update({ status: 'active', tenant_id: tenant.id })
+          .update({
+            status: 'active',
+            tenant_id: tenant.id,
+            ...(allowedIpPrefix ? { allowed_ip_prefix: allowedIpPrefix } : {}),
+          })
           .eq('id', existingBinding.id);
         if (activateErr) throw activateErr;
       } else {
@@ -222,6 +229,7 @@ export function DeviceManagement() {
             waiter_id: waiterId,
             tenant_id: tenant.id,
             status: 'active',
+            ...(allowedIpPrefix ? { allowed_ip_prefix: allowedIpPrefix } : {}),
           });
         if (bindError) throw bindError;
       }

@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
+import { getDeviceBindingCode } from '../lib/deviceBinding';
+import { checkRestaurantIpGate } from '../lib/waiterRestaurantIpGate';
 import { LogOut, Plus, Minus, Check, X, AlertCircle, ShoppingCart, RefreshCw, Search, ArrowRightLeft } from 'lucide-react';
 
 interface WaiterSession {
@@ -68,6 +70,50 @@ export function WaiterApp({ onLogout }: { onLogout: () => void }) {
       loadProducts(waiterSession.tenant_id, waiterSession.branch_id || null);
     }
   }, []);
+
+  /** Restoran dışına çıkıldıysa (IP öneki değiştiyse) oturumu kapat. */
+  useEffect(() => {
+    if (!session) return;
+    let alive = true;
+    const verifyLocation = async () => {
+      try {
+        const deviceCode = getDeviceBindingCode();
+        const { data: binding } = await supabase
+          .from('device_bindings')
+          .select('allowed_ip_prefix')
+          .eq('device_id', deviceCode)
+          .eq('waiter_id', session.id)
+          .eq('tenant_id', session.tenant_id)
+          .eq('status', 'active')
+          .maybeSingle();
+        const { data: acceptedReq } = await supabase
+          .from('device_binding_requests')
+          .select('device_info')
+          .eq('waiter_id', session.id)
+          .eq('device_id', deviceCode)
+          .eq('status', 'accepted')
+          .order('accepted_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        const gate = await checkRestaurantIpGate(
+          (binding as any)?.allowed_ip_prefix,
+          (acceptedReq as any)?.device_info,
+        );
+        if (!alive || gate.ok) return;
+        localStorage.removeItem('waiter_session');
+        setSession(null);
+        onLogout();
+      } catch (e) {
+        console.error('Garson ağ doğrulaması:', e);
+      }
+    };
+    void verifyLocation();
+    const interval = window.setInterval(() => void verifyLocation(), 5 * 60 * 1000);
+    return () => {
+      alive = false;
+      window.clearInterval(interval);
+    };
+  }, [session, onLogout]);
 
   const loadTableGroups = async (tenantId: string, branchId?: string | null) => {
     try {
