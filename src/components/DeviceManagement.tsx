@@ -91,17 +91,42 @@ export function DeviceManagement() {
   const loadDevices = async () => {
     if (!tenant) return;
     try {
-      const { data, error } = await supabase
+      // user_id → auth.users FK var; profiles'a doğrudan FK yok → PostgREST embed (profiles:user_id) PGRST200 verir.
+      const { data: rows, error } = await supabase
         .from('device_registrations')
-        .select(`
-          *,
-          profiles:user_id(full_name, email)
-        `)
+        .select('*')
         .eq('tenant_id', tenant.id)
         .order('last_seen', { ascending: false });
 
       if (error) throw error;
-      setDevices((data || []) as any);
+
+      const list = rows || [];
+      const userIds = [...new Set(list.map((r: { user_id?: string }) => r.user_id).filter(Boolean))] as string[];
+
+      const profileMap: Record<string, { full_name: string; email: string | null }> = {};
+      if (userIds.length > 0) {
+        let profs: { id: string; full_name: string | null; email: string | null }[] | null = null;
+        let pRes = await supabase
+          .from('profiles')
+          .select('id, full_name, email')
+          .in('id', userIds);
+        if (pRes.error && /email|column/i.test(pRes.error.message || '')) {
+          pRes = await supabase.from('profiles').select('id, full_name').in('id', userIds);
+        }
+        if (!pRes.error && pRes.data) {
+          profs = pRes.data as { id: string; full_name: string | null; email: string | null }[];
+        }
+        for (const p of profs || []) {
+          profileMap[p.id] = { full_name: p.full_name || '', email: p.email ?? null };
+        }
+      }
+
+      const merged = list.map((r: DeviceRegistration & { user_id: string }) => ({
+        ...r,
+        profiles: profileMap[r.user_id],
+      }));
+
+      setDevices((merged || []) as any);
     } catch (e) {
       console.error('Error loading devices:', e);
     }
