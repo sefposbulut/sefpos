@@ -96,6 +96,27 @@ Xcode ile imzalama ve dağıtım.
 
 ---
 
+## Uygulama ikonu (favicon + Electron)
+
+Tek bir kare PNG kaynağından (önerilen 1024×1024, şeffaf arka plan) tüm hedef
+ikonları üretmek için:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\generate-app-icons.ps1 -Source .\public\SEFPOS-source.png
+```
+
+Üretilen dosyalar (hepsi `public/` altında):
+
+- `logo.png` (256) — `index.html` favicon ve uygulama içi logo
+- `logo256.png` (256) — PWA manifest
+- `SEFPOS.png` (512) — Electron pencere/macOS/Linux ikonu
+- `SEFPOS.ico` — Windows .exe / NSIS kurulum (16,24,32,48,64,128,256 çoklu çözünürlük)
+
+Yeni kaynak vermek isterseniz `public/SEFPOS-source.png` dosyasını değiştirip
+yukarıdaki komutu yeniden çalıştırın.
+
+---
+
 ## İlgili dosyalar
 
 - `package.json` — `scripts` ve `build` (electron-builder) ayarları
