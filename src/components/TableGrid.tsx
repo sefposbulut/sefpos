@@ -5,6 +5,7 @@ import { Database } from '../lib/supabase';
 import { Plus, Clock, ShoppingCart, Lock, ZoomIn, ZoomOut } from 'lucide-react';
 import { isLocalMode } from '../lib/sqlDb';
 import { warmOrderItemsForPanel } from '../lib/orderPanelWarm';
+import { LiveDuration } from './LiveDuration';
 
 type Table = Database['public']['Tables']['restaurant_tables']['Row'] & {
   branch_id?: string | null;
@@ -55,7 +56,6 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
   const [tableGroups, setTableGroups] = useState<TableGroup[]>([]);
   const [selectedGroup, setSelectedGroup] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [currentTime, setCurrentTime] = useState(new Date());
   const [mobileTableCols, setMobileTableCols] = useState<number>(3);
   const [mobileZoomOpen, setMobileZoomOpen] = useState(false);
   const [desktopTableCols, setDesktopTableCols] = useState<number>(6);
@@ -183,12 +183,16 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
         ...t,
         order: t.orders ? t.orders : undefined,
       }));
-      const orderIds = mapped.map((t) => t.order?.id).filter(Boolean) as string[];
-      if (orderIds.length > 0) {
+      // Sadece kısmi ödemeli siparişler için payment_transactions çek;
+      // tam ödenmiş veya boş masalar gereksiz round-trip yapmasın.
+      const partialOrderIds = mapped
+        .map((t) => (t.order?.payment_status === 'partial' ? t.order.id : null))
+        .filter((id): id is string => !!id);
+      if (partialOrderIds.length > 0) {
         const { data: payments } = await supabase
           .from('payment_transactions')
           .select('order_id, amount')
-          .in('order_id', orderIds);
+          .in('order_id', partialOrderIds);
         if (payments) {
           const paidByOrder = new Map<string, number>();
           for (const p of payments as any[]) {
@@ -232,12 +236,14 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
 
     if (data) {
       const updatedRows = data.map((t: any) => ({ ...t, order: t.orders || undefined })) as TableWithOrder[];
-      const orderIds = updatedRows.map((t) => t.order?.id).filter(Boolean) as string[];
-      if (orderIds.length > 0) {
+      const partialIds = updatedRows
+        .map((t) => (t.order?.payment_status === 'partial' ? t.order.id : null))
+        .filter((id): id is string => !!id);
+      if (partialIds.length > 0) {
         const { data: payments } = await supabase
           .from('payment_transactions')
           .select('order_id, amount')
-          .in('order_id', orderIds);
+          .in('order_id', partialIds);
         if (payments) {
           const paidByOrder = new Map<string, number>();
           for (const p of payments as any[]) {
@@ -319,14 +325,13 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
 
     loadAll(true);
 
-    const timer = setInterval(() => {
-      setCurrentTime(new Date());
-      if (isLocalMode()) loadAll();
-    }, 30000);
-
+    // local mod dışında 30 sn'lik genel poll'a gerek yok; süre etiketleri
+    // <LiveDuration> ile kendi başına yenilenir, masa state'i realtime gelir.
+    let timer: ReturnType<typeof setInterval> | null = null;
     if (isLocalMode()) {
+      timer = setInterval(() => loadAll(), 30000);
       return () => {
-        clearInterval(timer);
+        if (timer) clearInterval(timer);
         if (updateTimerRef.current) clearTimeout(updateTimerRef.current);
       };
     }
@@ -361,7 +366,7 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
     channelsRef.current = [tablesChannel];
 
     return () => {
-      clearInterval(timer);
+      if (timer) clearInterval(timer);
       if (updateTimerRef.current) clearTimeout(updateTimerRef.current);
       channelsRef.current.forEach(ch => supabase.removeChannel(ch));
       channelsRef.current = [];
@@ -501,14 +506,6 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
       } as any);
     }
   };
-
-  const formatDuration = useCallback((startTime: string) => {
-    const diff = currentTime.getTime() - new Date(startTime).getTime();
-    const minutes = Math.floor(diff / 60000);
-    const hours = Math.floor(minutes / 60);
-    const mins = minutes % 60;
-    return hours > 0 ? `${hours}s ${mins}dk` : `${mins}dk`;
-  }, [currentTime]);
 
   const groupStats = useMemo(() => {
     const stats = new Map<string | null, { available: number; occupied: number; total: number }>();
@@ -730,7 +727,7 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
                 {table.session_start && table.status === 'occupied' && !isLocked && !isPartial && (
                   <div className="font-bold opacity-90 flex items-center gap-0.5 tracking-tight" style={{ fontSize: dkFontSize, marginTop: 2, fontFamily: corporateFontFamily }}>
                     <Clock style={{ width: dkFontSize - 1, height: dkFontSize - 1 }} className="shrink-0" />
-                    {formatDuration(table.session_start)}
+                    <LiveDuration startTime={table.session_start} />
                   </div>
                 )}
               </button>
@@ -796,7 +793,7 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
                   {table.session_start && (
                     <div className="font-bold opacity-90 flex items-center gap-0.5 mt-1.5 tracking-tight" style={{ fontSize: dkFontSize, fontFamily: corporateFontFamily }}>
                       <Clock style={{ width: dkFontSize, height: dkFontSize }} className="shrink-0" />
-                      {formatDuration(table.session_start)}
+                      <LiveDuration startTime={table.session_start} />
                     </div>
                   )}
                 </>

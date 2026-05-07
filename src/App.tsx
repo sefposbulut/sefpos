@@ -25,6 +25,7 @@ import { CancelLogs } from './components/CancelLogs';
 import { PinLockScreen } from './components/PinLockScreen';
 import { Database, supabase } from './lib/supabase';
 import { isSqlServerMode } from './lib/sqlDb';
+import { queryCache } from './lib/queryCache';
 import { SystemNotificationContainer } from './components/SystemNotificationBanner';
 import { TerminalLogin, TerminalApp, isTerminalMode, exitTerminalMode } from './components/TerminalMode';
 import { isCapacitorNative } from './lib/capacitorPlatform';
@@ -198,6 +199,11 @@ function App() {
     seenNotifIds.current.add(n.id);
     setSystemNotifications(prev => [...prev, { id: n.id, title: n.title, message: n.message, type: n.type || 'info' }]);
   }, []);
+
+  useEffect(() => {
+    if (!tenant?.id) return;
+    void queryCache.hydrateForTenant(tenant.id);
+  }, [tenant?.id]);
 
   useEffect(() => {
     if (!tenant || !user) return;
