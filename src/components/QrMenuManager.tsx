@@ -4,6 +4,7 @@ import { jsPDF } from 'jspdf';
 import {
   Download, FileDown, Link as LinkIcon, Copy, ExternalLink, Loader2,
   Building2, Image as ImageIcon, Palette, Save, Trash2, Eye, Sparkles,
+  Store, MapPin, Phone,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
@@ -58,10 +59,20 @@ export function QrMenuManager() {
   const [themeMsg, setThemeMsg] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Restoran bilgileri (menu basliginda gozuken)
+  const [infoName, setInfoName] = useState<string>(tenant?.name || '');
+  const [infoAddress, setInfoAddress] = useState<string>((tenant as any)?.address || '');
+  const [infoPhone, setInfoPhone] = useState<string>((tenant as any)?.phone || '');
+  const [infoSaving, setInfoSaving] = useState(false);
+  const [infoMsg, setInfoMsg] = useState<string | null>(null);
+
   useEffect(() => {
     setLogoUrl(tenant?.logo_url || null);
     setTheme(normalizeTheme(tenant?.menu_theme || null));
-  }, [tenant?.id, tenant?.logo_url, tenant?.menu_theme]);
+    setInfoName(tenant?.name || '');
+    setInfoAddress((tenant as any)?.address || '');
+    setInfoPhone((tenant as any)?.phone || '');
+  }, [tenant?.id, tenant?.name, tenant?.logo_url, tenant?.menu_theme, (tenant as any)?.address, (tenant as any)?.phone]);
 
   useEffect(() => {
     if (!tenant?.id) {
@@ -183,6 +194,36 @@ export function QrMenuManager() {
     }
   };
 
+  // ---------- RESTORAN BILGILERI KAYDET ----------
+  const saveInfo = async () => {
+    if (!tenant?.id) return;
+    const cleanName = infoName.trim();
+    if (!cleanName) {
+      setInfoMsg('Hata: Restoran adı boş olamaz.');
+      return;
+    }
+    setInfoSaving(true);
+    setInfoMsg(null);
+    try {
+      const { error } = await supabase
+        .from('tenants')
+        .update({
+          name: cleanName.slice(0, 80),
+          address: infoAddress.trim().slice(0, 240) || null,
+          phone: infoPhone.trim().slice(0, 40) || null,
+        })
+        .eq('id', tenant.id);
+      if (error) throw new Error(error.message);
+      if (refreshProfile) await refreshProfile();
+      setInfoMsg('Bilgiler kaydedildi.');
+      setTimeout(() => setInfoMsg(null), 2200);
+    } catch (e: any) {
+      setInfoMsg('Hata: ' + (e?.message || e));
+    } finally {
+      setInfoSaving(false);
+    }
+  };
+
   // ---------- TEMA KAYDET ----------
   const saveTheme = async () => {
     if (!tenant?.id) return;
@@ -273,6 +314,91 @@ export function QrMenuManager() {
               }}
             />
           </div>
+        </div>
+      </div>
+
+      {/* RESTORAN BILGILERI */}
+      <div className="bg-white border border-slate-200 rounded-2xl p-5">
+        <div className="flex items-center gap-2 mb-1">
+          <Store className="w-5 h-5 text-amber-600" />
+          <h3 className="font-bold text-slate-800">Restoran Bilgileri</h3>
+        </div>
+        <p className="text-xs text-slate-500 mb-4">
+          QR menünün üst başlığında müşteriye gösterilir. Şu an menüde
+          <span className="font-semibold text-slate-700"> "{tenant?.name || 'ŞefPOS'}" </span>
+          yazıyor — buradan değiştirebilirsiniz.
+        </p>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="md:col-span-2">
+            <label className="block text-xs font-bold text-slate-600 uppercase tracking-wide mb-1.5">
+              Restoran Adı *
+            </label>
+            <div className="relative">
+              <Store className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+              <input
+                type="text"
+                value={infoName}
+                onChange={e => setInfoName(e.target.value)}
+                maxLength={80}
+                placeholder="Örn. Lezzet Sofrası"
+                className="w-full pl-10 pr-3 py-2.5 border-2 border-slate-200 rounded-xl focus:border-amber-500 focus:outline-none text-sm font-semibold"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-xs font-bold text-slate-600 uppercase tracking-wide mb-1.5">
+              Adres
+            </label>
+            <div className="relative">
+              <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+              <input
+                type="text"
+                value={infoAddress}
+                onChange={e => setInfoAddress(e.target.value)}
+                maxLength={240}
+                placeholder="Örn. Atatürk Cd. No:42, Şişli/İstanbul"
+                className="w-full pl-10 pr-3 py-2.5 border-2 border-slate-200 rounded-xl focus:border-amber-500 focus:outline-none text-sm"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-xs font-bold text-slate-600 uppercase tracking-wide mb-1.5">
+              Telefon
+            </label>
+            <div className="relative">
+              <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+              <input
+                type="tel"
+                value={infoPhone}
+                onChange={e => setInfoPhone(e.target.value)}
+                maxLength={40}
+                placeholder="Örn. 0 (212) 555 12 34"
+                className="w-full pl-10 pr-3 py-2.5 border-2 border-slate-200 rounded-xl focus:border-amber-500 focus:outline-none text-sm"
+              />
+            </div>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 mt-4">
+          <button
+            onClick={saveInfo}
+            disabled={infoSaving}
+            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white font-bold text-sm"
+          >
+            {infoSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+            Bilgileri Kaydet
+          </button>
+          {infoMsg && (
+            <span className={`text-xs ${infoMsg.startsWith('Hata') ? 'text-red-600' : 'text-emerald-700'}`}>
+              {infoMsg}
+            </span>
+          )}
+          <span className="ml-auto text-[11px] text-slate-400 hidden sm:inline">
+            Tüm şubelerde geçerlidir
+          </span>
         </div>
       </div>
 
