@@ -526,27 +526,32 @@ function WaiterCallModal({
       return '';
     }
   });
-  const [callType, setCallType] = useState<'service' | 'bill' | 'water' | 'help'>('service');
-  const [message, setMessage] = useState('');
-  const [submitting, setSubmitting] = useState(false);
-  const [done, setDone] = useState(false);
+  // İlk açılışta masa zaten kayıtlıysa direkt çağrı seçimine git
+  const [step, setStep] = useState<'table' | 'pick'>(tableLabel.trim() ? 'pick' : 'table');
+  const [submittingType, setSubmittingType] = useState<string | null>(null);
+  const [done, setDone] = useState<{ type: string } | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [showNote, setShowNote] = useState(false);
+  const [message, setMessage] = useState('');
 
-  const types = [
-    { id: 'service' as const, label: 'Garson', icon: Bell, desc: 'Yardımcı olun' },
-    { id: 'bill' as const, label: 'Hesap', icon: Receipt, desc: 'Hesap istiyorum' },
-    { id: 'water' as const, label: 'Su', icon: Droplets, desc: 'Su getirin' },
-    { id: 'help' as const, label: 'Diğer', icon: HelpCircle, desc: 'Bir şey gerekli' },
+  const types: { id: 'service' | 'bill' | 'water' | 'help'; label: string; icon: any; gradient: string }[] = [
+    { id: 'service', label: 'Garson', icon: Bell, gradient: 'from-orange-500 to-amber-500' },
+    { id: 'bill', label: 'Hesap', icon: Receipt, gradient: 'from-emerald-500 to-teal-500' },
+    { id: 'water', label: 'Su', icon: Droplets, gradient: 'from-sky-500 to-blue-500' },
+    { id: 'help', label: 'Diğer', icon: HelpCircle, gradient: 'from-violet-500 to-purple-500' },
   ];
 
-  const submit = async () => {
-    setErr(null);
+  const sendCall = async (callType: 'service' | 'bill' | 'water' | 'help') => {
+    if (submittingType) return;
     if (!tableLabel.trim()) {
+      setStep('table');
       setErr('Lütfen masa numarası / adını girin.');
       return;
     }
-    setSubmitting(true);
+    setErr(null);
+    setSubmittingType(callType);
     try {
+      try { localStorage.setItem(TABLE_LS_KEY, tableLabel.trim()); } catch { /* ignore */ }
       await createWaiterCall({
         tenantId,
         branchId,
@@ -554,36 +559,37 @@ function WaiterCallModal({
         callType,
         message: message.trim() || undefined,
       });
-      try {
-        localStorage.setItem(TABLE_LS_KEY, tableLabel.trim());
-      } catch { /* ignore */ }
-      setDone(true);
-      setTimeout(onClose, 1800);
+      setDone({ type: callType });
+      setMessage('');
+      setShowNote(false);
+      setTimeout(onClose, 900);
     } catch (e: any) {
       setErr(e?.message || 'Çağrı gönderilemedi.');
     } finally {
-      setSubmitting(false);
+      setSubmittingType(null);
     }
   };
+
+  const tableValid = tableLabel.trim().length > 0;
+  const doneType = done ? types.find(t => t.id === done.type) : null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-sm p-0 sm:p-4">
       <div className={`w-full sm:max-w-md rounded-t-3xl sm:rounded-3xl shadow-2xl border ${
         isDark ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'
       }`}>
-        {done ? (
+        {done && doneType ? (
           <div className="p-8 text-center">
             <div
-              className="w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4"
-              style={{ backgroundColor: accent + '22' }}
+              className={`w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 bg-gradient-to-br ${doneType.gradient} shadow-lg`}
             >
-              <CheckCircle2 className="w-9 h-9" style={{ color: accent }} />
+              <CheckCircle2 className="w-9 h-9 text-white" />
             </div>
             <h3 className={`text-xl font-extrabold mb-1 ${isDark ? 'text-slate-100' : 'text-slate-800'}`}>
-              Çağrı Gönderildi!
+              {doneType.label} çağrısı gönderildi!
             </h3>
             <p className={`text-sm ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-              Garsonumuz en kısa sürede masanıza gelecek.
+              Masa <span className="font-bold">{tableLabel}</span> · garsonumuz hemen geliyor.
             </p>
           </div>
         ) : (
@@ -591,15 +597,22 @@ function WaiterCallModal({
             <div className={`flex items-center justify-between px-5 py-4 border-b ${
               isDark ? 'border-slate-800' : 'border-slate-100'
             }`}>
-              <div className="flex items-center gap-2">
-                <Bell className="w-5 h-5" style={{ color: accent }} />
-                <h3 className={`font-extrabold text-lg ${isDark ? 'text-slate-100' : 'text-slate-800'}`}>
+              <div className="flex items-center gap-2 min-w-0">
+                <Bell className="w-5 h-5 flex-shrink-0" style={{ color: accent }} />
+                <h3 className={`font-extrabold text-lg truncate ${isDark ? 'text-slate-100' : 'text-slate-800'}`}>
                   Garson Çağır
                 </h3>
+                {step === 'pick' && tableLabel && (
+                  <span className={`ml-1 text-xs font-bold px-2 py-0.5 rounded-full truncate max-w-[120px] ${
+                    isDark ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-600'
+                  }`} title={tableLabel}>
+                    {tableLabel}
+                  </span>
+                )}
               </div>
               <button
                 onClick={onClose}
-                className={`p-1.5 rounded-lg ${
+                className={`p-1.5 rounded-lg flex-shrink-0 ${
                   isDark ? 'hover:bg-slate-800 text-slate-400' : 'hover:bg-slate-100 text-slate-500'
                 }`}
                 aria-label="Kapat"
@@ -607,128 +620,128 @@ function WaiterCallModal({
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <div className="p-5 space-y-4">
-              <div>
-                <label className={`block text-xs font-semibold mb-1.5 ${
-                  isDark ? 'text-slate-400' : 'text-slate-600'
-                }`}>
-                  Masa Numarası / Adı
-                </label>
-                <input
-                  type="text"
-                  inputMode="text"
-                  autoFocus
-                  value={tableLabel}
-                  onChange={e => setTableLabel(e.target.value)}
-                  placeholder="Örn. Masa 5 / Bahçe-3"
-                  maxLength={60}
-                  className={`w-full px-3 py-3 rounded-xl outline-none text-base font-semibold focus:ring-2 transition ${
-                    isDark
-                      ? 'bg-slate-800 text-slate-100 ring-1 ring-slate-700 focus:ring-slate-500 placeholder-slate-500'
-                      : 'bg-slate-50 text-slate-800 ring-1 ring-slate-200 focus:ring-slate-300 placeholder-slate-400'
-                  }`}
-                />
-              </div>
 
-              <div>
-                <label className={`block text-xs font-semibold mb-2 ${
-                  isDark ? 'text-slate-400' : 'text-slate-600'
-                }`}>
-                  Çağrı Türü
-                </label>
-                <div className="grid grid-cols-2 gap-2">
+            {step === 'table' ? (
+              <div className="p-5 space-y-4">
+                <div>
+                  <label className={`block text-xs font-semibold mb-1.5 ${
+                    isDark ? 'text-slate-400' : 'text-slate-600'
+                  }`}>
+                    Masa Numarası / Adı
+                  </label>
+                  <input
+                    type="text"
+                    inputMode="text"
+                    autoFocus
+                    value={tableLabel}
+                    onChange={e => { setTableLabel(e.target.value); setErr(null); }}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter' && tableValid) setStep('pick');
+                    }}
+                    placeholder="Örn. Masa 5 / Bahçe-3"
+                    maxLength={60}
+                    className={`w-full px-3 py-3 rounded-xl outline-none text-base font-semibold focus:ring-2 transition ${
+                      isDark
+                        ? 'bg-slate-800 text-slate-100 ring-1 ring-slate-700 focus:ring-slate-500 placeholder-slate-500'
+                        : 'bg-slate-50 text-slate-800 ring-1 ring-slate-200 focus:ring-slate-300 placeholder-slate-400'
+                    }`}
+                  />
+                  <p className={`text-[11px] mt-1.5 ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
+                    Bir kere girin, cihazınızda kalır.
+                  </p>
+                </div>
+                {err && (
+                  <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                    {err}
+                  </div>
+                )}
+                <button
+                  onClick={() => tableValid && setStep('pick')}
+                  disabled={!tableValid}
+                  className="w-full py-3 rounded-xl font-bold text-white shadow-md disabled:opacity-50 disabled:cursor-not-allowed transition"
+                  style={{ backgroundColor: accent }}
+                >
+                  Devam Et
+                </button>
+              </div>
+            ) : (
+              <div className="p-5 space-y-3">
+                <div className="grid grid-cols-2 gap-2.5">
                   {types.map(t => {
                     const Icon = t.icon;
-                    const active = callType === t.id;
+                    const isLoading = submittingType === t.id;
+                    const isDisabled = !!submittingType && !isLoading;
                     return (
                       <button
                         key={t.id}
-                        onClick={() => setCallType(t.id)}
-                        className={`flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-sm font-semibold transition border-2 ${
-                          active
-                            ? 'text-white shadow-md'
-                            : isDark
-                              ? 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700'
-                              : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
-                        }`}
-                        style={
-                          active
-                            ? { backgroundColor: accent, borderColor: accent }
-                            : undefined
-                        }
+                        onClick={() => sendCall(t.id)}
+                        disabled={isDisabled}
+                        className={`relative overflow-hidden flex flex-col items-center justify-center gap-1.5 px-3 py-5 rounded-2xl text-white font-extrabold shadow-md bg-gradient-to-br ${t.gradient} active:scale-[0.97] transition-all disabled:opacity-50 disabled:cursor-not-allowed`}
                       >
-                        <Icon className="w-4 h-4 flex-shrink-0" />
-                        <div className="min-w-0 text-left">
-                          <div>{t.label}</div>
-                          <div className={`text-[10px] font-normal ${
-                            active ? 'text-white/80' : isDark ? 'text-slate-500' : 'text-slate-400'
-                          }`}>
-                            {t.desc}
-                          </div>
-                        </div>
+                        {isLoading ? (
+                          <Loader2 className="w-7 h-7 animate-spin" />
+                        ) : (
+                          <Icon className="w-7 h-7" />
+                        )}
+                        <span className="text-base">{t.label}</span>
                       </button>
                     );
                   })}
                 </div>
-              </div>
 
-              <div>
-                <label className={`block text-xs font-semibold mb-1.5 ${
-                  isDark ? 'text-slate-400' : 'text-slate-600'
-                }`}>
-                  Not (isteğe bağlı)
-                </label>
-                <textarea
-                  value={message}
-                  onChange={e => setMessage(e.target.value)}
-                  rows={2}
-                  placeholder="Eklemek istediğiniz bir şey var mı?"
-                  maxLength={280}
-                  className={`w-full px-3 py-2.5 rounded-xl outline-none text-sm focus:ring-2 transition resize-none ${
-                    isDark
-                      ? 'bg-slate-800 text-slate-100 ring-1 ring-slate-700 focus:ring-slate-500 placeholder-slate-500'
-                      : 'bg-slate-50 text-slate-800 ring-1 ring-slate-200 focus:ring-slate-300 placeholder-slate-400'
-                  }`}
-                />
-              </div>
-
-              {err && (
-                <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
-                  {err}
-                </div>
-              )}
-            </div>
-
-            <div className={`p-4 border-t flex gap-2 ${
-              isDark ? 'border-slate-800' : 'border-slate-100'
-            }`}>
-              <button
-                onClick={onClose}
-                className={`flex-1 py-3 rounded-xl font-semibold ${
-                  isDark
-                    ? 'bg-slate-800 hover:bg-slate-700 text-slate-200'
-                    : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
-                }`}
-              >
-                İptal
-              </button>
-              <button
-                onClick={submit}
-                disabled={submitting}
-                className="flex-1 py-3 rounded-xl font-bold text-white shadow-md disabled:opacity-60 inline-flex items-center justify-center gap-2"
-                style={{ backgroundColor: accent }}
-              >
-                {submitting ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" /> Gönderiliyor
-                  </>
+                {!showNote ? (
+                  <button
+                    onClick={() => setShowNote(true)}
+                    className={`text-xs font-semibold text-center w-full py-1.5 rounded-lg ${
+                      isDark
+                        ? 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+                        : 'text-slate-500 hover:text-slate-700 hover:bg-slate-50'
+                    }`}
+                  >
+                    + Not Eklemek İstiyorum
+                  </button>
                 ) : (
-                  <>
-                    <Bell className="w-4 h-4" /> Çağır
-                  </>
+                  <div>
+                    <label className={`block text-xs font-semibold mb-1.5 ${
+                      isDark ? 'text-slate-400' : 'text-slate-600'
+                    }`}>
+                      Not (isteğe bağlı)
+                    </label>
+                    <textarea
+                      value={message}
+                      onChange={e => setMessage(e.target.value)}
+                      rows={2}
+                      autoFocus
+                      placeholder="Eklemek istediğiniz bir şey var mı?"
+                      maxLength={280}
+                      className={`w-full px-3 py-2.5 rounded-xl outline-none text-sm focus:ring-2 transition resize-none ${
+                        isDark
+                          ? 'bg-slate-800 text-slate-100 ring-1 ring-slate-700 focus:ring-slate-500 placeholder-slate-500'
+                          : 'bg-slate-50 text-slate-800 ring-1 ring-slate-200 focus:ring-slate-300 placeholder-slate-400'
+                      }`}
+                    />
+                    <p className={`text-[11px] mt-1 ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
+                      Yukarıdaki düğmelerden birine basarak gönderin.
+                    </p>
+                  </div>
                 )}
-              </button>
-            </div>
+
+                <button
+                  onClick={() => setStep('table')}
+                  className={`text-[11px] font-semibold text-center w-full py-1 rounded ${
+                    isDark ? 'text-slate-500 hover:text-slate-300' : 'text-slate-400 hover:text-slate-600'
+                  }`}
+                >
+                  Masa: {tableLabel} (değiştir)
+                </button>
+
+                {err && (
+                  <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                    {err}
+                  </div>
+                )}
+              </div>
+            )}
           </>
         )}
       </div>
