@@ -358,16 +358,30 @@ export function PaymentModal({
     && !hasInvalidOpenAccount;
 
   return (
-    <div className="fixed inset-0 bg-black/75 flex items-center justify-center p-2 z-[60]">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md flex flex-col max-h-[calc(100vh-16px)] overflow-hidden">
-        <div className="bg-gradient-to-r from-green-600 to-green-700 px-4 py-3 flex items-center justify-between rounded-t-2xl flex-shrink-0">
-          <h3 className="text-xl font-bold text-white">Ödeme Al</h3>
-          <button onClick={onClose} className="text-white hover:bg-white/20 p-2 rounded-lg transition-all active:scale-95">
+    <div className="fixed inset-0 bg-black/75 z-[60] flex items-end sm:items-center justify-center sm:p-3">
+      {/* Mobil: bottom sheet (tam genişlik, üstten kavisli). Tablet+: ortalanmış kart. */}
+      <div
+        className={
+          'bg-white shadow-2xl w-full sm:max-w-md flex flex-col overflow-hidden ' +
+          'rounded-t-2xl sm:rounded-2xl ' +
+          'h-[100dvh] sm:h-auto sm:max-h-[92dvh]'
+        }
+      >
+        <div
+          className="bg-gradient-to-r from-green-600 to-green-700 px-4 py-3 flex items-center justify-between rounded-t-2xl flex-shrink-0"
+          style={{ paddingTop: 'max(0.75rem, env(safe-area-inset-top))' }}
+        >
+          <h3 className="text-lg sm:text-xl font-bold text-white">Ödeme Al</h3>
+          <button
+            onClick={onClose}
+            aria-label="Kapat"
+            className="text-white hover:bg-white/20 p-2 rounded-lg transition-all active:scale-95"
+          >
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        <div className="overflow-y-auto flex-1 p-4 space-y-3">
+        <div className="overflow-y-auto overscroll-contain flex-1 min-h-0 p-3 sm:p-4 space-y-3">
           {/* Tutar özeti */}
           <div className="grid grid-cols-2 gap-2">
             <div className="bg-orange-50 border-2 border-orange-200 rounded-xl p-3 text-center">
@@ -412,14 +426,14 @@ export function PaymentModal({
             </div>
 
             {splits.map((split, idx) => (
-              <div key={idx} className="border-2 border-slate-200 rounded-xl p-3 space-y-2.5">
-                <div className="flex items-center gap-2">
-                  <div className="flex gap-1.5 flex-1">
+              <div key={idx} className="border-2 border-slate-200 rounded-xl p-2.5 sm:p-3 space-y-2.5">
+                <div className="flex items-start gap-2">
+                  <div className="grid grid-cols-3 gap-1.5 flex-1 min-w-0">
                     {(['cash', 'credit_card', 'open_account'] as const).map(m => (
                       <button
                         key={m}
                         onClick={() => updateSplit(idx, 'method', m)}
-                        className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border-2 text-xs font-bold transition-all active:scale-95 ${
+                        className={`flex items-center justify-center gap-1 px-1.5 py-2 rounded-lg border-2 text-[11px] sm:text-xs font-bold transition-all active:scale-95 leading-tight ${
                           split.method === m
                             ? m === 'open_account'
                               ? 'border-orange-400 bg-orange-50 text-orange-700'
@@ -428,14 +442,15 @@ export function PaymentModal({
                         }`}
                       >
                         {METHOD_ICONS[m]}
-                        {METHOD_LABELS[m]}
+                        <span className="truncate">{METHOD_LABELS[m]}</span>
                       </button>
                     ))}
                   </div>
                   {splits.length > 1 && (
                     <button
                       onClick={() => removeSplit(idx)}
-                      className="text-red-400 hover:text-red-600 hover:bg-red-50 p-1.5 rounded-lg transition-all active:scale-95"
+                      aria-label="Sil"
+                      className="text-red-400 hover:text-red-600 hover:bg-red-50 p-1.5 rounded-lg transition-all active:scale-95 flex-shrink-0"
                     >
                       <Trash2 className="w-4 h-4" />
                     </button>
@@ -445,18 +460,19 @@ export function PaymentModal({
                 <div className="flex gap-2 items-center">
                   <input
                     type="number"
+                    inputMode="decimal"
                     step="0.01"
                     min="0"
                     value={split.amount}
                     onChange={(e) => updateSplit(idx, 'amount', e.target.value)}
-                    className="flex-1 px-3 py-2 border-2 rounded-xl text-2xl font-black focus:border-green-500 focus:outline-none text-right"
+                    className="flex-1 min-w-0 px-3 py-2 border-2 rounded-xl text-xl sm:text-2xl font-black focus:border-green-500 focus:outline-none text-right"
                     placeholder="0.00"
                     autoFocus={idx === 0}
                   />
                   <span className="text-slate-500 font-bold text-sm">₺</span>
                   <button
                     onClick={() => fillRemaining(idx)}
-                    className="px-2.5 py-2 bg-green-100 hover:bg-green-200 text-green-700 rounded-lg font-bold text-xs transition-all active:scale-95 whitespace-nowrap"
+                    className="px-2.5 py-2 bg-green-100 hover:bg-green-200 text-green-700 rounded-lg font-bold text-xs transition-all active:scale-95 whitespace-nowrap flex-shrink-0"
                   >
                     Tümü
                   </button>
@@ -504,7 +520,10 @@ export function PaymentModal({
           </button>
         </div>
 
-        <div className="flex gap-3 p-4 border-t border-slate-100 flex-shrink-0">
+        <div
+          className="flex gap-2 sm:gap-3 p-3 sm:p-4 border-t border-slate-100 flex-shrink-0 bg-white"
+          style={{ paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom))' }}
+        >
           <button
             onClick={onClose}
             className="flex-1 bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold py-3 rounded-xl transition-all active:scale-95"
@@ -514,7 +533,7 @@ export function PaymentModal({
           <button
             onClick={handleSubmit}
             disabled={loading || submitting || !isValid}
-            className={`flex-2 font-bold py-3 px-6 rounded-xl transition-all disabled:opacity-50 shadow-lg active:scale-95 ${
+            className={`flex-[2] font-bold py-3 px-4 sm:px-6 rounded-xl transition-all disabled:opacity-50 shadow-lg active:scale-95 ${
               isFullPayment
                 ? 'bg-gradient-to-r from-green-600 to-green-700 hover:from-green-700 hover:to-green-800 text-white'
                 : 'bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white'
