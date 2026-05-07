@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import { Plus, Trash2, Eye, EyeOff, AlertCircle, RefreshCw, Save, X } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
-import { phoneToAuthEmail, pinToAuthPassword } from '../lib/phoneAuthEmail';
+import { phoneToAuthEmail, pinToAuthPassword, getPhoneAuthEmailDomain } from '../lib/phoneAuthEmail';
 
 interface Waiter {
   id: string;
@@ -67,47 +67,86 @@ export function WaiterManagement({ tenantId }: { tenantId: string }) {
 
     setSaving(true);
     try {
-      // 1) waiters tablosu — daima kayıt
-      const { error: err } = await supabase.from('waiters').insert([
-        {
-          tenant_id: tenantId,
-          name: formData.name.trim(),
-          phone: cleaned,
-          pin: formData.pin,
-          status: 'active',
-        },
-      ]);
-      if (err) throw err;
+      const { data: inserted, error: err } = await supabase
+        .from('waiters')
+        .insert([
+          {
+            tenant_id: tenantId,
+            name: formData.name.trim(),
+            phone: cleaned,
+            pin: formData.pin,
+            status: 'active',
+          },
+        ])
+        .select('id')
+        .single();
 
-      // 2) Supabase Auth user oluştur (PIN tabanlı parola).
-      //    MX validation hatası durumunda kullanıcıya net mesaj gösterilir;
-      //    waiter satırı zaten oluşturuldu, fix-waiter-auth.mjs ile tamamlanabilir.
+      if (err) throw err;
+      const newWaiterId = inserted?.id as string | undefined;
+      if (!newWaiterId) throw new Error('Garson kaydı oluşturulamadı');
+
+      // Auth: Edge Function (service role) — MX kaydı olmayan domain ile tarayıcı signUp çalışmaz.
       try {
-        const authEmail = phoneToAuthEmail(cleaned);
-        const authPwd = pinToAuthPassword(formData.pin);
-        const sub = await supabase.auth.signUp({
-          email: authEmail,
-          password: authPwd,
-          options: { data: { full_name: formData.name.trim(), phone: cleaned, role: 'waiter' } },
-        });
-        if (sub.error) {
-          const msg = (sub.error.message || '').toLowerCase();
-          if (msg.includes('already registered') || msg.includes('already exists')) {
-            // Mevcut user — devam
-          } else if (msg.includes('email address') && msg.includes('invalid')) {
-            setError(
-              'Garson kaydedildi ama auth hesabı oluşturulamadı: ' +
-              'sentetik e-posta domaininin (varsayılan: sefpos.com.tr) MX kaydı yok. ' +
-              'Cloudflare DNS\'e MX ekleyin VEYA .env\'de VITE_PHONE_AUTH_EMAIL_DOMAIN ile ' +
-              'MX\'i olan başka bir domain belirtin. Geçici çözüm: ' +
-              'yöneticiniz `node scripts/fix-waiter-auth.mjs` çalıştırsın.',
-            );
-          } else {
-            setError('Garson kaydedildi ama auth hesabı oluşturulamadı: ' + sub.error.message);
+        const { data: sess } = await supabase.auth.getSession();
+        if (!sess?.session?.access_token) {
+          setError(
+            'Garson kaydedildi ancak oturum bulunamadı; auth hesabı için çıkış yapıp tekrar yönetici olarak girin, ' +
+              'veya `npm run edge:deploy:waiter-auth` ile create-waiter-auth fonksiyonunu yayınlayıp tekrar deneyin.',
+          );
+        } else {
+          const { data: fnData, error: fnErr } = await supabase.functions.invoke<{
+            success?: boolean;
+            error?: string;
+          }>('create-waiter-auth', {
+            body: {
+              waiter_id: newWaiterId,
+              phone_auth_domain: getPhoneAuthEmailDomain(),
+            },
+          });
+          if (fnErr) {
+            throw new Error(fnErr.message || 'Edge fonksiyonu çağrılamadı');
+          }
+          if (!fnData?.success) {
+            throw new Error(fnData?.error || 'Auth hesabı oluşturulamadı');
           }
         }
-      } catch (e: any) {
-        console.warn('[WaiterManagement] auth signUp warn:', e?.message);
+      } catch (authE: any) {
+        const m = String(authE?.message || authE || '');
+        const low = m.toLowerCase();
+        if (low.includes('not found') || low.includes('404') || low.includes('failed to fetch')) {
+          setError(
+            'Garson kaydedildi. Auth hesabı için Edge Function gerekli: proje kökünde ' +
+              '`npm run edge:deploy:waiter-auth` (veya Dashboard → Edge Functions → create-waiter-auth). ' +
+              'Geçici: `node scripts/fix-waiter-auth.mjs`',
+          );
+        } else {
+          // Edge başarısız → eski yol (MX varsa çalışır)
+          try {
+            const authEmail = phoneToAuthEmail(cleaned);
+            const authPwd = pinToAuthPassword(formData.pin);
+            const sub = await supabase.auth.signUp({
+              email: authEmail,
+              password: authPwd,
+              options: { data: { full_name: formData.name.trim(), phone: cleaned, role: 'waiter' } },
+            });
+            if (sub.error) {
+              const msg = (sub.error.message || '').toLowerCase();
+              if (!msg.includes('already registered') && !msg.includes('already exists')) {
+                setError(
+                  'Garson kaydedildi; auth: ' +
+                    (sub.error.message || 'bilinmeyen') +
+                    '. Edge Function yayınlayın: `npm run edge:deploy:waiter-auth` veya `node scripts/fix-waiter-auth.mjs`.',
+                );
+              }
+            }
+          } catch {
+            setError(
+              'Garson kaydedildi; auth hesabı oluşturulamadı: ' +
+                m +
+                '. Çözüm: `npm run edge:deploy:waiter-auth` veya MX + VITE_PHONE_AUTH_EMAIL_DOMAIN.',
+            );
+          }
+        }
       }
 
       setFormData({ name: '', phone: '', pin: '' });

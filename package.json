@@ -22,6 +22,7 @@
     "db:migrate-remote": "node scripts/run-supabase-migrations-pg.mjs",
     "db:apply-gotrue-fix": "node scripts/apply-gotrue-fix-sql.mjs",
     "edge:deploy:sms": "npx supabase functions deploy send-sms-otp verify-sms-otp send-sms-welcome send-sms-custom",
+    "edge:deploy:waiter-auth": "npx supabase functions deploy create-waiter-auth",
     "test:edge-sms": "node scripts/test-edge-sms-otp.mjs"
   },
   "build": {

@@ -418,3 +418,7 @@ verify_jwt = false
 
 [functions.send-sms-custom]
 verify_jwt = false
+
+# Yalnızca giriş yapmış yönetici çağırır; JWT doğrulanır.
+[functions.create-waiter-auth]
+verify_jwt = true
