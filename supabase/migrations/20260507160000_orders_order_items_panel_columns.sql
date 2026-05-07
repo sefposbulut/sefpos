@@ -84,6 +84,7 @@ BEGIN
 END $$;
 
 DROP TRIGGER IF EXISTS sync_orders_total_columns_trg ON public.orders;
+DROP TRIGGER IF EXISTS sync_orders_legacy_money_trg ON public.orders;
 CREATE TRIGGER sync_orders_legacy_money_trg
 BEFORE INSERT OR UPDATE ON public.orders
 FOR EACH ROW EXECUTE FUNCTION public.sync_orders_legacy_money_columns();
