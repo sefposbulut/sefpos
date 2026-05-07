@@ -60,6 +60,8 @@ export function WaiterApp({ onLogout }: { onLogout: () => void }) {
   const [cartOpen, setCartOpen] = useState(false);
   const [moveTargetTableId, setMoveTargetTableId] = useState('');
   const [orderLoading, setOrderLoading] = useState(false);
+  /** Zorla çıkış (pasif/silinmiş hesap, ağ dışı). null değilse modal gösterilir. */
+  const [forcedExit, setForcedExit] = useState<{ title: string; message: string } | null>(null);
 
   useEffect(() => {
     const saved = localStorage.getItem('waiter_session');
@@ -71,22 +73,54 @@ export function WaiterApp({ onLogout }: { onLogout: () => void }) {
     }
   }, []);
 
-  /** Restoran dışına çıkıldıysa (IP öneki değiştiyse) oturumu kapat. */
+  /**
+   * Garson hesabı / cihaz bağlama / ağ kilidi gerçek zamanlı denetimi.
+   * - waiters.status !== 'active' veya satır silindi  → derhal çıkış.
+   * - device_bindings.status !== 'active'             → derhal çıkış.
+   * - Genel IP /24 öneki yetkili önekle eşleşmiyor    → çıkış (mobil veri vs.).
+   *
+   * Hem realtime sub hem 30 sn periyodik fallback hem de sayfa görünür/odaklı
+   * olunca tetiklenir (uyku sonrası ilk etkileşimde anında doğrulanır).
+   */
   useEffect(() => {
     if (!session) return;
     let alive = true;
-    const verifyLocation = async () => {
+
+    const performExit = (title: string, message: string) => {
+      if (!alive) return;
       try {
-        const deviceCode = getDeviceBindingCode();
-        const { data: binding } = await supabase
+        localStorage.setItem('waiter_logout_reason', JSON.stringify({ title, message, at: Date.now() }));
+      } catch {
+        /* ignore */
+      }
+      setForcedExit({ title, message });
+      window.setTimeout(() => {
+        if (!alive) return;
+        localStorage.removeItem('waiter_session');
+        try { void supabase.auth.signOut(); } catch { /* ignore */ }
+        setSession(null);
+        onLogout();
+      }, 5000);
+    };
+
+    const checkAccountState = async () => {
+      if (!alive) return;
+      const deviceCode = getDeviceBindingCode();
+
+      const [waiterRes, bindingRes, acceptedReqRes] = await Promise.all([
+        supabase
+          .from('waiters')
+          .select('id, status')
+          .eq('id', session.id)
+          .maybeSingle(),
+        supabase
           .from('device_bindings')
-          .select('allowed_ip_prefix')
+          .select('id, status, allowed_ip_prefix')
           .eq('device_id', deviceCode)
           .eq('waiter_id', session.id)
           .eq('tenant_id', session.tenant_id)
-          .eq('status', 'active')
-          .maybeSingle();
-        const { data: acceptedReq } = await supabase
+          .maybeSingle(),
+        supabase
           .from('device_binding_requests')
           .select('device_info')
           .eq('waiter_id', session.id)
@@ -94,24 +128,80 @@ export function WaiterApp({ onLogout }: { onLogout: () => void }) {
           .eq('status', 'accepted')
           .order('accepted_at', { ascending: false })
           .limit(1)
-          .maybeSingle();
-        const gate = await checkRestaurantIpGate(
-          (binding as any)?.allowed_ip_prefix,
-          (acceptedReq as any)?.device_info,
-        );
-        if (!alive || gate.ok) return;
-        localStorage.removeItem('waiter_session');
-        setSession(null);
-        onLogout();
-      } catch (e) {
-        console.error('Garson ağ doğrulaması:', e);
+          .maybeSingle(),
+      ]);
+
+      if (!alive) return;
+
+      const waiter = waiterRes.data as any;
+      if (!waiter || !waiter.id) {
+        performExit('Hesap silindi', 'Garson hesabınız sistemden kaldırıldı. Yöneticinizle görüşün.');
+        return;
+      }
+      if (String(waiter.status || '').toLowerCase() !== 'active') {
+        performExit('Hesap pasif', 'Garson hesabınız pasif duruma alındı. Erişim sonlandırıldı.');
+        return;
+      }
+
+      const binding = bindingRes.data as any;
+      if (!binding || !binding.id) {
+        performExit('Cihaz bağlama kaldırıldı', 'Bu cihazın bağlama kaydı bulunamadı. Yeniden bağlama isteği gönderin.');
+        return;
+      }
+      if (String(binding.status || '').toLowerCase() !== 'active') {
+        performExit('Cihaz erişimi kapalı', 'Bu cihazın erişimi yönetici tarafından durduruldu.');
+        return;
+      }
+
+      const gate = await checkRestaurantIpGate(
+        binding.allowed_ip_prefix,
+        (acceptedReqRes.data as any)?.device_info,
+      );
+      if (!alive) return;
+      if (!gate.ok) {
+        performExit('Yetkisiz ağ', gate.message);
+        return;
       }
     };
-    void verifyLocation();
-    const interval = window.setInterval(() => void verifyLocation(), 5 * 60 * 1000);
+
+    void checkAccountState();
+    const interval = window.setInterval(() => void checkAccountState(), 30 * 1000);
+
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void checkAccountState();
+    };
+    const onFocus = () => void checkAccountState();
+    const onOnline = () => void checkAccountState();
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('focus', onFocus);
+    window.addEventListener('online', onOnline);
+
+    const waitersChannel = supabase
+      .channel(`waiter-self-${session.id}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'waiters', filter: `id=eq.${session.id}` },
+        () => { void checkAccountState(); },
+      )
+      .subscribe();
+
+    const bindingChannel = supabase
+      .channel(`waiter-binding-${session.id}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'device_bindings', filter: `waiter_id=eq.${session.id}` },
+        () => { void checkAccountState(); },
+      )
+      .subscribe();
+
     return () => {
       alive = false;
       window.clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('focus', onFocus);
+      window.removeEventListener('online', onOnline);
+      try { supabase.removeChannel(waitersChannel); } catch { /* ignore */ }
+      try { supabase.removeChannel(bindingChannel); } catch { /* ignore */ }
     };
   }, [session, onLogout]);
 
@@ -366,6 +456,29 @@ export function WaiterApp({ onLogout }: { onLogout: () => void }) {
 
   return (
     <div className="min-h-screen bg-slate-900">
+      {forcedExit && (
+        <div className="fixed inset-0 z-[100] bg-black/80 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-6 text-center">
+            <div className="w-14 h-14 rounded-full bg-red-100 flex items-center justify-center mx-auto mb-4">
+              <AlertCircle className="w-8 h-8 text-red-600" />
+            </div>
+            <h3 className="text-lg font-bold text-slate-900 mb-2">{forcedExit.title}</h3>
+            <p className="text-sm text-slate-600 mb-5">{forcedExit.message}</p>
+            <div className="text-xs text-slate-400 mb-3">Birkaç saniye içinde otomatik çıkış yapılacak…</div>
+            <button
+              onClick={() => {
+                localStorage.removeItem('waiter_session');
+                try { void supabase.auth.signOut(); } catch { /* ignore */ }
+                setSession(null);
+                onLogout();
+              }}
+              className="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-2.5 rounded-xl transition-colors"
+            >
+              Şimdi Çık
+            </button>
+          </div>
+        </div>
+      )}
       {/* Header */}
       <div className="bg-gradient-to-r from-orange-600 to-red-600 text-white">
         <div className="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between">

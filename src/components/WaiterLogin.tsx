@@ -39,6 +39,23 @@ export function WaiterLogin({ onLoginSuccess, onBack }: { onLoginSuccess: (waite
   const [bindingWait, setBindingWait] = useState<BindingWaitPayload | null>(null);
   const [networkWarning, setNetworkWarning] = useState('');
   const [info, setInfo] = useState('');
+  /** Önceki oturum zorla kapatılmışsa sebebini göster. */
+  const [exitNotice, setExitNotice] = useState<{ title: string; message: string } | null>(null);
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('waiter_logout_reason');
+      if (!raw) return;
+      const o = JSON.parse(raw) as { title?: string; message?: string; at?: number };
+      const fresh = !o?.at || Date.now() - Number(o.at) < 30 * 60 * 1000;
+      if (fresh && o?.title && o?.message) {
+        setExitNotice({ title: String(o.title), message: String(o.message) });
+      }
+      localStorage.removeItem('waiter_logout_reason');
+    } catch {
+      /* ignore */
+    }
+  }, []);
 
   const authenticateWaiterProfile = async (phoneToSearch: string, tenantId: string) => {
     const authEmail = phoneToAuthEmail(phoneToSearch);
@@ -576,6 +593,28 @@ export function WaiterLogin({ onLoginSuccess, onBack }: { onLoginSuccess: (waite
                 <h2 className="text-3xl font-bold text-white mb-2">Garson Girişi</h2>
                 <p className="text-slate-400">Telefon numarası ve PIN ile giriş yapın</p>
               </div>
+
+              {exitNotice && (
+                <div className="mb-6 bg-red-500/10 border border-red-500/30 rounded-lg px-4 py-3 text-left">
+                  <div className="flex items-start gap-2">
+                    <div className="w-5 h-5 rounded-full bg-red-500/30 flex items-center justify-center flex-shrink-0 mt-0.5">
+                      <span className="text-red-300 text-xs font-bold">!</span>
+                    </div>
+                    <div className="flex-1">
+                      <p className="text-red-300 font-semibold text-sm mb-0.5">{exitNotice.title}</p>
+                      <p className="text-red-200/80 text-xs">{exitNotice.message}</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setExitNotice(null)}
+                      className="text-red-300/70 hover:text-red-200 text-xs"
+                      aria-label="Kapat"
+                    >
+                      ×
+                    </button>
+                  </div>
+                </div>
+              )}
 
               <form onSubmit={handleSubmit} className="space-y-4 mb-8">
             <div className="relative group">
