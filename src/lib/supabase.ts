@@ -57,6 +57,16 @@ function edgeFunctionInvokeUrl(functionName: string): string {
   return `${edgeFunctionsBaseUrl}/${functionName}`;
 }
 
+/** Edge Function çağrıları için tam URL (dev'de Vite proxy, prod'da *.supabase.co). */
+export function getEdgeFunctionInvokeUrl(functionName: string): string {
+  return edgeFunctionInvokeUrl(functionName);
+}
+
+/** `apikey` header — createClient ile aynı çözümlü anahtar. */
+export function getResolvedSupabaseAnonKey(): string {
+  return supabaseAnonKey;
+}
+
 const nativeFetch = globalThis.fetch.bind(globalThis);
 
 /**

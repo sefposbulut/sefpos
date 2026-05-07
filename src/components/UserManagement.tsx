@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { supabase } from '../lib/supabase';
-import { phoneToAuthEmail } from '../lib/phoneAuthEmail';
+import { supabase, getEdgeFunctionInvokeUrl, getResolvedSupabaseAnonKey } from '../lib/supabase';
+import { phoneToAuthEmail, pinToAuthPassword } from '../lib/phoneAuthEmail';
 import { USER_DELETE_HARD_RESET_SQL } from '../lib/userDeleteHardResetSql';
 import { useAuth } from '../contexts/AuthContext';
 import { Database } from '../lib/supabase';
@@ -842,20 +842,27 @@ export function UserManagement() {
 
     setAddingUser(true);
     try {
-      const apiUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/create-user`;
+      const apiUrl = getEdgeFunctionInvokeUrl('create-user');
+      const anonKey = getResolvedSupabaseAnonKey();
+      if (!anonKey) {
+        alert(
+          'Kullanıcı oluşturulamadı: Supabase anon anahtarı yapılandırılmamış (.env → VITE_SUPABASE_ANON_KEY).',
+        );
+        return;
+      }
       const { data: { session } } = await supabase.auth.getSession();
       if (!session?.access_token) { alert('Oturum bilgisi alınamadı, lütfen tekrar giriş yapın'); return; }
 
       const sanitized = newUser.username.toLowerCase().replace(/[^a-z0-9]/g, '');
       const waiterEmail = phoneToAuthEmail(newUser.waiterPhone);
       const autoEmail = newUser.isWaiter ? waiterEmail : `${sanitized}@${tenant?.id?.slice(0, 8)}.shefpos.local`;
-      const accountPassword = newUser.isWaiter ? newUser.waiterPin : newUser.password;
+      const accountPassword = newUser.isWaiter ? pinToAuthPassword(newUser.waiterPin) : newUser.password;
 
       const response = await fetch(apiUrl, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${session.access_token}`,
-          'apikey': import.meta.env.VITE_SUPABASE_ANON_KEY,
+          'apikey': anonKey,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
@@ -899,7 +906,13 @@ export function UserManagement() {
       setNewUser({ username: '', full_name: '', password: '', role_id: '', branch_id: '', isWaiter: false, waiterPin: '', waiterPhone: '' });
       loadUsers();
     } catch (error) {
-      alert('Kullanıcı oluşturulamadı: ' + (error as Error).message);
+      const m = (error as Error)?.message || String(error);
+      const low = m.toLowerCase();
+      const extra =
+        low.includes('failed to fetch') || low.includes('networkerror')
+          ? ' Tarayıcı doğrudan Supabase’e erişemedi: yerelde Vite proxy kullanılıyor olmalı (`npm run dev`). Üretim build’inde .env’deki VITE_SUPABASE_URL ve VITE_SUPABASE_ANON_KEY’in build anında mevcut olduğundan emin olun. Edge fonksiyonu: `create-user` yayında mı kontrol edin.'
+          : '';
+      alert('Kullanıcı oluşturulamadı: ' + m + extra);
     } finally {
       setAddingUser(false);
     }
