@@ -30,3 +30,21 @@ export function phoneToAuthEmail(phoneOrDigits: string): string {
 export function getPhoneAuthEmailDomain(): string {
   return PHONE_AUTH_EMAIL_DOMAIN;
 }
+
+/**
+ * PIN → Supabase Auth password.
+ * Supabase GoTrue minimum 6 karakter şartı koyduğu için 4 haneli PIN'i
+ * deterministic prefix ile genişletiyoruz. Aynı PIN her zaman aynı parolayı
+ * üretmeli (login + create iki yerde tutarlı).
+ *
+ * Format: `sefp_<pin_doldurulmus_8_hane>`
+ */
+export function pinToAuthPassword(pin: string): string {
+  const digits = String(pin || '').replace(/\D/g, '');
+  if (!digits) throw new Error('PIN bos olamaz');
+  // 8 hane garanti et: kısa PIN ise tekrarla
+  let padded = digits;
+  while (padded.length < 8) padded = padded + digits;
+  padded = padded.slice(0, 8);
+  return `sefp_${padded}`;
+}

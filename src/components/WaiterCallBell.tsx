@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Bell, BellOff, X, Check, Receipt, Droplets, HelpCircle, Clock,
+  BellRing, Bell, BellOff, X, Check, Receipt, Droplets, HelpCircle, Clock,
   CheckCircle2, History, Trash2,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
@@ -19,19 +19,17 @@ interface WaiterCall {
 }
 
 const ICONS: Record<WaiterCall['call_type'], any> = {
-  service: Bell,
+  service: BellRing,
   bill: Receipt,
   water: Droplets,
   help: HelpCircle,
 };
-
 const LABELS: Record<WaiterCall['call_type'], string> = {
   service: 'Garson',
   bill: 'Hesap',
   water: 'Su',
   help: 'Yardım',
 };
-
 const COLORS: Record<WaiterCall['call_type'], string> = {
   service: 'from-orange-500 to-orange-600',
   bill: 'from-emerald-500 to-emerald-600',
@@ -42,13 +40,13 @@ const COLORS: Record<WaiterCall['call_type'], string> = {
 const HISTORY_LIMIT = 60;
 
 /**
- * POS için garson çağrı bildirim sistemi.
- * - Sağ üstte ufak Bell ikonu + pending sayı badge'i.
- * - Tıklayınca dropdown: Aktif çağrılar + Son geçmiş (resolved/cancelled).
- * - Yeni çağrı geldiğinde: 3 sn'lik toast pop-up + ses + titreşim.
- * - Tek tıkla "Tamamla" → status=resolved (geçmişe geçer).
+ * Header'a entegre edilen "Garson çağrısı zili" — POS panelinde sürekli görünür.
+ * - BellRing (concierge zili) ikonu, bekleyen çağrı varsa pulsasyonlu turuncu badge.
+ * - Tıklayınca dropdown: Aktif + Geçmiş sekmeli çağrı listesi.
+ * - Yeni çağrı geldiğinde: ses + titreşim + 3.5sn toast popup (sağ üstte).
+ * - Realtime: tüm POS cihazlarında aynı anda güncellenir.
  */
-export function WaiterCallToaster() {
+export function WaiterCallBell() {
   const { tenant, activeBranch } = useAuth();
   const [calls, setCalls] = useState<WaiterCall[]>([]);
   const [open, setOpen] = useState(false);
@@ -62,7 +60,7 @@ export function WaiterCallToaster() {
   const seenIdsRef = useRef<Set<string>>(new Set());
   const toastTimerRef = useRef<number | null>(null);
 
-  // İlk yükleme: aktif + son geçmiş
+  // İlk yükleme: aktif + geçmiş
   useEffect(() => {
     if (!tenant?.id) {
       setCalls([]);
@@ -107,7 +105,6 @@ export function WaiterCallToaster() {
           if (!muted) playBeep();
           showSystemNotification(c);
           vibrate();
-          // 3 sn'lik toast
           setToast(c);
           if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
           toastTimerRef.current = window.setTimeout(() => setToast(null), 3500);
@@ -245,44 +242,39 @@ export function WaiterCallToaster() {
     };
   }, [calls]);
 
-  const myActive = useMemo(
-    () => active.filter(c => !branchId || c.branch_id === branchId),
-    [active, branchId]
-  );
-
   if (!tenant?.id) return null;
 
   const pendingCount = active.length;
 
   return (
     <>
-      {/* SAĞ-ÜSTTE BELL BUTONU */}
+      {/* Header butonu */}
       <button
-        onClick={() => setOpen(o => !o)}
-        className={`fixed top-16 md:top-24 right-3 md:right-6 z-[60] inline-flex items-center justify-center w-11 h-11 md:w-12 md:h-12 rounded-full shadow-lg transition-all border-2 ${
+        onClick={() => { setOpen(o => !o); setToast(null); }}
+        className={`relative p-1.5 md:p-2 rounded-lg transition-all active:scale-95 ${
           pendingCount > 0
-            ? 'bg-gradient-to-br from-orange-500 to-amber-500 border-orange-300 text-white animate-pulse'
-            : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+            ? 'text-white bg-gradient-to-br from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 shadow-md animate-pulse'
+            : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
         }`}
-        title={pendingCount > 0 ? `${pendingCount} bekleyen çağrı` : 'Garson çağrıları'}
+        title={pendingCount > 0 ? `${pendingCount} bekleyen garson çağrısı` : 'Garson çağrıları'}
         aria-label="Garson çağrıları"
       >
-        <Bell className="w-5 h-5" />
+        <BellRing className="w-4 h-4 md:w-5 md:h-5" />
         {pendingCount > 0 && (
-          <span className="absolute -top-1 -right-1 min-w-[20px] h-[20px] px-1 bg-red-600 border-2 border-white text-white text-[10px] font-extrabold rounded-full flex items-center justify-center shadow">
+          <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 bg-red-600 border-2 border-white text-white text-[10px] font-extrabold rounded-full flex items-center justify-center shadow">
             {pendingCount > 9 ? '9+' : pendingCount}
           </span>
         )}
       </button>
 
-      {/* DROPDOWN */}
+      {/* Dropdown */}
       {open && (
         <>
           <div className="fixed inset-0 z-[60]" onClick={() => setOpen(false)} />
-          <div className="fixed top-[120px] md:top-[148px] right-3 md:right-6 z-[61] w-[320px] sm:w-[380px] bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col">
+          <div className="fixed top-14 md:top-20 right-3 md:right-6 z-[61] w-[320px] sm:w-[380px] bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col">
             <div className="flex items-center justify-between px-3 py-2.5 bg-gradient-to-r from-orange-500 to-amber-500 text-white">
               <div className="flex items-center gap-2 min-w-0">
-                <Bell className="w-4 h-4" />
+                <BellRing className="w-4 h-4" />
                 <span className="font-extrabold text-sm">Garson Çağrıları</span>
                 {pendingCount > 0 && (
                   <span className="bg-white/25 px-1.5 py-0.5 rounded-full text-[10px] font-bold">
@@ -308,7 +300,6 @@ export function WaiterCallToaster() {
               </div>
             </div>
 
-            {/* Sekmeler */}
             <div className="flex border-b border-slate-200 bg-slate-50">
               <button
                 onClick={() => setTab('active')}
@@ -318,7 +309,7 @@ export function WaiterCallToaster() {
                     : 'text-slate-500 hover:text-slate-700'
                 }`}
               >
-                <Bell className="w-3.5 h-3.5" />
+                <BellRing className="w-3.5 h-3.5" />
                 Aktif
                 {pendingCount > 0 && (
                   <span className="bg-orange-100 text-orange-700 text-[10px] font-extrabold px-1.5 py-0.5 rounded-full">
@@ -344,7 +335,6 @@ export function WaiterCallToaster() {
               </button>
             </div>
 
-            {/* Liste */}
             <div className="max-h-[60vh] overflow-y-auto">
               {tab === 'active' ? (
                 active.length === 0 ? (
@@ -389,7 +379,6 @@ export function WaiterCallToaster() {
               )}
             </div>
 
-            {/* Footer aksiyonlar */}
             <div className="border-t border-slate-200 px-2 py-1.5 flex items-center gap-1 bg-slate-50">
               {tab === 'active' && pendingCount > 0 && (
                 <button
@@ -409,7 +398,7 @@ export function WaiterCallToaster() {
               )}
               {((tab === 'active' && pendingCount === 0) || (tab === 'history' && history.length === 0)) && (
                 <span className="flex-1 text-center text-[11px] text-slate-400 py-1.5">
-                  Bildirim sayısı: {calls.length}/{HISTORY_LIMIT}
+                  Toplam: {calls.length}/{HISTORY_LIMIT}
                 </span>
               )}
             </div>
@@ -417,18 +406,19 @@ export function WaiterCallToaster() {
         </>
       )}
 
-      {/* YENİ ÇAĞRI TOAST'I */}
+      {/* Yeni geldiğinde toast */}
       {toast && !open && (
         <div
           onClick={() => { setOpen(true); setTab('active'); setToast(null); }}
-          className="fixed top-16 md:top-24 right-16 md:right-20 z-[59] w-[280px] sm:w-[320px] bg-white rounded-2xl shadow-2xl border border-orange-200 overflow-hidden cursor-pointer animate-[slideIn_0.3s_ease-out]"
+          className="fixed top-16 md:top-24 right-3 md:right-6 z-[59] w-[280px] sm:w-[320px] bg-white rounded-2xl shadow-2xl border border-orange-200 overflow-hidden cursor-pointer"
+          style={{ animation: 'sefposCallSlideIn 0.3s ease-out' }}
         >
           <div className={`flex items-center gap-2.5 px-3 py-2 bg-gradient-to-r ${COLORS[toast.call_type]} text-white`}>
             <span className="relative flex w-2.5 h-2.5">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-70" />
               <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-white" />
             </span>
-            <Bell className="w-4 h-4" />
+            <BellRing className="w-4 h-4" />
             <span className="font-extrabold text-sm">Yeni Çağrı</span>
             <span className="ml-auto text-[10px] uppercase font-bold bg-white/25 px-1.5 py-0.5 rounded-full">
               {LABELS[toast.call_type]}
@@ -441,31 +431,23 @@ export function WaiterCallToaster() {
             {toast.message && (
               <p className="text-xs text-slate-600 mt-1 line-clamp-2">{toast.message}</p>
             )}
-            <p className="text-[11px] text-slate-400 mt-1.5">Bildirimi açmak için tıklayın</p>
+            <p className="text-[11px] text-slate-400 mt-1.5">Açmak için tıklayın</p>
           </div>
         </div>
       )}
 
-      {/* Animasyon keyframes (lokal) */}
       <style>{`
-        @keyframes slideIn {
-          from { opacity: 0; transform: translateX(20px); }
-          to { opacity: 1; transform: translateX(0); }
+        @keyframes sefposCallSlideIn {
+          from { opacity: 0; transform: translateY(-10px); }
+          to { opacity: 1; transform: translateY(0); }
         }
       `}</style>
     </>
   );
 }
 
-// =============================================================
-// CALL ROW
-// =============================================================
 function CallRow({
-  call,
-  muted,
-  onAction,
-  actionLabel,
-  actionType,
+  call, muted, onAction, actionLabel, actionType,
 }: {
   call: WaiterCall;
   muted: boolean;
@@ -473,7 +455,7 @@ function CallRow({
   actionLabel: string;
   actionType: 'resolve' | 'delete';
 }) {
-  const Icon = ICONS[call.call_type] || Bell;
+  const Icon = ICONS[call.call_type] || BellRing;
   const colorClass = COLORS[call.call_type];
   const created = new Date(call.created_at);
   const ts = created.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
@@ -541,9 +523,7 @@ function CallRow({
 }
 
 function EmptyState({
-  icon,
-  title,
-  text,
+  icon, title, text,
 }: {
   icon: React.ReactNode;
   title: string;

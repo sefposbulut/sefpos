@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import { Plus, Trash2, Eye, EyeOff, AlertCircle, RefreshCw, Save, X } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
+import { phoneToAuthEmail, pinToAuthPassword } from '../lib/phoneAuthEmail';
 
 interface Waiter {
   id: string;
@@ -66,6 +67,7 @@ export function WaiterManagement({ tenantId }: { tenantId: string }) {
 
     setSaving(true);
     try {
+      // 1) waiters tablosu — daima kayıt
       const { error: err } = await supabase.from('waiters').insert([
         {
           tenant_id: tenantId,
@@ -75,8 +77,39 @@ export function WaiterManagement({ tenantId }: { tenantId: string }) {
           status: 'active',
         },
       ]);
-
       if (err) throw err;
+
+      // 2) Supabase Auth user oluştur (PIN tabanlı parola).
+      //    MX validation hatası durumunda kullanıcıya net mesaj gösterilir;
+      //    waiter satırı zaten oluşturuldu, fix-waiter-auth.mjs ile tamamlanabilir.
+      try {
+        const authEmail = phoneToAuthEmail(cleaned);
+        const authPwd = pinToAuthPassword(formData.pin);
+        const sub = await supabase.auth.signUp({
+          email: authEmail,
+          password: authPwd,
+          options: { data: { full_name: formData.name.trim(), phone: cleaned, role: 'waiter' } },
+        });
+        if (sub.error) {
+          const msg = (sub.error.message || '').toLowerCase();
+          if (msg.includes('already registered') || msg.includes('already exists')) {
+            // Mevcut user — devam
+          } else if (msg.includes('email address') && msg.includes('invalid')) {
+            setError(
+              'Garson kaydedildi ama auth hesabı oluşturulamadı: ' +
+              'sentetik e-posta domaininin (varsayılan: sefpos.com.tr) MX kaydı yok. ' +
+              'Cloudflare DNS\'e MX ekleyin VEYA .env\'de VITE_PHONE_AUTH_EMAIL_DOMAIN ile ' +
+              'MX\'i olan başka bir domain belirtin. Geçici çözüm: ' +
+              'yöneticiniz `node scripts/fix-waiter-auth.mjs` çalıştırsın.',
+            );
+          } else {
+            setError('Garson kaydedildi ama auth hesabı oluşturulamadı: ' + sub.error.message);
+          }
+        }
+      } catch (e: any) {
+        console.warn('[WaiterManagement] auth signUp warn:', e?.message);
+      }
+
       setFormData({ name: '', phone: '', pin: '' });
       setShowForm(false);
       await fetchWaiters();

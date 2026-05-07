@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
-import { phoneToAuthEmail } from '../lib/phoneAuthEmail';
+import { phoneToAuthEmail, pinToAuthPassword } from '../lib/phoneAuthEmail';
 import { getDeviceBindingCode } from '../lib/deviceBinding';
 import { Phone, Lock, ArrowRight, Sparkles, LogOut, Key, Copy, Check } from 'lucide-react';
 
@@ -52,9 +52,13 @@ export function WaiterLogin({ onLoginSuccess, onBack }: { onLoginSuccess: (waite
 
   const authenticateWaiterProfile = async (phoneToSearch: string, tenantId: string) => {
     const authEmail = phoneToAuthEmail(phoneToSearch);
-    const authRes = await supabase.auth.signInWithPassword({ email: authEmail, password: pin });
+    const authPwd = pinToAuthPassword(pin);
+    const authRes = await supabase.auth.signInWithPassword({ email: authEmail, password: authPwd });
     if (authRes.error || !authRes.data.user?.id) {
-      throw new Error('Garson auth hesabı bulunamadı. Restoran panelinden garsonu yeniden oluşturun.');
+      throw new Error(
+        'Garson auth hesabı bulunamadı. Restoran panelinden garsonu silip yeniden ekleyin ' +
+        'veya yöneticiniz `node scripts/fix-waiter-auth.mjs` komutunu çalıştırsın.',
+      );
     }
 
     const { data: prof, error: profErr } = await supabase

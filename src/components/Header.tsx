@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { LogOut, User, Settings, ChevronDown, MapPin, Check, Building2, Shield, Zap, ZoomIn, ZoomOut, Bell, Headphones as HeadphonesIcon, X, Send } from 'lucide-react';
+import { WaiterCallBell } from './WaiterCallBell';
 import { supabase } from '../lib/supabase';
 
 const isElectron = !!(window as any).electronAPI;
@@ -289,6 +290,8 @@ export function Header({ onOpenSettings, onOpenAdmin, onOpenOnboarding }: Header
                   <Shield className="w-4 h-4 md:w-5 md:h-5" />
                 </button>
               )}
+
+              <WaiterCallBell />
 
               <button
                 onClick={() => {
