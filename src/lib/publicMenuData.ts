@@ -1,4 +1,51 @@
-import { supabase } from './supabase';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
+
+/**
+ * Public/QR menu için **ayrı** bir Supabase client.
+ *
+ * NEDEN: `./supabase`'deki global client, POS oturumuna login olmuş bir kullanıcının
+ * JWT'sini localStorage'dan okuyup `Authorization` header'ı olarak ekler. Bu, QR menü
+ * isteklerinin `authenticated` rolüyle gitmesine neden olur ve `waiter_calls` için
+ * yalnızca `anon`'a tanımlı INSERT RLS policy'si fail eder (403).
+ *
+ * Bu client `persistSession:false` + ayrı `storageKey` ile yalnızca anon key
+ * gönderir, JWT eklemez. POS girişini etkilemez.
+ */
+let publicClient: SupabaseClient | null = null;
+function getPublicClient(): SupabaseClient {
+  if (publicClient) return publicClient;
+  const url = String(import.meta.env.VITE_SUPABASE_URL || '').trim()
+    || (typeof (globalThis as any).__SEFPOS_DEV_SUPABASE_URL__ === 'string'
+        ? (globalThis as any).__SEFPOS_DEV_SUPABASE_URL__.trim() : '');
+  const anon = String(import.meta.env.VITE_SUPABASE_ANON_KEY || '').trim()
+    || (typeof (globalThis as any).__SEFPOS_DEV_SUPABASE_ANON_KEY__ === 'string'
+        ? (globalThis as any).__SEFPOS_DEV_SUPABASE_ANON_KEY__.trim() : '');
+  if (!url || !anon) {
+    throw new Error('Supabase yapılandırması eksik (URL/ANON_KEY).');
+  }
+  publicClient = createClient(url, anon, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+      detectSessionInUrl: false,
+      storageKey: 'sefpos-public-menu-anon',
+    },
+    global: {
+      headers: {
+        'X-Client-Info': 'sefpos-public-menu',
+      },
+    },
+  });
+  return publicClient;
+}
+
+// publicMenuData içinde 'supabase' adıyla import edilen yerleri tek yerden yöneliyoruz.
+// Aşağıdaki tüm sorgular anon client üzerinden gider — JWT eklenmez.
+const supabase = new Proxy({} as SupabaseClient, {
+  get(_t, prop, receiver) {
+    return Reflect.get(getPublicClient(), prop, receiver);
+  },
+});
 
 export type ThemeMode = 'light' | 'dark';
 export type FontStyle = 'modern' | 'elegant' | 'casual';
