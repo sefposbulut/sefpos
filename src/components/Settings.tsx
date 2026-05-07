@@ -3,7 +3,7 @@ import { supabase } from '../lib/supabase';
 import { createClient } from '@supabase/supabase-js';
 import { useAuth } from '../contexts/AuthContext';
 import { Database } from '../lib/supabase';
-import { X, Plus, Trash2, Settings as SettingsIcon, Building2, ToggleLeft, ToggleRight, Printer, AlertCircle, MapPin, Phone, Save, CreditCard as Edit2, User, Store, CheckCircle, Wifi, WifiOff, Globe, RefreshCw, Lock, ShieldCheck, Eye, EyeOff, Package, CheckSquare, Square, Database as DatabaseIcon, Receipt, Pencil, Scale, Loader } from 'lucide-react';
+import { X, Plus, Trash2, Settings as SettingsIcon, Building2, ToggleLeft, ToggleRight, Printer, AlertCircle, MapPin, Phone, Save, CreditCard as Edit2, User, Store, CheckCircle, Wifi, WifiOff, Globe, RefreshCw, Lock, ShieldCheck, Eye, EyeOff, Package, CheckSquare, Square, Database as DatabaseIcon, Receipt, Pencil, Scale, Loader, QrCode } from 'lucide-react';
 import { HuginSettings, loadHuginSettings, saveHuginSettings, testHuginConnection } from '../lib/huginTps';
 import { Branch } from '../contexts/AuthContext';
 import { PrinterSettings } from './PrinterSettings';
@@ -11,6 +11,7 @@ import { SqlServerSettings } from './SqlServerSettings';
 import { DeviceManagement } from './DeviceManagement';
 import { WaiterManagement } from './WaiterManagement';
 import { ScaleCalibration } from './ScaleCalibration';
+import { QrMenuManager } from './QrMenuManager';
 
 type TableGroup = Database['public']['Tables']['table_groups']['Row'];
 
@@ -20,7 +21,7 @@ interface SettingsProps {
 
 export function Settings({ onClose }: SettingsProps) {
   const { tenant, profile, activeBranch, refreshProfile, refreshBranches } = useAuth();
-  const [activeTab, setActiveTab] = useState<'tables' | 'products' | 'manage' | 'platforms' | 'branches' | 'printers' | 'account' | 'system' | 'security' | 'branch-products' | 'database' | 'hugin' | 'devices' | 'waiters' | 'scale'>('branches');
+  const [activeTab, setActiveTab] = useState<'tables' | 'products' | 'manage' | 'platforms' | 'branches' | 'printers' | 'account' | 'system' | 'security' | 'branch-products' | 'database' | 'hugin' | 'devices' | 'waiters' | 'scale' | 'qr-menu'>('branches');
   const [groups, setGroups] = useState<TableGroup[]>([]);
   const [showGroupForm, setShowGroupForm] = useState(false);
   const [groupName, setGroupName] = useState('');
@@ -801,6 +802,7 @@ export function Settings({ onClose }: SettingsProps) {
   const navItems = [
     { id: 'branches', label: 'Şubeler', icon: Building2, group: 'Yönetim' },
     { id: 'branch-products', label: 'Şube Ürünleri', icon: Package, group: 'Yönetim' },
+    { id: 'qr-menu', label: 'QR Menü', icon: QrCode, group: 'Yönetim' },
     { id: 'waiters', label: 'Garsonlar', icon: User, group: 'Yönetim' },
     { id: 'tables', label: 'Masa Grupları', icon: Store, group: 'Masalar' },
     { id: 'manage', label: 'Masa Düzenle', icon: SettingsIcon, group: 'Masalar' },
@@ -1872,6 +1874,20 @@ export function Settings({ onClose }: SettingsProps) {
             <PrinterSettings />
           ) : activeTab === 'scale' ? (
             <ScaleCalibration />
+          ) : activeTab === 'qr-menu' ? (
+            <div className="space-y-4">
+              <div className="bg-gradient-to-r from-indigo-600 to-purple-600 rounded-xl p-4 md:p-6 text-white">
+                <div className="flex items-center gap-3 mb-1">
+                  <QrCode className="w-6 h-6" />
+                  <h3 className="text-lg md:text-2xl font-bold">QR Menü</h3>
+                </div>
+                <p className="text-white/85 text-sm">
+                  Her şubeye özel QR menü; müşteri telefonuyla kod okutarak menüyü görür.
+                  PNG veya PDF olarak indirin, masalara koyun.
+                </p>
+              </div>
+              <QrMenuManager />
+            </div>
           ) : activeTab === 'account' ? (
             <div className="space-y-5">
               <div className="bg-gradient-to-r from-orange-500 to-red-600 rounded-xl p-4 md:p-6 text-white">

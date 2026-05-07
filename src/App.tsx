@@ -1,6 +1,7 @@
 import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { useAuth } from './contexts/AuthContext';
 import { Auth } from './components/Auth';
+import { WaiterCallToaster } from './components/WaiterCallToaster';
 import { ElectronAuth } from './components/ElectronAuth';
 import { SetupWizard } from './components/SetupWizard';
 import { SqlServerSettings } from './components/SqlServerSettings';
@@ -431,6 +432,7 @@ function App() {
       {isLocked && <PinLockScreen onUnlock={() => setIsLocked(false)} />}
 
       <Header onOpenSettings={() => setShowSettings(true)} onOpenAdmin={() => setShowAdminPanel(true)} onOpenOnboarding={() => setShowOnboarding(true)} />
+      <WaiterCallToaster />
       <MainMenu
         onNavigate={handleNavigate}
         currentPage={currentPage}
