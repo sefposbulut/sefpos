@@ -551,6 +551,8 @@ export function UserManagement() {
     password: '',
     role_id: '',
     branch_id: '',
+    /** Opsiyonel — kullanici telefonla da giris yapabilir */
+    loginPhone: '',
     isWaiter: false,
     waiterPin: '',
     waiterPhone: '',
@@ -857,6 +859,7 @@ export function UserManagement() {
       const waiterEmail = phoneToAuthEmail(newUser.waiterPhone);
       const autoEmail = newUser.isWaiter ? waiterEmail : `${sanitized}@${tenant?.id?.slice(0, 8)}.shefpos.local`;
       const accountPassword = newUser.isWaiter ? pinToAuthPassword(newUser.waiterPin) : newUser.password;
+      const optionalPhone = newUser.isWaiter ? newUser.waiterPhone : (newUser.loginPhone || '').replace(/\D/g, '');
 
       const response = await fetch(apiUrl, {
         method: 'POST',
@@ -872,6 +875,8 @@ export function UserManagement() {
           role_id: newUser.role_id,
           tenant_id: tenant?.id,
           branch_id: newUser.branch_id || null,
+          username: sanitized || null,
+          phone: optionalPhone || null,
         }),
       });
 
@@ -903,7 +908,7 @@ export function UserManagement() {
       }
 
       setShowAddUser(false);
-      setNewUser({ username: '', full_name: '', password: '', role_id: '', branch_id: '', isWaiter: false, waiterPin: '', waiterPhone: '' });
+      setNewUser({ username: '', full_name: '', password: '', role_id: '', branch_id: '', loginPhone: '', isWaiter: false, waiterPin: '', waiterPhone: '' });
       loadUsers();
     } catch (error) {
       const m = (error as Error)?.message || String(error);
@@ -1044,6 +1049,29 @@ export function UserManagement() {
                 <p className="text-xs text-gray-500 mt-1">Kullanıcı yalnızca bu şubede giriş yapabilecek</p>
               </div>
 
+              {!newUser.isWaiter && (
+                <div className="sm:col-span-2">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Telefon <span className="text-xs text-gray-400">(giriş için opsiyonel)</span>
+                  </label>
+                  <input
+                    type="tel"
+                    value={newUser.loginPhone}
+                    onChange={(e) => {
+                      let digits = e.target.value.replace(/\D/g, '');
+                      if (digits.length > 11) digits = digits.slice(0, 11);
+                      if (digits.length > 0 && !digits.startsWith('0')) digits = '0' + digits;
+                      setNewUser({ ...newUser, loginPhone: digits.slice(0, 11) });
+                    }}
+                    maxLength={11}
+                    inputMode="numeric"
+                    placeholder="05XXXXXXXXX (boş bırakabilirsiniz)"
+                    className="w-full px-3 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">Doldurulursa kullanıcı bu telefonla da giriş yapabilir.</p>
+                </div>
+              )}
+
               <div className="sm:col-span-2">
                 <label className="flex items-center gap-2 cursor-pointer">
                   <input
@@ -1100,7 +1128,7 @@ export function UserManagement() {
             <div className="flex justify-end space-x-2 mt-4">
               <button
                 type="button"
-                onClick={() => { setShowAddUser(false); setNewUser({ username: '', full_name: '', password: '', role_id: '', branch_id: '' }); }}
+                onClick={() => { setShowAddUser(false); setNewUser({ username: '', full_name: '', password: '', role_id: '', branch_id: '', loginPhone: '', isWaiter: false, waiterPin: '', waiterPhone: '' }); }}
                 className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition"
               >
                 İptal

@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, invokeEdgeFunction } from '../lib/supabase';
 import { normalizeTurkishMobileDigits, phoneToAuthEmail } from '../lib/phoneAuthEmail';
-import { resolvePanelUsernameToEmail } from '../lib/panelUserLoginResolve';
+import { resolveLoginIdentifier } from '../lib/panelUserLoginResolve';
 import { isCapacitorNative } from '../lib/capacitorPlatform';
 import { Bike, Lock, Building2, Phone, ArrowRight, Sparkles, ChefHat, User, Mail } from 'lucide-react';
 import { WaiterLogin } from './WaiterLogin';
@@ -289,27 +289,21 @@ export function Auth() {
         if (trimmed === ADMIN_LOGIN_EMAIL || trimmed === ADMIN_LOGIN_EMAIL_LEGACY || trimmed === TEST_LOGIN_EMAIL) {
           email = ADMIN_LOGIN_EMAIL;
           if (trimmed === TEST_LOGIN_EMAIL) email = TEST_LOGIN_EMAIL;
-        } else if (isValidEmail(loginValue.trim())) {
-          email = loginValue.trim().toLowerCase();
         } else {
-          const cleaned = loginValue.replace(/\D/g, '');
-          if (cleaned.length >= 10) {
-            email = cleaned === TEST_LOGIN_PHONE ? TEST_LOGIN_EMAIL : phoneToAuthEmail(cleaned);
+          const cleanedDigits = loginValue.replace(/\D/g, '');
+          if (cleanedDigits === TEST_LOGIN_PHONE) {
+            email = TEST_LOGIN_EMAIL;
           } else {
-            const resolved = await resolvePanelUsernameToEmail(loginValue);
-            if (resolved.ok) {
-              email = resolved.email;
-            } else if (resolved.reason === 'ambiguous') {
-              setError('Bu kullanıcı adı birden fazla hesapla eşleşiyor. Tam e-posta adresinizi girin.');
-              setLoading(false);
-              return;
-            } else {
+            const resolved = await resolveLoginIdentifier(loginValue);
+            if (!resolved.ok) {
               setError(
-                'Geçerli cep telefonu (05…), e-posta veya panelde oluşturduğunuz kullanıcı adını girin.',
+                resolved.message ||
+                  'Giriş yapılamadı. E-posta, cep telefonu veya kullanıcı adınızı kontrol edin.',
               );
               setLoading(false);
               return;
             }
+            email = resolved.email;
           }
         }
         let result = await signIn(email, password);
