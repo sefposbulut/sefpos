@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { LogOut, User, Settings, ChevronDown, MapPin, Check, Building2, Shield, Zap, ZoomIn, ZoomOut, Bell, Headphones as HeadphonesIcon, X, Send } from 'lucide-react';
+import { LogOut, User, Settings, ChevronDown, MapPin, Check, Building2, Zap, ZoomIn, ZoomOut, Bell, Headphones as HeadphonesIcon, X, Send } from 'lucide-react';
 import { WaiterCallBell } from './WaiterCallBell';
 import { supabase } from '../lib/supabase';
 
@@ -20,6 +20,11 @@ const logoSrc = isElectron
 
 interface HeaderProps {
   onOpenSettings: () => void;
+  /**
+   * @deprecated Lisans paneli artık yalnızca /ayka URL'i üzerinden açılır;
+   * restoran arayüzünde kalkan ikonu gösterilmez. Geriye dönük uyumluluk
+   * için prop tutuldu, render edilmiyor.
+   */
   onOpenAdmin?: () => void;
   onOpenOnboarding?: () => void;
 }
@@ -33,7 +38,7 @@ interface Notification {
   admin_replied_at: string | null;
 }
 
-export function Header({ onOpenSettings, onOpenAdmin, onOpenOnboarding }: HeaderProps) {
+export function Header({ onOpenSettings, onOpenOnboarding }: HeaderProps) {
   const { profile, tenant, user, signOut, activeBranch, branches, setActiveBranch } = useAuth();
   const [showBranchMenu, setShowBranchMenu] = useState(false);
   const [zoom, setZoom] = useState(1);
@@ -278,16 +283,6 @@ export function Header({ onOpenSettings, onOpenAdmin, onOpenOnboarding }: Header
                 >
                   <Zap className="w-3.5 h-3.5" />
                   <span>Kurulum</span>
-                </button>
-              )}
-
-              {profile?.is_super_admin && onOpenAdmin && (
-                <button
-                  onClick={onOpenAdmin}
-                  className="p-1.5 md:p-2 text-orange-600 hover:text-orange-700 rounded-lg hover:bg-orange-50 transition-all active:scale-95"
-                  title="Admin Paneli"
-                >
-                  <Shield className="w-4 h-4 md:w-5 md:h-5" />
                 </button>
               )}
 

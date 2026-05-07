@@ -410,8 +410,26 @@ function App() {
     return <LandingPage onLogin={() => setShowAuthModal(true)} />;
   }
 
-  if (profile?.is_super_admin && showAdminPanel) {
-    return <AdminPanel onExit={() => setShowAdminPanel(false)} />;
+  const isAykaRoute =
+    typeof window !== 'undefined' &&
+    window.location.pathname.toLowerCase().startsWith('/ayka');
+
+  if (profile?.is_super_admin && (showAdminPanel || isAykaRoute)) {
+    return (
+      <AdminPanel
+        onExit={() => {
+          setShowAdminPanel(false);
+          if (isAykaRoute) {
+            try {
+              localStorage.removeItem('shefpos_ayka_auth');
+            } catch {
+              /* ignore */
+            }
+            window.location.assign('/');
+          }
+        }}
+      />
+    );
   }
 
   const needsOnboarding = user && tenant && profile?.role === 'owner' && (tenant.onboarding_completed === false || tenant.onboarding_completed === null) && !onboardingDone;
@@ -430,7 +448,7 @@ function App() {
     <div className="min-h-screen bg-slate-50">
       {isLocked && <PinLockScreen onUnlock={() => setIsLocked(false)} />}
 
-      <Header onOpenSettings={() => setShowSettings(true)} onOpenAdmin={() => setShowAdminPanel(true)} onOpenOnboarding={() => setShowOnboarding(true)} />
+      <Header onOpenSettings={() => setShowSettings(true)} onOpenOnboarding={() => setShowOnboarding(true)} />
       <MainMenu
         onNavigate={handleNavigate}
         currentPage={currentPage}
