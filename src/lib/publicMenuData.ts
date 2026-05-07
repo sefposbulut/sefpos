@@ -175,6 +175,10 @@ export function buildMenuUrl(branchId: string, origin?: string): string {
 /**
  * Garson çağırma — anon role INSERT yetkisi ile public.waiter_calls'a yazar.
  * RLS policy şube → tenant tutarlılığını ve menu_enabled'ı doğrular.
+ *
+ * NOT: `.select()` çağrılmıyor. Anon role'ün SELECT policy'si yok (mahremiyet:
+ * müşteri başka masaların çağrılarını okuyamaz). RETURNING istenirse RLS hatası
+ * döner. Sadece "INSERT ok" ile başarı kontrolü yapıyoruz.
  */
 export async function createWaiterCall(input: {
   tenantId: string;
@@ -182,8 +186,8 @@ export async function createWaiterCall(input: {
   tableLabel: string;
   callType: 'service' | 'bill' | 'water' | 'help';
   message?: string;
-}): Promise<{ id: string }> {
-  const { data, error } = await supabase
+}): Promise<void> {
+  const { error } = await supabase
     .from('waiter_calls')
     .insert({
       tenant_id: input.tenantId,
@@ -192,9 +196,12 @@ export async function createWaiterCall(input: {
       call_type: input.callType,
       message: input.message?.trim().slice(0, 280) || null,
       status: 'pending',
-    })
-    .select('id')
-    .single();
-  if (error) throw new Error(error.message);
-  return data as { id: string };
+    });
+  if (error) {
+    // Anti-spam tetikleyici hata kodu (40001) için TR mesaj
+    if ((error as any).code === '40001' || /cok hizli|spam/i.test(error.message)) {
+      throw new Error('Çok hızlı peşi sıra çağırdınız. Lütfen birkaç saniye bekleyip tekrar deneyin.');
+    }
+    throw new Error(error.message);
+  }
 }
