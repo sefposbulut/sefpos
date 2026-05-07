@@ -1,13 +1,18 @@
 const { createClient } = require('@supabase/supabase-js');
 
-// Eski Supabase veritabanına bağlan
-const supabase = createClient(
-  'https://orlydeyxshsdusxukhuu.supabase.co',
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9ybHlkZXl4c2hzZHVzeHVraHV1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3MjQ3ODI4MDAsImV4cCI6MjA0MDM1ODgwMH0.B1JQk3iEhN2s6nTnI3xQlTqJw8YfJdRkLmN9PqXsYt8'
-);
+const supabaseUrl =
+  String(process.env.VITE_SUPABASE_URL || '').trim().replace(/\/$/, '') ||
+  'https://xdfnozfuuzctubijbnds.supabase.co';
+const supabaseAnon = String(process.env.VITE_SUPABASE_ANON_KEY || '').trim();
+if (!supabaseAnon) {
+  console.error('VITE_SUPABASE_ANON_KEY gerekli (.env veya ortam değişkeni).');
+  process.exit(1);
+}
+
+const supabase = createClient(supabaseUrl, supabaseAnon);
 
 async function checkCurrentData() {
-  console.log('🔍 Eski Supabase veritabanını kontrol ediyorum...\n');
+  console.log('🔍 Supabase veritabanını kontrol ediyorum...\n');
 
   try {
     // Demo tenant'ı bul

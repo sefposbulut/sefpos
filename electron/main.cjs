@@ -546,8 +546,28 @@ let mainWindow;
 let printAgentServer = null;
 const PRINT_AGENT_PORT = 7878;
 
-const SUPABASE_URL = 'https://orlydeyxshsdusxukhuu.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9ybHlkZXl4c2hzZHVzeHVraHV1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ0NjI0MTcsImV4cCI6MjA5MDAzODQxN30.tbFxkDsVyw0b97l8bop5prHlxDhmmfnsc8rC8zP8FqI';
+/** Vite ile aynı: önce ortam, sonra sefpos-dev-port.json, sonra birincil URL (AGENTS.md). Anon JWT projeye özel — repoda gömülü değil. */
+function readSefposDevSupabaseFromJson() {
+  try {
+    const fp = path.join(__dirname, '..', 'sefpos-dev-port.json');
+    const j = JSON.parse(fs.readFileSync(fp, 'utf8'));
+    const url = String(j.supabaseDevUrl || '')
+      .trim()
+      .replace(/\/$/, '');
+    const anon = String(j.supabaseDevAnonKey || '').trim();
+    return { url, anon };
+  } catch (_) {}
+  return { url: '', anon: '' };
+}
+
+const DEFAULT_PRIMARY_SUPABASE_URL = 'https://xdfnozfuuzctubijbnds.supabase.co';
+const _fromPort = readSefposDevSupabaseFromJson();
+const SUPABASE_URL =
+  String(process.env.VITE_SUPABASE_URL || '')
+    .trim()
+    .replace(/\/$/, '') || _fromPort.url || DEFAULT_PRIMARY_SUPABASE_URL;
+const SUPABASE_ANON_KEY =
+  String(process.env.VITE_SUPABASE_ANON_KEY || '').trim() || _fromPort.anon || '';
 
 const isDev = process.env.NODE_ENV === 'development';
 const settingsPath = path.join(app.getPath('userData'), 'settings.json');

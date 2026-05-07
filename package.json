@@ -20,7 +20,9 @@
     "ios:build": "vite build && npx cap sync ios",
     "ios:open": "npx cap open ios",
     "db:migrate-remote": "node scripts/run-supabase-migrations-pg.mjs",
-    "edge:deploy:sms": "npx supabase functions deploy send-sms-otp verify-sms-otp send-sms-welcome send-sms-custom"
+    "db:apply-gotrue-fix": "node scripts/apply-gotrue-fix-sql.mjs",
+    "edge:deploy:sms": "npx supabase functions deploy send-sms-otp verify-sms-otp send-sms-welcome send-sms-custom",
+    "test:edge-sms": "node scripts/test-edge-sms-otp.mjs"
   },
   "build": {
     "appId": "com.sefpos.app",
@@ -86,8 +88,8 @@
   },
   "dependencies": {
     "@capacitor/android": "^8.3.1",
-    "@capacitor/ios": "^8.3.1",
     "@capacitor/core": "^8.3.1",
+    "@capacitor/ios": "^8.3.1",
     "@supabase/supabase-js": "^2.57.4",
     "bcryptjs": "^2.4.3",
     "electron-updater": "^6.8.3",

@@ -1,8 +1,8 @@
 const { createClient } = require('@supabase/supabase-js');
 
-// Yeni Supabase veritabanına bağlan (hwwsitusurqgpitptkuf)
+// ŞefPOS birincil Supabase (AGENTS.md — ref xdfnozfuuzctubijbnds)
 const supabase = createClient(
-  'https://hwwsitusurqgpitptkuf.supabase.co',
+  'https://xdfnozfuuzctubijbnds.supabase.co',
   'sb_publishable_4ziGGAYQkC9Is5P7leZ6VQ_WAddnGhD'
 );
 

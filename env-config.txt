@@ -1,7 +1,7 @@
 # Supabase Configuration
 # Bu dosyayı kopyalayıp .env olarak kaydedin
 
-VITE_SUPABASE_URL=https://orlydeyxshsdusxukhuu.supabase.co
+VITE_SUPABASE_URL=https://xdfnozfuuzctubijbnds.supabase.co
 VITE_SUPABASE_ANON_KEY=your_anon_key_here
 
 # Demo Kullanıcı Bilgileri
@@ -10,7 +10,7 @@ VITE_SUPABASE_ANON_KEY=your_anon_key_here
 
 # Nasıl API Key alınır:
 # 1. https://supabase.com/dashboard gidin
-# 2. orlydeyxshsdusxukhuu projesini seçin
+# 2. xdfnozfuuzctubijbnds projesini seçin
 # 3. Settings → API
 # 4. Project URL ve Anon Key kopyalayın
 # 5. Anon Key'i yukarıya yapıştırın

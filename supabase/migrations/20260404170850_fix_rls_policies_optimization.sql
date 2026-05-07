@@ -765,83 +765,95 @@ CREATE POLICY "Users can manage order items"
 
 -- =====================================================
 -- TERMINALS (optional table)
+-- Not: PL/pgSQL statik CREATE/DROP POLICY ifadelerini blok planlanirken
+-- cozumler; tablo yokken IF FALSE olsa bile "relation does not exist" verebilir.
+-- EXECUTE ile sadece tablo varken parse edilir.
 -- =====================================================
-DO $$
+DO $term$
 BEGIN
-  IF EXISTS (
-    SELECT 1 FROM information_schema.tables
-    WHERE table_schema = 'public' AND table_name = 'terminals'
-  ) THEN
-    DROP POLICY IF EXISTS "Users can view own terminals" ON public.terminals;
-    CREATE POLICY "Users can view own terminals"
-      ON public.terminals FOR SELECT
-      TO authenticated
-      USING (user_id = (SELECT auth.uid()));
-
-    DROP POLICY IF EXISTS "Users can insert own terminals" ON public.terminals;
-    CREATE POLICY "Users can insert own terminals"
-      ON public.terminals FOR INSERT
-      TO authenticated
-      WITH CHECK (user_id = (SELECT auth.uid()));
-
-    DROP POLICY IF EXISTS "Users can update own terminals" ON public.terminals;
-    CREATE POLICY "Users can update own terminals"
-      ON public.terminals FOR UPDATE
-      TO authenticated
-      USING (user_id = (SELECT auth.uid()))
-      WITH CHECK (user_id = (SELECT auth.uid()));
-
-    DROP POLICY IF EXISTS "Users can delete own terminals" ON public.terminals;
-    CREATE POLICY "Users can delete own terminals"
-      ON public.terminals FOR DELETE
-      TO authenticated
-      USING (user_id = (SELECT auth.uid()));
+  IF to_regclass('public.terminals') IS NOT NULL
+     AND EXISTS (
+       SELECT 1 FROM information_schema.columns
+       WHERE table_schema = 'public' AND table_name = 'terminals' AND column_name = 'user_id'
+     ) THEN
+    EXECUTE 'DROP POLICY IF EXISTS "Users can view own terminals" ON public.terminals';
+    EXECUTE $p$
+      CREATE POLICY "Users can view own terminals"
+        ON public.terminals FOR SELECT
+        TO authenticated
+        USING (user_id = (SELECT auth.uid()));
+    $p$;
+    EXECUTE 'DROP POLICY IF EXISTS "Users can insert own terminals" ON public.terminals';
+    EXECUTE $p$
+      CREATE POLICY "Users can insert own terminals"
+        ON public.terminals FOR INSERT
+        TO authenticated
+        WITH CHECK (user_id = (SELECT auth.uid()));
+    $p$;
+    EXECUTE 'DROP POLICY IF EXISTS "Users can update own terminals" ON public.terminals';
+    EXECUTE $p$
+      CREATE POLICY "Users can update own terminals"
+        ON public.terminals FOR UPDATE
+        TO authenticated
+        USING (user_id = (SELECT auth.uid()))
+        WITH CHECK (user_id = (SELECT auth.uid()));
+    $p$;
+    EXECUTE 'DROP POLICY IF EXISTS "Users can delete own terminals" ON public.terminals';
+    EXECUTE $p$
+      CREATE POLICY "Users can delete own terminals"
+        ON public.terminals FOR DELETE
+        TO authenticated
+        USING (user_id = (SELECT auth.uid()));
+    $p$;
   END IF;
-END $$;
+END $term$;
 
 -- =====================================================
 -- COMMANDS (optional; policies reference terminals)
 -- =====================================================
-DO $$
+DO $cmdpol$
 BEGIN
-  IF EXISTS (
-    SELECT 1 FROM information_schema.tables
-    WHERE table_schema = 'public' AND table_name = 'commands'
-  ) AND EXISTS (
-    SELECT 1 FROM information_schema.tables
-    WHERE table_schema = 'public' AND table_name = 'terminals'
-  ) THEN
-    DROP POLICY IF EXISTS "Users can view commands of own terminals" ON public.commands;
-    CREATE POLICY "Users can view commands of own terminals"
-      ON public.commands FOR SELECT
-      TO authenticated
-      USING (
-        terminal_id IN (
-          SELECT id FROM public.terminals WHERE user_id = (SELECT auth.uid())
-        )
-      );
-
-    DROP POLICY IF EXISTS "Users can insert commands to own terminals" ON public.commands;
-    CREATE POLICY "Users can insert commands to own terminals"
-      ON public.commands FOR INSERT
-      TO authenticated
-      WITH CHECK (
-        terminal_id IN (
-          SELECT id FROM public.terminals WHERE user_id = (SELECT auth.uid())
-        )
-      );
-
-    DROP POLICY IF EXISTS "Users can delete commands from own terminals" ON public.commands;
-    CREATE POLICY "Users can delete commands from own terminals"
-      ON public.commands FOR DELETE
-      TO authenticated
-      USING (
-        terminal_id IN (
-          SELECT id FROM public.terminals WHERE user_id = (SELECT auth.uid())
-        )
-      );
+  IF to_regclass('public.commands') IS NOT NULL
+     AND to_regclass('public.terminals') IS NOT NULL
+     AND EXISTS (
+       SELECT 1 FROM information_schema.columns
+       WHERE table_schema = 'public' AND table_name = 'commands' AND column_name = 'terminal_id'
+     ) THEN
+    EXECUTE 'DROP POLICY IF EXISTS "Users can view commands of own terminals" ON public.commands';
+    EXECUTE $p$
+      CREATE POLICY "Users can view commands of own terminals"
+        ON public.commands FOR SELECT
+        TO authenticated
+        USING (
+          terminal_id IN (
+            SELECT id FROM public.terminals WHERE user_id = (SELECT auth.uid())
+          )
+        );
+    $p$;
+    EXECUTE 'DROP POLICY IF EXISTS "Users can insert commands to own terminals" ON public.commands';
+    EXECUTE $p$
+      CREATE POLICY "Users can insert commands to own terminals"
+        ON public.commands FOR INSERT
+        TO authenticated
+        WITH CHECK (
+          terminal_id IN (
+            SELECT id FROM public.terminals WHERE user_id = (SELECT auth.uid())
+          )
+        );
+    $p$;
+    EXECUTE 'DROP POLICY IF EXISTS "Users can delete commands from own terminals" ON public.commands';
+    EXECUTE $p$
+      CREATE POLICY "Users can delete commands from own terminals"
+        ON public.commands FOR DELETE
+        TO authenticated
+        USING (
+          terminal_id IN (
+            SELECT id FROM public.terminals WHERE user_id = (SELECT auth.uid())
+          )
+        );
+    $p$;
   END IF;
-END $$;
+END $cmdpol$;
 
 -- =====================================================
 -- TABLE_GROUPS - Fix overly permissive policies (optional table)

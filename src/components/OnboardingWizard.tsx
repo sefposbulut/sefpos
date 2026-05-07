@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { isLocalMode } from '../lib/sqlDb';
@@ -9,6 +9,8 @@ interface OnboardingWizardProps {
 }
 
 type DeploymentMode = 'offline' | 'online' | 'hybrid';
+
+const PHONE_FIRST_SIGNUP_SESSION = 'shefpos_phone_first_signup';
 
 const STEPS = [
   { id: 1, title: 'Hoş Geldiniz', icon: Star },
@@ -83,6 +85,18 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [phoneFirstSignupHint, setPhoneFirstSignupHint] = useState(false);
+
+  useEffect(() => {
+    try {
+      if (sessionStorage.getItem(PHONE_FIRST_SIGNUP_SESSION) === '1') {
+        sessionStorage.removeItem(PHONE_FIRST_SIGNUP_SESSION);
+        setPhoneFirstSignupHint(true);
+      }
+    } catch {
+      /* private mode */
+    }
+  }, []);
 
   const [deploymentMode, setDeploymentMode] = useState<DeploymentMode>('online');
 
@@ -330,6 +344,15 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
         <div className="p-8">
           {step === 1 && (
             <div className="text-center">
+              {phoneFirstSignupHint && (
+                <div className="mb-6 text-left rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
+                  <p className="font-bold text-emerald-800 mb-1">Cep telefonu ile kayıt tamamlandı</p>
+                  <p className="text-emerald-800/90">
+                    Bir sonraki adımlarda çalışma modu, işletme adresi ve masalarınızı tamamlayarak ŞefPOS&apos;u kullanmaya
+                    başlayın.
+                  </p>
+                </div>
+              )}
               <div className="w-20 h-20 bg-orange-100 rounded-full flex items-center justify-center mx-auto mb-6">
                 <UtensilsCrossed className="w-10 h-10 text-orange-600" />
               </div>

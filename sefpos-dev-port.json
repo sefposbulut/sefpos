@@ -1,5 +1,6 @@
 {
   "port": 5180,
+  "devPortJsonOverridesEnv": false,
   "supabaseDevUrl": "https://xdfnozfuuzctubijbnds.supabase.co",
-  "_not": "port: yerel dev sunucu. supabaseDevUrl: Vite, .env okunamazsa (UTF-16 vb.) SMS Edge proxy hedefi; isteğe bağlı, .env ile aynı projeyi göstermeli."
+  "_not": "Birincil ref: xdfnozfuuzctubijbnds (AGENTS.md). VITE_SUPABASE_ANON_KEY .env içinde olmalı. devPortJsonOverridesEnv true ise supabaseDevAnonKey de ekleyin."
 }

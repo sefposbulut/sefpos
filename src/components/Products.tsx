@@ -1,10 +1,15 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { Plus, CreditCard as Edit2, Trash2, Search, Printer, Ban, Save, X, Download, Barcode, Upload, CheckCircle, AlertCircle, FileSpreadsheet, ArrowDownCircle, ArrowRightLeft, History } from 'lucide-react';
+import { Plus, CreditCard as Edit2, Trash2, Search, Printer, Ban, Save, X, Download, Barcode, Upload, CheckCircle, AlertCircle, FileSpreadsheet, ArrowDownCircle, ArrowRightLeft, History, ChevronDown, MoreVertical } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { loadPrintSettings, savePrintSettings } from '../lib/printService';
 import { queryCache } from '../lib/queryCache';
 import * as XLSX from 'xlsx';
+
+/** Bu tenant’ta `branch_product_stocks` yok (404) — React StrictMode çift mount’ta tekrar GET atılmaz. */
+const tenantIdsWithoutBranchProductStocksTable = new Set<string>();
+/** Aynı tenant+şube için eşzamanlı iki `loadBranchStocks` → tek ağ isteği. */
+const branchStockLoadInflight = new Map<string, Promise<void>>();
 
 function ean13Checksum(digits12: string): number {
   let sum = 0;
@@ -177,6 +182,7 @@ export function Products() {
   const [showReceipt, setShowReceipt] = useState(false);
   const [showStockMovements, setShowStockMovements] = useState(false);
   const [showAddCategory, setShowAddCategory] = useState(false);
+  const [productAdvancedOpen, setProductAdvancedOpen] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [editingProduct, setEditingProduct] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<any>(null);
@@ -327,6 +333,29 @@ export function Products() {
     loadBranchStocks();
   }, [tenant?.id, activeBranch?.id, products.length]);
 
+  useEffect(() => {
+    const anyOpen =
+      showAddProduct ||
+      showAddCategory ||
+      showStockEntry ||
+      showStockTransfer ||
+      showStockMovements ||
+      showImport;
+    if (!anyOpen) return;
+    const prevBody = document.body.style.overflow;
+    const prevHtml = document.documentElement.style.overflow;
+    document.body.style.overflow = 'hidden';
+    document.documentElement.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = prevBody;
+      document.documentElement.style.overflow = prevHtml;
+    };
+  }, [showAddProduct, showAddCategory, showStockEntry, showStockTransfer, showStockMovements, showImport]);
+
+  useEffect(() => {
+    if (!showAddProduct) setProductAdvancedOpen(false);
+  }, [showAddProduct]);
+
   const loadCategories = async (forceRefresh = false) => {
     if (!tenant) return;
     const { categories: prefetchedCategories } = await queryCache.getProductsAndCategories(tenant.id, undefined, forceRefresh);
@@ -345,29 +374,58 @@ export function Products() {
       setBranchStockMap({});
       return;
     }
-    const { data, error } = await supabase
-      .from('branch_product_stocks')
-      .select('product_id, quantity')
-      .eq('tenant_id', tenant.id)
-      .eq('branch_id', activeBranch.id);
-
-    if (error) {
-      const msg = String((error as any)?.message || '');
-      if (msg.includes('branch_product_stocks')) {
-        setBranchStockFeatureAvailable(false);
-        setBranchStockMap({});
-        return;
-      }
+    if (tenantIdsWithoutBranchProductStocksTable.has(tenant.id)) {
+      setBranchStockFeatureAvailable(false);
+      setBranchStockMap({});
       return;
     }
+    const inflightKey = `${tenant.id}:${activeBranch.id}`;
+    const existingRun = branchStockLoadInflight.get(inflightKey);
+    if (existingRun) {
+      await existingRun;
+      return;
+    }
+    const run = (async () => {
+      const { data, error } = await supabase
+        .from('branch_product_stocks')
+        .select('product_id, quantity')
+        .eq('tenant_id', tenant.id)
+        .eq('branch_id', activeBranch.id);
 
-    setBranchStockFeatureAvailable(true);
+      if (error) {
+        const msg = String((error as any)?.message || '').toLowerCase();
+        const code = String((error as any)?.code || '');
+        const status = Number((error as any)?.status || 0);
+        const branchStockMissing =
+          code === 'pgrst205' ||
+          code === '42p01' ||
+          status === 404 ||
+          msg.includes('branch_product_stocks') ||
+          msg.includes('could not find the table') ||
+          msg.includes('does not exist');
+        if (branchStockMissing) {
+          tenantIdsWithoutBranchProductStocksTable.add(tenant.id);
+          setBranchStockFeatureAvailable(false);
+          setBranchStockMap({});
+          return;
+        }
+        return;
+      }
 
-    const nextMap: Record<string, number> = {};
-    (data || []).forEach((row: any) => {
-      nextMap[row.product_id] = Number(row.quantity || 0);
-    });
-    setBranchStockMap(nextMap);
+      setBranchStockFeatureAvailable(true);
+
+      const nextMap: Record<string, number> = {};
+      (data || []).forEach((row: any) => {
+        nextMap[row.product_id] = Number(row.quantity || 0);
+      });
+      setBranchStockMap(nextMap);
+    })();
+    branchStockLoadInflight.set(inflightKey, run);
+    try {
+      await run;
+    } finally {
+      branchStockLoadInflight.delete(inflightKey);
+    }
   };
 
   const upsertBranchStock = async (branchId: string, productId: string, nextQuantity: number) => {
@@ -1047,9 +1105,9 @@ export function Products() {
   );
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 p-3 md:p-6">
-      <div className="max-w-7xl mx-auto">
-        <div className="flex justify-between items-center mb-4 md:mb-8">
+    <div className="h-full min-h-0 bg-gradient-to-br from-slate-50 to-slate-100 p-3 md:p-6 flex flex-col overflow-hidden">
+      <div className="max-w-7xl mx-auto w-full flex flex-col flex-1 min-h-0">
+        <div className="flex justify-between items-center mb-3 md:mb-6 shrink-0">
           <h1 className="text-xl md:text-3xl font-bold text-slate-800">Stok Yönetimi</h1>
           <div className="flex gap-2 md:gap-3 flex-wrap justify-end">
             <input
@@ -1124,7 +1182,7 @@ export function Products() {
           </div>
         </div>
 
-        <div className="mb-4 md:mb-6 flex gap-2 md:gap-4">
+        <div className="mb-3 md:mb-4 flex gap-2 md:gap-4 shrink-0">
           <div className="flex-1 relative">
             <Search className="absolute left-3 md:left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
             <input
@@ -1143,7 +1201,7 @@ export function Products() {
           </div>
         </div>
 
-        <div className="flex gap-2 md:gap-3 mb-4 md:mb-6 overflow-x-auto pb-3 items-start scroll-smooth" style={{scrollbarWidth: 'thin', scrollbarColor: '#cbd5e1 #f1f5f9'}}>
+        <div className="flex gap-2 md:gap-3 mb-3 md:mb-4 overflow-x-auto pb-2 items-start scroll-smooth shrink-0" style={{scrollbarWidth: 'thin', scrollbarColor: '#cbd5e1 #f1f5f9'}}>
           <style>{`
             .scroll-smooth::-webkit-scrollbar {
               height: 6px;
@@ -1227,13 +1285,12 @@ export function Products() {
                   </div>
                 </div>
               ) : (
-                <>
+                <div className="flex items-center bg-white rounded-lg md:rounded-xl shadow-sm hover:shadow-md transition-all" style={{ backgroundColor: selectedCategory === cat.id ? cat.color : undefined }}>
                   <button
                     onClick={() => setSelectedCategory(cat.id)}
-                    className={`px-3 py-2 md:px-5 md:py-3 rounded-lg md:rounded-xl font-medium whitespace-nowrap transition-all text-sm md:text-base pr-16 ${
-                      selectedCategory === cat.id ? 'text-white shadow-lg' : 'bg-white text-slate-600 hover:shadow-md'
+                    className={`pl-3 pr-2 py-2 md:pl-5 md:pr-2 md:py-3 rounded-l-lg md:rounded-l-xl font-medium whitespace-nowrap transition-all text-sm md:text-base ${
+                      selectedCategory === cat.id ? 'text-white' : 'text-slate-600'
                     }`}
-                    style={{ backgroundColor: selectedCategory === cat.id ? cat.color : undefined }}
                   >
                     {cat.name}
                     {disabledCategoryIds.includes(cat.id) ? (
@@ -1247,29 +1304,18 @@ export function Products() {
                       </span>
                     ) : null}
                   </button>
-                  <div className="absolute right-1 top-1/2 -translate-y-1/2 flex gap-0.5 bg-white/90 rounded-lg px-1 py-0.5 shadow opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
-                    <button
-                      onClick={e => { e.stopPropagation(); setShowCategoryPrinter(showCategoryPrinter === cat.id ? null : cat.id); }}
-                      className={`p-1 rounded transition ${disabledCategoryIds.includes(cat.id) ? 'text-slate-400 hover:bg-slate-100' : 'text-orange-500 hover:bg-orange-50'}`}
-                      title="Yazıcı ayarları"
-                    >
-                      <Printer size={12} />
-                    </button>
-                    <button
-                      onClick={e => { e.stopPropagation(); startEditCategory(cat); }}
-                      className="p-1 text-blue-500 hover:bg-blue-50 rounded transition"
-                      title="Düzenle"
-                    >
-                      <Edit2 size={12} />
-                    </button>
-                    <button
-                      onClick={e => { e.stopPropagation(); handleDeleteCategory(cat.id); }}
-                      className="p-1 text-red-500 hover:bg-red-50 rounded transition"
-                      title="Sil"
-                    >
-                      <Trash2 size={12} />
-                    </button>
-                  </div>
+                  <button
+                    onClick={e => { e.stopPropagation(); setShowCategoryPrinter(showCategoryPrinter === cat.id ? null : cat.id); }}
+                    className={`px-1.5 py-2 md:py-3 rounded-r-lg md:rounded-r-xl border-l transition ${
+                      selectedCategory === cat.id
+                        ? 'border-white/20 text-white/80 hover:bg-black/10'
+                        : 'border-slate-200 text-slate-400 hover:bg-slate-50 hover:text-slate-700'
+                    }`}
+                    title="Kategori menüsü"
+                    aria-label="Kategori menüsü"
+                  >
+                    <MoreVertical size={14} />
+                  </button>
                   {showCategoryPrinter === cat.id && (
                     <>
                       <div className="fixed inset-0 z-30 bg-black/10" onClick={() => setShowCategoryPrinter(null)} />
@@ -1280,7 +1326,7 @@ export function Products() {
                       }}>
                         <div className="flex items-center justify-between mb-3">
                           <p className="text-xs font-bold text-slate-600 uppercase tracking-wide flex items-center gap-1.5">
-                            <Printer size={12} className="text-orange-500" /> {cat.name}
+                            <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ backgroundColor: cat.color }} /> {cat.name}
                           </p>
                           <button onClick={() => setShowCategoryPrinter(null)} className="p-0.5 text-slate-400 hover:text-slate-600 rounded">
                             <X size={12} />
@@ -1288,16 +1334,28 @@ export function Products() {
                         </div>
                         <div className="space-y-1 mb-2">
                           <button
+                            onClick={() => { setShowCategoryPrinter(null); startEditCategory(cat); }}
+                            className="w-full text-left px-2 py-1.5 rounded-lg text-xs transition flex items-center gap-1.5 text-slate-700 hover:bg-blue-50 hover:text-blue-700"
+                          >
+                            <Edit2 size={11} /> Düzenle
+                          </button>
+                          <button
+                            onClick={() => { setShowCategoryPrinter(null); handleDeleteCategory(cat.id); }}
+                            className="w-full text-left px-2 py-1.5 rounded-lg text-xs transition flex items-center gap-1.5 text-slate-700 hover:bg-red-50 hover:text-red-700"
+                          >
+                            <Trash2 size={11} /> Sil
+                          </button>
+                          <button
                             onClick={() => { toggleCategoryPrintDisabled(cat.id); setShowCategoryPrinter(null); }}
-                            className={`w-full text-left px-2 py-1.5 rounded-lg text-xs transition flex items-center gap-1.5 ${disabledCategoryIds.includes(cat.id) ? 'bg-red-50 text-red-700 font-bold' : 'hover:bg-slate-50 text-slate-600'}`}
+                            className={`w-full text-left px-2 py-1.5 rounded-lg text-xs transition flex items-center gap-1.5 ${disabledCategoryIds.includes(cat.id) ? 'bg-red-50 text-red-700 font-bold' : 'text-slate-700 hover:bg-slate-50'}`}
                           >
                             <Ban size={11} />
-                            {disabledCategoryIds.includes(cat.id) ? 'Yazdirmay Etkinlestir' : 'Yazdirmay Kapat (Kagit Cikmasin)'}
+                            {disabledCategoryIds.includes(cat.id) ? 'Yazdırmayı Etkinleştir' : 'Yazdırmayı Kapat (Kağıt Çıkmasın)'}
                           </button>
                         </div>
                         {!disabledCategoryIds.includes(cat.id) && (
                           <div className="border-t border-slate-100 pt-2">
-                            <p className="text-xs text-slate-400 mb-1.5">Yazici Yonlendirmesi</p>
+                            <p className="text-xs text-slate-400 mb-1.5 flex items-center gap-1"><Printer size={10} className="text-orange-500" /> Yazıcı Yönlendirmesi</p>
                             {availablePrinters.length === 0 ? (
                               <button
                                 onClick={() => {
@@ -1306,7 +1364,7 @@ export function Products() {
                                 }}
                                 className="w-full text-left px-2 py-1.5 rounded-lg text-xs transition text-blue-600 hover:bg-blue-50 font-medium"
                               >
-                                Yazici Ayarlari Gozat →
+                                Yazıcı Ayarları Göz At →
                               </button>
                             ) : (
                               <div className="space-y-1">
@@ -1314,7 +1372,7 @@ export function Products() {
                                   onClick={() => saveCategoryPrinter(cat.id, '')}
                                   className={`w-full text-left px-2 py-1.5 rounded-lg text-xs transition flex items-center gap-1.5 ${!categoryPrinterMap[cat.id] ? 'bg-orange-50 text-orange-700 font-bold' : 'hover:bg-slate-50 text-slate-600'}`}
                                 >
-                                  <Printer size={10} /> Tum yazicilara gonder
+                                  <Printer size={10} /> Tüm yazıcılara gönder
                                 </button>
                                 {availablePrinters.map(p => (
                                   <button
@@ -1333,13 +1391,13 @@ export function Products() {
                       </div>
                     </>
                   )}
-                </>
+                </div>
               )}
             </div>
           ))}
         </div>
 
-        <div className="space-y-2 md:space-y-3">
+        <div className="flex-1 min-h-0 overflow-y-auto pr-1 -mr-1 space-y-2 md:space-y-3 overscroll-contain">
           {filteredProducts.map(product => {
             const category = categories.find(c => c.id === product.category_id);
             const isEditing = editingProduct === product.id;
@@ -1699,16 +1757,25 @@ export function Products() {
       </div>
 
       {showAddCategory && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl p-8 max-w-md w-full">
-            <h2 className="text-2xl font-bold mb-6">Yeni Kategori</h2>
-            <div className="space-y-4">
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-stretch sm:items-center justify-center p-0 sm:p-4 overscroll-contain">
+          <div className="bg-white w-full sm:max-w-md sm:rounded-2xl flex flex-col overflow-hidden shadow-2xl sm:max-h-[90vh] min-h-0 max-h-full">
+            <div className="flex items-center justify-between px-5 sm:px-7 py-3 sm:py-4 border-b border-slate-200 shrink-0">
+              <h2 className="text-lg sm:text-2xl font-bold">Yeni Kategori</h2>
+              <button
+                onClick={() => setShowAddCategory(false)}
+                className="p-2 rounded-lg hover:bg-slate-100 text-slate-500"
+                aria-label="Kapat"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            <div className="flex-1 min-h-0 overflow-y-auto px-5 sm:px-7 py-4 space-y-3 overscroll-contain">
               <input
                 type="text"
                 placeholder="Kategori Adı"
                 value={newCategory.name}
                 onChange={(e) => setNewCategory({ ...newCategory, name: e.target.value })}
-                className="w-full px-4 py-3 border-2 border-slate-200 rounded-xl focus:border-blue-500 focus:outline-none text-lg"
+                className="w-full px-4 py-3 border-2 border-slate-200 rounded-xl focus:border-blue-500 focus:outline-none text-base sm:text-lg"
               />
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-2">Renk</label>
@@ -1734,7 +1801,7 @@ export function Products() {
                   className="w-full h-10 rounded-xl cursor-pointer border-2 border-slate-200"
                 />
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1.5">KDV Oranı</label>
                   <select
@@ -1763,83 +1830,90 @@ export function Products() {
                   />
                 </div>
               </div>
-              <div className="flex gap-3 mt-6">
-                <button
-                  onClick={() => setShowAddCategory(false)}
-                  className="flex-1 px-6 py-3 bg-slate-200 text-slate-700 rounded-xl hover:bg-slate-300 transition-all"
-                >
-                  İptal
-                </button>
-                <button
-                  onClick={handleAddCategory}
-                  className="flex-1 px-6 py-3 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-xl hover:shadow-lg transition-all"
-                >
-                  Ekle
-                </button>
-              </div>
+            </div>
+            <div className="px-5 sm:px-7 py-3 border-t border-slate-200 bg-white shrink-0 flex flex-col-reverse sm:flex-row gap-2 sm:gap-3">
+              <button
+                onClick={() => setShowAddCategory(false)}
+                className="flex-1 px-6 py-3 bg-slate-200 text-slate-700 rounded-xl hover:bg-slate-300 transition-all"
+              >
+                İptal
+              </button>
+              <button
+                onClick={handleAddCategory}
+                className="flex-1 px-6 py-3 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-xl hover:shadow-lg transition-all"
+              >
+                Ekle
+              </button>
             </div>
           </div>
         </div>
       )}
 
       {showAddProduct && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl p-8 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-            <h2 className="text-2xl font-bold mb-6">Yeni Ürün</h2>
-            <div className="space-y-4">
-              <input
-                type="text"
-                placeholder="Ürün Adı"
-                value={newProduct.name}
-                onChange={(e) => setNewProduct({ ...newProduct, name: e.target.value })}
-                className="w-full px-4 py-3 border-2 border-slate-200 rounded-xl focus:border-blue-500 focus:outline-none text-lg"
-              />
-              <select
-                value={newProduct.category_id}
-                onChange={(e) => {
-                  const catId = e.target.value;
-                  const cat = categories.find(c => c.id === catId);
-                  const updates: Partial<typeof newProduct> = { category_id: catId };
-                  if (cat && cat.vat_rate != null) {
-                    updates.tax_rate = String(cat.vat_rate);
-                  }
-                  setNewProduct(prev => ({ ...prev, ...updates }));
-                }}
-                className="w-full px-4 py-3 border-2 border-slate-200 rounded-xl focus:border-blue-500 focus:outline-none text-lg"
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-stretch sm:items-center justify-center p-0 sm:p-4 overscroll-contain">
+          <div className="bg-white w-full sm:max-w-3xl sm:rounded-2xl flex flex-col overflow-hidden shadow-2xl sm:max-h-[92vh] min-h-0 max-h-full">
+            <div className="flex items-center justify-between px-5 sm:px-7 py-3 sm:py-4 border-b border-slate-200 shrink-0">
+              <h2 className="text-lg sm:text-2xl font-bold">Yeni Ürün</h2>
+              <button
+                onClick={() => setShowAddProduct(false)}
+                className="p-2 rounded-lg hover:bg-slate-100 text-slate-500"
+                aria-label="Kapat"
               >
-                <option value="">Kategori Seçin</option>
-                {categories.map(cat => (
-                  <option key={cat.id} value={cat.id}>{cat.name}{cat.vat_rate != null ? ` (KDV %${cat.vat_rate})` : ''}</option>
-                ))}
-              </select>
-              <div className="grid grid-cols-2 gap-4">
+                <X size={20} />
+              </button>
+            </div>
+            <div className="flex-1 min-h-0 overflow-y-auto px-5 sm:px-7 py-4 space-y-3 overscroll-contain">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <input
+                  type="text"
+                  placeholder="Ürün Adı"
+                  value={newProduct.name}
+                  onChange={(e) => setNewProduct({ ...newProduct, name: e.target.value })}
+                  className="md:col-span-2 w-full px-3 py-2.5 border-2 border-slate-200 rounded-xl focus:border-blue-500 focus:outline-none text-base"
+                />
+                <select
+                  value={newProduct.category_id}
+                  onChange={(e) => {
+                    const catId = e.target.value;
+                    const cat = categories.find(c => c.id === catId);
+                    const updates: Partial<typeof newProduct> = { category_id: catId };
+                    if (cat && cat.vat_rate != null) {
+                      updates.tax_rate = String(cat.vat_rate);
+                    }
+                    setNewProduct(prev => ({ ...prev, ...updates }));
+                  }}
+                  className="md:col-span-2 w-full px-3 py-2.5 border-2 border-slate-200 rounded-xl focus:border-blue-500 focus:outline-none text-base"
+                >
+                  <option value="">Kategori Seçin</option>
+                  {categories.map(cat => (
+                    <option key={cat.id} value={cat.id}>{cat.name}{cat.vat_rate != null ? ` (KDV %${cat.vat_rate})` : ''}</option>
+                  ))}
+                </select>
                 <input
                   type="number"
                   placeholder="Fiyat (₺)"
                   value={newProduct.price}
                   onChange={(e) => setNewProduct({ ...newProduct, price: e.target.value })}
-                  className="px-4 py-3 border-2 border-slate-200 rounded-xl focus:border-blue-500 focus:outline-none text-lg"
+                  className="px-3 py-2.5 border-2 border-slate-200 rounded-xl focus:border-blue-500 focus:outline-none text-base"
                 />
                 <input
                   type="number"
                   placeholder="Maliyet (₺)"
                   value={newProduct.cost}
                   onChange={(e) => setNewProduct({ ...newProduct, cost: e.target.value })}
-                  className="px-4 py-3 border-2 border-slate-200 rounded-xl focus:border-blue-500 focus:outline-none text-lg"
+                  className="px-3 py-2.5 border-2 border-slate-200 rounded-xl focus:border-blue-500 focus:outline-none text-base"
                 />
-              </div>
-              <div className="grid grid-cols-2 gap-4">
                 <input
                   type="number"
                   placeholder="Stok Miktarı"
                   value={newProduct.stock_quantity}
                   onChange={(e) => setNewProduct({ ...newProduct, stock_quantity: e.target.value })}
-                  className="px-4 py-3 border-2 border-slate-200 rounded-xl focus:border-blue-500 focus:outline-none text-lg"
+                  className="px-3 py-2.5 border-2 border-slate-200 rounded-xl focus:border-blue-500 focus:outline-none text-base"
                 />
                 <select
                   value={newProduct.unit}
                   onChange={(e) => setNewProduct({ ...newProduct, unit: e.target.value })}
-                  className="px-4 py-3 border-2 border-slate-200 rounded-xl focus:border-blue-500 focus:outline-none text-lg"
+                  className="px-3 py-2.5 border-2 border-slate-200 rounded-xl focus:border-blue-500 focus:outline-none text-base"
                 >
                   <option value="adet">Adet</option>
                   <option value="kg">Kilogram</option>
@@ -1847,315 +1921,326 @@ export function Products() {
                   <option value="gr">Gram</option>
                 </select>
               </div>
-              <div className="border-2 border-blue-100 rounded-xl p-4 bg-blue-50/40">
-                <div className="flex items-center gap-2 mb-3">
-                  <span className="text-sm font-bold text-slate-700">KDV Oranı</span>
-                  <span className="text-xs text-slate-400">(Bu ürüne özel)</span>
-                </div>
-                <div className="flex gap-2 flex-wrap">
-                  {[0, 1, 8, 10, 18, 20].map(rate => (
-                    <button
-                      key={rate}
-                      type="button"
-                      onClick={() => setNewProduct({ ...newProduct, tax_rate: String(rate) })}
-                      className={`px-4 py-2 rounded-xl text-sm font-semibold border-2 transition-all ${
-                        newProduct.tax_rate === String(rate)
-                          ? 'bg-blue-600 border-blue-600 text-white shadow-md'
-                          : 'bg-white border-slate-200 text-slate-600 hover:border-blue-300'
-                      }`}
-                    >
-                      %{rate}
-                    </button>
-                  ))}
-                </div>
+
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-xs font-semibold text-slate-600 mr-1">KDV:</span>
+                {[0, 1, 8, 10, 18, 20].map(rate => (
+                  <button
+                    key={rate}
+                    type="button"
+                    onClick={() => setNewProduct({ ...newProduct, tax_rate: String(rate) })}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold border-2 transition-all ${
+                      newProduct.tax_rate === String(rate)
+                        ? 'bg-blue-600 border-blue-600 text-white shadow-sm'
+                        : 'bg-white border-slate-200 text-slate-600 hover:border-blue-300'
+                    }`}
+                  >
+                    %{rate}
+                  </button>
+                ))}
               </div>
+
               <input
                 type="text"
                 placeholder="Resim URL (isteğe bağlı)"
                 value={newProduct.image_url}
                 onChange={(e) => setNewProduct({ ...newProduct, image_url: e.target.value })}
-                className="w-full px-4 py-3 border-2 border-slate-200 rounded-xl focus:border-blue-500 focus:outline-none text-lg"
+                className="w-full px-3 py-2.5 border-2 border-slate-200 rounded-xl focus:border-blue-500 focus:outline-none text-base"
               />
-              <div className="border-2 border-slate-200 rounded-xl p-4 bg-slate-50">
-                <div className="flex items-center gap-2 mb-3">
-                  <Barcode className="w-4 h-4 text-slate-500" />
-                  <span className="font-bold text-sm text-slate-700">Terazi Barkod Entegrasyonu</span>
-                </div>
-                <div className="grid grid-cols-3 gap-2 mb-2">
-                  <div className="col-span-1">
-                    <label className="block text-xs text-slate-500 mb-1">Prefix</label>
-                    <select
-                      value={newProduct.scale_prefix}
-                      onChange={e => handleScalePrefixChange(e.target.value)}
-                      className="w-full px-3 py-2.5 border-2 border-slate-200 rounded-lg focus:border-blue-500 focus:outline-none text-sm bg-white"
-                    >
-                      <option value="27">27 - Tartı (gram)</option>
-                      <option value="28">28 - Tartı (gram)</option>
-                      <option value="29">29 - Fiyat</option>
-                    </select>
-                  </div>
-                  <div className="col-span-2">
-                    <label className="block text-xs text-slate-500 mb-1">PLU / Stok Kodu (5 hane)</label>
-                    <input
-                      type="text"
-                      placeholder="Örn: 06564"
-                      value={newProduct.plu_code}
-                      onChange={e => handlePluCodeChange(e.target.value)}
-                      className="w-full px-3 py-2.5 border-2 border-slate-200 rounded-lg focus:border-blue-500 focus:outline-none text-sm font-mono bg-white"
-                      maxLength={5}
-                    />
-                  </div>
-                </div>
-                {newProduct.barcode ? (
-                  <div className="flex items-center gap-2 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
-                    <Barcode className="w-4 h-4 text-green-600 shrink-0" />
-                    <div>
-                      <div className="text-xs text-green-600 font-medium">Otomatik oluşturulan barkod</div>
-                      <div className="font-mono font-bold text-slate-700 text-sm tracking-widest">{newProduct.barcode}</div>
+
+              <button
+                type="button"
+                onClick={() => setProductAdvancedOpen(o => !o)}
+                className="w-full flex items-center justify-between px-4 py-2.5 bg-slate-50 hover:bg-slate-100 border-2 border-slate-200 rounded-xl text-sm font-semibold text-slate-700 transition-all"
+              >
+                <span className="flex items-center gap-2">
+                  <Barcode className="w-4 h-4" />
+                  Gelişmiş Ayarlar (Barkod, Tartı, Yazıcı, Porsiyon)
+                </span>
+                <ChevronDown className={`w-4 h-4 transition-transform ${productAdvancedOpen ? 'rotate-180' : ''}`} />
+              </button>
+
+              {productAdvancedOpen && (
+                <div className="space-y-3 pt-1">
+                  <div className="border-2 border-slate-200 rounded-xl p-3 bg-slate-50">
+                    <div className="flex items-center gap-2 mb-2">
+                      <Barcode className="w-4 h-4 text-slate-500" />
+                      <span className="font-semibold text-sm text-slate-700">Terazi Barkod Entegrasyonu</span>
                     </div>
-                  </div>
-                ) : (
-                  <p className="text-xs text-slate-400">PLU kodu girildiğinde EAN-13 barkod otomatik oluşturulur.</p>
-                )}
-              </div>
-
-              <div className="border-2 border-emerald-100 rounded-xl p-4 bg-emerald-50/40">
-                <label className="flex items-center gap-3 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={newProduct.scale_enabled}
-                    onChange={(e) => setNewProduct({ ...newProduct, scale_enabled: e.target.checked })}
-                    className="w-4 h-4 rounded border-slate-300"
-                  />
-                  <div>
-                    <div className="text-sm font-bold text-slate-700">Bilgisayar Bağlantılı Terazi</div>
-                    <div className="text-xs text-slate-500">CAS ERJ gibi canlı tartı sistemi</div>
-                  </div>
-                </label>
-              </div>
-
-              {availablePrinters.length > 0 && (
-                <div className="border-2 border-orange-100 rounded-xl p-4 bg-orange-50/40">
-                  <div className="flex items-center gap-2 mb-2">
-                    <Printer className="w-4 h-4 text-orange-500" />
-                    <span className="font-bold text-sm text-slate-700">Yazıcı Yönlendirmesi (İsteğe Bağlı)</span>
-                  </div>
-                  <p className="text-xs text-slate-500 mb-2">Boş bırakılırsa kategori yazıcısı veya varsayılan yazıcı kullanılır.</p>
-                  <select
-                    value={newProduct.printer_name}
-                    onChange={e => setNewProduct({ ...newProduct, printer_name: e.target.value })}
-                    className="w-full px-3 py-2.5 border-2 border-slate-200 rounded-xl focus:border-orange-400 focus:outline-none text-sm bg-white"
-                  >
-                    <option value="">Kategori/Varsayılan yazıcı kullan</option>
-                    {availablePrinters.map(p => (
-                      <option key={p.name} value={p.name}>{p.label || p.name}</option>
-                    ))}
-                  </select>
-                </div>
-              )}
-
-              <div className="border-t-2 border-slate-200 pt-4 mt-4">
-                <h3 className="font-bold text-lg mb-1 text-slate-700">Porsiyon Seçenekleri (İsteğe Bağlı)</h3>
-                {newProduct.price && (
-                  <p className="text-sm text-slate-500 mb-3">Ana fiyat: <span className="font-semibold text-slate-700">{parseFloat(newProduct.price).toFixed(2)} ₺</span></p>
-                )}
-
-                <div className="flex gap-2 mb-3">
-                  <button
-                    type="button"
-                    onClick={() => setVariantMode('multiplier')}
-                    className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all ${variantMode === 'multiplier' ? 'bg-orange-500 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
-                  >
-                    Carpan ile (Az / Tam / 1.5x)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setVariantMode('fixed')}
-                    className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all ${variantMode === 'fixed' ? 'bg-orange-500 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
-                  >
-                    Sabit Fiyat Farkı (₺)
-                  </button>
-                </div>
-
-                <div className="flex gap-2 mb-3">
-                  <input
-                    type="text"
-                    placeholder="Porsiyon adı (Az, Tam, 1.5x...)"
-                    value={variantName}
-                    onChange={(e) => setVariantName(e.target.value)}
-                    className="flex-1 px-4 py-3 border-2 border-slate-200 rounded-xl focus:border-blue-500 focus:outline-none"
-                  />
-                  {variantMode === 'multiplier' ? (
-                    <div className="relative">
-                      <input
-                        type="number"
-                        step="0.1"
-                        min="0"
-                        placeholder="Carpan"
-                        value={variantMultiplier}
-                        onChange={(e) => setVariantMultiplier(e.target.value)}
-                        className="w-28 px-3 py-3 border-2 border-slate-200 rounded-xl focus:border-blue-500 focus:outline-none"
-                      />
-                      {variantMultiplier && newProduct.price && (
-                        <div className="absolute -bottom-5 left-0 right-0 text-center text-xs text-orange-600 font-medium">
-                          = {(parseFloat(newProduct.price) * parseFloat(variantMultiplier)).toFixed(2)} ₺
-                        </div>
-                      )}
+                    <div className="grid grid-cols-3 gap-2 mb-2">
+                      <div className="col-span-1">
+                        <label className="block text-xs text-slate-500 mb-1">Prefix</label>
+                        <select
+                          value={newProduct.scale_prefix}
+                          onChange={e => handleScalePrefixChange(e.target.value)}
+                          className="w-full px-2 py-2 border-2 border-slate-200 rounded-lg focus:border-blue-500 focus:outline-none text-sm bg-white"
+                        >
+                          <option value="27">27 - Tartı (gram)</option>
+                          <option value="28">28 - Tartı (gram)</option>
+                          <option value="29">29 - Fiyat</option>
+                        </select>
+                      </div>
+                      <div className="col-span-2">
+                        <label className="block text-xs text-slate-500 mb-1">PLU / Stok Kodu (5 hane)</label>
+                        <input
+                          type="text"
+                          placeholder="Örn: 06564"
+                          value={newProduct.plu_code}
+                          onChange={e => handlePluCodeChange(e.target.value)}
+                          className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:border-blue-500 focus:outline-none text-sm font-mono bg-white"
+                          maxLength={5}
+                        />
+                      </div>
                     </div>
-                  ) : (
-                    <input
-                      type="number"
-                      step="0.01"
-                      placeholder="Fark (₺)"
-                      value={variantPrice}
-                      onChange={(e) => setVariantPrice(e.target.value)}
-                      className="w-28 px-3 py-3 border-2 border-slate-200 rounded-xl focus:border-blue-500 focus:outline-none"
-                    />
-                  )}
-                  <button
-                    onClick={handleAddVariant}
-                    className="px-4 py-3 bg-green-600 text-white rounded-xl hover:bg-green-700 transition-all active:scale-95"
-                  >
-                    <Plus size={20} />
-                  </button>
-                </div>
-
-                <div className="flex flex-wrap gap-2 mb-3">
-                  {[{label:'Az (0.5x)', val:'0.5'},{label:'Tam (1x)', val:'1'},{label:'1.5x', val:'1.5'},{label:'2x', val:'2'}].map(preset => (
-                    <button
-                      key={preset.val}
-                      type="button"
-                      onClick={() => { setVariantMode('multiplier'); setVariantMultiplier(preset.val); }}
-                      className={`px-3 py-1.5 text-sm rounded-lg border-2 transition-all ${variantMultiplier === preset.val && variantMode === 'multiplier' ? 'border-orange-500 bg-orange-50 text-orange-700 font-medium' : 'border-slate-200 text-slate-600 hover:border-slate-300'}`}
-                    >
-                      {preset.label}
-                    </button>
-                  ))}
-                </div>
-
-                {newProduct.variants.length > 0 && (
-                  <div className="space-y-2">
-                    {newProduct.variants.map((variant, index) => {
-                      const basePrice = parseFloat(newProduct.price) || 0;
-                      const finalPrice = basePrice + variant.price_modifier;
-                      return (
-                      <div key={index} className="flex justify-between items-center bg-slate-50 px-4 py-3 rounded-xl">
-                        <span className="font-medium text-slate-700">{variant.name}</span>
-                        <div className="flex items-center gap-3">
-                          <div className="text-right">
-                            <div className="text-xs text-slate-500">
-                              {variant.price_modifier > 0 ? '+' : ''}{variant.price_modifier.toFixed(2)} ₺ fark
-                            </div>
-                            <div className="text-green-600 font-bold text-sm">{finalPrice.toFixed(2)} ₺</div>
-                          </div>
-                          <button
-                            onClick={() => handleRemoveVariant(index)}
-                            className="text-red-600 hover:bg-red-50 p-2 rounded-lg transition-all"
-                          >
-                            <Trash2 size={18} />
-                          </button>
+                    {newProduct.barcode ? (
+                      <div className="flex items-center gap-2 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
+                        <Barcode className="w-4 h-4 text-green-600 shrink-0" />
+                        <div>
+                          <div className="text-xs text-green-600 font-medium">Otomatik oluşturulan barkod</div>
+                          <div className="font-mono font-bold text-slate-700 text-sm tracking-widest">{newProduct.barcode}</div>
                         </div>
                       </div>
-                      );
-                    })}
+                    ) : (
+                      <p className="text-xs text-slate-400">PLU kodu girildiğinde EAN-13 barkod otomatik oluşturulur.</p>
+                    )}
                   </div>
-                )}
-              </div>
 
-              <div className="flex gap-3 mt-6">
-                <button
-                  onClick={() => setShowAddProduct(false)}
-                  className="flex-1 px-6 py-3 bg-slate-200 text-slate-700 rounded-xl hover:bg-slate-300 transition-all"
-                >
-                  İptal
-                </button>
-                <button
-                  onClick={handleAddProduct}
-                  className="flex-1 px-6 py-3 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-xl hover:shadow-lg transition-all"
-                >
-                  Ekle
-                </button>
-              </div>
+                  <div className="border-2 border-emerald-100 rounded-xl p-3 bg-emerald-50/40">
+                    <label className="flex items-center gap-3 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={newProduct.scale_enabled}
+                        onChange={(e) => setNewProduct({ ...newProduct, scale_enabled: e.target.checked })}
+                        className="w-4 h-4 rounded border-slate-300"
+                      />
+                      <div>
+                        <div className="text-sm font-semibold text-slate-700">Bilgisayar Bağlantılı Terazi</div>
+                        <div className="text-xs text-slate-500">CAS ERJ gibi canlı tartı sistemi</div>
+                      </div>
+                    </label>
+                  </div>
+
+                  {availablePrinters.length > 0 && (
+                    <div className="border-2 border-orange-100 rounded-xl p-3 bg-orange-50/40">
+                      <div className="flex items-center gap-2 mb-2">
+                        <Printer className="w-4 h-4 text-orange-500" />
+                        <span className="font-semibold text-sm text-slate-700">Yazıcı Yönlendirmesi</span>
+                      </div>
+                      <select
+                        value={newProduct.printer_name}
+                        onChange={e => setNewProduct({ ...newProduct, printer_name: e.target.value })}
+                        className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg focus:border-orange-400 focus:outline-none text-sm bg-white"
+                      >
+                        <option value="">Kategori/Varsayılan yazıcı kullan</option>
+                        {availablePrinters.map(p => (
+                          <option key={p.name} value={p.name}>{p.label || p.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
+                  <div className="border-2 border-slate-200 rounded-xl p-3">
+                    <h3 className="font-semibold text-sm text-slate-700 mb-2">Porsiyon Seçenekleri</h3>
+                    {newProduct.price && (
+                      <p className="text-xs text-slate-500 mb-2">Ana fiyat: <span className="font-semibold text-slate-700">{parseFloat(newProduct.price).toFixed(2)} ₺</span></p>
+                    )}
+                    <div className="flex gap-2 mb-2">
+                      <button
+                        type="button"
+                        onClick={() => setVariantMode('multiplier')}
+                        className={`flex-1 py-1.5 rounded-lg text-xs font-medium transition-all ${variantMode === 'multiplier' ? 'bg-orange-500 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+                      >
+                        Carpan ile
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setVariantMode('fixed')}
+                        className={`flex-1 py-1.5 rounded-lg text-xs font-medium transition-all ${variantMode === 'fixed' ? 'bg-orange-500 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+                      >
+                        Sabit Fiyat Farkı
+                      </button>
+                    </div>
+                    <div className="flex gap-2 mb-2">
+                      <input
+                        type="text"
+                        placeholder="Porsiyon adı"
+                        value={variantName}
+                        onChange={(e) => setVariantName(e.target.value)}
+                        className="flex-1 px-3 py-2 border-2 border-slate-200 rounded-lg focus:border-blue-500 focus:outline-none text-sm"
+                      />
+                      {variantMode === 'multiplier' ? (
+                        <input
+                          type="number"
+                          step="0.1"
+                          min="0"
+                          placeholder="Carpan"
+                          value={variantMultiplier}
+                          onChange={(e) => setVariantMultiplier(e.target.value)}
+                          className="w-24 px-2 py-2 border-2 border-slate-200 rounded-lg focus:border-blue-500 focus:outline-none text-sm"
+                        />
+                      ) : (
+                        <input
+                          type="number"
+                          step="0.01"
+                          placeholder="Fark (₺)"
+                          value={variantPrice}
+                          onChange={(e) => setVariantPrice(e.target.value)}
+                          className="w-24 px-2 py-2 border-2 border-slate-200 rounded-lg focus:border-blue-500 focus:outline-none text-sm"
+                        />
+                      )}
+                      <button
+                        onClick={handleAddVariant}
+                        className="px-3 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-all active:scale-95"
+                      >
+                        <Plus size={18} />
+                      </button>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5 mb-2">
+                      {[{label:'Az (0.5x)', val:'0.5'},{label:'Tam (1x)', val:'1'},{label:'1.5x', val:'1.5'},{label:'2x', val:'2'}].map(preset => (
+                        <button
+                          key={preset.val}
+                          type="button"
+                          onClick={() => { setVariantMode('multiplier'); setVariantMultiplier(preset.val); }}
+                          className={`px-2.5 py-1 text-xs rounded-lg border-2 transition-all ${variantMultiplier === preset.val && variantMode === 'multiplier' ? 'border-orange-500 bg-orange-50 text-orange-700 font-medium' : 'border-slate-200 text-slate-600 hover:border-slate-300'}`}
+                        >
+                          {preset.label}
+                        </button>
+                      ))}
+                    </div>
+                    {newProduct.variants.length > 0 && (
+                      <div className="space-y-1.5">
+                        {newProduct.variants.map((variant, index) => {
+                          const basePrice = parseFloat(newProduct.price) || 0;
+                          const finalPrice = basePrice + variant.price_modifier;
+                          return (
+                            <div key={index} className="flex justify-between items-center bg-slate-50 px-3 py-2 rounded-lg">
+                              <span className="font-medium text-slate-700 text-sm">{variant.name}</span>
+                              <div className="flex items-center gap-2">
+                                <div className="text-right">
+                                  <div className="text-[10px] text-slate-500">{variant.price_modifier > 0 ? '+' : ''}{variant.price_modifier.toFixed(2)} ₺ fark</div>
+                                  <div className="text-green-600 font-bold text-xs">{finalPrice.toFixed(2)} ₺</div>
+                                </div>
+                                <button
+                                  onClick={() => handleRemoveVariant(index)}
+                                  className="text-red-600 hover:bg-red-50 p-1.5 rounded-lg transition-all"
+                                >
+                                  <Trash2 size={16} />
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="px-5 sm:px-7 py-3 border-t border-slate-200 bg-white shrink-0 flex flex-col-reverse sm:flex-row gap-2 sm:gap-3">
+              <button
+                onClick={() => setShowAddProduct(false)}
+                className="flex-1 px-6 py-3 bg-slate-200 text-slate-700 rounded-xl hover:bg-slate-300 transition-all"
+              >
+                İptal
+              </button>
+              <button
+                onClick={handleAddProduct}
+                className="flex-1 px-6 py-3 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-xl hover:shadow-lg transition-all"
+              >
+                Ekle
+              </button>
             </div>
           </div>
         </div>
       )}
 
       {showStockEntry && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl p-8 max-w-xl w-full">
-            <h2 className="text-2xl font-bold mb-6">Stok Girisi (Tedarik)</h2>
-            <div className="space-y-4">
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-stretch sm:items-center justify-center p-0 sm:p-4 overscroll-contain">
+          <div className="bg-white w-full sm:max-w-2xl sm:rounded-2xl flex flex-col overflow-hidden shadow-2xl sm:max-h-[90vh] min-h-0 max-h-full">
+            <div className="flex items-center justify-between px-5 sm:px-7 py-3 sm:py-4 border-b border-slate-200 shrink-0">
+              <h2 className="text-lg sm:text-2xl font-bold">Stok Girişi (Tedarik)</h2>
+              <button
+                onClick={() => setShowStockEntry(false)}
+                className="p-2 rounded-lg hover:bg-slate-100 text-slate-500"
+                aria-label="Kapat"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="flex-1 min-h-0 overflow-y-auto px-5 sm:px-7 py-4 space-y-3 overscroll-contain">
               {!branchStockFeatureAvailable && (
                 <div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-                  Uyari: Subeye ozel stok tablosu henuz kurulmadigi icin su an global stok isleniyor.
+                  Uyarı: Şubeye özel stok tablosu henüz kurulmadığı için şu an global stok işleniyor.
                 </div>
               )}
               <div className="text-xs text-slate-500 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
-                Aktif sube: <span className="font-semibold text-slate-700">{activeBranch?.name || '-'}</span>
+                Aktif şube: <span className="font-semibold text-slate-700">{activeBranch?.name || '-'}</span>
               </div>
               <select
                 value={stockEntry.branch_id}
                 onChange={(e) => setStockEntry({ ...stockEntry, branch_id: e.target.value })}
                 className="w-full px-4 py-3 border-2 border-slate-200 rounded-xl focus:border-blue-500 focus:outline-none text-base"
               >
-                <option value="">Sube secin</option>
+                <option value="">Şube seçin</option>
                 {branches.map((b) => (
-                  <option key={b.id} value={b.id}>{b.name}{b.is_main ? ' (Ana Sube)' : ''}</option>
+                  <option key={b.id} value={b.id}>{b.name}{b.is_main ? ' (Ana Şube)' : ''}</option>
                 ))}
               </select>
 
-              <div className="space-y-2 max-h-64 overflow-y-auto">
-                <div className="grid grid-cols-2 gap-2">
-                  <input
-                    type="text"
-                    value={stockEntrySearch}
-                    onChange={(e) => setStockEntrySearch(e.target.value)}
-                    placeholder="Urun ara ve Enter"
-                    autoComplete="new-password"
-                    data-lpignore="true"
-                    onKeyDown={(e) => {
-                      if (e.key !== 'Enter') return;
-                      const q = stockEntrySearch.trim().toLowerCase();
-                      if (!q) return;
-                      const hit = products.find((p) => p.name.toLowerCase().includes(q));
-                      if (hit) {
-                        appendStockEntryLineByProduct(hit.id);
-                        setStockEntrySearch('');
-                      }
-                    }}
-                    className="px-3 py-2 border-2 border-slate-200 rounded-xl focus:border-blue-500 focus:outline-none text-sm"
-                  />
-                  <input
-                    type="text"
-                    value={stockEntryBarcode}
-                    onChange={(e) => setStockEntryBarcode(e.target.value)}
-                    placeholder="Barkod okut / gir"
-                    autoComplete="off"
-                    data-lpignore="true"
-                    onKeyDown={(e) => {
-                      if (e.key !== 'Enter') return;
-                      const code = stockEntryBarcode.trim();
-                      if (!code) return;
-                      const hit = products.find((p) => p.barcode === code);
-                      if (hit) {
-                        appendStockEntryLineByProduct(hit.id);
-                        setStockEntryBarcode('');
-                      } else {
-                        alert('Barkod ile urun bulunamadi');
-                      }
-                    }}
-                    className="px-3 py-2 border-2 border-slate-200 rounded-xl focus:border-blue-500 focus:outline-none text-sm"
-                  />
-                </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <input
+                  type="text"
+                  value={stockEntrySearch}
+                  onChange={(e) => setStockEntrySearch(e.target.value)}
+                  placeholder="Ürün ara ve Enter"
+                  autoComplete="new-password"
+                  data-lpignore="true"
+                  onKeyDown={(e) => {
+                    if (e.key !== 'Enter') return;
+                    const q = stockEntrySearch.trim().toLowerCase();
+                    if (!q) return;
+                    const hit = products.find((p) => p.name.toLowerCase().includes(q));
+                    if (hit) {
+                      appendStockEntryLineByProduct(hit.id);
+                      setStockEntrySearch('');
+                    }
+                  }}
+                  className="px-3 py-2 border-2 border-slate-200 rounded-xl focus:border-blue-500 focus:outline-none text-sm"
+                />
+                <input
+                  type="text"
+                  value={stockEntryBarcode}
+                  onChange={(e) => setStockEntryBarcode(e.target.value)}
+                  placeholder="Barkod okut / gir"
+                  autoComplete="off"
+                  data-lpignore="true"
+                  onKeyDown={(e) => {
+                    if (e.key !== 'Enter') return;
+                    const code = stockEntryBarcode.trim();
+                    if (!code) return;
+                    const hit = products.find((p) => p.barcode === code);
+                    if (hit) {
+                      appendStockEntryLineByProduct(hit.id);
+                      setStockEntryBarcode('');
+                    } else {
+                      alert('Barkod ile ürün bulunamadı');
+                    }
+                  }}
+                  className="px-3 py-2 border-2 border-slate-200 rounded-xl focus:border-blue-500 focus:outline-none text-sm"
+                />
+              </div>
+
+              <div className="space-y-2">
                 {stockEntryLines.map((line, idx) => (
                   <div key={idx} className="grid grid-cols-12 gap-2 items-center">
                     <select
                       value={line.product_id}
                       onChange={(e) => setStockEntryLines(prev => prev.map((r, i) => i === idx ? { ...r, product_id: e.target.value } : r))}
-                      className="col-span-6 px-3 py-2 border-2 border-slate-200 rounded-xl focus:border-blue-500 focus:outline-none text-sm"
+                      className="col-span-12 sm:col-span-6 px-3 py-2 border-2 border-slate-200 rounded-xl focus:border-blue-500 focus:outline-none text-sm"
                     >
-                      <option value="">Urun secin</option>
+                      <option value="">Ürün seçin</option>
                       {products.map((p) => (
                         <option key={p.id} value={p.id}>
                           {p.name} (Mevcut: {getVisibleStock(p)} {p.unit})
@@ -2169,7 +2254,7 @@ export function Products() {
                       placeholder="Miktar"
                       value={line.quantity}
                       onChange={(e) => setStockEntryLines(prev => prev.map((r, i) => i === idx ? { ...r, quantity: e.target.value } : r))}
-                      className="col-span-2 px-3 py-2 border-2 border-slate-200 rounded-xl focus:border-blue-500 focus:outline-none text-sm"
+                      className="col-span-5 sm:col-span-2 px-3 py-2 border-2 border-slate-200 rounded-xl focus:border-blue-500 focus:outline-none text-sm"
                     />
                     <input
                       type="number"
@@ -2178,12 +2263,12 @@ export function Products() {
                       placeholder="Maliyet"
                       value={line.unit_cost}
                       onChange={(e) => setStockEntryLines(prev => prev.map((r, i) => i === idx ? { ...r, unit_cost: e.target.value } : r))}
-                      className="col-span-3 px-3 py-2 border-2 border-slate-200 rounded-xl focus:border-blue-500 focus:outline-none text-sm"
+                      className="col-span-6 sm:col-span-3 px-3 py-2 border-2 border-slate-200 rounded-xl focus:border-blue-500 focus:outline-none text-sm"
                     />
                     <button
                       onClick={() => setStockEntryLines(prev => prev.length === 1 ? prev : prev.filter((_, i) => i !== idx))}
-                      className="col-span-1 p-2 text-red-600 hover:bg-red-50 rounded-lg"
-                      title="Satir sil"
+                      className="col-span-1 p-2 text-red-600 hover:bg-red-50 rounded-lg flex items-center justify-center"
+                      title="Satır sil"
                     >
                       <Trash2 size={15} />
                     </button>
@@ -2193,13 +2278,13 @@ export function Products() {
                   onClick={() => setStockEntryLines(prev => [...prev, { product_id: '', quantity: '', unit_cost: '' }])}
                   className="w-full px-3 py-2 border border-blue-200 text-blue-700 rounded-xl hover:bg-blue-50 text-sm"
                 >
-                  + Satir Ekle
+                  + Satır Ekle
                 </button>
               </div>
 
               <input
                 type="text"
-                placeholder="Tedarikci/Firma (opsiyonel)"
+                placeholder="Tedarikçi/Firma (opsiyonel)"
                 value={stockEntry.supplier_name}
                 onChange={(e) => setStockEntry({ ...stockEntry, supplier_name: e.target.value })}
                 className="w-full px-4 py-3 border-2 border-slate-200 rounded-xl focus:border-blue-500 focus:outline-none"
@@ -2210,106 +2295,119 @@ export function Products() {
                 value={stockEntry.note}
                 onChange={(e) => setStockEntry({ ...stockEntry, note: e.target.value })}
                 className="w-full px-4 py-3 border-2 border-slate-200 rounded-xl focus:border-blue-500 focus:outline-none"
-                rows={3}
+                rows={2}
               />
+            </div>
 
-              <div className="flex gap-3 mt-2">
-                <button
-                  onClick={() => setShowStockEntry(false)}
-                  className="flex-1 px-6 py-3 bg-slate-200 text-slate-700 rounded-xl hover:bg-slate-300 transition-all"
-                >
-                  Iptal
-                </button>
-                <button
-                  onClick={handleStockEntry}
-                  className="flex-1 px-6 py-3 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-xl hover:shadow-lg transition-all"
-                >
-                  Stok Girisi Kaydet
-                </button>
-              </div>
+            <div className="px-5 sm:px-7 py-3 border-t border-slate-200 bg-white shrink-0 flex flex-col-reverse sm:flex-row gap-2 sm:gap-3">
+              <button
+                onClick={() => setShowStockEntry(false)}
+                className="flex-1 px-6 py-3 bg-slate-200 text-slate-700 rounded-xl hover:bg-slate-300 transition-all"
+              >
+                İptal
+              </button>
+              <button
+                onClick={handleStockEntry}
+                className="flex-1 px-6 py-3 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-xl hover:shadow-lg transition-all"
+              >
+                Stok Girişi Kaydet
+              </button>
             </div>
           </div>
         </div>
       )}
 
       {showStockTransfer && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl p-8 max-w-xl w-full">
-            <h2 className="text-2xl font-bold mb-6">Subeler Arasi Stok Transferi</h2>
-            <div className="space-y-4">
-              <select
-                value={stockTransfer.source_branch_id}
-                onChange={(e) => setStockTransfer({ ...stockTransfer, source_branch_id: e.target.value })}
-                className="w-full px-4 py-3 border-2 border-slate-200 rounded-xl focus:border-purple-500 focus:outline-none text-base"
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-stretch sm:items-center justify-center p-0 sm:p-4 overscroll-contain">
+          <div className="bg-white w-full sm:max-w-2xl sm:rounded-2xl flex flex-col overflow-hidden shadow-2xl sm:max-h-[90vh] min-h-0 max-h-full">
+            <div className="flex items-center justify-between px-5 sm:px-7 py-3 sm:py-4 border-b border-slate-200 shrink-0">
+              <h2 className="text-lg sm:text-2xl font-bold">Şubeler Arası Stok Transferi</h2>
+              <button
+                onClick={() => setShowStockTransfer(false)}
+                className="p-2 rounded-lg hover:bg-slate-100 text-slate-500"
+                aria-label="Kapat"
               >
-                <option value="">Kaynak sube secin</option>
-                {branches.map((b) => (
-                  <option key={b.id} value={b.id}>{b.name}{b.is_main ? ' (Ana Sube)' : ''}</option>
-                ))}
-              </select>
+                <X size={20} />
+              </button>
+            </div>
 
-              <select
-                value={stockTransfer.target_branch_id}
-                onChange={(e) => setStockTransfer({ ...stockTransfer, target_branch_id: e.target.value })}
-                className="w-full px-4 py-3 border-2 border-slate-200 rounded-xl focus:border-purple-500 focus:outline-none text-base"
-              >
-                <option value="">Hedef sube secin</option>
-                {branches.filter((b) => b.id !== stockTransfer.source_branch_id).map((b) => (
-                  <option key={b.id} value={b.id}>{b.name}</option>
-                ))}
-              </select>
+            <div className="flex-1 min-h-0 overflow-y-auto px-5 sm:px-7 py-4 space-y-3 overscroll-contain">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-3">
+                <select
+                  value={stockTransfer.source_branch_id}
+                  onChange={(e) => setStockTransfer({ ...stockTransfer, source_branch_id: e.target.value })}
+                  className="w-full px-4 py-3 border-2 border-slate-200 rounded-xl focus:border-purple-500 focus:outline-none text-base"
+                >
+                  <option value="">Kaynak şube seçin</option>
+                  {branches.map((b) => (
+                    <option key={b.id} value={b.id}>{b.name}{b.is_main ? ' (Ana Şube)' : ''}</option>
+                  ))}
+                </select>
 
-              <div className="space-y-2 max-h-64 overflow-y-auto">
-                <div className="grid grid-cols-2 gap-2">
-                  <input
-                    type="text"
-                    value={stockTransferSearch}
-                    onChange={(e) => setStockTransferSearch(e.target.value)}
-                    placeholder="Urun ara ve Enter"
-                    autoComplete="new-password"
-                    data-lpignore="true"
-                    onKeyDown={(e) => {
-                      if (e.key !== 'Enter') return;
-                      const q = stockTransferSearch.trim().toLowerCase();
-                      if (!q) return;
-                      const hit = products.find((p) => p.name.toLowerCase().includes(q));
-                      if (hit) {
-                        appendStockTransferLineByProduct(hit.id);
-                        setStockTransferSearch('');
-                      }
-                    }}
-                    className="px-3 py-2 border-2 border-slate-200 rounded-xl focus:border-purple-500 focus:outline-none text-sm"
-                  />
-                  <input
-                    type="text"
-                    value={stockTransferBarcode}
-                    onChange={(e) => setStockTransferBarcode(e.target.value)}
-                    placeholder="Barkod okut / gir"
-                    autoComplete="off"
-                    data-lpignore="true"
-                    onKeyDown={(e) => {
-                      if (e.key !== 'Enter') return;
-                      const code = stockTransferBarcode.trim();
-                      if (!code) return;
-                      const hit = products.find((p) => p.barcode === code);
-                      if (hit) {
-                        appendStockTransferLineByProduct(hit.id);
-                        setStockTransferBarcode('');
-                      } else {
-                        alert('Barkod ile urun bulunamadi');
-                      }
-                    }}
-                    className="px-3 py-2 border-2 border-slate-200 rounded-xl focus:border-purple-500 focus:outline-none text-sm"
-                  />
-                </div>
+                <select
+                  value={stockTransfer.target_branch_id}
+                  onChange={(e) => setStockTransfer({ ...stockTransfer, target_branch_id: e.target.value })}
+                  className="w-full px-4 py-3 border-2 border-slate-200 rounded-xl focus:border-purple-500 focus:outline-none text-base"
+                >
+                  <option value="">Hedef şube seçin</option>
+                  {branches.filter((b) => b.id !== stockTransfer.source_branch_id).map((b) => (
+                    <option key={b.id} value={b.id}>{b.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <input
+                  type="text"
+                  value={stockTransferSearch}
+                  onChange={(e) => setStockTransferSearch(e.target.value)}
+                  placeholder="Ürün ara ve Enter"
+                  autoComplete="new-password"
+                  data-lpignore="true"
+                  onKeyDown={(e) => {
+                    if (e.key !== 'Enter') return;
+                    const q = stockTransferSearch.trim().toLowerCase();
+                    if (!q) return;
+                    const hit = products.find((p) => p.name.toLowerCase().includes(q));
+                    if (hit) {
+                      appendStockTransferLineByProduct(hit.id);
+                      setStockTransferSearch('');
+                    }
+                  }}
+                  className="px-3 py-2 border-2 border-slate-200 rounded-xl focus:border-purple-500 focus:outline-none text-sm"
+                />
+                <input
+                  type="text"
+                  value={stockTransferBarcode}
+                  onChange={(e) => setStockTransferBarcode(e.target.value)}
+                  placeholder="Barkod okut / gir"
+                  autoComplete="off"
+                  data-lpignore="true"
+                  onKeyDown={(e) => {
+                    if (e.key !== 'Enter') return;
+                    const code = stockTransferBarcode.trim();
+                    if (!code) return;
+                    const hit = products.find((p) => p.barcode === code);
+                    if (hit) {
+                      appendStockTransferLineByProduct(hit.id);
+                      setStockTransferBarcode('');
+                    } else {
+                      alert('Barkod ile ürün bulunamadı');
+                    }
+                  }}
+                  className="px-3 py-2 border-2 border-slate-200 rounded-xl focus:border-purple-500 focus:outline-none text-sm"
+                />
+              </div>
+
+              <div className="space-y-2">
                 {stockTransferLines.map((line, idx) => (
                   <div key={idx} className="grid grid-cols-12 gap-2 items-center">
                     <select
                       value={line.product_id}
                       onChange={(e) => setStockTransferLines(prev => prev.map((r, i) => i === idx ? { ...r, product_id: e.target.value } : r))}
-                      className="col-span-8 px-3 py-2 border-2 border-slate-200 rounded-xl focus:border-purple-500 focus:outline-none text-sm"
+                      className="col-span-12 sm:col-span-8 px-3 py-2 border-2 border-slate-200 rounded-xl focus:border-purple-500 focus:outline-none text-sm"
                     >
-                      <option value="">Transfer urunu</option>
+                      <option value="">Transfer ürünü</option>
                       {products.map((p) => (
                         <option key={p.id} value={p.id}>
                           {p.name} (Kaynak stok: {getVisibleStock(p)} {p.unit})
@@ -2323,12 +2421,12 @@ export function Products() {
                       placeholder="Miktar"
                       value={line.quantity}
                       onChange={(e) => setStockTransferLines(prev => prev.map((r, i) => i === idx ? { ...r, quantity: e.target.value } : r))}
-                      className="col-span-3 px-3 py-2 border-2 border-slate-200 rounded-xl focus:border-purple-500 focus:outline-none text-sm"
+                      className="col-span-11 sm:col-span-3 px-3 py-2 border-2 border-slate-200 rounded-xl focus:border-purple-500 focus:outline-none text-sm"
                     />
                     <button
                       onClick={() => setStockTransferLines(prev => prev.length === 1 ? prev : prev.filter((_, i) => i !== idx))}
-                      className="col-span-1 p-2 text-red-600 hover:bg-red-50 rounded-lg"
-                      title="Satir sil"
+                      className="col-span-1 p-2 text-red-600 hover:bg-red-50 rounded-lg flex items-center justify-center"
+                      title="Satır sil"
                     >
                       <Trash2 size={15} />
                     </button>
@@ -2338,7 +2436,7 @@ export function Products() {
                   onClick={() => setStockTransferLines(prev => [...prev, { product_id: '', quantity: '' }])}
                   className="w-full px-3 py-2 border border-purple-200 text-purple-700 rounded-xl hover:bg-purple-50 text-sm"
                 >
-                  + Satir Ekle
+                  + Satır Ekle
                 </button>
               </div>
 
@@ -2347,23 +2445,23 @@ export function Products() {
                 value={stockTransfer.note}
                 onChange={(e) => setStockTransfer({ ...stockTransfer, note: e.target.value })}
                 className="w-full px-4 py-3 border-2 border-slate-200 rounded-xl focus:border-purple-500 focus:outline-none"
-                rows={3}
+                rows={2}
               />
+            </div>
 
-              <div className="flex gap-3 mt-2">
-                <button
-                  onClick={() => setShowStockTransfer(false)}
-                  className="flex-1 px-6 py-3 bg-slate-200 text-slate-700 rounded-xl hover:bg-slate-300 transition-all"
-                >
-                  Iptal
-                </button>
-                <button
-                  onClick={handleStockTransfer}
-                  className="flex-1 px-6 py-3 bg-gradient-to-r from-purple-600 to-purple-700 text-white rounded-xl hover:shadow-lg transition-all"
-                >
-                  Transferi Kaydet
-                </button>
-              </div>
+            <div className="px-5 sm:px-7 py-3 border-t border-slate-200 bg-white shrink-0 flex flex-col-reverse sm:flex-row gap-2 sm:gap-3">
+              <button
+                onClick={() => setShowStockTransfer(false)}
+                className="flex-1 px-6 py-3 bg-slate-200 text-slate-700 rounded-xl hover:bg-slate-300 transition-all"
+              >
+                İptal
+              </button>
+              <button
+                onClick={handleStockTransfer}
+                className="flex-1 px-6 py-3 bg-gradient-to-r from-purple-600 to-purple-700 text-white rounded-xl hover:shadow-lg transition-all"
+              >
+                Transferi Kaydet
+              </button>
             </div>
           </div>
         </div>
@@ -2433,12 +2531,12 @@ export function Products() {
       )}
 
       {showStockMovements && movementProduct && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl p-6 max-w-6xl w-full max-h-[90vh] overflow-y-auto">
-            <div className="flex justify-between items-center mb-4">
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-stretch sm:items-center justify-center p-0 sm:p-4 overscroll-contain">
+          <div className="bg-white w-full sm:max-w-6xl sm:rounded-2xl flex flex-col overflow-hidden shadow-2xl sm:max-h-[90vh] min-h-0 max-h-full">
+            <div className="flex justify-between items-center px-5 sm:px-6 py-3 sm:py-4 border-b border-slate-200 shrink-0">
               <div>
-                <h2 className="text-xl font-bold text-slate-800">Stok Hareketleri</h2>
-                <p className="text-sm text-slate-500">{movementProduct.name}</p>
+                <h2 className="text-lg sm:text-xl font-bold text-slate-800">Stok Hareketleri</h2>
+                <p className="text-xs sm:text-sm text-slate-500">{movementProduct.name}</p>
               </div>
               <button onClick={() => {
                 setShowStockMovements(false);
@@ -2452,6 +2550,8 @@ export function Products() {
                 <X size={18} />
               </button>
             </div>
+
+            <div className="flex-1 min-h-0 overflow-y-auto px-5 sm:px-6 py-4 overscroll-contain">
 
             <div className="grid grid-cols-1 md:grid-cols-5 gap-2 mb-4">
               <select
@@ -2560,13 +2660,14 @@ export function Products() {
                 </table>
               </div>
             )}
+            </div>
           </div>
         </div>
       )}
 
       {showImport && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-3xl w-full max-h-[90vh] flex flex-col shadow-2xl">
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-stretch sm:items-center justify-center p-0 sm:p-4 overscroll-contain">
+          <div className="bg-white sm:rounded-2xl sm:max-w-3xl w-full sm:max-h-[90vh] flex flex-col shadow-2xl overflow-hidden min-h-0 max-h-full">
             <div className="flex items-center justify-between p-6 border-b border-slate-100">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 bg-green-100 rounded-xl flex items-center justify-center">

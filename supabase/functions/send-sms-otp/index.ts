@@ -1,3 +1,5 @@
+import { postOztekSms } from '../_shared/oztekSms.ts';
+
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
@@ -36,30 +38,6 @@ async function hmacSign(input: string, secret: string) {
   return b64urlEncode(String.fromCharCode(...new Uint8Array(sig)));
 }
 
-async function sendOtpSms(phone: string, message: string) {
-  const endpoint = Deno.env.get('OZTEK_SMS_ENDPOINT') || 'http://www.oztekbayi.com/panel/smsgonder1Npost.php';
-  const kullanicino = Deno.env.get('OZTEK_KULLANICINO') || '';
-  const kullaniciadi = Deno.env.get('OZTEK_KULLANICIADI') || '';
-  const sifre = Deno.env.get('OZTEK_SIFRE') || '';
-  const orjinator = Deno.env.get('OZTEK_ORGINATOR') || 'AYKA SOFT';
-  const body = `data=<sms><kno>${kullanicino}</kno><kulad>${kullaniciadi}</kulad><sifre>${sifre}</sifre><gonderen>${orjinator}</gonderen><mesaj>${message}</mesaj><numaralar>${phone}</numaralar><tur>Turkce</tur></sms>`;
-
-  const res = await fetch(endpoint, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded; charset=utf-8',
-    },
-    body,
-  });
-
-  const text = await res.text();
-  if (!res.ok) throw new Error(`SMS servis hatası: ${res.status}`);
-  const rawResult = text.trim();
-  if (!rawResult) throw new Error('SMS servis yaniti bos');
-  if (!rawResult.startsWith('1:')) throw new Error(`SMS saglayici reddetti: ${rawResult}`);
-  return text;
-}
-
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response(null, { status: 200, headers: corsHeaders });
 
@@ -84,7 +62,7 @@ Deno.serve(async (req: Request) => {
     const otpToken = `${payloadB64}.${sig}`;
 
     const message = `SefPOS dogrulama kodunuz: ${code}. Kod 4 dakika gecerlidir.`;
-    await sendOtpSms(phone, message);
+    await postOztekSms(phone, message, 'SMS OTP');
 
     return new Response(JSON.stringify({ success: true, otpToken }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },

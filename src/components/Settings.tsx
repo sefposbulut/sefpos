@@ -363,14 +363,15 @@ export function Settings({ onClose }: SettingsProps) {
 
     let query = supabase
       .from('table_groups')
-      .select('*, branches(id, name, is_main)')
+      .select('id, tenant_id, name, prefix, color, branch_id, created_at')
       .eq('tenant_id', tenant.id);
 
     if (activeBranch) {
-      query = query.eq('branch_id', activeBranch.id);
+      query = query.or(`branch_id.eq.${activeBranch.id},branch_id.is.null`);
     }
 
-    const { data } = await query.order('name');
+    const { data, error } = await query.order('name');
+    if (error && import.meta.env.DEV) console.error('[ŞefPOS] loadGroups:', error.message, error);
 
     if (data) {
       setGroups(data as any);
@@ -410,13 +411,27 @@ export function Settings({ onClose }: SettingsProps) {
       return;
     }
 
+    if (!groupName.trim()) {
+      alert('Grup adı girin.');
+      return;
+    }
+
+    const branchForGroup = groupBranchId || activeBranch?.id;
+    if (!branchForGroup) {
+      alert('Önce üst menüden bir şube seçin veya formda şube seçin.');
+      return;
+    }
+
+    const rawPrefix = (groupPrefix || groupName || 'M').trim();
+    const prefix = rawPrefix.slice(0, 12).toUpperCase() || 'M';
+
     const { data, error } = await supabase
       .from('table_groups')
       .insert({
         tenant_id: tenant.id,
-        branch_id: groupBranchId || activeBranch?.id || null,
-        name: groupName,
-        prefix: groupPrefix.toUpperCase(),
+        branch_id: branchForGroup,
+        name: groupName.trim(),
+        prefix,
         color: groupColor,
       })
       .select();

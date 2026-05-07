@@ -10,7 +10,7 @@ Could not find the 'discount_amount' column of 'order_items' in the schema cache
 
 ### Yöntem 1: Supabase SQL Editor (Önerilen)
 1. [Supabase Dashboard](https://supabase.com/dashboard) açın
-2. Proje: `hwwsitusurqgpitptkuf`
+2. Proje: `xdfnozfuuzctubijbnds`
 3. **SQL Editor** gidin
 4. Aşağıdaki SQL komutunu çalıştırın:
 

@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState } from 'react';
-import { User } from '@supabase/supabase-js';
+import { User, Session } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
 import { Database } from '../lib/supabase';
 import { isSqlServerMode, isLocalMode } from '../lib/sqlDb';
@@ -343,19 +343,34 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return;
       }
 
-      // Cloud mode
+      // Cloud mode — önce sadece profil (roles(*) gömülüsü bazı PostgREST/şema sürümlerinde hata verebiliyor)
       const { data: profileData, error: profileError } = await supabase
         .from('profiles')
-        .select('*, roles(*)')
+        .select('*')
         .eq('id', userId)
         .maybeSingle();
 
       if (profileError || !profileData) {
+        if (import.meta.env.DEV) {
+          console.error('[ŞefPOS] Profil yüklenemedi:', profileError?.message || profileError, 'userId=', userId);
+        }
         setProfileLoadFailed(true);
         return;
       }
 
-      const prof = profileData as unknown as ProfileWithRole;
+      let prof = profileData as unknown as ProfileWithRole;
+      const rid = (profileData as { role_id?: string | null }).role_id;
+      if (rid) {
+        const { data: roleRow, error: roleErr } = await supabase
+          .from('roles')
+          .select('*')
+          .eq('id', rid)
+          .maybeSingle();
+        if (import.meta.env.DEV && roleErr) {
+          console.warn('[ŞefPOS] Rol satırı okunamadı (izinler varsayılan):', roleErr.message);
+        }
+        if (roleRow) prof = { ...prof, roles: roleRow as unknown as ProfileWithRole['roles'] };
+      }
       if (isProfileBlocked(prof)) {
         await forceSignOutForBlockedProfile();
         setProfileLoadFailed(true);
@@ -387,30 +402,60 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   useEffect(() => {
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      (async () => {
-        if (session?.user) {
-          setUser(session.user);
-          await loadProfile(session.user.id);
-        } else {
-          setUser(null);
-          setProfile(null);
-          setTenant(null);
-          setActiveBranchState(null);
-          setBranches([]);
-          setPermissions(DEFAULT_WAITER_PERMISSIONS);
-          setProfileLoadFailed(false);
-        }
-        setLoading(false);
-      })();
+    let cancelled = false;
+
+    const applySession = async (session: Session | null) => {
+      if (cancelled) return;
+      if (session?.user) {
+        setUser(session.user);
+        await loadProfile(session.user.id);
+      } else {
+        setUser(null);
+        setProfile(null);
+        setTenant(null);
+        setActiveBranchState(null);
+        setBranches([]);
+        setPermissions(DEFAULT_WAITER_PERMISSIONS);
+        setProfileLoadFailed(false);
+      }
+      if (!cancelled) setLoading(false);
+    };
+
+    void supabase.auth.getSession().then(({ data: { session } }) => {
+      void applySession(session);
     });
 
-    return () => { subscription.unsubscribe(); };
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'INITIAL_SESSION') return;
+      void applySession(session);
+    });
+
+    return () => {
+      cancelled = true;
+      subscription.unsubscribe();
+    };
   }, []);
 
   const signIn = async (email: string, password: string) => {
     const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) return { error };
+    if (error) {
+      const status = (error as { status?: number }).status;
+      const m = String(error.message || '');
+      if (
+        status === 500 ||
+        /\b500\b/i.test(m) ||
+        /database error|internal server error|unexpected_failure|querying schema/i.test(m)
+      ) {
+        return {
+          error: new Error(
+            'Database error querying schema (GoTrue). Dashboard → SQL Editor’da `scripts/fix-gotrue-database-error-querying-schema.sql` içeriğini çalıştırın veya `npm run db:migrate-remote`.',
+          ),
+        };
+      }
+      return { error };
+    }
 
     if (data.user) {
       const { data: profileData } = await supabase

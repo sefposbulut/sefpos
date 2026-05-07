@@ -28,3 +28,8 @@ release-new/
 .vs/
 old_release/
 old_release_extracted/
+
+# Geçici diagnostic / test çıktıları (şifre / kişisel bilgi içerebilir)
+scripts/_tmp-*.json
+scripts/_tmp-*.txt
+scripts/_tmp-*.log

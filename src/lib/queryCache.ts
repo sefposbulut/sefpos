@@ -15,6 +15,9 @@ const CACHE_TTL = {
   TABLES: 10 * 60 * 1000, // 10 minutes (uzatıldı)
 };
 
+/** Şema/kolon değişince artırın; eski boş menü önbelleğini düşürür */
+const MENU_CACHE_SCHEMA_VER = 'v2';
+
 class QueryCache {
   private cache = new Map<string, CacheEntry<any>>();
   private pendingRequests = new Map<string, Promise<any>>();
@@ -45,6 +48,10 @@ class QueryCache {
     return `${type}:${tenantId}:${branchId || 'global'}`;
   }
 
+  private getMenuCacheKey(type: 'products' | 'categories' | 'product_variants', tenantId: string) {
+    return `${type}:${MENU_CACHE_SCHEMA_VER}:${tenantId}`;
+  }
+
   private isExpired(entry: CacheEntry<any>, ttl: number) {
     return Date.now() - entry.timestamp > ttl;
   }
@@ -52,9 +59,9 @@ class QueryCache {
   async getProductsAndCategories(tenantId: string, branchId?: string, forceRefresh = false) {
     await this.dbReady;
 
-    const prodKey = this.getCacheKey('products', tenantId);
-    const catKey = this.getCacheKey('categories', tenantId);
-    const varKey = this.getCacheKey('product_variants', tenantId);
+    const prodKey = this.getMenuCacheKey('products', tenantId);
+    const catKey = this.getMenuCacheKey('categories', tenantId);
+    const varKey = this.getMenuCacheKey('product_variants', tenantId);
 
     const prodCache = this.cache.get(prodKey);
     const catCache = this.cache.get(catKey);
@@ -70,7 +77,7 @@ class QueryCache {
     }
 
     // Batch fetch from Supabase (3 queries paralel)
-    const dedup = `${tenantId}:batch`;
+    const dedup = `${tenantId}:batch:${MENU_CACHE_SCHEMA_VER}`;
     if (this.pendingRequests.has(dedup)) {
       return this.pendingRequests.get(dedup)!;
     }
@@ -80,7 +87,7 @@ class QueryCache {
         .from('products')
         .select('id, name, price, cost, category_id, is_active, image_url, barcode, printer_name, unit, stock_quantity, tax_rate, scale_enabled')
         .eq('tenant_id', tenantId)
-        .eq('is_active', true),
+        .or('is_active.eq.true,is_active.is.null'),
       supabase
         .from('categories')
         .select('id, name, color, tenant_id')
@@ -93,6 +100,11 @@ class QueryCache {
         .eq('is_active', true)
         .order('sort_order'),
     ]).then(([prodRes, catRes, varRes]) => {
+      if (import.meta.env.DEV) {
+        if (prodRes.error) console.error('[ŞefPOS] products sorgu hatası:', prodRes.error.message, prodRes.error);
+        if (catRes.error) console.error('[ŞefPOS] categories sorgu hatası:', catRes.error.message, catRes.error);
+        if (varRes.error) console.error('[ŞefPOS] product_variants sorgu hatası:', varRes.error.message, varRes.error);
+      }
       const products = (prodRes.data || []) as any[];
       const categories = (catRes.data || []) as any[];
       const productVariants = (varRes.data || []) as any[];
@@ -116,9 +128,9 @@ class QueryCache {
     categories: any[];
     productVariants: any[];
   } | null {
-    const prodKey = this.getCacheKey('products', tenantId);
-    const catKey = this.getCacheKey('categories', tenantId);
-    const varKey = this.getCacheKey('product_variants', tenantId);
+    const prodKey = this.getMenuCacheKey('products', tenantId);
+    const catKey = this.getMenuCacheKey('categories', tenantId);
+    const varKey = this.getMenuCacheKey('product_variants', tenantId);
     const prodCache = this.cache.get(prodKey);
     const catCache = this.cache.get(catKey);
     const varCache = this.cache.get(varKey);
@@ -155,6 +167,10 @@ class QueryCache {
   }
 
   invalidate(type: 'products' | 'categories' | 'tables' | 'orders' | 'product_variants', tenantId: string, branchId?: string) {
+    if (type === 'products' || type === 'categories' || type === 'product_variants') {
+      this.cache.delete(this.getMenuCacheKey(type, tenantId));
+      return;
+    }
     const key = this.getCacheKey(type, tenantId, branchId);
     this.cache.delete(key);
   }

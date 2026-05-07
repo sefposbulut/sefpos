@@ -2,14 +2,10 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
 import { isSqlServerMode, isLocalMode } from '../lib/sqlDb';
+import { phoneToAuthEmail } from '../lib/phoneAuthEmail';
 import { Eye, EyeOff, ChevronLeft, User, Lock, Building2, Phone, Bike, Delete, Cloud, Server, Settings, HardDrive } from 'lucide-react';
 
 const logoSrc = new URL('../../public/logo.png', import.meta.url).href;
-
-function phoneToEmail(phone: string) {
-  const cleaned = phone.replace(/\D/g, '');
-  return `${cleaned}@sefpos.com.tr`;
-}
 
 const REMEMBER_KEY = 'shefpos_remembered_login';
 const REMEMBER_PASSWORD_KEY = 'shefpos_remembered_password';
@@ -124,7 +120,7 @@ export function ElectronAuth({ onCourierMode, onSwitchMode, currentDbMode }: Ele
     if (isSqlServerMode()) {
       const api = (window as any).electronAPI;
       if (trimmed.includes('@')) return trimmed.toLowerCase();
-      if (isPhoneInput(trimmed)) return phoneToEmail(trimmed.replace(/\D/g, ''));
+      if (isPhoneInput(trimmed)) return phoneToAuthEmail(trimmed);
       const sanitized = trimmed.toLowerCase().replace(/[^a-z0-9_.-]/g, '');
       if (api?.sqlFindProfileByUsername) {
         try {
@@ -135,7 +131,7 @@ export function ElectronAuth({ onCourierMode, onSwitchMode, currentDbMode }: Ele
       return `${sanitized}@shefpos.local`;
     }
 
-    if (isPhoneInput(trimmed)) return phoneToEmail(trimmed.replace(/\D/g, ''));
+    if (isPhoneInput(trimmed)) return phoneToAuthEmail(trimmed);
     if (trimmed.includes('@') && !trimmed.endsWith('@shefpos.local') && trimmed.includes('.'))
       return trimmed.toLowerCase();
     const sanitized = trimmed.toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -167,7 +163,7 @@ export function ElectronAuth({ onCourierMode, onSwitchMode, currentDbMode }: Ele
             setLoading(false);
             return;
           }
-          email = cleaned === TEST_LOGIN_PHONE ? TEST_LOGIN_EMAIL : phoneToEmail(cleaned);
+          email = cleaned === TEST_LOGIN_PHONE ? TEST_LOGIN_EMAIL : phoneToAuthEmail(cleaned);
         }
       } else {
         email = await resolveEmail(loginValue);
@@ -223,7 +219,7 @@ export function ElectronAuth({ onCourierMode, onSwitchMode, currentDbMode }: Ele
     if (cleaned.length < 10) { setError('Geçerli bir telefon numarası girin'); return; }
     setLoading(true);
     try {
-      const email = phoneToEmail(cleaned);
+      const email = phoneToAuthEmail(cleaned);
       const { error } = await signUp(email, password, fullName, tenantName);
       if (error) throw error;
     } catch (err: any) {

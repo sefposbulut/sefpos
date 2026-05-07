@@ -164,6 +164,10 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
 
     const [groupsRes, tablesRes] = await Promise.all([groupQ, tableQ]);
 
+    if (import.meta.env.DEV && tablesRes.error) {
+      console.error('[ŞefPOS] restaurant_tables sorgu hatası:', tablesRes.error.message, tablesRes.error);
+    }
+
     if (groupsRes.data) {
       setTableGroups(groupsRes.data as TableGroup[]);
       if (groupsRes.data.length > 0) {

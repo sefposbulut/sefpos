@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
+import { phoneToAuthEmail } from '../lib/phoneAuthEmail';
 import { getDeviceBindingCode } from '../lib/deviceBinding';
 import { Phone, Lock, ArrowRight, Sparkles, LogOut, Key, Copy, Check } from 'lucide-react';
 
@@ -9,8 +10,6 @@ interface Waiter {
   tenant_id: string;
   branch_id?: string | null;
 }
-
-const phoneToEmail = (phone: string) => `${phone.replace(/\D/g, '')}@sefpos.com.tr`;
 
 const formatPhone = (value: string) => {
   const digits = value.replace(/\D/g, '').slice(0, 11);
@@ -52,7 +51,7 @@ export function WaiterLogin({ onLoginSuccess, onBack }: { onLoginSuccess: (waite
   };
 
   const authenticateWaiterProfile = async (phoneToSearch: string, tenantId: string) => {
-    const authEmail = phoneToEmail(phoneToSearch);
+    const authEmail = phoneToAuthEmail(phoneToSearch);
     const authRes = await supabase.auth.signInWithPassword({ email: authEmail, password: pin });
     if (authRes.error || !authRes.data.user?.id) {
       throw new Error('Garson auth hesabı bulunamadı. Restoran panelinden garsonu yeniden oluşturun.');

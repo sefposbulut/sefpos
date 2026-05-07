@@ -7,7 +7,7 @@
 
 ### Yöntem 1: Supabase Dashboard (Önerilen)
 1. [Supabase Dashboard](https://supabase.com/dashboard) açın
-2. Proje seçin: `hwwsitusurqgpitptkuf`
+2. Proje seçin: `xdfnozfuuzctubijbnds` (ŞefPOS birincil — AGENTS.md)
 3. **Authentication** → **Policies** gidin
 4. Aşağıdaki tablolarda RLS'i devre dışı bırakın:
    - `tenants`

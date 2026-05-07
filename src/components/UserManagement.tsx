@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { supabase } from '../lib/supabase';
+import { phoneToAuthEmail } from '../lib/phoneAuthEmail';
 import { USER_DELETE_HARD_RESET_SQL } from '../lib/userDeleteHardResetSql';
 import { useAuth } from '../contexts/AuthContext';
 import { Database } from '../lib/supabase';
@@ -846,8 +847,7 @@ export function UserManagement() {
       if (!session?.access_token) { alert('Oturum bilgisi alınamadı, lütfen tekrar giriş yapın'); return; }
 
       const sanitized = newUser.username.toLowerCase().replace(/[^a-z0-9]/g, '');
-      const waiterDigits = newUser.waiterPhone.replace(/\D/g, '');
-      const waiterEmail = `${waiterDigits}@sefpos.com.tr`;
+      const waiterEmail = phoneToAuthEmail(newUser.waiterPhone);
       const autoEmail = newUser.isWaiter ? waiterEmail : `${sanitized}@${tenant?.id?.slice(0, 8)}.shefpos.local`;
       const accountPassword = newUser.isWaiter ? newUser.waiterPin : newUser.password;
 

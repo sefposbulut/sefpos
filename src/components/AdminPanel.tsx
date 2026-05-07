@@ -573,7 +573,7 @@ function extractPhoneFromEmail(email: string | null | undefined) {
   const value = (email || '').trim().toLowerCase();
   if (!value || !value.includes('@')) return '';
   const local = value.split('@')[0] || '';
-  // Phone-based accounts are stored like 5XXXXXXXXX@sefpos.com.tr
+  // Phone-based accounts: m5XXXXXXXXX@sefpos.com.tr (Auth synthetic email)
   if (!/^\d{10,12}$/.test(local)) return '';
   return normalizeSmsPhone(local);
 }

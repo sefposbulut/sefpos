@@ -5,12 +5,12 @@
  * Gerekli .env (proje kokunde):
  *   SUPABASE_DB_PASSWORD=<Dashboard Database sifresi>
  * veya
- *   DATABASE_URL=postgresql://postgres:...@db.<ref>.supabase.co:5432/postgres?sslmode=require
+ *   DATABASE_URL=postgresql://postgres:...@db.<ref>.supabase.co:5432/postgres?sslmode=verify-full
  * Dogrudan baglanti IPv6-only ve aginiz IPv6 route etmiyorsa Dashboard → Database →
  * Connection string → "Session pooler" URI'yi DATABASE_URL olarak kullanin.
  *
  * Opsiyonel:
- *   SUPABASE_PROJECT_REF=orlydeyxshsdusxukhuu  (SEFPOS birincil ref; .env ile ezilebilir)
+ *   SUPABASE_PROJECT_REF=xdfnozfuuzctubijbnds  (SEFPOS birincil ref; .env ile ezilebilir)
  */
 import dns from 'node:dns/promises';
 import fs from 'node:fs';
@@ -85,7 +85,7 @@ function inferRefFromConnectionString(conn) {
 }
 
 const refFromViteUrl = extractRefFromSupabaseUrl(process.env.VITE_SUPABASE_URL || '');
-const ref = process.env.SUPABASE_PROJECT_REF || refFromViteUrl || 'orlydeyxshsdusxukhuu';
+const ref = process.env.SUPABASE_PROJECT_REF || refFromViteUrl || 'xdfnozfuuzctubijbnds';
 const password = process.env.SUPABASE_DB_PASSWORD;
 let connectionString = process.env.DATABASE_URL;
 
@@ -103,7 +103,7 @@ if (connectionString) {
 async function pgClientOptionsFromPassword(dbPassword) {
   const host = `db.${ref}.supabase.co`;
   const enc = encodeURIComponent(dbPassword);
-  const connStr = `postgresql://postgres:${enc}@${host}:5432/postgres?sslmode=require`;
+  const connStr = `postgresql://postgres:${enc}@${host}:5432/postgres?sslmode=no-verify`;
   let v4 = [];
   let v6 = [];
   try {

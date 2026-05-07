@@ -40,7 +40,7 @@ function readFileTextMaybeUtf16(filePath: string): string {
   return buf.toString('utf8');
 }
 
-function readViteSupabaseUrlFromEnvFiles(mode: string): string {
+function readViteEnvValueFromEnvFiles(mode: string, keyName: 'VITE_SUPABASE_URL' | 'VITE_SUPABASE_ANON_KEY'): string {
   const names = [`.env.${mode}.local`, `.env.${mode}`, '.env.local', '.env'];
   for (const name of names) {
     try {
@@ -51,12 +51,12 @@ function readViteSupabaseUrlFromEnvFiles(mode: string): string {
         const i = t.indexOf('=');
         if (i <= 0) continue;
         const k = t.slice(0, i).trim();
-        if (k !== 'VITE_SUPABASE_URL') continue;
+        if (k !== keyName) continue;
         let v = t.slice(i + 1).trim();
         if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
           v = v.slice(1, -1);
         }
-        if (v) return v.replace(/\/$/, '');
+        if (v) return keyName === 'VITE_SUPABASE_URL' ? v.replace(/\/$/, '') : v;
       }
     } catch {
       /* dosya yok */
@@ -65,17 +65,42 @@ function readViteSupabaseUrlFromEnvFiles(mode: string): string {
   return '';
 }
 
+function readViteSupabaseUrlFromEnvFiles(mode: string): string {
+  return readViteEnvValueFromEnvFiles(mode, 'VITE_SUPABASE_URL');
+}
+
+function readViteSupabaseAnonFromEnvFiles(mode: string): string {
+  return readViteEnvValueFromEnvFiles(mode, 'VITE_SUPABASE_ANON_KEY');
+}
+
 /** Yerel dev'de Vite config aşamasında URL (UTF-16 .env için yedek). */
-function readSupabaseDevUrlFromPortJson(): string {
+function readSefposDevPortJson(): { url: string; anon: string; devPortJsonOverridesEnv: boolean } {
   try {
     const raw = readFileSync(join(__root, 'sefpos-dev-port.json'), 'utf8');
-    const j = JSON.parse(raw) as { supabaseDevUrl?: string };
+    const j = JSON.parse(raw) as {
+      supabaseDevUrl?: string;
+      supabaseDevAnonKey?: string;
+      /** true iken `vite` dev sunucusunda .env içindeki VITE_SUPABASE_* yerine bu dosyadaki URL/anon kullanılır (yanlış/bozuk ref’i geç). */
+      devPortJsonOverridesEnv?: boolean | string;
+    };
     const u = (j.supabaseDevUrl || '').trim().replace(/\/$/, '');
-    if (u && /^https:\/\/[a-z0-9-]+\.supabase\.co$/i.test(u)) return u;
+    const anon = (j.supabaseDevAnonKey || '').trim();
+    const urlOk = u && /^https:\/\/[a-z0-9-]+\.supabase\.co$/i.test(u);
+    const ov = j.devPortJsonOverridesEnv;
+    const devPortJsonOverridesEnv = ov === true || ov === 'true' || ov === 1 || ov === '1';
+    return {
+      url: urlOk ? u : '',
+      anon,
+      devPortJsonOverridesEnv,
+    };
   } catch {
     /* ignore */
   }
-  return '';
+  return { url: '', anon: '', devPortJsonOverridesEnv: false };
+}
+
+function readSupabaseDevUrlFromPortJson(): string {
+  return readSefposDevPortJson().url;
 }
 
 async function readRequestBody(req: IncomingMessage): Promise<Buffer> {
@@ -172,9 +197,62 @@ function resolveDevSupabaseUrl(mode: string): string {
   return fromEnv || fromPortJson;
 }
 
+/** Birincil ŞefPOS bulut ref (AGENTS.md). Anon JWT projeye özel — repoda gömülü tutulmaz; .env veya sefpos-dev-port.json. */
+const DEFAULT_PRIMARY_SUPABASE_URL = 'https://xdfnozfuuzctubijbnds.supabase.co';
+const DEFAULT_PRIMARY_SUPABASE_ANON_KEY = '';
+
 // https://vitejs.dev/config/
-export default defineConfig(({ mode }) => {
-  const viteSupabaseUrl = resolveDevSupabaseUrl(mode);
+export default defineConfig(({ mode, command }) => {
+  const env = loadEnv(mode, __root, 'VITE_');
+  const viteUrlFromEnv =
+    (env.VITE_SUPABASE_URL || '').trim().replace(/\/$/, '') ||
+    readViteSupabaseUrlFromEnvFiles(mode) ||
+    (process.env.VITE_SUPABASE_URL || '').trim().replace(/\/$/, '');
+  const viteAnonFromEnv =
+    (env.VITE_SUPABASE_ANON_KEY || '').trim() ||
+    readViteSupabaseAnonFromEnvFiles(mode) ||
+    (process.env.VITE_SUPABASE_ANON_KEY || '').trim();
+
+  const { url: jsonUrl, anon: jsonAnon, devPortJsonOverridesEnv } = readSefposDevPortJson();
+  const isDevServe = command === 'serve';
+
+  const effectiveNoEnvUrl = jsonUrl || DEFAULT_PRIMARY_SUPABASE_URL;
+  const anonForJsonUrl =
+    jsonAnon ||
+    (effectiveNoEnvUrl === DEFAULT_PRIMARY_SUPABASE_URL ? DEFAULT_PRIMARY_SUPABASE_ANON_KEY : '');
+
+  const forceDevSupabaseFromPortJson =
+    isDevServe && devPortJsonOverridesEnv && !!jsonUrl && !!anonForJsonUrl;
+
+  if (isDevServe && devPortJsonOverridesEnv && jsonUrl && !anonForJsonUrl) {
+    console.warn(
+      '[ŞefPOS] devPortJsonOverridesEnv açık; supabaseDevAnonKey boş — override uygulanamıyor. `supabaseDevAnonKey` ekleyin veya `.env` içinde `VITE_SUPABASE_ANON_KEY` tanımlayın (Dashboard → API → anon).',
+    );
+  }
+
+  const devFallbackSupabaseUrl = isDevServe && !viteUrlFromEnv && !forceDevSupabaseFromPortJson ? effectiveNoEnvUrl : '';
+  const devFallbackSupabaseAnon =
+    isDevServe && !viteAnonFromEnv && !forceDevSupabaseFromPortJson
+      ? jsonAnon ||
+        (effectiveNoEnvUrl === DEFAULT_PRIMARY_SUPABASE_URL ? DEFAULT_PRIMARY_SUPABASE_ANON_KEY : '')
+      : '';
+
+  const viteSupabaseUrl = forceDevSupabaseFromPortJson
+    ? jsonUrl
+    : resolveDevSupabaseUrl(mode) || (isDevServe ? DEFAULT_PRIMARY_SUPABASE_URL : '');
+
+  const define: Record<string, string> = {
+    __SEFPOS_DEV_SUPABASE_URL__: JSON.stringify(devFallbackSupabaseUrl),
+    __SEFPOS_DEV_SUPABASE_ANON_KEY__: JSON.stringify(devFallbackSupabaseAnon),
+    /** import.meta.env define’ı güvenilir değil; src/lib/supabase.ts doğrudan bunu okur. */
+    __SEFPOS_DEV_PORT_OVERRIDE_URL__: JSON.stringify(forceDevSupabaseFromPortJson ? jsonUrl : ''),
+    __SEFPOS_DEV_PORT_OVERRIDE_ANON__: JSON.stringify(forceDevSupabaseFromPortJson ? anonForJsonUrl : ''),
+  };
+
+  if (forceDevSupabaseFromPortJson) {
+    console.info('[ŞefPOS] Yerel dev: devPortJsonOverridesEnv — .env / localStorage yerine →', jsonUrl);
+  }
+
   const plugins: Plugin[] = [react()];
   if (viteSupabaseUrl) {
     try {
@@ -190,6 +268,7 @@ export default defineConfig(({ mode }) => {
   }
 
   return {
+    define,
     plugins,
     base: './',
     server: {

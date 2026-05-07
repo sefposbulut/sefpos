@@ -3,7 +3,7 @@
 ## ✅ TAMAMLANAN İŞLEMLER
 
 ### 1. 🔧 Sistem Kurulumu
-- **Supabase Bağlantısı:** `https://hwwsitusurqgpitptkuf.supabase.co` ✅
+- **Supabase Bağlantısı:** `https://xdfnozfuuzctubijbnds.supabase.co` ✅
 - **Production Build:** 14.82 saniye ✅
 - **Sunucu:** `http://localhost:5180` ✅
 - **Performans Optimizasyonları:** Tamamlandı ✅
@@ -17,9 +17,9 @@
 ### 3. 📊 Mevcut Veri Durumu
 - **Tablolar:** tenants, restaurant_tables, categories, products ✅
 - **Tenant Sayısı:** 0 (Demo tenant yok) ❌
-- **Masa Sayısı:** 0 (Eski veritabanında 10 vardı) ❌
-- **Kategori Sayısı:** 0 (Eski veritabanında vardı) ❌
-- **Ürün Sayısı:** 0 (Eski veritabanında 2 vardı) ❌
+- **Masa Sayısı:** 0 ❌
+- **Kategori Sayısı:** 0 ❌
+- **Ürün Sayısı:** 0 ❌
 
 ### 4. 🔐 Kullanıcı Bilgileri
 - **Demo:** `info@sefpos.com.tr` / `2128948++` ✅
@@ -45,7 +45,7 @@
 
 ### Adım 1: Supabase Dashboard
 1. [https://supabase.com/dashboard](https://supabase.com/dashboard) açın
-2. Proje: `hwwsitusurqgpitptkuf`
+2. Proje: `xdfnozfuuzctubijbnds`
 3. **Authentication** → **Policies** gidin
 4. Aşağıdaki tablolarda RLS'i devre dışı bırakın:
    - `tenants`

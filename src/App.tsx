@@ -124,7 +124,24 @@ function App() {
   const [dbMode, setDbMode] = useState<'cloud' | 'sqlserver' | null | 'loading'>('loading');
   const [sqlServerConfigured, setSqlServerConfigured] = useState(false);
   const [showSqlServerSettings, setShowSqlServerSettings] = useState(false);
-  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [showAuthModal, setShowAuthModal] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    try {
+      const params = new URLSearchParams(window.location.search);
+      if (params.has('landing')) return false;
+      const host = window.location.hostname;
+      const path = window.location.pathname || '/';
+      const isLocalHost =
+        host === 'localhost' ||
+        host === '127.0.0.1' ||
+        host === '[::1]' ||
+        host.endsWith('.local');
+      if (import.meta.env.DEV && isLocalHost && path === '/') return true;
+    } catch {
+      /* ignore */
+    }
+    return false;
+  });
   const [onboardingDone, setOnboardingDone] = useState(() => {
     return localStorage.getItem('onboarding_dismissed') === 'true';
   });
@@ -436,7 +453,7 @@ function App() {
         <OnlineOrders />
       </div>
 
-      <div style={{ display: show('products') ? undefined : 'none' }} className="fixed inset-0 top-14 md:top-20 overflow-auto">
+      <div style={{ display: show('products') ? undefined : 'none' }} className="fixed inset-0 top-14 md:top-20 overflow-hidden">
         <Products />
       </div>
 

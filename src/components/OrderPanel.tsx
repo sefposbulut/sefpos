@@ -1512,6 +1512,7 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
           variant_name: item.variant?.name || (weightLabel ? `Gramaj: ${weightLabel}` : null),
           quantity: item.quantity,
           unit_price: finalPrice,
+          subtotal: lineTotal,
           tax_rate: item.product.tax_rate,
           discount_amount: 0,
           total_amount: lineTotal,

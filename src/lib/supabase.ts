@@ -5,33 +5,126 @@ const isElectronRuntime = !!(window as any).electronAPI;
 const runtimeDbUrl = localStorage.getItem('shefpos_db_url');
 const runtimeDbAnonKey = localStorage.getItem('shefpos_db_anon_key');
 
-const supabaseUrl =
-  import.meta.env.VITE_SUPABASE_URL ||
-  runtimeDbUrl ||
-  'https://orlydeyxshsdusxukhuu.supabase.co';
+const portOverrideUrl =
+  typeof __SEFPOS_DEV_PORT_OVERRIDE_URL__ === 'string' ? __SEFPOS_DEV_PORT_OVERRIDE_URL__.trim() : '';
+const portOverrideAnon =
+  typeof __SEFPOS_DEV_PORT_OVERRIDE_ANON__ === 'string' ? __SEFPOS_DEV_PORT_OVERRIDE_ANON__.trim() : '';
 
-const supabaseAnonKey =
-  import.meta.env.VITE_SUPABASE_ANON_KEY ||
-  runtimeDbAnonKey ||
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9ybHlkZXl4c2hzZHVzeHVraHV1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ0NjI0MTcsImV4cCI6MjA5MDAzODQxN30.tbFxkDsVyw0b97l8bop5prHlxDhmmfnsc8rC8zP8FqI';
+const envUrl = String(import.meta.env.VITE_SUPABASE_URL || '').trim();
+const envAnon = String(import.meta.env.VITE_SUPABASE_ANON_KEY || '').trim();
+const devUrl = typeof __SEFPOS_DEV_SUPABASE_URL__ === 'string' ? __SEFPOS_DEV_SUPABASE_URL__.trim() : '';
+const devAnon = typeof __SEFPOS_DEV_SUPABASE_ANON_KEY__ === 'string' ? __SEFPOS_DEV_SUPABASE_ANON_KEY__.trim() : '';
 
-if (!import.meta.env.VITE_SUPABASE_URL && !runtimeDbUrl) {
-  console.warn('Supabase environment variables missing - offline mode');
+const DEFAULT_SUPABASE_URL = 'https://xdfnozfuuzctubijbnds.supabase.co';
+/** Gömülü anon yok: JWT `ref` alanı her projeye özel. Dashboard → Settings → API → `anon` public key → `.env` veya `sefpos-dev-port.json` → `supabaseDevAnonKey`. */
+const DEFAULT_SUPABASE_ANON_KEY = '';
+
+const supabaseUrl = portOverrideUrl || envUrl || devUrl || runtimeDbUrl || DEFAULT_SUPABASE_URL;
+const supabaseAnonKey = portOverrideAnon || envAnon || devAnon || runtimeDbAnonKey || DEFAULT_SUPABASE_ANON_KEY;
+
+if (import.meta.env.DEV && portOverrideUrl) {
+  try {
+    console.info('[ŞefPOS] Supabase (port-json override):', new URL(supabaseUrl).host);
+  } catch {
+    console.info('[ŞefPOS] Supabase (port-json override):', supabaseUrl);
+  }
+}
+
+if (import.meta.env.DEV && !envUrl && !runtimeDbUrl && devUrl) {
+  console.info('[ŞefPOS] Supabase URL: .env yok → sefpos-dev-port.json / Vite yedek:', devUrl);
+}
+if (import.meta.env.DEV && supabaseUrl && !supabaseAnonKey) {
+  console.error(
+    '[ŞefPOS] VITE_SUPABASE_ANON_KEY veya sefpos-dev-port.json → supabaseDevAnonKey gerekli (URL ile aynı projeden).',
+  );
+}
+if (import.meta.env.DEV && !portOverrideUrl && !envUrl && !runtimeDbUrl && !devUrl) {
+  console.warn('[ŞefPOS] VITE_SUPABASE_URL tanımlı değil; birincil proje URL’si kullanılıyor.');
 }
 
 const edgeFunctionsBaseUrl = `${String(supabaseUrl).replace(/\/$/, '')}/functions/v1`;
 
-function edgeFunctionRequestBase(): string {
+/** Yerel `npm run dev`: tarayıcıdan doğrudan *.supabase.co → CORS / OPTIONS hatası. Vite `/__supabase-functions` proxy aynı origin. */
+function edgeFunctionInvokeUrl(functionName: string): string {
   if (
     import.meta.env.DEV &&
     typeof window !== 'undefined' &&
-    (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') &&
-    (window.location.protocol === 'http:' || window.location.protocol === 'https:')
+    /^https?:\/\//i.test(String(window.location?.protocol || ''))
   ) {
-    // Vite proxy: tarayıcıdan doğrudan *.supabase.co OPTIONS/CORS hatası olmadan
-    return `${window.location.origin}/__supabase-functions`;
+    const base = String(window.location.origin || '').replace(/\/$/, '');
+    if (base) return `${base}/__supabase-functions/${functionName}`;
   }
-  return edgeFunctionsBaseUrl;
+  return `${edgeFunctionsBaseUrl}/${functionName}`;
+}
+
+const nativeFetch = globalThis.fetch.bind(globalThis);
+
+/**
+ * Konsolda gördüğünüz:
+ * - Host `….supabase.co` = Supabase **proje** adresi (ref hostname’de).
+ * - `tenant_id=eq.<uuid>` / `branch_id=eq.<uuid>` = uygulama **kiracı / şube** satır id’leri (demo migration’daki sabitler), proje ref’i değil.
+ */
+const REST_BRANCH_PRODUCT_STOCKS = '/rest/v1/branch_product_stocks';
+
+function devBranchProductStocksAbsentSessionKey(): string {
+  try {
+    return `sefpos_dev_branch_product_stocks_absent:${new URL(supabaseUrl).host}`;
+  } catch {
+    return 'sefpos_dev_branch_product_stocks_absent';
+  }
+}
+
+/** Bellek + sessionStorage: F5 ile yenileyince de tablo yok bilgisi korunur (gereksiz GET 404 tekrarlanmaz). */
+let devBranchProductStocksTableInMemoryMissing = false;
+
+function isDevBranchProductStocksKnownMissing(): boolean {
+  if (!import.meta.env.DEV) return false;
+  if (devBranchProductStocksTableInMemoryMissing) return true;
+  try {
+    if (typeof sessionStorage !== 'undefined' && sessionStorage.getItem(devBranchProductStocksAbsentSessionKey()) === '1') {
+      devBranchProductStocksTableInMemoryMissing = true;
+      return true;
+    }
+  } catch {
+    /* private mode */
+  }
+  return false;
+}
+
+function rememberDevBranchProductStocksTableMissing(): void {
+  devBranchProductStocksTableInMemoryMissing = true;
+  try {
+    if (typeof sessionStorage !== 'undefined') sessionStorage.setItem(devBranchProductStocksAbsentSessionKey(), '1');
+  } catch {
+    /* quota */
+  }
+}
+
+function clearDevBranchProductStocksTableMissing(): void {
+  devBranchProductStocksTableInMemoryMissing = false;
+  try {
+    if (typeof sessionStorage !== 'undefined') sessionStorage.removeItem(devBranchProductStocksAbsentSessionKey());
+  } catch {
+    /* ignore */
+  }
+}
+
+function sefposRequestHref(input: RequestInfo | URL): string {
+  if (typeof input === 'string') return input;
+  if (input instanceof URL) return input.href;
+  if (input instanceof Request) return input.url;
+  return String(input);
+}
+
+function sefposRequestMethod(input: RequestInfo | URL, init?: RequestInit): string {
+  const m = init?.method || (typeof input !== 'string' && input instanceof Request ? input.method : undefined);
+  return String(m || 'GET').toUpperCase();
+}
+
+/** Legacy anon (eyJ… üç parça). sb_publishable_* Bearer olarak gönderilmez (platform 401). */
+function isLegacyJwtAnonKey(k: string): boolean {
+  const s = String(k || '').trim();
+  return s.startsWith('eyJ') && s.split('.').length === 3;
 }
 
 /** Edge Function — URL ve anahtar, üstteki createClient ile aynı (VITE_* / localStorage). */
@@ -39,18 +132,15 @@ export async function invokeEdgeFunction<T = unknown>(
   functionName: string,
   payload: Record<string, unknown>,
 ): Promise<T> {
-  const headers = {
+  const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     apikey: supabaseAnonKey,
-    Authorization: `Bearer ${supabaseAnonKey}`,
   };
-  const body = JSON.stringify(payload);
-  const primaryBase = edgeFunctionRequestBase();
-  let res = await fetch(`${primaryBase}/${functionName}`, { method: 'POST', headers, body });
-  // Vite proxy .env okunmadıysa /__supabase-functions 404 döner; doğrudan Supabase'e düş.
-  if (res.status === 404 && primaryBase.includes('__supabase-functions')) {
-    res = await fetch(`${edgeFunctionsBaseUrl}/${functionName}`, { method: 'POST', headers, body });
+  if (isLegacyJwtAnonKey(supabaseAnonKey)) {
+    headers.Authorization = `Bearer ${supabaseAnonKey}`;
   }
+  const body = JSON.stringify(payload);
+  const res = await fetch(edgeFunctionInvokeUrl(functionName), { method: 'POST', headers, body });
   const rawText = await res.text();
   let data: unknown = null;
   if (rawText) {
@@ -88,12 +178,51 @@ const realSupabase = createClient(supabaseUrl, supabaseAnonKey, {
     autoRefreshToken: true,
   },
   global: {
-    fetch: (url, init) => {
+    fetch: (input, init) => {
       if (isSqlServerMode() || isLocalMode()) {
         return Promise.resolve(new Response(JSON.stringify([]), { status: 200, headers: { 'Content-Type': 'application/json' } }));
       }
-      // Do not swallow network errors into fake 200/[] — that breaks RPC booleans, deletes, and error handling.
-      return fetch(url, init);
+      const href = sefposRequestHref(input);
+      const method = sefposRequestMethod(input, init);
+      if (
+        import.meta.env.DEV &&
+        isDevBranchProductStocksKnownMissing() &&
+        href.includes(REST_BRANCH_PRODUCT_STOCKS) &&
+        method === 'GET'
+      ) {
+        const body = JSON.stringify({
+          code: 'PGRST205',
+          details: null,
+          hint: null,
+          message: "Could not find the table 'public.branch_product_stocks' in the schema cache",
+        });
+        return Promise.resolve(
+          new Response(body, {
+            status: 404,
+            statusText: 'Not Found',
+            headers: { 'Content-Type': 'application/json; charset=utf-8' },
+          }),
+        );
+      }
+      return nativeFetch(input as RequestInfo, init as RequestInit | undefined).then(async (res) => {
+        if (import.meta.env.DEV && href.includes('/auth/v1/') && !res.ok) {
+          try {
+            const snippet = (await res.clone().text()).slice(0, 900);
+            const log = res.status >= 500 ? console.error : console.warn;
+            log('[ŞefPOS] Supabase Auth HTTP', res.status, href, snippet || '(gövde boş)');
+          } catch {
+            /* ignore */
+          }
+        }
+        if (import.meta.env.DEV && method === 'GET' && href.includes(REST_BRANCH_PRODUCT_STOCKS)) {
+          if (res.ok && res.status >= 200 && res.status < 300) {
+            clearDevBranchProductStocksTableMissing();
+          } else if (res.status === 404) {
+            rememberDevBranchProductStocksTableMissing();
+          }
+        }
+        return res;
+      });
     },
   },
 });

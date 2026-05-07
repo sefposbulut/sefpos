@@ -2,7 +2,7 @@ const { createClient } = require('@supabase/supabase-js');
 
 // Supabase veritabanına bağlan
 const supabase = createClient(
-  'https://hwwsitusurqgpitptkuf.supabase.co',
+  'https://xdfnozfuuzctubijbnds.supabase.co',
   'sb_publishable_4ziGGAYQkC9Is5P7leZ6VQ_WAddnGhD'
 );
 

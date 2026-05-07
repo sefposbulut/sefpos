@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, invokeEdgeFunction } from '../lib/supabase';
+import { normalizeTurkishMobileDigits, phoneToAuthEmail } from '../lib/phoneAuthEmail';
 import { isCapacitorNative } from '../lib/capacitorPlatform';
 import { Bike, Lock, Building2, Phone, ArrowRight, Sparkles, ChefHat, User, Mail } from 'lucide-react';
 import { WaiterLogin } from './WaiterLogin';
@@ -12,11 +13,6 @@ function getInitialAuthMode(): 'main' | 'waiter' {
   if (sp.has('waiter') || sp.has('garson')) return 'waiter';
   if (isCapacitorNative()) return 'waiter';
   return 'main';
-}
-
-function phoneToEmail(phone: string) {
-  const cleaned = phone.replace(/\D/g, '');
-  return `${cleaned}@sefpos.com.tr`;
 }
 
 const REMEMBER_KEY = 'shefpos_remembered_login';
@@ -39,6 +35,13 @@ const formatPhone = (value: string) => {
 const isPhoneInput = (val: string) => /^\d[\d\s]*$/.test(val.trim());
 const isValidEmail = (val: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val.trim());
 
+type RegisterFieldKey = 'tenantName' | 'fullName' | 'registerEmail' | 'phone' | 'password' | 'otp';
+
+const REGISTER_FIELD_RING_ERROR =
+  'border-red-500 focus:border-red-500 focus:ring-2 focus:ring-red-500/25';
+const REGISTER_FIELD_RING_OK =
+  'border-slate-700 hover:border-slate-600 focus:border-orange-500 focus:ring-2 focus:ring-orange-500/20';
+
 export function Auth() {
   const isAykaPath = window.location.pathname.toLowerCase().startsWith('/ayka');
   const [authMode, setAuthMode] = useState<'main' | 'waiter'>(getInitialAuthMode);
@@ -58,22 +61,38 @@ export function Auth() {
   const [otpCode, setOtpCode] = useState('');
   const [otpPhone, setOtpPhone] = useState('');
   const [otpToken, setOtpToken] = useState('');
+  const [registerErrors, setRegisterErrors] = useState<Partial<Record<RegisterFieldKey, string>>>({});
+  /** 1 = yalnızca cep + SMS; 2 = firma, ad soyad, e-posta, şifre */
+  const [registerWizardStep, setRegisterWizardStep] = useState<1 | 2>(1);
   const { signIn, signUp } = useAuth();
+
+  const registerFieldRing = (key: RegisterFieldKey) =>
+    registerErrors[key] ? REGISTER_FIELD_RING_ERROR : REGISTER_FIELD_RING_OK;
+
+  const resetRegisterWizard = () => {
+    setRegisterWizardStep(1);
+    setRegisterErrors({});
+    setTenantName('');
+    setFullName('');
+    setRegisterEmail('');
+    setOtpRequested(false);
+    setOtpVerified(false);
+    setOtpCode('');
+    setOtpPhone('');
+    setOtpToken('');
+    setInfo('');
+  };
 
   const sendOtp = async () => {
     setError('');
     setInfo('');
-    if (!tenantName.trim() || !fullName.trim() || !registerEmail.trim() || !password.trim()) {
-      setError('SMS doğrulama için tüm alanlar zorunludur');
-      return;
-    }
-    if (!isValidEmail(registerEmail)) {
-      setError('Geçerli bir eposta adresi girin');
-      return;
-    }
+    setRegisterErrors({});
     const cleaned = loginValue.replace(/\D/g, '');
-    if (cleaned.length < 10) {
-      setError('Geçerli bir telefon numarası girin');
+    const nextErr: Partial<Record<RegisterFieldKey, string>> = {};
+    if (cleaned.length < 10) nextErr.phone = 'Zorunlu alan';
+    if (Object.keys(nextErr).length > 0) {
+      setRegisterErrors(nextErr);
+      setError('Lütfen cep telefonu girin');
       return;
     }
     if (cleaned === TEST_LOGIN_PHONE) {
@@ -84,19 +103,26 @@ export function Auth() {
       setInfo('Test hesabı için SMS doğrulama atlandı.');
       return;
     }
+    const norm = normalizeTurkishMobileDigits(cleaned);
+    if (norm.length !== 10 || !norm.startsWith('5')) {
+      setRegisterErrors({ phone: 'Geçerli cep telefonu girin (05XXXXXXXXX)' });
+      setError('Geçerli bir cep telefonu girin (05XXXXXXXXX)');
+      return;
+    }
     setLoading(true);
     try {
       const data = await invokeEdgeFunction<{ success: boolean; otpToken?: string }>('send-sms-otp', {
-        phone: cleaned,
+        phone: norm,
         purpose: 'signup',
       });
       if (!data?.otpToken) {
         throw new Error('OTP token üretilemedi');
       }
-      setOtpPhone(cleaned);
+      setOtpPhone(norm);
       setOtpRequested(true);
       setOtpVerified(false);
       setOtpToken(data.otpToken);
+      setRegisterErrors({});
       setInfo('SMS kodu gönderildi. 4 dakika içinde doğrulayın.');
     } catch (err: any) {
       setError(err?.message || 'SMS doğrulama kodu gönderilemedi');
@@ -105,17 +131,63 @@ export function Auth() {
     }
   };
 
-  useEffect(() => {
-    if (isLogin) return;
+  /** Adım 1 bitti: SMS kodu doğrulandıktan sonra firma/ad/e-posta ekranına geç. */
+  const advanceToRegisterBusinessStep = async () => {
+    setError('');
+    setRegisterErrors({});
     const cleaned = loginValue.replace(/\D/g, '');
-    if (!cleaned || cleaned !== otpPhone) {
+    if (cleaned.length < 10) {
+      setRegisterErrors({ phone: 'Zorunlu alan' });
+      setError('Cep telefonu zorunludur');
+      return;
+    }
+    const registerNorm = normalizeTurkishMobileDigits(cleaned);
+    if (!otpRequested || otpPhone !== registerNorm) {
+      setRegisterErrors({ phone: 'Önce SMS kodu gönderin' });
+      setError('Önce telefonunuza doğrulama kodu gönderin');
+      return;
+    }
+    if (otpVerified) {
+      setRegisterWizardStep(2);
+      setInfo('İşletme bilgilerinizi girin.');
+      return;
+    }
+    if (!otpCode.trim() || otpCode.trim().length < 4) {
+      setRegisterErrors({ otp: 'Zorunlu alan' });
+      setError('SMS doğrulama kodunu girin');
+      return;
+    }
+    setLoading(true);
+    try {
+      const data = await invokeEdgeFunction<{ success: boolean }>('verify-sms-otp', {
+        phone: registerNorm,
+        code: otpCode.trim(),
+        purpose: 'signup',
+        otpToken,
+      });
+      if (!data?.success) throw new Error('SMS kodu doğrulanamadı');
+      setOtpVerified(true);
+      setRegisterWizardStep(2);
+      setInfo('Telefon doğrulandı. İşletme bilgilerinizi girin.');
+    } catch (err: any) {
+      setError(err?.message || 'Kod doğrulanamadı');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (isLogin || registerWizardStep !== 1) return;
+    const cleaned = loginValue.replace(/\D/g, '');
+    const norm = normalizeTurkishMobileDigits(cleaned);
+    if (!norm || norm !== otpPhone) {
       setOtpRequested(false);
       setOtpVerified(false);
       setOtpCode('');
       setOtpToken('');
       setInfo('');
     }
-  }, [loginValue, isLogin, otpPhone]);
+  }, [loginValue, isLogin, otpPhone, registerWizardStep]);
 
   useEffect(() => {
     if (!isAykaPath) return;
@@ -223,7 +295,7 @@ export function Auth() {
             setLoading(false);
             return;
           }
-          email = cleaned === TEST_LOGIN_PHONE ? TEST_LOGIN_EMAIL : phoneToEmail(cleaned);
+          email = cleaned === TEST_LOGIN_PHONE ? TEST_LOGIN_EMAIL : phoneToAuthEmail(cleaned);
         }
         let result = await signIn(email, password);
         if (
@@ -274,62 +346,80 @@ export function Auth() {
           localStorage.removeItem(REMEMBER_PASSWORD_KEY);
         }
       } else {
-        if (!fullName.trim() || !tenantName.trim() || !registerEmail.trim() || !password.trim()) {
-          setError('Lütfen tüm alanları doldurun');
-          setLoading(false);
-          return;
-        }
-        if (!isValidEmail(registerEmail)) {
-          setError('Geçerli bir eposta adresi girin');
-          setLoading(false);
-          return;
-        }
+        setRegisterErrors({});
+        const nextErr: Partial<Record<RegisterFieldKey, string>> = {};
+        if (!tenantName.trim()) nextErr.tenantName = 'Zorunlu alan';
+        if (!fullName.trim()) nextErr.fullName = 'Zorunlu alan';
+        if (!registerEmail.trim()) nextErr.registerEmail = 'Zorunlu alan';
+        else if (!isValidEmail(registerEmail)) nextErr.registerEmail = 'Geçerli bir e-posta girin';
+        if (!password.trim()) nextErr.password = 'Zorunlu alan';
         const cleaned = loginValue.replace(/\D/g, '');
-        if (cleaned.length < 10) {
-          setError('Geçerli bir telefon numarası girin');
+        if (cleaned.length < 10) nextErr.phone = 'Zorunlu alan';
+        if (Object.keys(nextErr).length > 0) {
+          setRegisterErrors(nextErr);
+          setError('Lütfen zorunlu alanları doldurun');
           setLoading(false);
           return;
         }
-        if (!otpRequested || otpPhone !== cleaned) {
+        const registerNorm = normalizeTurkishMobileDigits(cleaned);
+        if (registerWizardStep !== 2) {
+          setError('Önce telefon doğrulamasını tamamlayın');
+          setLoading(false);
+          return;
+        }
+        if (!otpRequested || otpPhone !== registerNorm || !otpVerified) {
+          setRegisterErrors((prev) => ({ ...prev, phone: 'Önce telefon doğrulaması yapın' }));
           setError('Önce telefon numaranızı doğrulayın');
           setLoading(false);
           return;
         }
 
-        if (!otpVerified) {
-          if (!otpCode.trim() || otpCode.trim().length < 4) {
-            setError('Lütfen SMS doğrulama kodunu girin');
-            setLoading(false);
-            return;
-          }
-          const data = await invokeEdgeFunction<{ success: boolean }>('verify-sms-otp', {
-            phone: cleaned,
-            code: otpCode.trim(),
-            purpose: 'signup',
-            otpToken,
-          });
-          if (!data?.success) throw new Error('SMS kodu doğrulanamadı');
-          setOtpVerified(true);
-          setInfo('Telefon doğrulandı. Hesap oluşturuluyor...');
-        }
-
-        const email = phoneToEmail(cleaned);
+        const email = phoneToAuthEmail(cleaned);
         const { error } = await signUp(email, password, fullName, tenantName, registerEmail.trim().toLowerCase());
         if (error) throw error;
-        await invokeEdgeFunction('send-sms-welcome', { phone: cleaned });
+        try {
+          sessionStorage.setItem('shefpos_phone_first_signup', '1');
+        } catch {
+          /* ignore */
+        }
+        await invokeEdgeFunction('send-sms-welcome', { phone: registerNorm });
         if (remember) {
           localStorage.setItem(REMEMBER_KEY, loginValue);
           localStorage.setItem(REMEMBER_PASSWORD_KEY, password);
         }
       }
     } catch (err: any) {
-      const msg = err.message || '';
+      const msg = String(err?.message || err || '');
+      const low = msg.toLowerCase();
       if (msg.includes('Invalid login credentials'))
         setError('Kullanıcı adı/telefon veya şifre hatalı');
       else if (msg.includes('User already registered'))
         setError('Bu telefon numarası zaten kayıtlı');
+      else if (
+        low.includes('email address') && low.includes('invalid') ||
+        low.includes('email_address_invalid') ||
+        low.includes('email address.*is invalid')
+      )
+        setError(
+          'Telefon numarasından üretilen e-posta Supabase tarafından geçersiz olarak işaretlendi. ' +
+          'Domain\'in (varsayılan: sefpos.com.tr) MX kaydı olmadığı için reddediliyor. ' +
+          'Çözüm: Cloudflare DNS panelinden MX kaydı ekleyin VEYA .env\'de VITE_PHONE_AUTH_EMAIL_DOMAIN ile MX\'i olan başka bir domain belirtin.',
+        );
+      else if (low.includes('rate limit') || low.includes('too many requests') || msg.includes('429'))
+        setError(
+          'Çok sık deneme yapıldı (e-posta / kayıt sınırı). Lütfen birkaç dakika bekleyip tekrar deneyin.',
+        );
       else if (msg.includes('OTP'))
         setError('SMS doğrulama kodu geçersiz veya süresi doldu');
+      else if (
+        msg.includes('500') ||
+        low.includes('internal server error') ||
+        low.includes('database error') ||
+        low.includes('querying schema')
+      )
+        setError(
+          'Giriş sunucu hatası (Auth). Konsolda `[ŞefPOS] Supabase Auth HTTP` satırına bakın; Dashboard → Logs → Auth ve projede auth migration’larının uygulandığını kontrol edin.',
+        );
       else setError(msg || 'Bir hata oluştu');
     } finally {
       setLoading(false);
@@ -472,10 +562,12 @@ export function Auth() {
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <button
                     type="button"
-                    onClick={() => {
-                      setIsLogin(false);
-                      setError('');
-                    }}
+                  onClick={() => {
+                    setIsLogin(false);
+                    setError('');
+                    resetRegisterWizard();
+                    setLoginValue('');
+                  }}
                     className="py-3 border border-orange-500/50 hover:border-orange-500 text-orange-400 hover:text-orange-300 font-semibold rounded-lg text-sm transition-all hover:bg-orange-500/5"
                   >
                     Yeni Hesap
@@ -504,142 +596,291 @@ export function Auth() {
               )}
             </div>
           ) : (
-            // Register Form
+            // Register — 1: cep + SMS, 2: işletme bilgileri + şifre
             <>
-              <div className="mb-8 text-center">
+              <div className="mb-6 text-center">
                 <button
                   type="button"
                   onClick={() => {
                     setIsLogin(true);
                     setError('');
+                    resetRegisterWizard();
                   }}
-                  className="text-orange-500 text-sm font-semibold mb-4 flex items-center gap-1 hover:text-orange-400 transition-colors mx-auto"
+                  className="text-orange-500 text-sm font-semibold mb-3 flex items-center gap-1 hover:text-orange-400 transition-colors mx-auto"
                 >
                   ← Geri Dön
                 </button>
-                <h2 className="text-3xl font-bold text-white mb-2">Başlayın</h2>
-                <p className="text-slate-400">Restoranınızı ŞefPOS'a kaydettirin</p>
+                <p className="text-xs font-semibold text-orange-400/90 tracking-wide uppercase mb-1">
+                  Adım {registerWizardStep} / 2
+                </p>
+                <h2 className="text-2xl md:text-3xl font-bold text-white mb-1">
+                  {registerWizardStep === 1 ? 'Cep telefonu ile başlayın' : 'İşletme bilgileri'}
+                </h2>
+                <p className="text-slate-400 text-sm">
+                  {registerWizardStep === 1
+                    ? 'Numaranıza SMS ile kod gönderilir; ardından firma ve hesap bilgilerinizi girersiniz.'
+                    : 'Zorunlu alanları doldurup kaydı tamamlayın. Ardından kurulum sihirbazına yönlendirileceksiniz.'}
+                </p>
               </div>
 
-              <form onSubmit={handleSubmit} className="space-y-4 mb-8">
-                <div className="relative group">
-                  <Building2 className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500 group-focus-within:text-orange-500 transition-colors" />
-                  <input
-                    type="text"
-                    value={tenantName}
-                    onChange={(e) => setTenantName(e.target.value)}
-                    placeholder="Restoran / İşletme Adı"
-                    className="w-full pl-12 pr-4 py-3 bg-slate-800/50 border border-slate-700 hover:border-slate-600 focus:border-orange-500 focus:ring-2 focus:ring-orange-500/20 rounded-lg outline-none text-white text-sm transition-all placeholder:text-slate-500"
-                  />
-                </div>
+              {registerWizardStep === 1 && (
+                <div className="space-y-4 mb-8">
+                  <div>
+                    <div className="relative group">
+                      <Phone className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500 group-focus-within:text-orange-500 transition-colors" />
+                      <input
+                        type="text"
+                        value={loginValue}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          if (isPhoneInput(val) || val === '') setLoginValue(formatPhone(val));
+                          else setLoginValue(val);
+                          setRegisterErrors((p) => ({ ...p, phone: undefined }));
+                        }}
+                        placeholder="Cep telefonu (05XX XXX XX XX)"
+                        aria-invalid={!!registerErrors.phone}
+                        autoComplete="tel"
+                        className={`w-full pl-12 pr-36 py-3 bg-slate-800/50 border rounded-lg outline-none text-white text-sm transition-all placeholder:text-slate-500 ${registerFieldRing('phone')}`}
+                      />
+                      <button
+                        type="button"
+                        onClick={sendOtp}
+                        disabled={loading || otpVerified}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 px-3 py-1.5 rounded-md bg-orange-600 hover:bg-orange-700 text-white text-xs font-semibold disabled:opacity-50 whitespace-nowrap"
+                      >
+                        {otpVerified ? 'Doğrulandı' : 'SMS gönder'}
+                      </button>
+                    </div>
+                    {registerErrors.phone && (
+                      <p className="text-xs text-red-400 mt-1.5 pl-1">{registerErrors.phone}</p>
+                    )}
+                  </div>
 
-                <div className="relative group">
-                  <User className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500 group-focus-within:text-orange-500 transition-colors" />
-                  <input
-                    type="text"
-                    value={fullName}
-                    onChange={(e) => setFullName(e.target.value)}
-                    placeholder="Ad Soyad"
-                    className="w-full pl-12 pr-4 py-3 bg-slate-800/50 border border-slate-700 hover:border-slate-600 focus:border-orange-500 focus:ring-2 focus:ring-orange-500/20 rounded-lg outline-none text-white text-sm transition-all placeholder:text-slate-500"
-                  />
-                </div>
+                  {otpRequested && (
+                    <div>
+                      <div className="relative group">
+                        <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500 group-focus-within:text-orange-500 transition-colors" />
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          value={otpCode}
+                          onChange={(e) => {
+                            setOtpCode(e.target.value.replace(/\D/g, '').slice(0, 6));
+                            setRegisterErrors((p) => ({ ...p, otp: undefined }));
+                          }}
+                          placeholder="SMS doğrulama kodu"
+                          aria-invalid={!!registerErrors.otp}
+                          className={`w-full pl-12 pr-4 py-3 bg-slate-800/50 border rounded-lg outline-none text-white text-sm transition-all placeholder:text-slate-500 ${registerFieldRing('otp')}`}
+                        />
+                      </div>
+                      {registerErrors.otp && (
+                        <p className="text-xs text-red-400 mt-1.5 pl-1">{registerErrors.otp}</p>
+                      )}
+                    </div>
+                  )}
 
-                <div className="relative group">
-                  <Mail className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500 group-focus-within:text-orange-500 transition-colors" />
-                  <input
-                    type="text"
-                    value={registerEmail}
-                    onChange={(e) => setRegisterEmail(e.target.value)}
-                    placeholder="Eposta Adresi"
-                    className="w-full pl-12 pr-4 py-3 bg-slate-800/50 border border-slate-700 hover:border-slate-600 focus:border-orange-500 focus:ring-2 focus:ring-orange-500/20 rounded-lg outline-none text-white text-sm transition-all placeholder:text-slate-500"
-                  />
-                </div>
+                  {info && (
+                    <div className="bg-blue-500/10 border border-blue-500/30 text-blue-300 px-4 py-3 rounded-lg text-sm">
+                      {info}
+                    </div>
+                  )}
+                  {error && (
+                    <div className="bg-red-500/10 border border-red-500/30 text-red-400 px-4 py-3 rounded-lg text-sm">
+                      {error}
+                    </div>
+                  )}
 
-                <div className="relative group">
-                  <Phone className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500 group-focus-within:text-orange-500 transition-colors" />
-                  <input
-                    type="text"
-                    value={loginValue}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      if (isPhoneInput(val) || val === '') setLoginValue(formatPhone(val));
-                      else setLoginValue(val);
-                    }}
-                    placeholder="Telefon Numarası (zorunlu)"
-                    className="w-full pl-12 pr-32 py-3 bg-slate-800/50 border border-slate-700 hover:border-slate-600 focus:border-orange-500 focus:ring-2 focus:ring-orange-500/20 rounded-lg outline-none text-white text-sm transition-all placeholder:text-slate-500"
-                  />
                   <button
                     type="button"
-                    onClick={sendOtp}
-                    disabled={loading || otpVerified}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 px-3 py-1.5 rounded-md bg-orange-600 hover:bg-orange-700 text-white text-xs font-semibold disabled:opacity-50"
+                    onClick={() => void advanceToRegisterBusinessStep()}
+                    disabled={loading}
+                    className="w-full bg-gradient-to-r from-orange-600 to-orange-500 hover:from-orange-700 hover:to-orange-600 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold py-3 rounded-lg text-sm transition-all duration-200 flex items-center justify-center gap-2"
                   >
-                    {otpVerified ? 'Doğrulandı' : 'Doğrula'}
+                    {loading ? (
+                      <>
+                        <div className="w-4 h-4 border-2 border-orange-200 border-t-white rounded-full animate-spin" />
+                        Kontrol ediliyor...
+                      </>
+                    ) : (
+                      <>
+                        Devam
+                        <ArrowRight className="w-4 h-4" />
+                      </>
+                    )}
                   </button>
                 </div>
+              )}
 
-                {otpRequested && (
-                  <div className="relative group">
-                    <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500 group-focus-within:text-orange-500 transition-colors" />
-                    <input
-                      type="text"
-                      value={otpCode}
-                      onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                      placeholder="SMS Doğrulama Kodu"
-                      className="w-full pl-12 pr-4 py-3 bg-slate-800/50 border border-slate-700 hover:border-slate-600 focus:border-orange-500 focus:ring-2 focus:ring-orange-500/20 rounded-lg outline-none text-white text-sm transition-all placeholder:text-slate-500"
-                    />
+              {registerWizardStep === 2 && (
+                <form onSubmit={handleSubmit} className="space-y-4 mb-8">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRegisterWizardStep(1);
+                      setOtpVerified(false);
+                      setOtpRequested(false);
+                      setOtpCode('');
+                      setOtpToken('');
+                      setOtpPhone('');
+                      setInfo('');
+                      setError('');
+                      setRegisterErrors({});
+                    }}
+                    className="text-slate-400 text-sm hover:text-white transition-colors mb-1"
+                  >
+                    ← Telefon adımına dön
+                  </button>
+
+                  <div>
+                    <div className="relative group">
+                      <Building2 className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500 group-focus-within:text-orange-500 transition-colors" />
+                      <input
+                        type="text"
+                        value={tenantName}
+                        onChange={(e) => {
+                          setTenantName(e.target.value);
+                          setRegisterErrors((p) => ({ ...p, tenantName: undefined }));
+                        }}
+                        placeholder="Restoran / işletme adı"
+                        aria-invalid={!!registerErrors.tenantName}
+                        className={`w-full pl-12 pr-4 py-3 bg-slate-800/50 border rounded-lg outline-none text-white text-sm transition-all placeholder:text-slate-500 ${registerFieldRing('tenantName')}`}
+                      />
+                    </div>
+                    {registerErrors.tenantName && (
+                      <p className="text-xs text-red-400 mt-1.5 pl-1">{registerErrors.tenantName}</p>
+                    )}
                   </div>
-                )}
 
-                {info && (
-                  <div className="bg-blue-500/10 border border-blue-500/30 text-blue-300 px-4 py-3 rounded-lg text-sm">
-                    {info}
+                  <div>
+                    <div className="relative group">
+                      <User className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500 group-focus-within:text-orange-500 transition-colors" />
+                      <input
+                        type="text"
+                        value={fullName}
+                        onChange={(e) => {
+                          setFullName(e.target.value);
+                          setRegisterErrors((p) => ({ ...p, fullName: undefined }));
+                        }}
+                        placeholder="Ad soyad"
+                        aria-invalid={!!registerErrors.fullName}
+                        className={`w-full pl-12 pr-4 py-3 bg-slate-800/50 border rounded-lg outline-none text-white text-sm transition-all placeholder:text-slate-500 ${registerFieldRing('fullName')}`}
+                      />
+                    </div>
+                    {registerErrors.fullName && (
+                      <p className="text-xs text-red-400 mt-1.5 pl-1">{registerErrors.fullName}</p>
+                    )}
                   </div>
-                )}
 
-                <div className="relative group">
-                  <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500 group-focus-within:text-orange-500 transition-colors" />
-                  <input
-                    type="password"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    placeholder="Şifre"
-                    className="w-full pl-12 pr-4 py-3 bg-slate-800/50 border border-slate-700 hover:border-slate-600 focus:border-orange-500 focus:ring-2 focus:ring-orange-500/20 rounded-lg outline-none text-white text-sm transition-all placeholder:text-slate-500"
-                  />
-                </div>
-
-                {error && (
-                  <div className="bg-red-500/10 border border-red-500/30 text-red-400 px-4 py-3 rounded-lg text-sm">
-                    {error}
+                  <div>
+                    <div className="relative group">
+                      <Mail className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500 group-focus-within:text-orange-500 transition-colors" />
+                      <input
+                        type="email"
+                        value={registerEmail}
+                        onChange={(e) => {
+                          setRegisterEmail(e.target.value);
+                          setRegisterErrors((p) => ({ ...p, registerEmail: undefined }));
+                        }}
+                        placeholder="E-posta adresi"
+                        aria-invalid={!!registerErrors.registerEmail}
+                        autoComplete="email"
+                        className={`w-full pl-12 pr-4 py-3 bg-slate-800/50 border rounded-lg outline-none text-white text-sm transition-all placeholder:text-slate-500 ${registerFieldRing('registerEmail')}`}
+                      />
+                    </div>
+                    {registerErrors.registerEmail && (
+                      <p className="text-xs text-red-400 mt-1.5 pl-1">{registerErrors.registerEmail}</p>
+                    )}
                   </div>
-                )}
 
-                <button
-                  type="submit"
-                  disabled={loading}
-                  className="w-full bg-gradient-to-r from-orange-600 to-orange-500 hover:from-orange-700 hover:to-orange-600 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold py-3 rounded-lg text-sm transition-all duration-200 flex items-center justify-center gap-2 mt-6"
-                >
-                  {loading ? (
-                    <>
-                      <div className="w-4 h-4 border-2 border-orange-200 border-t-white rounded-full animate-spin" />
-                      Kaydediliyor...
-                    </>
-                  ) : (
-                    <>
-                      Kayıt Ol
-                      <ArrowRight className="w-4 h-4" />
-                    </>
+                  <div>
+                    <div className="relative group">
+                      <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500 group-focus-within:text-orange-500 transition-colors" />
+                      <input
+                        type="password"
+                        value={password}
+                        onChange={(e) => {
+                          setPassword(e.target.value);
+                          setRegisterErrors((p) => ({ ...p, password: undefined }));
+                        }}
+                        placeholder="Şifre"
+                        aria-invalid={!!registerErrors.password}
+                        autoComplete="new-password"
+                        className={`w-full pl-12 pr-4 py-3 bg-slate-800/50 border rounded-lg outline-none text-white text-sm transition-all placeholder:text-slate-500 ${registerFieldRing('password')}`}
+                      />
+                    </div>
+                    {registerErrors.password && (
+                      <p className="text-xs text-red-400 mt-1.5 pl-1">{registerErrors.password}</p>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-3 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => setRemember((r) => !r)}
+                      className={`w-5 h-5 rounded border flex items-center justify-center transition shrink-0 ${
+                        remember ? 'border-orange-500 bg-orange-500' : 'border-slate-600 bg-slate-800'
+                      }`}
+                    >
+                      {remember && (
+                        <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 12 12">
+                          <path
+                            d="M2 6l3 3 5-5"
+                            stroke="currentColor"
+                            strokeWidth="2"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          />
+                        </svg>
+                      )}
+                    </button>
+                    <label
+                      onClick={() => setRemember((r) => !r)}
+                      className="text-sm text-slate-400 select-none cursor-pointer hover:text-slate-300 transition-colors"
+                    >
+                      Beni hatırla
+                    </label>
+                  </div>
+
+                  {info && registerWizardStep === 2 && (
+                    <div className="bg-blue-500/10 border border-blue-500/30 text-blue-300 px-4 py-3 rounded-lg text-sm">
+                      {info}
+                    </div>
                   )}
-                </button>
-              </form>
 
-              <p className="text-center text-sm text-slate-400">
+                  {error && (
+                    <div className="bg-red-500/10 border border-red-500/30 text-red-400 px-4 py-3 rounded-lg text-sm">
+                      {error}
+                    </div>
+                  )}
+
+                  <button
+                    type="submit"
+                    disabled={loading}
+                    className="w-full bg-gradient-to-r from-orange-600 to-orange-500 hover:from-orange-700 hover:to-orange-600 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold py-3 rounded-lg text-sm transition-all duration-200 flex items-center justify-center gap-2"
+                  >
+                    {loading ? (
+                      <>
+                        <div className="w-4 h-4 border-2 border-orange-200 border-t-white rounded-full animate-spin" />
+                        Kaydediliyor...
+                      </>
+                    ) : (
+                      <>
+                        Kayıt ol ve kuruluma geç
+                        <ArrowRight className="w-4 h-4" />
+                      </>
+                    )}
+                  </button>
+                </form>
+              )}
+
+              <p className="text-center text-sm text-slate-400 mt-4">
                 Zaten hesabınız var mı?{' '}
                 <button
                   type="button"
                   onClick={() => {
                     setIsLogin(true);
                     setError('');
+                    resetRegisterWizard();
                   }}
                   className="text-orange-500 font-semibold hover:text-orange-400 transition-colors"
                 >
