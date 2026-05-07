@@ -419,6 +419,8 @@ verify_jwt = false
 [functions.send-sms-custom]
 verify_jwt = false
 
-# Yalnızca giriş yapmış yönetici çağırır; JWT doğrulanır.
+# Yalnızca giriş yapmış yönetici çağırır. Gateway-level verify_jwt = false:
+# bazı projelerde sb_publishable_* anon key + gateway eşleşmesi 401 üretiyor;
+# JWT'yi fonksiyon içinde admin.auth.getUser ile manuel doğruluyoruz.
 [functions.create-waiter-auth]
-verify_jwt = true
+verify_jwt = false
