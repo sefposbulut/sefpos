@@ -357,7 +357,8 @@ export function DeviceManagement() {
       let query = supabase
         .from('device_bindings')
         .delete()
-        .eq('tenant_id', tenant?.id || '');
+        .eq('tenant_id', tenant?.id || '')
+        .select('id');
 
       // Delete all duplicate rows for same waiter/device pair to prevent resurrection.
       if (binding?.waiter_id && binding?.device_id) {
@@ -366,9 +367,27 @@ export function DeviceManagement() {
         query = query.eq('id', id);
       }
 
-      const { error } = await query;
+      const { data: deletedRows, error } = await query;
 
       if (error) throw error;
+      if (!deletedRows || deletedRows.length === 0) {
+        alert(
+          'Cihaz bağlaması silinemedi: yetki (RLS) tarafından engellendi. ' +
+          'Yöneticiye / sahip hesabına geçin veya migration’ları (device_bindings RLS) yeniden uygulayın.',
+        );
+        return;
+      }
+
+      // İlgili açık bağlama isteklerini de kapatalım, yoksa onay polling'i diriltebilir.
+      if (binding?.waiter_id && binding?.device_id && tenant?.id) {
+        await supabase
+          .from('device_binding_requests')
+          .update({ status: 'rejected' } as any)
+          .eq('tenant_id', tenant.id)
+          .eq('waiter_id', binding.waiter_id)
+          .eq('device_id', binding.device_id)
+          .in('status', ['pending', 'accepted']);
+      }
 
       // If waiter has no more active devices, mark waiter inactive.
       if (binding?.waiter_id && tenant?.id) {

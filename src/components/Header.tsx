@@ -9,9 +9,12 @@ const isElectron = !!(window as any).electronAPI;
 const roleLabels: Record<string, string> = {
   owner: 'Sahip',
   admin: 'Yönetici',
-  manager: 'Müdür',
+  manager: 'Şube Müdürü',
   cashier: 'Kasiyer',
   waiter: 'Garson',
+  courier: 'Kurye',
+  kitchen: 'Mutfak',
+  super_admin: 'Süper Admin',
 };
 
 const logoSrc = isElectron
@@ -21,7 +24,7 @@ const logoSrc = isElectron
 interface HeaderProps {
   onOpenSettings: () => void;
   /**
-   * @deprecated Lisans paneli artık yalnızca /ayka URL'i üzerinden açılır;
+   * @deprecated Lisans paneli artık yalnızca gizli URL (aykaRoute) üzerinden açılır;
    * restoran arayüzünde kalkan ikonu gösterilmez. Geriye dönük uyumluluk
    * için prop tutuldu, render edilmiyor.
    */

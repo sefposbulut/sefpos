@@ -1314,6 +1314,26 @@ function createWindow() {
     }
   } catch (_) {}
 
+  // Kamera / mikrofon izinlerini Electron tarafında otomatik ver
+  // (barkod tarayıcı, gelecekte sesli not vb. için gerekli)
+  try {
+    const ses = mainWindow.webContents.session;
+    ses.setPermissionRequestHandler((_wc, permission, callback) => {
+      if (permission === 'media' || permission === 'mediaKeySystem' || permission === 'display-capture') {
+        return callback(true);
+      }
+      callback(true);
+    });
+    ses.setPermissionCheckHandler((_wc, permission) => {
+      if (permission === 'media' || permission === 'mediaKeySystem' || permission === 'display-capture') {
+        return true;
+      }
+      return true;
+    });
+  } catch (e) {
+    console.warn('[permissions] handler set failed:', e?.message || e);
+  }
+
   mainWindow.once('ready-to-show', () => {
     if (settings.zoomFactor) {
       mainWindow.webContents.setZoomFactor(settings.zoomFactor);
@@ -2095,6 +2115,7 @@ app.whenReady().then(() => {
   startPrintAgent();
   createWindow();
   setupAutoUpdater();
+  initCidListener();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -2102,6 +2123,85 @@ app.whenReady().then(() => {
     }
   });
 });
+
+let cidListener = null;
+let cidAutoStartArmed = false;
+
+function initCidListener() {
+  if (cidListener) return;
+  try {
+    const { CidListener } = require('./cidListener.cjs');
+    cidListener = new CidListener();
+  } catch (e) {
+    console.warn('[CallerID] modül yüklenemedi:', e?.message || e);
+    return;
+  }
+
+  cidListener.onCall = (payload) => {
+    try {
+      mainWindow?.webContents.send('caller-id-ring', payload);
+    } catch (e) {
+      console.error('[CallerID] ring forward error:', e);
+    }
+  };
+  cidListener.onSignal = (payload) => {
+    try {
+      mainWindow?.webContents.send('caller-id-signal', payload);
+    } catch (e) {
+      console.error('[CallerID] signal forward error:', e);
+    }
+  };
+  cidListener.onError = (err) => {
+    console.error('[CallerID] error:', err?.message || err);
+    try {
+      mainWindow?.webContents.send('caller-id-error', { message: String(err?.message || err) });
+    } catch {
+      /* yoksay */
+    }
+  };
+}
+
+ipcMain.handle('caller-id-status', () => {
+  if (!cidListener) return { available: false, running: false };
+  return cidListener.status();
+});
+
+ipcMain.handle('caller-id-start', (_evt, opts = {}) => {
+  if (!cidListener) return { ok: false, error: 'Caller ID modülü yok' };
+  try {
+    const status = cidListener.start({
+      softTest: !!opts.softTest,
+      arch: opts.arch,
+      dllPath: opts.dllPath,
+    });
+    cidAutoStartArmed = true;
+    return { ok: true, status };
+  } catch (e) {
+    return { ok: false, error: String(e?.message || e) };
+  }
+});
+
+ipcMain.handle('caller-id-stop', () => {
+  if (!cidListener) return { ok: false };
+  try {
+    cidListener.stop();
+    cidAutoStartArmed = false;
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: String(e?.message || e) };
+  }
+});
+
+app.on('before-quit', () => {
+  try {
+    if (cidListener && cidListener.isRunning()) cidListener.stop();
+  } catch {
+    /* yoksay */
+  }
+});
+
+// suppress unused warning when caller-id is not active
+void cidAutoStartArmed;
 
 let scaleComPort = null;
 let scaleWeighingSession = null;

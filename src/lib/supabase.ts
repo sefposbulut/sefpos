@@ -639,6 +639,8 @@ export type Database = {
           cancelled_by: string | null;
           cancelled_at: string | null;
           created_at: string;
+          paid_quantity: number | null;
+          paid_at: string | null;
         };
         Insert: {
           id?: string;
@@ -654,6 +656,8 @@ export type Database = {
           variant_name?: string | null;
           status?: 'pending' | 'preparing' | 'ready' | 'served';
           created_at?: string;
+          paid_quantity?: number | null;
+          paid_at?: string | null;
         };
         Update: {
           id?: string;
@@ -668,6 +672,8 @@ export type Database = {
           cancelled_by?: string | null;
           cancelled_at?: string | null;
           created_at?: string;
+          paid_quantity?: number | null;
+          paid_at?: string | null;
         };
       };
     };

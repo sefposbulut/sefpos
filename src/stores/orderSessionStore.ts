@@ -14,6 +14,7 @@ export type PaymentTransactionRow = {
   amount: number;
   created_by: string;
   created_at: string;
+  customer_id?: string | null;
 };
 
 type SetArg<T> = T | ((prev: T) => T);

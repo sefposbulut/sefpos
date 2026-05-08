@@ -2,15 +2,30 @@ import { useState, useEffect, useRef } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import {
-  Bike, User, Phone, MapPin, FileText, Clock, ChevronLeft, Plus, Minus,
+  Bike, User, MapPin, FileText, Clock, ChevronLeft, Plus, Minus,
   Search, X, Trash2, Home, ShoppingBag, CreditCard, Banknote, Smartphone,
   History, RefreshCw, Check, ChevronRight
 } from 'lucide-react';
 import { Courier, DeliveryCustomer } from './TakeawayOrders';
 import { loadPrintSettings, printTakeawayReceipt } from '../lib/printService';
 
+/** Cari hesap (customers tablosu) — paket formunda teslimat kaydı ile birlikte aranır */
+interface CariCustomerRow {
+  id: string;
+  name: string;
+  phone: string | null;
+  email: string | null;
+  address: string | null;
+  notes: string | null;
+  is_active: boolean;
+}
+
+type CustomerSuggestion =
+  | { kind: 'delivery'; row: DeliveryCustomer }
+  | { kind: 'cari'; row: CariCustomerRow };
+
 type Category = { id: string; name: string; sort_order: number };
-type Product = { id: string; name: string; price: number; category_id: string | null };
+type Product = { id: string; name: string; price: number; category_id: string | null; tax_rate?: number | null };
 interface CartItem { product: Product; quantity: number; note: string }
 
 type OrderSubtype = 'takeaway' | 'gel_al' | 'delivery';
@@ -18,10 +33,12 @@ type OrderSubtype = 'takeaway' | 'gel_al' | 'delivery';
 interface DeliveryOrderFormProps {
   couriers: Courier[];
   editOrder?: any | null;
+  /** Caller ID akışından gelen önyükleme: telefonu yaz, varsa müşteriyi seç. */
+  prefillCustomer?: { phone: string; matched: DeliveryCustomer | null } | null;
   onClose: () => void;
 }
 
-export function DeliveryOrderForm({ couriers, editOrder, onClose }: DeliveryOrderFormProps) {
+export function DeliveryOrderForm({ couriers, editOrder, prefillCustomer, onClose }: DeliveryOrderFormProps) {
   const { tenant, user, profile, activeBranch } = useAuth();
 
   const [subtype, setSubtype] = useState<OrderSubtype>(editOrder?.order_type === 'delivery' ? 'delivery' : editOrder?.order_subtype === 'gel_al' ? 'gel_al' : 'takeaway');
@@ -41,8 +58,9 @@ export function DeliveryOrderForm({ couriers, editOrder, onClose }: DeliveryOrde
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  const [customerSuggestions, setCustomerSuggestions] = useState<DeliveryCustomer[]>([]);
-  const [selectedCustomer, setSelectedCustomer] = useState<DeliveryCustomer | null>(null);
+  const [customerSuggestions, setCustomerSuggestions] = useState<CustomerSuggestion[]>([]);
+  const [selectedDeliveryCustomer, setSelectedDeliveryCustomer] = useState<DeliveryCustomer | null>(null);
+  const [selectedCariCustomer, setSelectedCariCustomer] = useState<CariCustomerRow | null>(null);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [lastOrders, setLastOrders] = useState<any[]>([]);
   const [showLastOrders, setShowLastOrders] = useState(false);
@@ -54,13 +72,26 @@ export function DeliveryOrderForm({ couriers, editOrder, onClose }: DeliveryOrde
 
   useEffect(() => {
     if (!tenant) return;
-    let cq = supabase.from('categories').select('id, name, sort_order').eq('tenant_id', tenant.id).order('sort_order');
-    if (activeBranch) cq = cq.or(`branch_id.eq.${activeBranch.id},branch_id.is.null`);
-    cq.then(({ data }) => { if (data) setCategories(data); });
-    let pq = supabase.from('products').select('id, name, price, category_id').eq('tenant_id', tenant.id).eq('is_active', true).order('name');
-    if (activeBranch) pq = pq.or(`branch_id.eq.${activeBranch.id},branch_id.is.null`);
-    pq.then(({ data }) => { if (data) setProducts(data); });
-  }, [tenant, activeBranch]);
+    void supabase
+      .from('categories')
+      .select('id, name, sort_order')
+      .eq('tenant_id', tenant.id)
+      .order('sort_order')
+      .then(({ data, error }) => {
+        if (error) console.error('[Paket] kategoriler:', error);
+        if (data) setCategories(data);
+      });
+    void supabase
+      .from('products')
+      .select('id, name, price, category_id, tax_rate')
+      .eq('tenant_id', tenant.id)
+      .eq('is_active', true)
+      .order('name')
+      .then(({ data, error }) => {
+        if (error) console.error('[Paket] ürünler:', error);
+        if (data) setProducts(data as Product[]);
+      });
+  }, [tenant]);
 
   useEffect(() => {
     if (editOrder?.order_items) {
@@ -71,35 +102,101 @@ export function DeliveryOrderForm({ couriers, editOrder, onClose }: DeliveryOrde
       }));
       setCart(mapped);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const searchCustomers = async (phone: string) => {
-    if (!tenant || phone.length < 3) { setCustomerSuggestions([]); setShowSuggestions(false); return; }
+  // Caller ID önyüklemesi: çağrı geldiğinde telefonu yaz, varsa müşteriyi seç ve son siparişleri çek.
+  useEffect(() => {
+    if (!prefillCustomer || editOrder) return;
+    const { phone, matched } = prefillCustomer;
+    if (matched) {
+      void selectDeliveryCustomer(matched);
+    } else if (phone) {
+      setCustomerPhone(phone);
+      setCustomerName('');
+      setDeliveryAddress('');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefillCustomer?.phone, prefillCustomer?.matched?.id]);
+
+  const searchCustomers = async (raw: string) => {
+    const q = raw.trim();
+    if (!tenant || q.length < 2) {
+      setCustomerSuggestions([]);
+      setShowSuggestions(false);
+      return;
+    }
     setLoadingCustomer(true);
-    const { data } = await supabase
-      .from('delivery_customers')
-      .select('*')
-      .eq('tenant_id', tenant.id)
-      .ilike('phone', `%${phone}%`)
-      .order('last_order_at', { ascending: false })
-      .limit(5);
-    if (data) { setCustomerSuggestions(data as DeliveryCustomer[]); setShowSuggestions(data.length > 0); }
+    const safe = q.replace(/%/g, '').replace(/,/g, ' ').trim();
+    const pattern = `%${safe}%`;
+
+    const [byDelPhone, byDelName, byCariName, byCariPhone] = await Promise.all([
+      supabase
+        .from('delivery_customers')
+        .select('*')
+        .eq('tenant_id', tenant.id)
+        .ilike('phone', pattern)
+        .order('last_order_at', { ascending: false })
+        .limit(8),
+      supabase
+        .from('delivery_customers')
+        .select('*')
+        .eq('tenant_id', tenant.id)
+        .ilike('full_name', pattern)
+        .order('last_order_at', { ascending: false })
+        .limit(8),
+      supabase
+        .from('customers')
+        .select('id, name, phone, email, address, notes, is_active')
+        .eq('tenant_id', tenant.id)
+        .eq('is_active', true)
+        .ilike('name', pattern)
+        .order('name', { ascending: true })
+        .limit(8),
+      supabase
+        .from('customers')
+        .select('id, name, phone, email, address, notes, is_active')
+        .eq('tenant_id', tenant.id)
+        .eq('is_active', true)
+        .ilike('phone', pattern)
+        .order('name', { ascending: true })
+        .limit(8),
+    ]);
+
+    const err = byDelPhone.error || byDelName.error || byCariName.error || byCariPhone.error;
+    if (err) console.error('[Paket] müşteri ara:', err);
+
+    const merged: CustomerSuggestion[] = [];
+    const seenDel = new Set<string>();
+    const seenCari = new Set<string>();
+
+    for (const row of [...(byDelPhone.data || []), ...(byDelName.data || [])]) {
+      const r = row as DeliveryCustomer;
+      if (seenDel.has(r.id)) continue;
+      seenDel.add(r.id);
+      merged.push({ kind: 'delivery', row: r });
+    }
+    for (const row of [...(byCariName.data || []), ...(byCariPhone.data || [])]) {
+      const r = row as CariCustomerRow;
+      if (seenCari.has(r.id)) continue;
+      seenCari.add(r.id);
+      merged.push({ kind: 'cari', row: r });
+    }
+
+    setCustomerSuggestions(merged);
+    setShowSuggestions(merged.length > 0);
     setLoadingCustomer(false);
   };
 
-  const handlePhoneChange = (val: string) => {
+  const handleCustomerSearchChange = (val: string) => {
     setCustomerPhone(val);
-    setSelectedCustomer(null);
+    setSelectedDeliveryCustomer(null);
+    setSelectedCariCustomer(null);
     if (phoneDebounce.current) clearTimeout(phoneDebounce.current);
     phoneDebounce.current = setTimeout(() => searchCustomers(val), 300);
   };
 
-  const selectCustomer = async (customer: DeliveryCustomer) => {
-    setSelectedCustomer(customer);
-    setCustomerPhone(customer.phone);
-    setCustomerName(customer.full_name);
-    setDeliveryAddress(customer.address || '');
-    setShowSuggestions(false);
+  const loadLastOrdersForDeliveryCustomer = async (customer: DeliveryCustomer) => {
     const { data } = await supabase
       .from('orders')
       .select('*, order_items(quantity, unit_price, products(name))')
@@ -107,6 +204,56 @@ export function DeliveryOrderForm({ couriers, editOrder, onClose }: DeliveryOrde
       .order('created_at', { ascending: false })
       .limit(3);
     if (data) setLastOrders(data);
+  };
+
+  const loadLastOrdersForCari = async (cari: CariCustomerRow) => {
+    const { data: byId } = await supabase
+      .from('orders')
+      .select('*, order_items(quantity, unit_price, products(name))')
+      .eq('tenant_id', tenant.id)
+      .eq('customer_id', cari.id)
+      .in('order_type', ['takeaway', 'delivery'])
+      .order('created_at', { ascending: false })
+      .limit(3);
+    let data = byId;
+    if ((!data || data.length === 0) && cari.phone?.trim()) {
+      const p = cari.phone.trim().replace(/%/g, '');
+      const { data: byPhone } = await supabase
+        .from('orders')
+        .select('*, order_items(quantity, unit_price, products(name))')
+        .eq('tenant_id', tenant.id)
+        .in('order_type', ['takeaway', 'delivery'])
+        .ilike('customer_phone', `%${p}%`)
+        .order('created_at', { ascending: false })
+        .limit(3);
+      data = byPhone;
+    }
+    if (data) setLastOrders(data);
+  };
+
+  const selectDeliveryCustomer = async (customer: DeliveryCustomer) => {
+    setSelectedDeliveryCustomer(customer);
+    setSelectedCariCustomer(null);
+    setCustomerPhone(customer.phone);
+    setCustomerName(customer.full_name);
+    setDeliveryAddress(customer.address || '');
+    setShowSuggestions(false);
+    await loadLastOrdersForDeliveryCustomer(customer);
+  };
+
+  const selectCariCustomer = async (cari: CariCustomerRow) => {
+    setSelectedCariCustomer(cari);
+    setSelectedDeliveryCustomer(null);
+    setCustomerPhone(cari.phone?.trim() || '');
+    setCustomerName(cari.name);
+    setDeliveryAddress(cari.address || '');
+    setShowSuggestions(false);
+    await loadLastOrdersForCari(cari);
+  };
+
+  const pickSuggestion = (s: CustomerSuggestion) => {
+    if (s.kind === 'delivery') void selectDeliveryCustomer(s.row);
+    else void selectCariCustomer(s.row);
   };
 
   const reorderFromHistory = (order: any) => {
@@ -164,17 +311,14 @@ export function DeliveryOrderForm({ couriers, editOrder, onClose }: DeliveryOrde
       .maybeSingle();
 
     if (existing) {
-      await supabase.from('delivery_customers').update({
-        full_name: customerName.trim() || existing.id,
-        address: deliveryAddress.trim(),
-        last_order_at: new Date().toISOString(),
-        order_count: supabase.rpc as any,
-      }).eq('id', existing.id);
-      await supabase.from('delivery_customers').update({
-        full_name: customerName.trim(),
-        address: deliveryAddress.trim(),
-        last_order_at: new Date().toISOString(),
-      }).eq('id', existing.id);
+      await supabase
+        .from('delivery_customers')
+        .update({
+          full_name: customerName.trim(),
+          address: deliveryAddress.trim(),
+          last_order_at: new Date().toISOString(),
+        })
+        .eq('id', existing.id);
       return existing.id;
     }
 
@@ -193,7 +337,8 @@ export function DeliveryOrderForm({ couriers, editOrder, onClose }: DeliveryOrde
   const handleSubmit = async () => {
     if (!tenant || !user) return;
     if (!customerName.trim()) { alert('Müşteri adı zorunludur'); return; }
-    if (isDelivery && !deliveryAddress.trim()) { alert('Teslimat adresi zorunludur'); return; }
+    if (!customerPhone.trim()) { alert('Telefon zorunludur'); return; }
+    if (!deliveryAddress.trim()) { alert('Adres zorunludur'); return; }
     if (cart.length === 0) { alert('En az 1 ürün ekleyin'); return; }
     setSubmitting(true);
 
@@ -243,15 +388,21 @@ export function DeliveryOrderForm({ couriers, editOrder, onClose }: DeliveryOrde
       orderId = created.id;
     }
 
-    const items = cart.map(i => ({
-      order_id: orderId,
-      tenant_id: tenant.id,
-      product_id: i.product.id,
-      quantity: i.quantity,
-      unit_price: i.product.price,
-      total_price: i.product.price * i.quantity,
-      notes: i.note || null,
-    }));
+    const items = cart.map((i) => {
+      const lineTotal = i.product.price * i.quantity;
+      return {
+        order_id: orderId,
+        tenant_id: tenant.id,
+        product_id: i.product.id,
+        quantity: i.quantity,
+        unit_price: i.product.price,
+        subtotal: lineTotal,
+        total_amount: lineTotal,
+        tax_rate: i.product.tax_rate ?? 20,
+        discount_amount: 0,
+        notes: i.note || null,
+      };
+    });
     await supabase.from('order_items').insert(items);
 
     if (courier) await supabase.from('couriers').update({ status: 'busy' }).eq('id', courier.id);
@@ -329,42 +480,84 @@ export function DeliveryOrderForm({ couriers, editOrder, onClose }: DeliveryOrde
             </div>
 
             <div className="relative">
-              <label className="text-xs font-bold text-slate-600 mb-1 block">Telefon</label>
+              <label className="text-xs font-bold text-slate-600 mb-1 block">Müşteri ara (cari adı, teslimat kaydı veya telefon)</label>
               <div className="relative">
-                <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                 <input
-                  type="tel"
+                  type="text"
                   value={customerPhone}
-                  onChange={e => handlePhoneChange(e.target.value)}
+                  onChange={(e) => handleCustomerSearchChange(e.target.value)}
                   onFocus={() => customerSuggestions.length > 0 && setShowSuggestions(true)}
-                  placeholder="05XX XXX XX XX"
+                  placeholder="Cari adı, isim veya 05XX…"
                   className="w-full pl-9 pr-8 py-2.5 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-orange-400 focus:border-transparent"
                 />
                 {loadingCustomer && <div className="absolute right-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 border-2 border-orange-400 border-t-transparent rounded-full animate-spin" />}
-                {selectedCustomer && <Check className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-green-500" />}
+                {(selectedDeliveryCustomer || selectedCariCustomer) && (
+                  <Check className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-green-500" />
+                )}
               </div>
 
               {showSuggestions && customerSuggestions.length > 0 && (
-                <div className="absolute z-20 top-full mt-1 left-0 right-0 bg-white border border-slate-200 rounded-xl shadow-xl overflow-hidden">
+                <div className="absolute z-20 top-full mt-1 left-0 right-0 bg-white border border-slate-200 rounded-xl shadow-xl overflow-hidden max-h-72 overflow-y-auto">
                   <div className="px-3 py-1.5 bg-slate-50 border-b border-slate-100">
-                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">Kayıtlı Müşteriler</p>
+                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">Eşleşen kayıtlar</p>
                   </div>
-                  {customerSuggestions.map(c => (
-                    <button
-                      key={c.id}
-                      onClick={() => selectCustomer(c)}
-                      className="w-full text-left px-3 py-2.5 hover:bg-orange-50 border-b border-slate-100 last:border-b-0 transition"
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="min-w-0">
-                          <div className="font-bold text-sm text-slate-800">{c.full_name}</div>
-                          <div className="text-xs text-slate-500">{c.phone}</div>
-                          {c.address && <div className="text-xs text-slate-400 mt-0.5 truncate flex items-center gap-1"><MapPin className="w-2.5 h-2.5 shrink-0" />{c.address}</div>}
+                  {customerSuggestions.map((s) => {
+                    const key = s.kind === 'delivery' ? `d-${s.row.id}` : `c-${s.row.id}`;
+                    if (s.kind === 'delivery') {
+                      const c = s.row;
+                      return (
+                        <button
+                          key={key}
+                          type="button"
+                          onClick={() => pickSuggestion(s)}
+                          className="w-full text-left px-3 py-2.5 hover:bg-orange-50 border-b border-slate-100 last:border-b-0 transition"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-orange-100 text-orange-700 uppercase">Teslimat</span>
+                                <div className="font-bold text-sm text-slate-800">{c.full_name}</div>
+                              </div>
+                              <div className="text-xs text-slate-500">{c.phone}</div>
+                              {c.address && (
+                                <div className="text-xs text-slate-400 mt-0.5 truncate flex items-center gap-1">
+                                  <MapPin className="w-2.5 h-2.5 shrink-0" />
+                                  {c.address}
+                                </div>
+                              )}
+                            </div>
+                            <div className="text-xs text-orange-500 font-bold shrink-0">{c.order_count} sipariş</div>
+                          </div>
+                        </button>
+                      );
+                    }
+                    const c = s.row;
+                    return (
+                      <button
+                        key={key}
+                        type="button"
+                        onClick={() => pickSuggestion(s)}
+                        className="w-full text-left px-3 py-2.5 hover:bg-teal-50 border-b border-slate-100 last:border-b-0 transition"
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-teal-100 text-teal-800 uppercase">Cari</span>
+                              <div className="font-bold text-sm text-slate-800">{c.name}</div>
+                            </div>
+                            <div className="text-xs text-slate-500">{c.phone || '—'}</div>
+                            {c.address && (
+                              <div className="text-xs text-slate-400 mt-0.5 truncate flex items-center gap-1">
+                                <MapPin className="w-2.5 h-2.5 shrink-0" />
+                                {c.address}
+                              </div>
+                            )}
+                          </div>
                         </div>
-                        <div className="text-xs text-orange-500 font-bold shrink-0">{c.order_count} sipariş</div>
-                      </div>
-                    </button>
-                  ))}
+                      </button>
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -382,7 +575,7 @@ export function DeliveryOrderForm({ couriers, editOrder, onClose }: DeliveryOrde
 
             <div>
               <label className="text-xs font-bold text-slate-600 mb-1 block">
-                Adres {isDelivery && <span className="text-red-500">*</span>}
+                Adres <span className="text-red-500">*</span>
               </label>
               <textarea
                 value={deliveryAddress}

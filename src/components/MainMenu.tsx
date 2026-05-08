@@ -1,4 +1,4 @@
-import { Package, Users, TrendingUp, Wallet, Clock, Grid3x3, Menu, X, UserCog, ShoppingBag, ShoppingCart, Ban, Settings, Lock } from 'lucide-react';
+import { Package, Users, TrendingUp, Wallet, Clock, Grid3x3, Menu, X, UserCog, ShoppingBag, ShoppingCart, Ban, Settings, Lock, Zap, Boxes } from 'lucide-react';
 import { useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -16,9 +16,11 @@ export function MainMenu({ onNavigate, currentPage, onOpenSettings, onLockScreen
 
   const menuItems = [
     { id: 'tables', label: 'Masalar', icon: Grid3x3, show: permissions.can_view_tables },
+    { id: 'quick-sale', label: 'Hızlı Satış', icon: Zap, show: permissions.can_take_orders && permissions.can_process_payments },
     { id: 'takeaway', label: 'Paket Servis', icon: ShoppingCart, show: permissions.can_take_orders || permissions.can_view_tables },
     { id: 'online-orders', label: 'Online Siparişler', icon: ShoppingBag, show: permissions.can_take_orders || permissions.can_view_tables },
-    { id: 'products', label: 'Stok Yönetimi', icon: Package, show: permissions.can_manage_products },
+    { id: 'products', label: 'Ürünler', icon: Package, show: permissions.can_manage_products },
+    { id: 'inventory', label: 'Stok / Reçete', icon: Boxes, show: permissions.can_manage_products },
     { id: 'users', label: 'Kullanıcı Yönetimi', icon: UserCog, show: permissions.can_manage_users },
     { id: 'customers', label: 'Cari Hesaplar', icon: Users, show: permissions.can_process_payments || permissions.can_manage_products },
     { id: 'reports', label: 'Raporlar', icon: TrendingUp, show: permissions.can_view_reports },

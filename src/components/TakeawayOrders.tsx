@@ -4,10 +4,24 @@ import { useAuth } from '../contexts/AuthContext';
 import {
   Plus, Package, Clock, CheckCircle2, Trash2, Bike, Phone, MapPin, User,
   X, AlertCircle, Truck, Home, ShoppingBag, Settings, ChevronRight,
-  CreditCard, Banknote, Smartphone, RefreshCw, Filter, Navigation
+  CreditCard, Banknote, Smartphone, RefreshCw, Filter, Navigation, Search,
+  PhoneIncoming, Wifi, WifiOff, FlaskConical,
 } from 'lucide-react';
 import { DeliveryOrderForm } from './DeliveryOrderForm';
 import { CourierManagement } from './CourierManagement';
+import {
+  isCallerIdAvailable,
+  startCallerId,
+  stopCallerId,
+  callerIdStatus,
+  onCallerIdRing,
+  onCallerIdSignal,
+  onCallerIdError,
+  simulateRing,
+  callerIdLocalSettings,
+  type CallerIdRing,
+  type CallerIdStatus,
+} from '../lib/callerId';
 
 export interface Courier {
   id: string;
@@ -108,6 +122,143 @@ export function TakeawayOrders() {
   const [editingOrder, setEditingOrder] = useState<TakeawayOrder | null>(null);
   const [assigningCourierId, setAssigningCourierId] = useState<string | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [customerQuery, setCustomerQuery] = useState('');
+
+  // ===== Caller ID =====
+  const cidAvailable = isCallerIdAvailable();
+  const [cidStatusInfo, setCidStatusInfo] = useState<CallerIdStatus>({ available: cidAvailable, running: false });
+  const [cidSettings, setCidSettings] = useState(callerIdLocalSettings.load());
+  const [cidPanelOpen, setCidPanelOpen] = useState(false);
+  const [incomingCalls, setIncomingCalls] = useState<Array<{ id: string; ring: CallerIdRing; matched: DeliveryCustomer | null; }>>([]);
+  const [cidPrefill, setCidPrefill] = useState<{ phone: string; matched: DeliveryCustomer | null } | null>(null);
+  const [cidError, setCidError] = useState<string | null>(null);
+
+  const refreshCidStatus = useCallback(async () => {
+    try {
+      const s = await callerIdStatus();
+      setCidStatusInfo(s);
+    } catch (e: any) {
+      setCidError(e?.message || 'Caller ID durumu alınamadı');
+    }
+  }, []);
+
+  // Otomatik başlat (electron + ayar açık)
+  useEffect(() => {
+    if (!cidAvailable) return;
+    let cancelled = false;
+    (async () => {
+      const s = await callerIdStatus();
+      if (cancelled) return;
+      setCidStatusInfo(s);
+      if (cidSettings.autoStart && !s.running) {
+        try {
+          const next = await startCallerId({ softTest: cidSettings.softTest });
+          if (!cancelled) setCidStatusInfo(next);
+        } catch (e: any) {
+          if (!cancelled) setCidError(e?.message || 'Caller ID başlatılamadı');
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [cidAvailable, cidSettings.autoStart, cidSettings.softTest]);
+
+  // Olay dinleyiciler: çağrı, sinyal, hata
+  useEffect(() => {
+    if (!cidAvailable) return;
+    const offRing = onCallerIdRing(async (ring) => {
+      if (!tenant || !ring.phone) return;
+      let matched: DeliveryCustomer | null = null;
+      try {
+        const { data } = await supabase
+          .from('delivery_customers')
+          .select('*')
+          .eq('tenant_id', tenant.id)
+          .eq('phone', ring.phone)
+          .maybeSingle();
+        matched = (data as DeliveryCustomer | null) || null;
+        if (!matched) {
+          // Tam eşleşme yoksa son haneleri dene (formatlama farkı için)
+          const last7 = ring.phone.slice(-7);
+          const { data: fuzzy } = await supabase
+            .from('delivery_customers')
+            .select('*')
+            .eq('tenant_id', tenant.id)
+            .ilike('phone', `%${last7}`)
+            .order('last_order_at', { ascending: false })
+            .limit(1);
+          matched = (fuzzy?.[0] as DeliveryCustomer) || null;
+        }
+      } catch (e) {
+        console.error('[CallerID] müşteri arama hatası:', e);
+      }
+      setIncomingCalls((prev) => [
+        { id: `${ring.ts}-${ring.phone}`, ring, matched },
+        ...prev,
+      ].slice(0, 5));
+    });
+    const offSignal = onCallerIdSignal((sig) => {
+      setCidStatusInfo((prev) => ({
+        ...prev,
+        connected: sig.connected,
+        deviceModel: sig.deviceModel,
+        deviceSerial: sig.deviceSerial,
+        running: true,
+      }));
+    });
+    const offError = onCallerIdError(({ message }) => setCidError(message));
+    return () => {
+      offRing();
+      offSignal();
+      offError();
+    };
+  }, [cidAvailable, tenant]);
+
+  const handleAcceptCall = (item: { ring: CallerIdRing; matched: DeliveryCustomer | null }) => {
+    setCidPrefill({ phone: item.ring.phone, matched: item.matched });
+    setShowNewOrderForm(true);
+    setIncomingCalls((prev) => prev.filter((p) => p.ring.ts !== item.ring.ts));
+  };
+
+  const handleDismissCall = (id: string) =>
+    setIncomingCalls((prev) => prev.filter((p) => p.id !== id));
+
+  const updateCidSetting = async (patch: Partial<{ autoStart: boolean; softTest: boolean }>) => {
+    const next = { ...cidSettings, ...patch };
+    setCidSettings(next);
+    callerIdLocalSettings.save(next);
+    if (cidStatusInfo.running) {
+      await stopCallerId();
+    }
+    if (next.autoStart) {
+      try {
+        const s = await startCallerId({ softTest: next.softTest });
+        setCidStatusInfo(s);
+        setCidError(null);
+      } catch (e: any) {
+        setCidError(e?.message || 'Caller ID başlatılamadı');
+      }
+    } else {
+      await refreshCidStatus();
+    }
+  };
+
+  const triggerSimulatedRing = () => {
+    const phone = window.prompt('Test çağrısı için telefon (örn 05551112233):', '05551112233');
+    if (!phone) return;
+    simulateRing(phone);
+  };
+
+  // Masa ekranındaki "Pakette ara" kutusundan gelen sorguyu yakala
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<string>).detail;
+      if (typeof detail === 'string') setCustomerQuery(detail);
+    };
+    window.addEventListener('sefpos:takeaway-search', handler as EventListener);
+    return () => window.removeEventListener('sefpos:takeaway-search', handler as EventListener);
+  }, []);
 
   const loadOrders = useCallback(async () => {
     if (!tenant) return;
@@ -242,6 +393,13 @@ export function TakeawayOrders() {
   }).filter(o => {
     if (statusFilter === 'all') return true;
     return o.delivery_status === statusFilter;
+  }).filter((o) => {
+    const q = customerQuery.trim().toLowerCase();
+    if (!q) return true;
+    const name = (o.customer_name || '').toLowerCase();
+    const phone = (o.customer_phone || '').toLowerCase();
+    const addr = (o.delivery_address || '').toLowerCase();
+    return name.includes(q) || phone.includes(q) || addr.includes(q);
   });
 
   const availableCouriers = couriers.filter(c => c.status === 'available');
@@ -251,7 +409,14 @@ export function TakeawayOrders() {
       <DeliveryOrderForm
         couriers={couriers}
         editOrder={editingOrder}
-        onClose={() => { setShowNewOrderForm(false); setEditingOrder(null); loadOrders(); loadCouriers(); }}
+        prefillCustomer={cidPrefill}
+        onClose={() => {
+          setShowNewOrderForm(false);
+          setEditingOrder(null);
+          setCidPrefill(null);
+          loadOrders();
+          loadCouriers();
+        }}
       />
     );
   }
@@ -276,6 +441,34 @@ export function TakeawayOrders() {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            {cidAvailable && (
+              <button
+                onClick={() => setCidPanelOpen((p) => !p)}
+                title={
+                  cidStatusInfo.running
+                    ? cidStatusInfo.connected
+                      ? `Caller ID • Cihaz: ${cidStatusInfo.deviceModel || 'bağlı'}`
+                      : 'Caller ID dinleniyor (cihaz yok)'
+                    : 'Caller ID kapalı'
+                }
+                className={`relative p-2 rounded-xl transition active:scale-95 ${
+                  cidStatusInfo.running
+                    ? cidStatusInfo.connected
+                      ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
+                      : 'bg-amber-100 text-amber-700 hover:bg-amber-200'
+                    : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                }`}
+              >
+                {cidStatusInfo.running ? (
+                  cidStatusInfo.connected ? <Wifi className="w-4 h-4" /> : <WifiOff className="w-4 h-4" />
+                ) : (
+                  <PhoneIncoming className="w-4 h-4" />
+                )}
+                {cidStatusInfo.softTest && (
+                  <span className="absolute -top-0.5 -right-0.5 w-2 h-2 bg-purple-500 rounded-full" title="Soft test" />
+                )}
+              </button>
+            )}
             <button
               onClick={() => setShowCourierMgmt(true)}
               title="Kurye Yönetimi"
@@ -300,7 +493,142 @@ export function TakeawayOrders() {
           </div>
         </div>
 
+        {cidPanelOpen && cidAvailable && (
+          <div className="mt-3 mb-2 p-3 rounded-xl border border-slate-200 bg-slate-50">
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-2 text-sm font-bold text-slate-700">
+                <PhoneIncoming className="w-4 h-4" />
+                Caller ID — Arayan Tanımlama
+              </div>
+              <button onClick={() => setCidPanelOpen(false)} className="p-1 hover:bg-slate-200 rounded-lg" aria-label="Kapat">
+                <X className="w-4 h-4 text-slate-500" />
+              </button>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
+              <div className="bg-white rounded-lg border border-slate-200 p-2">
+                <div className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Durum</div>
+                <div className={`font-bold ${cidStatusInfo.running ? 'text-emerald-700' : 'text-slate-500'}`}>
+                  {cidStatusInfo.running ? (cidStatusInfo.connected ? `Cihaz bağlı: ${cidStatusInfo.deviceModel || 'Bilinmiyor'}` : 'Dinleniyor (cihaz yok)') : 'Kapalı'}
+                </div>
+                {cidStatusInfo.deviceSerial && <div className="text-slate-500 mt-0.5">Seri: {cidStatusInfo.deviceSerial}</div>}
+              </div>
+              <label className="bg-white rounded-lg border border-slate-200 p-2 flex items-start gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={cidSettings.autoStart}
+                  onChange={(e) => void updateCidSetting({ autoStart: e.target.checked })}
+                  className="mt-0.5"
+                />
+                <span>
+                  <div className="font-bold text-slate-700">Açılışta başlat</div>
+                  <div className="text-slate-500 text-[11px]">ŞefPOS açıldığında dinleyici otomatik başlasın</div>
+                </span>
+              </label>
+              <label className="bg-white rounded-lg border border-slate-200 p-2 flex items-start gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={cidSettings.softTest}
+                  onChange={(e) => void updateCidSetting({ softTest: e.target.checked })}
+                  className="mt-0.5"
+                />
+                <span>
+                  <div className="font-bold text-slate-700 flex items-center gap-1">
+                    <FlaskConical className="w-3 h-3" /> Soft test (cihazsız)
+                  </div>
+                  <div className="text-slate-500 text-[11px]">DLL otomatik sahte çağrılar üretir; geliştirme için</div>
+                </span>
+              </label>
+            </div>
+            <div className="flex items-center gap-2 mt-2">
+              <button
+                onClick={async () => {
+                  if (cidStatusInfo.running) {
+                    await stopCallerId();
+                    await refreshCidStatus();
+                  } else {
+                    try {
+                      const s = await startCallerId({ softTest: cidSettings.softTest });
+                      setCidStatusInfo(s);
+                      setCidError(null);
+                    } catch (e: any) {
+                      setCidError(e?.message || 'Başlatılamadı');
+                    }
+                  }
+                }}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold ${
+                  cidStatusInfo.running ? 'bg-rose-500 text-white hover:bg-rose-600' : 'bg-emerald-500 text-white hover:bg-emerald-600'
+                }`}
+              >
+                {cidStatusInfo.running ? 'Dinlemeyi durdur' : 'Dinlemeyi başlat'}
+              </button>
+              <button
+                onClick={triggerSimulatedRing}
+                className="px-3 py-1.5 rounded-lg text-xs font-bold bg-slate-200 text-slate-700 hover:bg-slate-300 inline-flex items-center gap-1"
+              >
+                <FlaskConical className="w-3 h-3" /> Test çağrısı
+              </button>
+              {cidError && <span className="text-xs text-rose-600">{cidError}</span>}
+            </div>
+          </div>
+        )}
+
+        {incomingCalls.length > 0 && (
+          <div className="mt-3 mb-2 space-y-2">
+            {incomingCalls.map((item) => (
+              <div
+                key={item.id}
+                className="p-3 rounded-xl border-2 border-orange-300 bg-gradient-to-r from-orange-50 to-red-50 shadow flex items-center gap-3"
+              >
+                <div className="w-11 h-11 rounded-full bg-orange-500 text-white flex items-center justify-center flex-shrink-0 animate-pulse">
+                  <PhoneIncoming className="w-5 h-5" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-xs font-bold text-orange-600 uppercase tracking-wider">Gelen çağrı</div>
+                  <div className="font-black text-slate-800 truncate text-base">
+                    {item.matched ? item.matched.full_name : 'Bilinmeyen müşteri'}
+                  </div>
+                  <div className="text-xs text-slate-600 flex items-center gap-2 flex-wrap">
+                    <span className="flex items-center gap-1"><Phone className="w-3 h-3" />{item.ring.phone}</span>
+                    {item.matched?.address && (
+                      <span className="flex items-center gap-1 truncate"><MapPin className="w-3 h-3" />{item.matched.address}</span>
+                    )}
+                    {item.matched && (
+                      <span className="text-orange-600 font-bold">{item.matched.order_count} sipariş geçmişi</span>
+                    )}
+                  </div>
+                </div>
+                <div className="flex items-center gap-1.5 flex-shrink-0">
+                  <button
+                    onClick={() => handleAcceptCall(item)}
+                    className="px-3 py-2 bg-orange-500 hover:bg-orange-600 text-white rounded-lg text-xs font-bold inline-flex items-center gap-1.5"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    Pakete aç
+                  </button>
+                  <button
+                    onClick={() => handleDismissCall(item.id)}
+                    className="p-2 bg-slate-200 hover:bg-slate-300 text-slate-600 rounded-lg"
+                    title="Kapat"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
         <div className="flex items-center gap-2 flex-wrap">
+          <div className="relative flex-1 min-w-[180px] max-w-md">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+            <input
+              type="search"
+              value={customerQuery}
+              onChange={(e) => setCustomerQuery(e.target.value)}
+              placeholder="Müşteri ara (ad, telefon, adres)…"
+              className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-200 text-sm focus:ring-2 focus:ring-orange-200 focus:border-orange-400 outline-none"
+            />
+          </div>
           <div className="flex bg-slate-100 rounded-xl p-0.5 gap-0.5">
             {([['all', 'Tümü'], ['takeaway', 'Paket'], ['gel_al', 'Gel-Al'], ['delivery', 'Kurye']] as [TypeFilter, string][]).map(([v, l]) => (
               <button

@@ -2,9 +2,9 @@ import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { Database } from '../lib/supabase';
-import { Plus, Clock, ShoppingCart, Lock, ZoomIn, ZoomOut } from 'lucide-react';
+import { Plus, Clock, Lock, ZoomIn, ZoomOut, ScanBarcode, Truck } from 'lucide-react';
 import { isLocalMode } from '../lib/sqlDb';
-import { warmOrderItemsForPanel } from '../lib/orderPanelWarm';
+import { warmOrderItemsForPanel, bulkWarmOrderItemsForOrders } from '../lib/orderPanelWarm';
 import { LiveDuration } from './LiveDuration';
 
 type Table = Database['public']['Tables']['restaurant_tables']['Row'] & {
@@ -41,16 +41,37 @@ const naturalSort = (a: TableWithOrder, b: TableWithOrder) =>
 
 const tableGridRuntimeCache = new Map<string, { tables: TableWithOrder[]; groups: TableGroup[] }>();
 
+// Masa zoom tercihleri cihaz başına tek bir global anahtarda tutulur:
+// kullanıcı +/- ile değiştirdiğinde tenant/branch/kullanıcı değişse de aynı
+// boyut hep korunur. (Eski scoped anahtarlar varsa migrate edilir.)
+const MOBILE_COLS_KEY = 'sefpos.tableGrid.mobileCols';
+const DESKTOP_COLS_KEY = 'sefpos.tableGrid.desktopCols';
+
+function readPersistedCols(globalKey: string, legacyPrefix: string): number | null {
+  try {
+    const direct = localStorage.getItem(globalKey);
+    const directParsed = parseInt(direct || '', 10);
+    if (Number.isFinite(directParsed)) return directParsed;
+    // Geriye dönük uyumluluk: eski tenant/branch/user-scoped anahtarlar
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (!k) continue;
+      if (k === legacyPrefix || k.startsWith(`${legacyPrefix}:`)) {
+        const v = parseInt(localStorage.getItem(k) || '', 10);
+        if (Number.isFinite(v)) {
+          localStorage.setItem(globalKey, String(v));
+          return v;
+        }
+      }
+    }
+  } catch {}
+  return null;
+}
+
 export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayButton = true }: TableGridProps) {
-  const { tenant, user, activeBranch } = useAuth();
-  const mobileColsStorageKey = useMemo(() => {
-    if (!tenant?.id || !activeBranch?.id || !user?.id) return 'mobileTableCols';
-    return `mobileTableCols:${tenant.id}:${activeBranch.id}:${user.id}`;
-  }, [tenant?.id, activeBranch?.id, user?.id]);
-  const desktopColsStorageKey = useMemo(() => {
-    if (!tenant?.id || !activeBranch?.id || !user?.id) return 'desktopTableCols';
-    return `desktopTableCols:${tenant.id}:${activeBranch.id}:${user.id}`;
-  }, [tenant?.id, activeBranch?.id, user?.id]);
+  const { tenant, user, activeBranch, permissions } = useAuth();
+  const mobileColsStorageKey = MOBILE_COLS_KEY;
+  const desktopColsStorageKey = DESKTOP_COLS_KEY;
 
   const [tables, setTables] = useState<TableWithOrder[]>([]);
   const [tableGroups, setTableGroups] = useState<TableGroup[]>([]);
@@ -66,6 +87,8 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
   const channelsRef = useRef<ReturnType<typeof supabase.channel>[]>([]);
   const pendingUpdatesRef = useRef<Set<string>>(new Set());
   const updateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const tablesRef = useRef<TableWithOrder[]>([]);
+  const groupsReloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cacheKey = useMemo(
     () => (tenant?.id && activeBranch?.id ? `${tenant.id}:${activeBranch.id}` : null),
     [tenant?.id, activeBranch?.id]
@@ -134,6 +157,7 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
         mapped.sort(naturalSort);
         setTables(mapped);
         tableGridRuntimeCache.set(cacheKey, { tables: mapped, groups });
+        bulkWarmOrderItemsForOrders(mapped.map((t) => t.current_order_id));
       } catch (e) {
         console.error('TableGrid local load error:', e);
         setTables([]);
@@ -211,6 +235,8 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
       mapped.sort(naturalSort);
       setTables(mapped);
       tableGridRuntimeCache.set(cacheKey, { tables: mapped, groups: (groupsRes.data || []) as TableGroup[] });
+      // Aktif siparişleri TEK sorguda warm cache'e al; masaya tıklandığında sepet anında boyanır.
+      bulkWarmOrderItemsForOrders(mapped.map((t) => t.current_order_id));
     } else {
       setTables([]);
     }
@@ -267,8 +293,19 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
   const scheduleUpdate = useCallback((tableId: string) => {
     pendingUpdatesRef.current.add(tableId);
     if (updateTimerRef.current) clearTimeout(updateTimerRef.current);
-    updateTimerRef.current = setTimeout(flushPendingUpdates, 120);
+    updateTimerRef.current = setTimeout(flushPendingUpdates, 80);
   }, [flushPendingUpdates]);
+
+  const findTableIdByOrderId = useCallback((orderId: string | null | undefined) => {
+    if (!orderId) return null;
+    const t = tablesRef.current.find(x => x.current_order_id === orderId);
+    return t?.id || null;
+  }, []);
+
+  const scheduleGroupsReload = useCallback(() => {
+    if (groupsReloadTimerRef.current) clearTimeout(groupsReloadTimerRef.current);
+    groupsReloadTimerRef.current = setTimeout(() => { void loadAll(); }, 200);
+  }, [loadAll]);
 
   const handleSelectTableInstant = useCallback((table: TableWithOrder) => {
     if (table.current_order_id) {
@@ -279,26 +316,24 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
 
   useEffect(() => {
     setColsPrefsReady(false);
-    const userScopedMobile = localStorage.getItem(mobileColsStorageKey);
-    const userScopedDesktop = localStorage.getItem(desktopColsStorageKey);
-    const parsedMobile = parseInt(userScopedMobile || '', 10);
-    const parsedDesktop = parseInt(userScopedDesktop || '', 10);
+    const parsedMobile = readPersistedCols(MOBILE_COLS_KEY, 'mobileTableCols');
+    const parsedDesktop = readPersistedCols(DESKTOP_COLS_KEY, 'desktopTableCols');
 
-    if (Number.isFinite(parsedMobile)) {
+    if (parsedMobile != null) {
       setMobileTableCols(Math.min(6, Math.max(2, parsedMobile)));
       setMobileColsTouched(true);
     } else {
       setMobileColsTouched(false);
     }
 
-    if (Number.isFinite(parsedDesktop)) {
+    if (parsedDesktop != null) {
       setDesktopTableCols(Math.min(12, Math.max(3, parsedDesktop)));
       setDesktopColsTouched(true);
     } else {
       setDesktopColsTouched(false);
     }
     setColsPrefsReady(true);
-  }, [mobileColsStorageKey, desktopColsStorageKey]);
+  }, []);
 
   useEffect(() => {
     if (!mobileColsTouched) return;
@@ -338,12 +373,18 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
 
     const tablesChannel = supabase
       .channel(`tables-rt-${tenant.id}-${activeBranch.id}`)
+      // 1) Masanın kendisi (status, current_order_id, payment_locked, group_id…)
       .on('postgres_changes', {
         event: '*',
         schema: 'public',
         table: 'restaurant_tables',
         filter: `branch_id=eq.${activeBranch.id}`,
       }, (payload) => {
+        if (payload.eventType === 'INSERT') {
+          // Yeni eklenen masa için tüm listeyi yenile (basit ve doğru).
+          void loadAll();
+          return;
+        }
         if (payload.eventType === 'DELETE') {
           setTables(prev => prev.filter(t => t.id !== (payload.old as any).id));
           return;
@@ -351,14 +392,59 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
         const id = (payload.new as any)?.id;
         if (id) scheduleUpdate(id);
       })
+      // 2) Sipariş (yeni açılış / güncelleme / iptal/kapanış)
       .on('postgres_changes', {
-        event: 'UPDATE',
+        event: '*',
         schema: 'public',
         table: 'orders',
         filter: `branch_id=eq.${activeBranch.id}`,
       }, (payload) => {
-        const tableId = (payload.new as any)?.table_id || (payload.old as any)?.table_id;
+        const newRow: any = payload.new;
+        const oldRow: any = payload.old;
+        if (payload.eventType === 'INSERT') {
+          const tableId = newRow?.table_id;
+          if (tableId) scheduleUpdate(tableId);
+          return;
+        }
+        if (payload.eventType === 'DELETE') {
+          const tableId = oldRow?.table_id;
+          if (tableId) scheduleUpdate(tableId);
+          return;
+        }
+        // UPDATE
+        const tableId = newRow?.table_id || oldRow?.table_id;
         if (tableId) scheduleUpdate(tableId);
+      })
+      // 3) Sipariş satırları → bağlı masanın total/remaining'i güncellensin
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'order_items',
+        filter: `tenant_id=eq.${tenant.id}`,
+      }, (payload) => {
+        const orderId = (payload.new as any)?.order_id || (payload.old as any)?.order_id;
+        const tableId = findTableIdByOrderId(orderId);
+        if (tableId) scheduleUpdate(tableId);
+      })
+      // 4) Parça/full ödemeler → kalan tutar/payment_status anında değişsin
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'payment_transactions',
+        filter: `tenant_id=eq.${tenant.id}`,
+      }, (payload) => {
+        const orderId = (payload.new as any)?.order_id || (payload.old as any)?.order_id;
+        const tableId = findTableIdByOrderId(orderId);
+        if (tableId) scheduleUpdate(tableId);
+      })
+      // 5) Masa grupları (ad/renk/sıra değiştiğinde tek seferde tazele)
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'table_groups',
+        filter: `tenant_id=eq.${tenant.id}`,
+      }, () => {
+        scheduleGroupsReload();
       })
       .subscribe();
 
@@ -368,10 +454,11 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
     return () => {
       if (timer) clearInterval(timer);
       if (updateTimerRef.current) clearTimeout(updateTimerRef.current);
+      if (groupsReloadTimerRef.current) clearTimeout(groupsReloadTimerRef.current);
       channelsRef.current.forEach(ch => supabase.removeChannel(ch));
       channelsRef.current = [];
     };
-  }, [tenant?.id, activeBranch?.id]);
+  }, [tenant?.id, activeBranch?.id, loadAll, scheduleUpdate, findTableIdByOrderId, scheduleGroupsReload]);
 
   useEffect(() => {
     if (onRefresh) onRefresh(loadAll);
@@ -381,6 +468,11 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
     if (!cacheKey) return;
     tableGridRuntimeCache.set(cacheKey, { tables, groups: tableGroups });
   }, [cacheKey, tables, tableGroups]);
+
+  // tablesRef her render'da güncel olsun (subscription callback'leri için).
+  useEffect(() => {
+    tablesRef.current = tables;
+  }, [tables]);
 
   useEffect(() => {
     const applyExternalTableState = (rawEvent: Event) => {
@@ -573,12 +665,32 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
               className="flex gap-2 md:gap-3 pb-0.5 md:pb-1 flex-1 min-w-0"
               style={{ overflowX: 'scroll', WebkitOverflowScrolling: 'touch' as any, scrollbarWidth: 'none' }}
             >
+              {permissions.can_take_orders && permissions.can_process_payments && onNavigate && (
+                <button
+                  onClick={() => onNavigate('quick-sale')}
+                  title="Hızlı Satış / Barkod Oku"
+                  aria-label="Hızlı Satış"
+                  className="p-2.5 md:p-3 rounded-lg md:rounded-xl flex items-center justify-center transition-all active:scale-95 border-2 bg-gradient-to-br from-amber-400 via-orange-500 to-red-500 text-white shadow-lg border-orange-600 hover:from-amber-500 hover:via-orange-600 hover:to-red-600 shrink-0"
+                >
+                  <ScanBarcode className="w-5 h-5 md:w-6 md:h-6" strokeWidth={2.5} />
+                </button>
+              )}
+              {showTakeawayButton && (
+                <button
+                  onClick={() => onNavigate ? onNavigate('takeaway') : createTakeawayOrder()}
+                  className="p-2.5 md:p-3 rounded-lg md:rounded-xl flex items-center justify-center transition-all active:scale-95 border-2 bg-gradient-to-br from-amber-400 via-orange-500 to-red-500 text-white shadow-lg border-orange-600 hover:from-amber-500 hover:via-orange-600 hover:to-red-600 shrink-0"
+                  aria-label="Paket Servis"
+                  title="Paket Servis"
+                >
+                  <Truck className="w-5 h-5 md:w-6 md:h-6" strokeWidth={2.2} />
+                </button>
+              )}
               <button
                 onClick={() => setSelectedGroup(null)}
                 className={`px-4 py-2.5 md:px-6 md:py-3.5 rounded-lg md:rounded-xl font-black whitespace-nowrap transition-all text-sm md:text-base active:scale-95 border-2 shrink-0 ${
                   selectedGroup === null
-                    ? 'bg-gradient-to-r from-orange-500 to-red-600 text-white shadow-lg border-orange-700'
-                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200 border-slate-300'
+                    ? 'bg-gradient-to-r from-green-500 to-green-600 text-white shadow-lg border-green-700 hover:from-green-600 hover:to-green-700'
+                    : 'bg-gradient-to-r from-green-500 to-green-600 text-white shadow-lg border-green-700 hover:from-green-600 hover:to-green-700 opacity-90'
                 }`}
               >
                 AÇIK MASALAR
@@ -586,15 +698,6 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
                   ({groupStats.get(null)?.occupied ?? 0})
                 </span>
               </button>
-              {showTakeawayButton && (
-                <button
-                  onClick={() => onNavigate ? onNavigate('takeaway') : createTakeawayOrder()}
-                  className="px-4 py-2.5 md:px-6 md:py-3.5 rounded-lg md:rounded-xl font-black whitespace-nowrap transition-all text-sm md:text-base active:scale-95 border-2 bg-gradient-to-r from-green-500 to-green-600 text-white shadow-lg border-green-700 hover:from-green-600 hover:to-green-700 flex items-center gap-1.5 md:gap-2 shrink-0"
-                >
-                  <ShoppingCart className="w-4 h-4 md:w-5 md:h-5" />
-                  PAKET SERVİS
-                </button>
-              )}
               {tableGroups.map((group) => {
                 const stats = groupStats.get(group.id) || { available: 0, occupied: 0, total: 0 };
                 return (

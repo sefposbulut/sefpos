@@ -21,7 +21,7 @@ export function WaiterManagement({ tenantId }: { tenantId: string }) {
   const [formData, setFormData] = useState({ name: '', phone: '', pin: '' });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-  const { profile } = useAuth();
+  const { profile, isOwnerOrAdmin } = useAuth();
 
   useEffect(() => {
     fetchWaiters();
@@ -207,13 +207,14 @@ export function WaiterManagement({ tenantId }: { tenantId: string }) {
     }
   };
 
-  const canManage = profile?.role === 'owner' || profile?.role === 'manager';
+  const canManage =
+    isOwnerOrAdmin || profile?.role === 'manager';
 
   if (!canManage) {
     return (
       <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 text-sm text-yellow-700">
         <AlertCircle className="inline w-4 h-4 mr-2" />
-        Garson yönetimi için müdür veya müdür yardımcısı olmalısınız.
+        Garson yönetimi için sahip, yönetici veya şube müdürü yetkisi gerekir.
       </div>
     );
   }

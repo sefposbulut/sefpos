@@ -63,3 +63,51 @@ export function takeWarmOrderItems(orderId: string): { rows: any[] } | undefined
   warmRows.delete(orderId);
   return { rows: e.rows };
 }
+
+/**
+ * Toplu önbellekleme — TableGrid masa listesi her yenilendiğinde aktif
+ * sipariş satırlarını TEK sorguda çekip warm cache'e koyar. Kullanıcı
+ * herhangi bir masaya tıkladığında OrderPanel mount olur olmaz sepet ilk
+ * karede boyanır (network round-trip beklenmez).
+ */
+const inflightBulk = new Map<string, Promise<void>>();
+
+export function bulkWarmOrderItemsForOrders(orderIds: (string | null | undefined)[]) {
+  const unique = Array.from(new Set(orderIds.filter((x): x is string => !!x)));
+  if (unique.length === 0) return;
+  const todo = unique.filter((id) => !warmRows.has(id) && !inflightItems.has(id));
+  if (todo.length === 0) return;
+
+  const key = todo.slice().sort().join(',');
+  if (inflightBulk.has(key)) return;
+
+  const p = (async () => {
+    try {
+      let r = await supabase.from('order_items').select(ORDER_ITEMS_PANEL_SELECT).in('order_id', todo);
+      if (r.error) {
+        r = await supabase
+          .from('order_items')
+          .select('*, products(*, categories(*))')
+          .in('order_id', todo);
+      }
+      if (r.data) {
+        const grouped = new Map<string, any[]>();
+        for (const row of r.data as any[]) {
+          const oid = String(row.order_id || '');
+          if (!oid) continue;
+          if (!grouped.has(oid)) grouped.set(oid, []);
+          grouped.get(oid)!.push(row);
+        }
+        for (const oid of todo) {
+          const rows = grouped.get(oid) || [];
+          warmRows.set(oid, { rows });
+          persistOrderItemsSnapshot(oid, rows);
+        }
+      }
+    } finally {
+      inflightBulk.delete(key);
+    }
+  })();
+
+  inflightBulk.set(key, p);
+}

@@ -4,12 +4,14 @@ import { useShallow } from 'zustand/react/shallow';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { Database } from '../lib/supabase';
-import { X, Plus, Minus, ShoppingCart, Trash2, Search, ChevronUp, ChevronDown, AlertCircle, Printer, Banknote, CreditCard, Receipt, ZoomIn, ZoomOut, MessageSquare, Scale, ArrowRightLeft, Check, Combine } from 'lucide-react';
+import { X, Plus, Minus, ShoppingCart, Trash2, Search, ChevronUp, ChevronDown, AlertCircle, Printer, Banknote, CreditCard, Receipt, ZoomIn, ZoomOut, MessageSquare, Scale, ArrowRightLeft, Check, Combine, Package } from 'lucide-react';
 import { PaymentModal } from './PaymentModal';
+import { TableToPackageTransferModal } from './TableToPackageTransferModal';
 import { ScaleWeighingModal } from './ScaleWeighingModal';
 import { loadPrintSettings, printKitchenReceipts, printHtml, buildReceiptHtml, printTakeawayReceipt } from '../lib/printService';
 import { sendSaleToHugin } from '../lib/huginTps';
 import { queryCache } from '../lib/queryCache';
+import { isLocalMode } from '../lib/sqlDb';
 import { useOrderSessionStore } from '../stores/orderSessionStore';
 import type { CartItem, ProductVariant } from '../types/posOrder';
 import type { PaymentTransactionRow } from '../stores/orderSessionStore';
@@ -257,6 +259,11 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
   const [noteInput, setNoteInput] = useState('');
   const [existingItemNoteModal, setExistingItemNoteModal] = useState<{ itemId: string; currentNote: string } | null>(null);
   const [existingNoteInput, setExistingNoteInput] = useState('');
+  // Sepetteki ürünler için kısmi (item-bazlı) ödeme
+  const [selectedItemIds, setSelectedItemIds] = useState<Set<string>>(() => new Set());
+  const partialPaymentItemIdsRef = useRef<string[]>([]);
+  const partialPaymentMarkedRef = useRef<boolean>(false);
+  const partialPaymentRemainingRef = useRef<number>(0);
   const [productGridSize, setProductGridSize] = useState<number>(() => {
     const saved = localStorage.getItem('productGridSize');
     return saved ? parseInt(saved) : 4;
@@ -278,6 +285,7 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
   const [transferGroups, setTransferGroups] = useState<TableGroupRow[]>([]);
   const [transferFilterGroupId, setTransferFilterGroupId] = useState<string | null>(null);
   const [merging, setMerging] = useState(false);
+  const [showTableToPackage, setShowTableToPackage] = useState(false);
   const barcodeBufferRef = useRef('');
   const barcodeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const submittingRef = useRef(false);
@@ -796,6 +804,38 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
       if (menuChannel) supabase.removeChannel(menuChannel);
     };
   }, [tenant?.id, table.id, loadMenuData]);
+
+  // Aynı masaya birden çok cihazdan bakıldığında: order_items / payment_transactions /
+  // orders değişikliklerini realtime al ve loadExistingOrder ile tazele.
+  // Sadece bu masanın güncel sipariş id'si için filtre uygulanır → düşük gürültü.
+  const loadExistingOrderRef = useRef<() => void>(() => {});
+  useEffect(() => {
+    loadExistingOrderRef.current = () => { void loadExistingOrder(); };
+  });
+  useEffect(() => {
+    if (!tenant?.id) return;
+    const oid = currentOrder?.id || table.current_order_id;
+    if (!oid) return;
+    if (isLocalMode()) return;
+
+    let reloadTimer: ReturnType<typeof setTimeout> | null = null;
+    const scheduleReload = () => {
+      if (reloadTimer) clearTimeout(reloadTimer);
+      reloadTimer = setTimeout(() => loadExistingOrderRef.current?.(), 250);
+    };
+
+    const ch = supabase
+      .channel(`order-panel-live-${tenant.id}-${oid}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'order_items', filter: `order_id=eq.${oid}` }, scheduleReload)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'payment_transactions', filter: `order_id=eq.${oid}` }, scheduleReload)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'orders', filter: `id=eq.${oid}` }, scheduleReload)
+      .subscribe();
+
+    return () => {
+      if (reloadTimer) clearTimeout(reloadTimer);
+      supabase.removeChannel(ch);
+    };
+  }, [tenant?.id, currentOrder?.id, table.current_order_id]);
 
   const loadExistingOrder = async () => {
     if (!tenant) {
@@ -1582,11 +1622,45 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
     }
   };
 
-  const handleAddPayment = async (method: PaymentMethod, amount: number, printReceiptOnComplete = false) => {
+  const handleAddPayment = async (
+    method: PaymentMethod,
+    amount: number,
+    printReceiptOnComplete = false,
+    customerId?: string,
+  ) => {
     if (!currentOrder || !tenant || !user) return;
     if (isTempOrderId(currentOrder.id)) {
       alert('Sipariş sunucuya yazılıyor; birkaç saniye sonra tekrar deneyin.');
       return;
+    }
+
+    if (method === 'open_account') {
+      if (!customerId) {
+        alert('Cari hesap ödemesi için müşteri seçin.');
+        return;
+      }
+      const { data: cust, error: custErr } = await supabase
+        .from('customers')
+        .select('id, current_balance, credit_limit, name, is_active')
+        .eq('id', customerId)
+        .eq('tenant_id', tenant.id)
+        .maybeSingle();
+      if (custErr || !cust) {
+        alert('Cari hesap bulunamadı.');
+        return;
+      }
+      if (!cust.is_active) {
+        alert('Bu cari hesap pasif; önce aktifleştirin.');
+        return;
+      }
+      const bal = Number(cust.current_balance) || 0;
+      const limit = Number(cust.credit_limit) || 0;
+      if (limit > 0 && bal + amount > limit) {
+        const ok = window.confirm(
+          `Kredi limiti (${limit.toFixed(2)} ₺) aşılacak. Yine de cari hesaba yazılsın mı?`,
+        );
+        if (!ok) return;
+      }
     }
 
     const tempId = crypto.randomUUID();
@@ -1597,10 +1671,14 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
       payment_method: method,
       amount,
       created_by: user.id,
-      created_at: new Date().toISOString()
+      created_at: new Date().toISOString(),
+      ...(method === 'open_account' && customerId ? { customer_id: customerId } : {}),
     };
 
     setPaymentTransactions(prev => [newPayment, ...prev]);
+
+    let insertedPaymentId: string | null = null;
+    let insertedCariTxId: string | null = null;
 
     try {
       const { data: insertedPayment, error } = await supabase
@@ -1610,24 +1688,109 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
           order_id: currentOrder.id,
           payment_method: method,
           amount,
-          created_by: user.id
+          created_by: user.id,
+          ...(method === 'open_account' && customerId ? { customer_id: customerId } : {}),
         })
         .select()
         .single();
 
       if (error) throw error;
+      insertedPaymentId = insertedPayment?.id || null;
+
+      if (method === 'open_account' && customerId && insertedPaymentId) {
+        const tableLabel =
+          table.table_number === 0 ? 'Paket' : `Masa ${table.table_number}`;
+        const note = `${tableLabel} · Sipariş #${currentOrder.order_number}`;
+
+        const { data: cariRow, error: txErr } = await supabase
+          .from('customer_transactions')
+          .insert({
+            tenant_id: tenant.id,
+            customer_id: customerId,
+            order_id: currentOrder.id,
+            type: 'debt',
+            amount,
+            note,
+            created_by: user.id,
+          })
+          .select('id')
+          .single();
+
+        if (txErr) throw txErr;
+        insertedCariTxId = cariRow?.id || null;
+
+        const { data: custFresh } = await supabase
+          .from('customers')
+          .select('current_balance')
+          .eq('id', customerId)
+          .maybeSingle();
+        const newBal = (Number(custFresh?.current_balance) || 0) + amount;
+        const { error: upErr } = await supabase
+          .from('customers')
+          .update({ current_balance: newBal })
+          .eq('id', customerId);
+        if (upErr) throw upErr;
+      }
 
       if (insertedPayment) {
         setPaymentTransactions(prev =>
-          prev.map(p => p.id === tempId ? insertedPayment : p)
+          prev.map(p => p.id === tempId ? (insertedPayment as PaymentTransaction) : p)
         );
       }
 
-      await checkAndCompleteOrder(printReceiptOnComplete, [...paymentTransactions.filter(p => p.id !== tempId), insertedPayment || newPayment]);
+      // Item-bazlı kısmi ödeme: hedef tutara ulaşıldığında seçili satırları
+      // "ödendi" olarak işaretle. Kullanıcı tutarı bölmüş olsa bile (ör. 100₺
+      // nakit + 50₺ kart) tüm split'ler tamamlandığında işaretleme bir kez yapılır.
+      if (
+        !partialPaymentMarkedRef.current &&
+        partialPaymentItemIdsRef.current.length > 0
+      ) {
+        partialPaymentRemainingRef.current = Math.max(
+          0,
+          (partialPaymentRemainingRef.current || 0) - Number(amount || 0),
+        );
+        if (partialPaymentRemainingRef.current <= 0.01) {
+          const itemIdsToMark = partialPaymentItemIdsRef.current.slice();
+          partialPaymentMarkedRef.current = true;
+          const nowIso = new Date().toISOString();
+
+          setExistingOrderItems((prev) =>
+            prev.map((i) =>
+              itemIdsToMark.includes(i.id)
+                ? ({ ...i, paid_quantity: i.quantity, paid_at: nowIso } as any)
+                : i,
+            ),
+          );
+          setSelectedItemIds(new Set());
+
+          void Promise.all(
+            itemIdsToMark.map((id) => {
+              const target = existingOrderItems.find((i) => i.id === id);
+              const q = target ? Number(target.quantity) : 0;
+              return supabase
+                .from('order_items')
+                .update({ paid_quantity: q, paid_at: nowIso } as any)
+                .eq('id', id);
+            }),
+          ).catch((e) => console.warn('Item ödeme işaretleme hatası:', e));
+        }
+      }
+
+      const merged = [
+        ...paymentTransactions.filter(p => p.id !== tempId),
+        (insertedPayment as PaymentTransaction) || newPayment,
+      ];
+      await checkAndCompleteOrder(printReceiptOnComplete, merged);
     } catch (error: any) {
+      if (insertedCariTxId) {
+        await supabase.from('customer_transactions').delete().eq('id', insertedCariTxId);
+      }
+      if (insertedPaymentId) {
+        await supabase.from('payment_transactions').delete().eq('id', insertedPaymentId);
+      }
       setPaymentTransactions(prev => prev.filter(p => p.id !== tempId));
       await unlockTable();
-      alert('Ödeme eklenirken hata oluştu: ' + error.message);
+      alert('Ödeme eklenirken hata oluştu: ' + (error?.message || String(error)));
     }
   };
 
@@ -1641,41 +1804,25 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
       const { discountAmount, total } = calculateTotal();
 
       if (totalPaid >= total) {
-        await Promise.all([
-        supabase.from('orders').update({
-          status: 'completed',
-          payment_status: 'paid',
-          paid_at: new Date().toISOString(),
-          discount_amount: discountAmount,
-          total_amount: total
-        }).eq('id', currentOrder.id),
-        payments.length > 0 && tenant && user
-          ? supabase.from('cash_register_transactions').insert(
-              payments.map((p: any) => ({
-                tenant_id: tenant.id,
-                branch_id: (table as any).branch_id || null,
-                transaction_type: 'order_payment',
-                payment_method: p.payment_method,
-                amount: Number(p.amount),
-                description: `Sipariş #${currentOrder.order_number} - ${table.table_number === 0 ? 'Paket Servis' : `Masa ${table.table_number}`}`,
-                reference_id: currentOrder.id,
-                reference_type: 'order',
-                order_number: currentOrder.order_number,
-                table_name: table.table_number === 0 ? 'Paket Servis' : `Masa ${table.table_number}`,
-                created_by: user!.id,
-              }))
-            )
-          : Promise.resolve(),
-        table.table_number !== 0
-          ? supabase.from('restaurant_tables').update({
-              status: 'available',
-              current_order_id: null,
-              session_start: null,
-              payment_locked: false,
-            }).eq('id', table.id)
-          : Promise.resolve(),
-      ]);
+        const cashRegisterRows = payments
+          .filter((p: any) => p.payment_method !== 'open_account')
+          .map((p: any) => ({
+            tenant_id: tenant.id,
+            branch_id: (table as any).branch_id || null,
+            transaction_type: 'order_payment',
+            payment_method: p.payment_method,
+            amount: Number(p.amount),
+            description: `Sipariş #${currentOrder.order_number} - ${table.table_number === 0 ? 'Paket Servis' : `Masa ${table.table_number}`}`,
+            reference_id: currentOrder.id,
+            reference_type: 'order',
+            order_number: currentOrder.order_number,
+            table_name: table.table_number === 0 ? 'Paket Servis' : `Masa ${table.table_number}`,
+            created_by: user!.id,
+          }));
 
+      // Önce optimistik UI: masa anında "available" görünsün, panel kapansın.
+      // DB yazımı arka planda yapılır; hata olursa restaurant_tables realtime ile
+      // gerçek state geri gelir.
       if (table.table_number !== 0 && table.id) {
         emitTableStateChanged({
           id: table.id,
@@ -1686,6 +1833,30 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
           order: null,
         });
       }
+      queueMicrotask(() => onClose());
+
+      void Promise.all([
+        supabase.from('orders').update({
+          status: 'completed',
+          payment_status: 'paid',
+          paid_at: new Date().toISOString(),
+          discount_amount: discountAmount,
+          total_amount: total
+        }).eq('id', currentOrder.id),
+        cashRegisterRows.length > 0 && tenant && user
+          ? supabase.from('cash_register_transactions').insert(cashRegisterRows)
+          : Promise.resolve(),
+        table.table_number !== 0
+          ? supabase.from('restaurant_tables').update({
+              status: 'available',
+              current_order_id: null,
+              session_start: null,
+              payment_locked: false,
+            }).eq('id', table.id)
+          : Promise.resolve(),
+      ]).catch((e) => {
+        console.error('Sipariş tamamlama (background):', e);
+      });
 
       // Stok düşümü çok satırda onlarca sıralı DB çağrısı yapıyor; ödeme modalını bekletmemek için arka planda çalışır.
       const stockOrderId = currentOrder.id;
@@ -1754,8 +1925,7 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
           }
         }, 50);
       }
-
-      queueMicrotask(() => onClose());
+      // Panel kapanışı yukarıda optimistik olarak tetiklendi.
       } else {
         supabase.from('orders').update({
           discount_amount: discountAmount,
@@ -1810,6 +1980,29 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
   const { discountAmount, total } = useMemo(() => calculateTotal(), [calculateTotal]);
   const totalPaid = useMemo(() => paymentTransactions.reduce((sum, p) => sum + Number(p.amount), 0), [paymentTransactions]);
   const remainingAmount = useMemo(() => Math.max(0, total - totalPaid), [total, totalPaid]);
+
+  // Item-bazlı kısmi ödeme yardımcıları
+  const isItemPaid = useCallback((it: { paid_at?: string | null; paid_quantity?: number | null; quantity: number }) => {
+    if (!it) return false;
+    const paidQ = Number((it as any).paid_quantity || 0);
+    return !!(it as any).paid_at || paidQ >= Number(it.quantity || 0);
+  }, []);
+  const selectedItemsTotal = useMemo(() => {
+    if (selectedItemIds.size === 0) return 0;
+    return existingOrderItems
+      .filter((i) => selectedItemIds.has(i.id) && !isItemPaid(i as any))
+      .reduce((s, i) => s + Number(i.unit_price) * Number(i.quantity), 0);
+  }, [existingOrderItems, selectedItemIds, isItemPaid]);
+  const partialPayActive = selectedItemIds.size > 0 && selectedItemsTotal > 0;
+  const paymentModalAmount = partialPayActive ? selectedItemsTotal : remainingAmount;
+  const toggleItemSelection = useCallback((itemId: string) => {
+    setSelectedItemIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(itemId)) next.delete(itemId);
+      else next.add(itemId);
+      return next;
+    });
+  }, []);
   const hasOrderContext = !!(table.current_order_id || currentOrder?.id || orderHydrating);
   const formatWeightLabel = useCallback((grams?: number) => {
     if (!grams || grams <= 0) return null;
@@ -2057,11 +2250,17 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
 
       {showPayment && (
         <PaymentModal
-          remainingAmount={remainingAmount}
+          remainingAmount={paymentModalAmount}
           discount={discount}
           onDiscountChange={setDiscount}
           onPayment={handleAddPayment}
           onClose={() => {
+            // ÖNEMLİ: kısmi ödeme ref'lerini burada TEMİZLEME!
+            // PaymentModal "Ödemeyi Tamamla"da önce onClose() çağırıyor, sonra
+            // handleAddPayment'i async tetikliyor. Burada temizlenirse ödenen
+            // satırlar "Ödendi" olarak işaretlenmiyor (paid_at DB'ye yazılmıyor).
+            // Ref'ler zaten her ÖDE tıklamasında baştan set ediliyor; iptalde
+            // de bir sonraki kullanım için sıfırlanacaklar.
             setShowPayment(false);
             unlockTable();
           }}
@@ -2275,6 +2474,24 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
         </div>
       )}
 
+      {showTableToPackage && currentOrder && !isTempOrderId(currentOrder.id) && (
+        <TableToPackageTransferModal
+          tableId={table.id}
+          branchId={(table as any).branch_id || activeBranch?.id || null}
+          currentOrder={currentOrder}
+          existingOrderItems={existingOrderItems}
+          cart={cart}
+          totalPaid={totalPaid}
+          onClose={() => setShowTableToPackage(false)}
+          onTransferred={() => {
+            setShowTableToPackage(false);
+            resetOrderSession();
+            onClose();
+          }}
+          emitTableStateChanged={emitTableStateChanged}
+        />
+      )}
+
       <div className="fixed inset-0 bg-white md:bg-black/75 flex items-center justify-center z-50 overflow-hidden">
         <div className="bg-white w-full h-full md:rounded-2xl md:shadow-2xl md:max-w-[98vw] md:h-[97vh] lg:max-w-7xl lg:h-[95vh] flex flex-col overflow-hidden">
           {/* Mobile Header - Compact */}
@@ -2290,6 +2507,13 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
             <div className="flex items-center gap-1">
               {currentOrder && table.table_number !== 0 && (
                 <>
+                  <button
+                    onClick={() => setShowTableToPackage(true)}
+                    className="text-white p-2 rounded-lg active:scale-95 bg-white/20"
+                    title="Paket servise aktar"
+                  >
+                    <Package className="w-5 h-5" />
+                  </button>
                   <button
                     onClick={openTableTransfer}
                     className="text-white p-2 rounded-lg active:scale-95 bg-white/20"
@@ -2329,6 +2553,14 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
               <div className="flex items-center gap-2">
                 {currentOrder && table.table_number !== 0 && (
                   <>
+                    <button
+                      onClick={() => setShowTableToPackage(true)}
+                      className="text-white hover:bg-white/20 px-3 lg:px-4 py-2 lg:py-2.5 rounded-xl transition-all active:scale-95 flex items-center gap-2 border border-white/30"
+                      title="Paket servise aktar"
+                    >
+                      <Package className="w-4 h-4 lg:w-5 lg:h-5" />
+                      <span className="text-sm lg:text-base font-semibold hidden sm:inline">Paket</span>
+                    </button>
                     <button
                       onClick={openTableTransfer}
                       className="text-white hover:bg-white/20 px-3 lg:px-4 py-2 lg:py-2.5 rounded-xl transition-all active:scale-95 flex items-center gap-2 border border-white/30"
@@ -2597,26 +2829,48 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
                         )}
                       </div>
                       <div className="space-y-1.5">
-                        {existingOrderItems.map((item) => (
+                        {existingOrderItems.map((item) => {
+                          const paid = isItemPaid(item as any);
+                          const selected = selectedItemIds.has(item.id);
+                          return (
                           <div
                             key={item.id}
-                            className="border rounded-xl px-3 py-2 bg-green-50 border-green-200"
+                            className={`border rounded-xl px-3 py-2 transition-colors ${
+                              paid
+                                ? 'bg-emerald-50 border-emerald-300 opacity-80'
+                                : selected
+                                  ? 'bg-amber-50 border-amber-400 ring-2 ring-amber-300'
+                                  : 'bg-green-50 border-green-200'
+                            }`}
                           >
                             <div className="flex items-center gap-2">
+                              {paid ? (
+                                <span className="shrink-0 inline-flex items-center gap-1 text-[10px] font-black text-emerald-700 bg-emerald-100 border border-emerald-300 rounded-full px-2 py-1">
+                                  <Check className="w-3 h-3" /> Ödendi
+                                </span>
+                              ) : (
+                                <input
+                                  type="checkbox"
+                                  checked={selected}
+                                  onChange={() => toggleItemSelection(item.id)}
+                                  className="w-5 h-5 shrink-0 accent-amber-500"
+                                  aria-label="Bu ürünü ödemeye seç"
+                                />
+                              )}
                               <div className="flex-1 min-w-0">
-                                <div className="font-bold text-gray-800 text-sm leading-tight">{(item as any).products?.name || 'Ürün'}</div>
-                                {(item as any).variant_name && <div className="text-xs text-green-600 font-bold">{(item as any).variant_name}</div>}
+                                <div className={`font-bold text-sm leading-tight ${paid ? 'text-emerald-800 line-through' : 'text-gray-800'}`}>{(item as any).products?.name || 'Ürün'}</div>
+                                {(item as any).variant_name && <div className={`text-xs font-bold ${paid ? 'text-emerald-600' : 'text-green-600'}`}>{(item as any).variant_name}</div>}
                               </div>
                               <div className="flex items-center gap-1.5 shrink-0">
-                                <button onPointerDown={() => updateExistingItemQuantity(item.id, item.quantity - 1)} className="w-7 h-7 bg-orange-200 rounded-full flex items-center justify-center active:scale-90">
+                                <button disabled={paid} onPointerDown={() => updateExistingItemQuantity(item.id, item.quantity - 1)} className="w-7 h-7 bg-orange-200 rounded-full flex items-center justify-center active:scale-90 disabled:opacity-40">
                                   <Minus className="w-3.5 h-3.5 text-orange-700" />
                                 </button>
                                 <span className="w-6 text-center font-black text-sm text-gray-700">{item.quantity}</span>
-                                <button onPointerDown={() => updateExistingItemQuantity(item.id, item.quantity + 1)} className="w-7 h-7 bg-green-500 rounded-full flex items-center justify-center active:scale-90">
+                                <button disabled={paid} onPointerDown={() => updateExistingItemQuantity(item.id, item.quantity + 1)} className="w-7 h-7 bg-green-500 rounded-full flex items-center justify-center active:scale-90 disabled:opacity-40">
                                   <Plus className="w-3.5 h-3.5 text-white" />
                                 </button>
                               </div>
-                              <div className="font-black text-sm shrink-0 text-green-700">
+                              <div className={`font-black text-sm shrink-0 ${paid ? 'text-emerald-700' : 'text-green-700'}`}>
                                 {(item.unit_price * item.quantity).toFixed(0)}₺
                               </div>
                               <button
@@ -2625,7 +2879,7 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
                               >
                                 <MessageSquare className="w-4 h-4" />
                               </button>
-                              <button onClick={() => promptCancelExistingItem(item.id)} className="text-red-400 active:scale-90 p-1.5">
+                              <button disabled={paid} onClick={() => promptCancelExistingItem(item.id)} className="text-red-400 active:scale-90 p-1.5 disabled:opacity-40">
                                 <Trash2 className="w-4 h-4" />
                               </button>
                             </div>
@@ -2633,7 +2887,8 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
                               <div className="mt-1 text-[10px] text-blue-600 font-medium bg-blue-50 rounded px-2 py-0.5 truncate">Not: {(item as any).notes}</div>
                             )}
                           </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     </div>
                   )}
@@ -2708,26 +2963,41 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
                   </button>
                   {hasOrderContext && permissions.can_process_payments && (
                     <button
-                      onClick={async (e) => {
+                      onClick={(e) => {
                         e.stopPropagation();
-                        if (payButtonBlocked || payOpening) return;
+                        if (payButtonBlocked) return;
                         if (!currentOrder?.id || isTempOrderId(currentOrder.id)) {
                           alert('Sipariş sunucuya yazılıyor; birkaç saniye bekleyin.');
                           return;
                         }
-                        setPayOpening(true);
-                        try {
-                          const canPay = await lockTableForPayment();
-                          if (canPay) setShowPayment(true);
-                          if (cart.length > 0) handleSubmitOrder();
-                        } finally {
-                          setPayOpening(false);
+                        if (partialPayActive) {
+                          partialPaymentItemIdsRef.current = Array.from(selectedItemIds);
+                          partialPaymentMarkedRef.current = false;
+                          partialPaymentRemainingRef.current = selectedItemsTotal;
+                        } else {
+                          partialPaymentItemIdsRef.current = [];
+                          partialPaymentMarkedRef.current = false;
+                          partialPaymentRemainingRef.current = 0;
                         }
+                        setShowPayment(true);
+                        if (cart.length > 0) void handleSubmitOrder();
+                        void (async () => {
+                          const canPay = await lockTableForPayment();
+                          if (!canPay) setShowPayment(false);
+                        })();
                       }}
-                      disabled={payButtonBlocked || submitBusy || payOpening}
-                      className="flex-1 bg-green-500 text-white font-black py-4 rounded-xl text-base active:scale-95 shadow-lg border border-green-400 disabled:opacity-50 disabled:pointer-events-none transition-colors duration-75"
+                      disabled={payButtonBlocked || submitBusy}
+                      className={`flex-1 text-white font-black py-4 rounded-xl text-base active:scale-95 shadow-lg border disabled:opacity-50 disabled:pointer-events-none transition-colors duration-75 ${
+                        partialPayActive
+                          ? 'bg-amber-500 border-amber-400'
+                          : 'bg-green-500 border-green-400'
+                      }`}
                     >
-                      {payOpening ? 'AÇILIYOR...' : (remainingAmount > 0 ? `ÖDE ${remainingAmount.toFixed(0)}₺` : 'ÖDE')}
+                      {partialPayActive
+                        ? `SEÇİLİ ÖDE ${selectedItemsTotal.toFixed(0)}₺`
+                        : remainingAmount > 0
+                          ? `ÖDE ${remainingAmount.toFixed(0)}₺`
+                          : 'ÖDE'}
                     </button>
                   )}
                 </div>
@@ -2924,24 +3194,50 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
                 {orderHydrating && existingOrderItems.length === 0 && cart.length === 0 && orderLinesSkeleton}
                 {existingOrderItems.length > 0 && (
                   <>
-                    {existingOrderItems.map((item) => (
+                    {existingOrderItems.map((item) => {
+                      const paid = isItemPaid(item as any);
+                      const selected = selectedItemIds.has(item.id);
+                      return (
                       <div
                         key={item.id}
-                        className="rounded-lg p-2.5 shadow-md border-2 bg-gradient-to-br from-orange-50 to-red-50 border-orange-300"
+                        onClick={() => { if (!paid) toggleItemSelection(item.id); }}
+                        className={`rounded-lg p-2.5 shadow-md border-2 transition-colors ${paid ? 'cursor-default' : 'cursor-pointer'} ${
+                          paid
+                            ? 'bg-gradient-to-br from-emerald-50 to-green-50 border-emerald-300 opacity-90'
+                            : selected
+                              ? 'bg-gradient-to-br from-amber-50 to-orange-100 border-amber-400 ring-2 ring-amber-300'
+                              : 'bg-gradient-to-br from-orange-50 to-red-50 border-orange-300'
+                        }`}
                       >
                         <div className="flex items-start justify-between mb-1.5">
-                          <div className="flex-1">
-                            <h4 className="font-bold text-slate-800 text-base leading-tight">{(item as any).products?.name || 'Ürün'}</h4>
-                            {(item as any).variant_name && !isWeightVariantLabel((item as any).variant_name) && (
-                              <span className="text-sm text-orange-600 font-bold bg-orange-100 px-2 py-0.5 rounded mt-1 inline-block">{(item as any).variant_name}</span>
+                          <div className="flex items-start gap-2 flex-1 min-w-0">
+                            {paid ? (
+                              <span className="mt-0.5 inline-flex items-center gap-1 text-[10px] font-black text-emerald-700 bg-emerald-100 border border-emerald-300 rounded-full px-2 py-1 shrink-0">
+                                <Check className="w-3 h-3" /> Ödendi
+                              </span>
+                            ) : (
+                              <input
+                                type="checkbox"
+                                checked={selected}
+                                onChange={() => toggleItemSelection(item.id)}
+                                onClick={(e) => e.stopPropagation()}
+                                className="mt-1 w-5 h-5 shrink-0 accent-amber-500"
+                                aria-label="Bu ürünü ödemeye seç"
+                              />
                             )}
-                            {getPersistedWeightLabel(item as any) ? (
-                              <div className="text-xs text-emerald-700 font-bold mt-1">
-                                Gramaj: {getPersistedWeightLabel(item as any)}
-                              </div>
-                            ) : null}
+                            <div className="flex-1 min-w-0">
+                              <h4 className={`font-bold text-base leading-tight ${paid ? 'text-emerald-800 line-through' : 'text-slate-800'}`}>{(item as any).products?.name || 'Ürün'}</h4>
+                              {(item as any).variant_name && !isWeightVariantLabel((item as any).variant_name) && (
+                                <span className={`text-sm font-bold px-2 py-0.5 rounded mt-1 inline-block ${paid ? 'text-emerald-600 bg-emerald-100' : 'text-orange-600 bg-orange-100'}`}>{(item as any).variant_name}</span>
+                              )}
+                              {getPersistedWeightLabel(item as any) ? (
+                                <div className="text-xs text-emerald-700 font-bold mt-1">
+                                  Gramaj: {getPersistedWeightLabel(item as any)}
+                                </div>
+                              ) : null}
+                            </div>
                           </div>
-                          <div className="flex items-center gap-1">
+                          <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
                             <button
                               onClick={() => { setExistingItemNoteModal({ itemId: item.id, currentNote: (item as any).notes || '' }); setExistingNoteInput((item as any).notes || ''); }}
                               className={`p-2 rounded-lg transition-all active:scale-90 ${(item as any).notes ? 'text-blue-500 bg-blue-50 hover:bg-blue-100' : 'text-gray-300 hover:text-gray-500 hover:bg-gray-50'}`}
@@ -2950,8 +3246,9 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
                               <MessageSquare className="w-4 h-4" />
                             </button>
                             <button
+                              disabled={paid}
                               onClick={() => promptCancelExistingItem(item.id)}
-                              className="text-red-500 hover:text-red-700 p-2 hover:bg-red-100 rounded-lg transition-all active:scale-90"
+                              className="text-red-500 hover:text-red-700 p-2 hover:bg-red-100 rounded-lg transition-all active:scale-90 disabled:opacity-40"
                             >
                               <Trash2 className="w-4 h-4" />
                             </button>
@@ -2960,28 +3257,31 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
                         {(item as any).notes && (
                           <div className="mb-1.5 text-xs text-blue-600 font-medium bg-blue-50 rounded px-2 py-1">Not: {(item as any).notes}</div>
                         )}
-                        <div className="flex items-center justify-between">
+                        <div className="flex items-center justify-between" onClick={(e) => e.stopPropagation()}>
                           <div className="flex items-center gap-2">
                             <button
+                              disabled={paid}
                               onPointerDown={() => updateExistingItemQuantity(item.id, item.quantity - 1)}
-                              className="w-9 h-9 bg-orange-200 rounded-lg flex items-center justify-center hover:bg-orange-300 transition-all active:scale-90"
+                              className="w-9 h-9 bg-orange-200 rounded-lg flex items-center justify-center hover:bg-orange-300 transition-all active:scale-90 disabled:opacity-40"
                             >
                               <Minus className="w-4 h-4" />
                             </button>
                             <span className="w-7 text-center font-bold text-sm">{item.quantity}</span>
                             <button
+                              disabled={paid}
                               onPointerDown={() => updateExistingItemQuantity(item.id, item.quantity + 1)}
-                              className="w-9 h-9 bg-gradient-to-br from-orange-500 to-red-600 text-white rounded-lg flex items-center justify-center hover:shadow-lg transition-all active:scale-90"
+                              className="w-9 h-9 bg-gradient-to-br from-orange-500 to-red-600 text-white rounded-lg flex items-center justify-center hover:shadow-lg transition-all active:scale-90 disabled:opacity-40"
                             >
                               <Plus className="w-4 h-4" />
                             </button>
                           </div>
-                          <span className="font-bold text-sm text-orange-600">
+                          <span className={`font-bold text-sm ${paid ? 'text-emerald-700' : 'text-orange-600'}`}>
                             {(item.unit_price * item.quantity).toFixed(0)} ₺
                           </span>
                         </div>
                       </div>
-                    ))}
+                      );
+                    })}
                   </>
                 )}
 
@@ -3088,7 +3388,7 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
                               <span className="text-xs font-bold">
                                 {payment.payment_method === 'cash' && 'Nakit'}
                                 {payment.payment_method === 'credit_card' && 'Kart'}
-                                {payment.payment_method === 'open_account' && 'Veresiye'}
+                                {payment.payment_method === 'open_account' && 'Cari hesap'}
                               </span>
                             </div>
                             <span className="font-bold text-green-700 text-xs">{Number(payment.amount).toFixed(0)} ₺</span>
@@ -3163,24 +3463,40 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
                       )}
                       {hasOrderContext && permissions.can_process_payments && (
                         <button
-                          onClick={async () => {
-                            if (payButtonBlocked || payOpening) return;
+                          onClick={() => {
+                            if (payButtonBlocked) return;
                             if (!currentOrder?.id || isTempOrderId(currentOrder.id)) {
                               alert('Sipariş sunucuya yazılıyor; birkaç saniye bekleyin.');
                               return;
                             }
-                            setPayOpening(true);
-                            try {
-                              const canPay = await lockTableForPayment();
-                              if (canPay) setShowPayment(true);
-                            } finally {
-                              setPayOpening(false);
+                            if (partialPayActive) {
+                              partialPaymentItemIdsRef.current = Array.from(selectedItemIds);
+                              partialPaymentMarkedRef.current = false;
+                              partialPaymentRemainingRef.current = selectedItemsTotal;
+                            } else {
+                              partialPaymentItemIdsRef.current = [];
+                              partialPaymentMarkedRef.current = false;
+                              partialPaymentRemainingRef.current = 0;
                             }
+                            setShowPayment(true);
+                            if (cart.length > 0) void handleSubmitOrder();
+                            void (async () => {
+                              const canPay = await lockTableForPayment();
+                              if (!canPay) setShowPayment(false);
+                            })();
                           }}
-                          disabled={payButtonBlocked || submitBusy || payOpening}
-                          className="flex-1 bg-gradient-to-r from-green-600 to-green-700 hover:from-green-700 hover:to-green-800 text-white font-bold py-4 rounded-xl transition-colors duration-75 shadow-lg text-base active:scale-95 disabled:opacity-50 disabled:pointer-events-none"
+                          disabled={payButtonBlocked || submitBusy}
+                          className={`flex-1 text-white font-bold py-4 rounded-xl transition-colors duration-75 shadow-lg text-base active:scale-95 disabled:opacity-50 disabled:pointer-events-none ${
+                            partialPayActive
+                              ? 'bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600'
+                              : 'bg-gradient-to-r from-green-600 to-green-700 hover:from-green-700 hover:to-green-800'
+                          }`}
                         >
-                          {payOpening ? 'AÇILIYOR...' : (remainingAmount > 0 ? `ÖDE ${remainingAmount.toFixed(0)}₺` : 'ÖDE')}
+                          {partialPayActive
+                            ? `SEÇİLİ ÖDE ${selectedItemsTotal.toFixed(0)}₺`
+                            : remainingAmount > 0
+                              ? `ÖDE ${remainingAmount.toFixed(0)}₺`
+                              : 'ÖDE'}
                         </button>
                       )}
                     </>

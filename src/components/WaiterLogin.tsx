@@ -70,12 +70,15 @@ export function WaiterLogin({ onLoginSuccess, onBack }: { onLoginSuccess: (waite
 
     const { data: prof, error: profErr } = await supabase
       .from('profiles')
-      .select('tenant_id, branch_id, role')
+      .select('tenant_id, branch_id, role, is_active')
       .eq('id', authRes.data.user.id)
       .maybeSingle();
 
     if (profErr || !prof || (prof as any).tenant_id !== tenantId) {
       throw new Error('Garson hesabı tenant/şube eşleşmedi. Lütfen kullanıcıyı yeniden oluşturun.');
+    }
+    if ((prof as any).is_active === false) {
+      throw new Error('Bu garson hesabı pasif. Yöneticinizden hesabın açılmasını isteyin.');
     }
     if (!['waiter', 'manager', 'cashier', 'admin', 'owner'].includes((prof as any).role || '')) {
       throw new Error('Bu hesap garson girişi için yetkili değil.');
@@ -720,7 +723,7 @@ export function WaiterLogin({ onLoginSuccess, onBack }: { onLoginSuccess: (waite
 
               <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-4 text-sm text-blue-400">
                 <p className="font-semibold mb-1">Garson hesabı yok mu?</p>
-                <p className="text-xs">Müdür veya müdür yardımcısından garson hesabı açılması isteyin.</p>
+                <p className="text-xs">Sahip, yönetici veya şube müdüründen garson hesabı açılması isteyin.</p>
               </div>
             </div>
             </>

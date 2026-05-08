@@ -538,7 +538,13 @@ export function UserManagement() {
   const [selectedBranch, setSelectedBranch] = useState<string>('');
   const [showAddUser, setShowAddUser] = useState(false);
   const [addingUser, setAddingUser] = useState(false);
-  const [filterBranch, setFilterBranch] = useState<string>('all');
+  // Sube muduru icin filtre kendi subesine zorlanir (RLS de zaten kisitlar
+  // ama UX'in tutarli kalmasi icin baslangic state'ini de kendi branch'i yap).
+  const isBranchManager = profile?.role === 'manager';
+  const [filterBranch, setFilterBranch] = useState<string>(() => {
+    if (profile?.role === 'manager' && profile?.branch_id) return String(profile.branch_id);
+    return 'all';
+  });
   const [passwordModal, setPasswordModal] = useState<ProfileWithRole | null>(null);
   const [ipLockModal, setIpLockModal] = useState<ProfileWithRole | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<ProfileWithRole | null>(null);
@@ -700,47 +706,65 @@ export function UserManagement() {
   };
 
   const handleDeleteUser = async (userId: string) => {
+    // Sıralı tam temizlik:
+    //  1) RPC delete_tenant_user → profiles satırı + ilgili device_bindings (RPC içinde)
+    //  2) Edge update-user (delete_user) → auth.users satırını sil (idempotent: profil yoksa da çalışır)
+    //  3) Garson/kasiyer ise tutarlılık için cihaz bağlamalarını da pasifleştir
     try {
       const rpc = await tryDeleteTenantUserRpc(userId);
       if (rpc === 'denied') {
         throw new Error('Bu kullanıcıyı silmek için yetkiniz yok veya bu işlem yasak.');
       }
-      if (rpc === 'deleted') {
-        let { data: stillRpc } = await supabase.from('profiles').select('id').eq('id', userId).maybeSingle();
-        if (!stillRpc) {
-          try {
-            await callUpdateUser({ target_user_id: userId, delete_user: true });
-          } catch {
-            /* Profil gitti; auth kaydı edge ile temizlenemezse sorun değil */
+
+      // RPC yoksa (eski projede migration uygulanmamış) önce Edge ile dene; bu da
+      // hem profili hem auth kullanıcısını siler (FK CASCADE ile profiles düşer).
+      let profileGone = rpc === 'deleted';
+      if (!profileGone) {
+        const { data: still } = await supabase.from('profiles').select('id').eq('id', userId).maybeSingle();
+        profileGone = !still;
+      }
+
+      // Auth kullanıcısını her durumda Edge ile temizle. Edge artık profil yoksa
+      // hata vermiyor; auth.users içindeki yetimleri de temizler.
+      try {
+        await callUpdateUser({ target_user_id: userId, delete_user: true });
+      } catch (e) {
+        const msg = (e as Error).message || '';
+        if (msg.includes('Kendi hesabınızı')) throw e;
+        // Edge yayında değilse / yetki vs olamadıysa profili local fallback ile sil
+        if (!profileGone) {
+          const removed = await deleteProfileViaDatabase(userId);
+          if (!removed) {
+            const { data: still2 } = await supabase.from('profiles').select('id').eq('id', userId).maybeSingle();
+            if (still2) {
+              throw new Error(
+                'Kullanıcı silinemedi. Ağ bağlantınızı veya RLS kuralını kontrol edin; auth kaydı silmek için update-user edge fonksiyonunu yayınlayın.',
+              );
+            }
+            profileGone = true;
+          } else {
+            profileGone = true;
           }
-          alert('Kullanıcı başarıyla silindi');
-          await loadUsers();
-          setDeleteConfirm(null);
-          return;
+        }
+        // Edge yayında değil + profile silindi → auth kaydı hayalet kalmış olabilir.
+        // Kullanıcıya bildiril.
+        if (profileGone) {
+          console.warn('Auth kaydı silinemedi, profile silindi:', msg);
         }
       }
 
-      try {
-        await callDeleteUser(userId);
-      } catch (e) {
-        const msg = (e as Error).message;
-        if (msg.includes('Kendi hesabınızı')) throw e;
-      }
-
-      let { data: still } = await supabase.from('profiles').select('id').eq('id', userId).maybeSingle();
-      if (!still) {
-        alert('Kullanıcı başarıyla silindi');
-        await loadUsers();
-        setDeleteConfirm(null);
-        return;
-      }
-
-      const removed = await deleteProfileViaDatabase(userId);
-      if (!removed) {
-        ({ data: still } = await supabase.from('profiles').select('id').eq('id', userId).maybeSingle());
-        if (still) {
+      const { data: stillProfile } = await supabase
+        .from('profiles')
+        .select('id')
+        .eq('id', userId)
+        .maybeSingle();
+      if (stillProfile) {
+        // Edge delete_user başarılı olduysa CASCADE ile profile silinmeli
+        // Yine de duruyorsa elle sil
+        const removed = await deleteProfileViaDatabase(userId);
+        if (!removed) {
           throw new Error(
-            'Kullanıcı silinemedi. Ağ bağlantınızı kontrol edin; sorun sürerse veritabanında silme kuralı (RLS) veya delete_tenant_user RPC henüz uygulanmamış olabilir.',
+            'Profile satırı RLS engeline takıldı; tenant manager rolünüzde ekleme/silme izni yok olabilir.',
           );
         }
       }
@@ -749,7 +773,7 @@ export function UserManagement() {
       await loadUsers();
     } catch (err) {
       const msg = (err as Error).message || '';
-      if (msg.includes('silinemedi')) {
+      if (msg.includes('silinemedi') || msg.includes('RLS')) {
         setDeleteDbFixModal(msg);
       } else {
         alert('Hata: ' + msg);
@@ -761,13 +785,27 @@ export function UserManagement() {
   const handleToggleUserActive = async (userId: string, nextActive: boolean) => {
     try {
       const target = users.find(u => u.id === userId);
+
+      let bindWaiterId: string = userId;
+      if (target?.tenant_id && ['waiter', 'courier'].includes(target.role || '')) {
+        const { data: wrow } = await supabase
+          .from('waiters')
+          .select('id')
+          .eq('tenant_id', target.tenant_id)
+          .or(`auth_user_id.eq.${userId},id.eq.${userId}`)
+          .limit(1)
+          .maybeSingle();
+        if (wrow?.id) bindWaiterId = wrow.id;
+      }
+
       const { error } = await supabase
         .from('profiles')
         .update({ is_active: nextActive } as any)
         .eq('id', userId);
       if (error) throw error;
 
-      // Permanent rule: inactive waiter/courier cannot keep active device authorization.
+      // Cihaz bağlama: FK her zaman public.waiters.id (garson satırı PK); profil UUID ile eşleşmez.
+      // DB tetikleyicisi de senkronlar; burada doğru waiter_id ile anında kapatma.
       if (target?.tenant_id && ['waiter', 'courier'].includes(target.role || '')) {
         if (!nextActive) {
           await Promise.all([
@@ -775,14 +813,27 @@ export function UserManagement() {
               .from('device_bindings')
               .update({ status: 'inactive' } as any)
               .eq('tenant_id', target.tenant_id)
-              .eq('waiter_id', userId),
+              .eq('waiter_id', bindWaiterId),
             supabase
               .from('device_binding_requests')
               .update({ status: 'rejected' } as any)
               .eq('tenant_id', target.tenant_id)
-              .eq('waiter_id', userId)
+              .eq('waiter_id', bindWaiterId)
               .in('status', ['pending', 'accepted']),
           ]);
+        }
+        const { data: w2 } = await supabase
+          .from('waiters')
+          .select('id')
+          .eq('tenant_id', target.tenant_id)
+          .or(`auth_user_id.eq.${userId},id.eq.${userId}`)
+          .limit(1)
+          .maybeSingle();
+        if (w2?.id) {
+          await supabase
+            .from('waiters')
+            .update({ status: nextActive ? 'active' : 'inactive' } as any)
+            .eq('id', w2.id);
         }
       }
 
@@ -874,7 +925,8 @@ export function UserManagement() {
           full_name: newUser.full_name,
           role_id: newUser.role_id,
           tenant_id: tenant?.id,
-          branch_id: newUser.branch_id || null,
+          // Sube muduru icin form'da branch disabled, kendi subesi otomatik kullanilir.
+          branch_id: isBranchManager ? (profile?.branch_id || null) : (newUser.branch_id || null),
           username: sanitized || null,
           phone: optionalPhone || null,
         }),
@@ -950,7 +1002,7 @@ export function UserManagement() {
             <h2 className="text-lg md:text-2xl font-bold text-gray-800">Kullanıcı Yönetimi</h2>
           </div>
           <div className="flex items-center gap-2">
-            {branches.length > 1 && (
+            {branches.length > 1 && !isBranchManager && (
               <div className="flex items-center gap-2 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
                 <MapPin className="w-4 h-4 text-gray-500 flex-shrink-0" />
                 <select
@@ -965,6 +1017,15 @@ export function UserManagement() {
                 </select>
               </div>
             )}
+            {isBranchManager && (() => {
+              const myBranch = branches.find((b) => b.id === profile?.branch_id);
+              return myBranch ? (
+                <div className="flex items-center gap-2 bg-orange-50 border border-orange-200 rounded-lg px-3 py-2">
+                  <MapPin className="w-4 h-4 text-orange-600 flex-shrink-0" />
+                  <span className="text-sm text-orange-700 font-medium">{myBranch.name}</span>
+                </div>
+              ) : null;
+            })()}
             <button
               onClick={() => setShowAddUser(true)}
               className="bg-orange-600 hover:bg-orange-700 text-white px-3 py-2 md:px-4 rounded-lg flex items-center space-x-1 md:space-x-2 transition shadow-md hover:shadow-lg text-sm md:text-base"
@@ -1035,18 +1096,25 @@ export function UserManagement() {
               <div className="sm:col-span-2">
                 <label className="block text-sm font-medium text-gray-700 mb-1">Atandığı Şube</label>
                 <select
-                  value={newUser.branch_id}
+                  value={isBranchManager ? (profile?.branch_id || '') : newUser.branch_id}
                   onChange={(e) => setNewUser({ ...newUser, branch_id: e.target.value })}
-                  className="w-full px-3 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500"
+                  disabled={isBranchManager}
+                  className="w-full px-3 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500 disabled:bg-gray-100 disabled:cursor-not-allowed"
                 >
-                  <option value="">Şube Seçin (Opsiyonel)</option>
-                  {branches.map((branch) => (
-                    <option key={branch.id} value={branch.id}>
-                      {branch.name}{branch.is_main ? ' (Ana Şube)' : ''}
-                    </option>
-                  ))}
+                  {!isBranchManager && <option value="">Şube Seçin (Opsiyonel)</option>}
+                  {branches
+                    .filter((b) => !isBranchManager || b.id === profile?.branch_id)
+                    .map((branch) => (
+                      <option key={branch.id} value={branch.id}>
+                        {branch.name}{branch.is_main ? ' (Ana Şube)' : ''}
+                      </option>
+                    ))}
                 </select>
-                <p className="text-xs text-gray-500 mt-1">Kullanıcı yalnızca bu şubede giriş yapabilecek</p>
+                <p className="text-xs text-gray-500 mt-1">
+                  {isBranchManager
+                    ? 'Şube müdürü olarak yalnızca kendi şubenize kullanıcı ekleyebilirsiniz.'
+                    : 'Kullanıcı yalnızca bu şubede giriş yapabilecek.'}
+                </p>
               </div>
 
               {!newUser.isWaiter && (

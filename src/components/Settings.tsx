@@ -3,7 +3,18 @@ import { supabase } from '../lib/supabase';
 import { createClient } from '@supabase/supabase-js';
 import { useAuth } from '../contexts/AuthContext';
 import { Database } from '../lib/supabase';
-import { X, Plus, Trash2, Settings as SettingsIcon, Building2, ToggleLeft, ToggleRight, Printer, AlertCircle, MapPin, Phone, Save, CreditCard as Edit2, User, Store, CheckCircle, Wifi, WifiOff, Globe, RefreshCw, Lock, ShieldCheck, Eye, EyeOff, Package, CheckSquare, Square, Database as DatabaseIcon, Receipt, Pencil, Scale, Loader, QrCode } from 'lucide-react';
+import { X, Plus, Trash2, Settings as SettingsIcon, Building2, ToggleLeft, ToggleRight, Printer, AlertCircle, MapPin, Phone, Save, CreditCard as Edit2, User, Store, CheckCircle, Wifi, WifiOff, Globe, RefreshCw, Lock, ShieldCheck, Eye, EyeOff, Package, CheckSquare, Square, Database as DatabaseIcon, Receipt, Pencil, Scale, Loader, QrCode, PhoneIncoming, FlaskConical } from 'lucide-react';
+import {
+  isCallerIdAvailable,
+  startCallerId,
+  stopCallerId,
+  callerIdStatus,
+  onCallerIdSignal,
+  onCallerIdError,
+  simulateRing,
+  callerIdLocalSettings,
+  type CallerIdStatus,
+} from '../lib/callerId';
 import { HuginSettings, loadHuginSettings, saveHuginSettings, testHuginConnection } from '../lib/huginTps';
 import { Branch } from '../contexts/AuthContext';
 import { PrinterSettings } from './PrinterSettings';
@@ -21,7 +32,7 @@ interface SettingsProps {
 
 export function Settings({ onClose }: SettingsProps) {
   const { tenant, profile, activeBranch, refreshProfile, refreshBranches } = useAuth();
-  const [activeTab, setActiveTab] = useState<'tables' | 'products' | 'manage' | 'platforms' | 'branches' | 'printers' | 'account' | 'system' | 'security' | 'branch-products' | 'database' | 'hugin' | 'devices' | 'waiters' | 'scale' | 'qr-menu'>('branches');
+  const [activeTab, setActiveTab] = useState<'tables' | 'products' | 'manage' | 'platforms' | 'branches' | 'printers' | 'account' | 'system' | 'security' | 'branch-products' | 'database' | 'hugin' | 'devices' | 'waiters' | 'scale' | 'qr-menu' | 'caller-id'>('branches');
   const [groups, setGroups] = useState<TableGroup[]>([]);
   const [showGroupForm, setShowGroupForm] = useState(false);
   const [groupName, setGroupName] = useState('');
@@ -106,6 +117,62 @@ export function Settings({ onClose }: SettingsProps) {
   const [huginTesting, setHuginTesting] = useState(false);
   const [huginCategories, setHuginCategories] = useState<Array<{ id: string; name: string; vat_rate: number | null; hugin_department_id: number | null }>>([]);
   const [huginCategorySaving, setHuginCategorySaving] = useState<string | null>(null);
+
+  // ===== Caller ID =====
+  const cidAvailable = isCallerIdAvailable();
+  const [cidSettings, setCidSettings] = useState(() => callerIdLocalSettings.load());
+  const [cidStatusInfo, setCidStatusInfo] = useState<CallerIdStatus>({ available: cidAvailable, running: false });
+  const [cidBusy, setCidBusy] = useState(false);
+  const [cidError, setCidError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (activeTab !== 'caller-id') return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const s = await callerIdStatus();
+        if (!cancelled) setCidStatusInfo(s);
+      } catch (e: any) {
+        if (!cancelled) setCidError(e?.message || 'Durum alınamadı');
+      }
+    })();
+    const offSignal = onCallerIdSignal((sig) => {
+      setCidStatusInfo((prev) => ({
+        ...prev,
+        connected: sig.connected,
+        deviceModel: sig.deviceModel,
+        deviceSerial: sig.deviceSerial,
+        running: true,
+      }));
+    });
+    const offError = onCallerIdError(({ message }) => setCidError(message));
+    return () => {
+      cancelled = true;
+      offSignal();
+      offError();
+    };
+  }, [activeTab]);
+
+  const cidSaveAndApply = async (next: { autoStart: boolean; softTest: boolean; enabled: boolean }) => {
+    setCidBusy(true);
+    setCidError(null);
+    try {
+      callerIdLocalSettings.save({ autoStart: next.autoStart, softTest: next.softTest });
+      setCidSettings({ autoStart: next.autoStart, softTest: next.softTest });
+      if (!next.enabled) {
+        await stopCallerId();
+        const s = await callerIdStatus();
+        setCidStatusInfo(s);
+        return;
+      }
+      const s = await startCallerId({ softTest: next.softTest });
+      setCidStatusInfo(s);
+    } catch (e: any) {
+      setCidError(e?.message || 'Caller ID değişikliği uygulanamadı');
+    } finally {
+      setCidBusy(false);
+    }
+  };
 
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
@@ -810,6 +877,7 @@ export function Settings({ onClose }: SettingsProps) {
     { id: 'printers', label: 'Yazıcılar', icon: Printer, group: 'Sistem' },
     { id: 'hugin', label: 'Yazarkasa (Hugin)', icon: Receipt, group: 'Sistem' },
     { id: 'scale', label: 'Terazi Testi', icon: Scale, group: 'Sistem' },
+    { id: 'caller-id', label: 'Arayan No (Caller ID)', icon: PhoneIncoming, group: 'Sistem' },
     { id: 'devices', label: 'Cihaz Yönetimi', icon: ShieldCheck, group: 'Sistem' },
     { id: 'system', label: 'Sistem Modu', icon: Wifi, group: 'Sistem' },
     { id: 'security', label: 'Güvenlik & PIN', icon: Lock, group: 'Sistem' },
@@ -2315,6 +2383,160 @@ export function Settings({ onClose }: SettingsProps) {
                   </div>
                 );
               })()}
+            </div>
+          ) : activeTab === 'caller-id' ? (
+            <div className="space-y-5">
+              <div className="bg-gradient-to-r from-orange-500 to-red-600 rounded-xl p-5 text-white">
+                <div className="flex items-center gap-3 mb-1">
+                  <PhoneIncoming className="w-6 h-6" />
+                  <h3 className="text-xl font-bold">Arayan No (Caller ID)</h3>
+                </div>
+                <p className="text-orange-50 text-sm">
+                  Cidshow / cid.dll ile çalışan caller-id kutusu çağrı geldiğinde müşteriyi otomatik bulur.
+                  Paket Servis ekranında bildirim çıkar; <b>Pakete aç</b> ile sipariş formu telefon doldurulmuş şekilde gelir.
+                </p>
+              </div>
+
+              {!cidAvailable && (
+                <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm text-amber-800 flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                  <div>
+                    Caller ID yalnızca <b>ŞefPOS Masaüstü (Electron)</b> sürümünde çalışır. Tarayıcı versiyonunda
+                    cihaza erişim yoktur. Lütfen masaüstü uygulamasını kullanın.
+                  </div>
+                </div>
+              )}
+
+              {cidAvailable && (
+                <>
+                  <div className="bg-white rounded-xl border border-slate-200 p-4 space-y-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="text-sm font-bold text-slate-800">Aktif / Pasif</div>
+                        <div className="text-xs text-slate-500 mt-0.5">
+                          Açıkken DLL yüklenir ve çağrılar dinlenir. Cihaz olmasa bile dinleme aktif tutulabilir.
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        disabled={cidBusy}
+                        onClick={() =>
+                          void cidSaveAndApply({
+                            autoStart: cidSettings.autoStart,
+                            softTest: cidSettings.softTest,
+                            enabled: !cidStatusInfo.running,
+                          })
+                        }
+                        className="flex items-center gap-2 disabled:opacity-50"
+                        aria-pressed={cidStatusInfo.running}
+                      >
+                        {cidStatusInfo.running ? (
+                          <ToggleRight className="w-10 h-10 text-emerald-500" />
+                        ) : (
+                          <ToggleLeft className="w-10 h-10 text-slate-400" />
+                        )}
+                        <span className={`text-sm font-bold ${cidStatusInfo.running ? 'text-emerald-700' : 'text-slate-500'}`}>
+                          {cidStatusInfo.running ? 'AKTİF' : 'PASİF'}
+                        </span>
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-slate-100">
+                      <label className="flex items-start gap-2 p-2 rounded-lg bg-slate-50 border border-slate-200 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          className="mt-0.5"
+                          checked={cidSettings.autoStart}
+                          onChange={(e) =>
+                            void cidSaveAndApply({
+                              autoStart: e.target.checked,
+                              softTest: cidSettings.softTest,
+                              enabled: e.target.checked ? true : cidStatusInfo.running,
+                            })
+                          }
+                        />
+                        <span>
+                          <div className="text-sm font-bold text-slate-700">Açılışta otomatik başlat</div>
+                          <div className="text-xs text-slate-500">ŞefPOS açıldığında dinleyici kendiliğinden aktif olsun</div>
+                        </span>
+                      </label>
+                      <label className="flex items-start gap-2 p-2 rounded-lg bg-slate-50 border border-slate-200 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          className="mt-0.5"
+                          checked={cidSettings.softTest}
+                          onChange={(e) =>
+                            void cidSaveAndApply({
+                              autoStart: cidSettings.autoStart,
+                              softTest: e.target.checked,
+                              enabled: cidStatusInfo.running,
+                            })
+                          }
+                        />
+                        <span>
+                          <div className="text-sm font-bold text-slate-700 flex items-center gap-1">
+                            <FlaskConical className="w-3.5 h-3.5" /> Soft test (cihazsız sahte çağrı)
+                          </div>
+                          <div className="text-xs text-slate-500">DLL otomatik periyodik test çağrıları üretir; gerçek cihaz olmadan akışı denersiniz</div>
+                        </span>
+                      </label>
+                    </div>
+                  </div>
+
+                  <div className="bg-white rounded-xl border border-slate-200 p-4 space-y-2">
+                    <div className="text-xs uppercase font-bold tracking-wider text-slate-400">Durum</div>
+                    <div className="flex items-center gap-2 text-sm">
+                      <div
+                        className={`w-2.5 h-2.5 rounded-full ${
+                          cidStatusInfo.running
+                            ? cidStatusInfo.connected
+                              ? 'bg-emerald-500'
+                              : 'bg-amber-500'
+                            : 'bg-slate-300'
+                        }`}
+                      />
+                      <span className="font-bold text-slate-700">
+                        {cidStatusInfo.running
+                          ? cidStatusInfo.connected
+                            ? `Cihaz bağlı: ${cidStatusInfo.deviceModel || 'Bilinmiyor'}`
+                            : 'Dinleniyor (cihaz görünmüyor)'
+                          : 'Pasif'}
+                      </span>
+                    </div>
+                    {cidStatusInfo.deviceSerial && (
+                      <div className="text-xs text-slate-500">Seri No: {cidStatusInfo.deviceSerial}</div>
+                    )}
+                    {cidStatusInfo.dllPath && (
+                      <div className="text-xs text-slate-500 break-all">DLL: {cidStatusInfo.dllPath}</div>
+                    )}
+                    {cidStatusInfo.softTest && (
+                      <div className="text-xs text-purple-600">Soft test çağrıları aktif.</div>
+                    )}
+                    {cidError && (
+                      <div className="text-xs text-rose-600 bg-rose-50 border border-rose-100 rounded-lg px-2 py-1">{cidError}</div>
+                    )}
+                  </div>
+
+                  <div className="bg-white rounded-xl border border-slate-200 p-4 flex items-center justify-between gap-2">
+                    <div>
+                      <div className="text-sm font-bold text-slate-800">Test çağrısı gönder</div>
+                      <div className="text-xs text-slate-500">Telefon yazıp test edin: paket sayfasında bildirim açılır.</div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const phone = window.prompt('Test çağrısı için telefon (örn 05551112233):', '05551112233');
+                        if (!phone) return;
+                        simulateRing(phone);
+                      }}
+                      className="px-3 py-2 rounded-lg text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 inline-flex items-center gap-1.5"
+                    >
+                      <FlaskConical className="w-3.5 h-3.5" />
+                      Test
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
           ) : activeTab === 'devices' ? (
             <DeviceManagement />

@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { supabase, invokeEdgeFunction } from '../lib/supabase';
 import { Shield, Search, Building2, Users, CheckCircle, XCircle, Clock, AlertTriangle, RefreshCw, ChevronDown, ChevronUp, X, Save, Calendar, CreditCard, TrendingUp, LogOut, Bell, Send, TicketCheck, MessageCircle, Trash2, Eye, EyeOff, Ban, Play, ChevronRight, Mail, Phone, MapPin, Hash, UserCheck, AlertCircle, Info, Headphones, BarChart3, Banknote, Package2, Server, Handshake, Key, Plus, CreditCard as Edit2 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
+import { AYKA_ADMIN_PATH } from '../lib/aykaRoute';
 
 interface TenantRow {
   id: string;
@@ -1330,7 +1331,11 @@ export function AdminPanel({ onExit }: AdminPanelProps) {
       await loadTenants();
     } catch (err: any) {
       console.error('Delete error:', err);
-      alert('Hata: ' + (err.message || 'Silme işlemi başarısız'));
+      const detail = err?.message || err?.error_description || '';
+      const hint = err?.hint || '';
+      const code = err?.code || '';
+      const lines = [`Silme islemi basarisiz`, detail, hint, code ? `(code: ${code})` : ''].filter(Boolean);
+      alert(lines.join('\n'));
       setDeleteLoading(false);
     }
   };
@@ -1458,7 +1463,7 @@ export function AdminPanel({ onExit }: AdminPanelProps) {
 
       {!profile?.is_super_admin && (
         <div className="mx-4 md:mx-6 mt-2 p-2.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs md:text-sm font-semibold">
-          Bu hesap super-admin degil. Eski restoran/lisans listesinin tamami gorunmez. /ayka icin super-admin hesapla giris yapin.
+          Bu hesap super-admin degil. Eski restoran/lisans listesinin tamami gorunmez. {AYKA_ADMIN_PATH} icin super-admin hesapla giris yapin.
         </div>
       )}
 

@@ -77,6 +77,53 @@ Deno.serve(async (req: Request) => {
       );
     }
 
+    // Sube izolasyonu: caller "manager" (Sube Muduru) ise yeni kullanici
+    // SADECE caller'in kendi branch_id'sine olusturulabilir. owner/admin
+    // herhangi bir branch'i secebilir.
+    let enforcedBranchId: string | null | undefined = branch_id ?? null;
+    if (callerUser?.id) {
+      const { data: callerProf } = await supabaseAdmin
+        .from('profiles')
+        .select('tenant_id, role, branch_id, is_super_admin')
+        .eq('id', callerUser.id)
+        .maybeSingle();
+      const callerRole = String((callerProf as { role?: string } | null)?.role || '');
+      const callerBranch = (callerProf as { branch_id?: string } | null)?.branch_id || null;
+      const callerTenant = (callerProf as { tenant_id?: string } | null)?.tenant_id || null;
+      const isSuper = (callerProf as { is_super_admin?: boolean } | null)?.is_super_admin === true;
+
+      if (!isSuper) {
+        // Cross-tenant kullanici yaratma yasak
+        if (callerTenant && tenant_id !== callerTenant) {
+          return new Response(
+            JSON.stringify({ success: false, error: 'Farkli isletmeye kullanici eklenemez.' }),
+            { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+        if (callerRole === 'manager') {
+          if (!callerBranch) {
+            return new Response(
+              JSON.stringify({ success: false, error: 'Sube muduru kullanici eklemek icin bir subeye atanmis olmalidir.' }),
+              { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+            );
+          }
+          // Manager kendi branch'inden baska branch'e kullanici acamaz.
+          if (branch_id && branch_id !== callerBranch) {
+            return new Response(
+              JSON.stringify({ success: false, error: 'Sube muduru sadece kendi subesine kullanici ekleyebilir.' }),
+              { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+            );
+          }
+          enforcedBranchId = callerBranch;
+        } else if (!['owner', 'admin'].includes(callerRole)) {
+          return new Response(
+            JSON.stringify({ success: false, error: 'Bu islem icin yetkiniz yok.' }),
+            { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+      }
+    }
+
     const cleanUsername = sanitizeUsername(username);
     const cleanPhone = sanitizePhone(phone);
 
@@ -120,7 +167,7 @@ Deno.serve(async (req: Request) => {
       user_metadata: {
         full_name,
         tenant_id,
-        branch_id: branch_id || null,
+        branch_id: enforcedBranchId || null,
         username: cleanUsername || null,
         phone: cleanPhone || null,
       },
@@ -133,7 +180,8 @@ Deno.serve(async (req: Request) => {
     await new Promise(resolve => setTimeout(resolve, 800));
 
     const profileUpdate: Record<string, unknown> = { role_id };
-    if (branch_id) profileUpdate.branch_id = branch_id;
+    // branch_id'yi her zaman yaz (manager icin enforce edilmis caller branch'i)
+    profileUpdate.branch_id = enforcedBranchId || null;
     if (cleanUsername) profileUpdate.username = cleanUsername;
     if (cleanPhone) profileUpdate.phone = cleanPhone;
 

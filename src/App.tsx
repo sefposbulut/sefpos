@@ -1,6 +1,8 @@
 import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { useAuth } from './contexts/AuthContext';
+import { isAykaAdminPath } from './lib/aykaRoute';
 import { Auth } from './components/Auth';
+import { AykaLogin } from './components/AykaLogin';
 import { ElectronAuth } from './components/ElectronAuth';
 import { SetupWizard } from './components/SetupWizard';
 import { SqlServerSettings } from './components/SqlServerSettings';
@@ -23,6 +25,8 @@ import { EndOfDay } from './components/EndOfDay';
 import { Reports } from './components/reports/Reports';
 import { CancelLogs } from './components/CancelLogs';
 import { PinLockScreen } from './components/PinLockScreen';
+import { Inventory } from './components/inventory/Inventory';
+import { QuickSale } from './components/QuickSale';
 import { Database, supabase } from './lib/supabase';
 import { isSqlServerMode } from './lib/sqlDb';
 import { queryCache } from './lib/queryCache';
@@ -125,13 +129,19 @@ function App() {
   const [dbMode, setDbMode] = useState<'cloud' | 'sqlserver' | null | 'loading'>('loading');
   const [sqlServerConfigured, setSqlServerConfigured] = useState(false);
   const [showSqlServerSettings, setShowSqlServerSettings] = useState(false);
-  const [showAuthModal, setShowAuthModal] = useState(() => {
+  // /login veya AYKA_ADMIN_PATH açıkken Auth tam sayfa (modal değil).
+  // DEV ortamında localhost / kökünde de doğrudan login’e yönlendirilir.
+  const isAuthRoutePath = (p: string): boolean =>
+    p.startsWith('/login') || isAykaAdminPath(p);
+
+  const [showLoginPage, setShowLoginPage] = useState<boolean>(() => {
     if (typeof window === 'undefined') return false;
     try {
+      const path = (window.location.pathname || '/').toLowerCase();
+      if (isAuthRoutePath(path)) return true;
       const params = new URLSearchParams(window.location.search);
       if (params.has('landing')) return false;
       const host = window.location.hostname;
-      const path = window.location.pathname || '/';
       const isLocalHost =
         host === 'localhost' ||
         host === '127.0.0.1' ||
@@ -143,6 +153,38 @@ function App() {
     }
     return false;
   });
+
+  const goToLogin = useCallback(() => {
+    try {
+      const path = (window.location.pathname || '/').toLowerCase();
+      if (!isAuthRoutePath(path)) {
+        window.history.pushState({}, '', '/login');
+      }
+    } catch {
+      /* ignore */
+    }
+    setShowLoginPage(true);
+  }, []);
+
+  const goToLanding = useCallback(() => {
+    try {
+      window.history.pushState({}, '', '/');
+    } catch {
+      /* ignore */
+    }
+    setShowLoginPage(false);
+  }, []);
+
+  // Tarayıcı geri/ileri tuşlarıyla URL değişince login/landing geçişi
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const onPop = () => {
+      const path = (window.location.pathname || '/').toLowerCase();
+      setShowLoginPage(isAuthRoutePath(path));
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
   const [onboardingDone, setOnboardingDone] = useState(() => {
     return localStorage.getItem('onboarding_dismissed') === 'true';
   });
@@ -395,30 +437,20 @@ function App() {
       // Garson APK / iOS: aynı WaiterLogin bileşeni, mobilde "Garson" ile açılan ekran
       return <Auth />;
     }
-    if (showAuthModal) {
-      return (
-        <div className="min-h-screen relative">
-          <LandingPage onLogin={() => setShowAuthModal(true)} />
-          <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-            <div className="relative w-full max-w-md">
-              <button
-                onClick={() => setShowAuthModal(false)}
-                className="absolute -top-3 -right-3 z-10 w-8 h-8 bg-white rounded-full shadow-lg flex items-center justify-center text-slate-500 hover:text-slate-800 transition-colors"
-              >
-                ×
-              </button>
-              <Auth />
-            </div>
-          </div>
-        </div>
-      );
+    if (showLoginPage) {
+      // Gizli lisans paneli yolu (src/lib/aykaRoute.ts) — ayrı login ekranı.
+      const path = typeof window !== 'undefined' ? window.location.pathname : '';
+      if (isAykaAdminPath(path)) {
+        return <AykaLogin onBackToLanding={goToLanding} />;
+      }
+      // /login → restoran kullanıcıları için genel giriş ekranı
+      return <Auth onBackToLanding={goToLanding} />;
     }
-    return <LandingPage onLogin={() => setShowAuthModal(true)} />;
+    return <LandingPage onLogin={goToLogin} />;
   }
 
   const isAykaRoute =
-    typeof window !== 'undefined' &&
-    window.location.pathname.toLowerCase().startsWith('/ayka');
+    typeof window !== 'undefined' && isAykaAdminPath(window.location.pathname);
 
   if (profile?.is_super_admin && (showAdminPanel || isAykaRoute)) {
     return (
@@ -490,13 +522,29 @@ function App() {
         </div>
       )}
 
-      {show('customers') && <Customers />}
+      {show('customers') && (
+        <div className="fixed inset-0 top-14 md:top-20 bg-gradient-to-br from-slate-50 to-slate-100 overflow-hidden">
+          <Customers />
+        </div>
+      )}
 
       {show('reports') && <Reports />}
 
       {show('endofday') && <EndOfDay />}
 
       {show('cancel-logs') && <CancelLogs onClose={() => setCurrentPage('tables')} />}
+
+      {show('inventory') && (
+        <div className="fixed inset-0 top-14 md:top-20 bg-gradient-to-br from-slate-50 to-slate-100 overflow-hidden">
+          <Inventory />
+        </div>
+      )}
+
+      {show('quick-sale') && (
+        <div className="fixed inset-0 top-14 md:top-20 bg-gradient-to-br from-slate-50 to-slate-100 overflow-hidden">
+          <QuickSale />
+        </div>
+      )}
 
       {selectedTable && (
         <OrderPanel

@@ -216,6 +216,14 @@ Deno.serve(async (req: Request) => {
       }
     }
 
+    const { error: linkErr } = await admin
+      .from('waiters')
+      .update({ auth_user_id: userId })
+      .eq('id', waiter_id);
+    if (linkErr) {
+      console.error('waiters auth_user_id link:', linkErr);
+    }
+
     return json({ success: true, user_id: userId, email }, 200);
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : String(e);

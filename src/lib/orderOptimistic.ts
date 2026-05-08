@@ -151,4 +151,4 @@ export function buildGridSnapshotPlaceholderOrder(params: {
 
 /** Sipariş paneli listesi: ağır `products(*, categories(*))` yerine sadece gerekli kolonlar */
 export const ORDER_ITEMS_PANEL_SELECT =
-  'id, tenant_id, order_id, product_id, variant_id, variant_name, quantity, unit_price, tax_rate, discount_amount, total_amount, notes, created_at, products(id, name, price, category_id, tax_rate, unit, barcode, printer_name, scale_enabled, categories(vat_rate, hugin_department_id, name))';
+  'id, tenant_id, order_id, product_id, variant_id, variant_name, quantity, unit_price, tax_rate, discount_amount, total_amount, notes, created_at, paid_quantity, paid_at, products(id, name, price, category_id, tax_rate, unit, barcode, printer_name, scale_enabled, categories(vat_rate, hugin_department_id, name))';

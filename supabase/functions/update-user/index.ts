@@ -84,7 +84,7 @@ Deno.serve(async (req: Request) => {
 
       const { data: callerProf, error: callerErr } = await supabaseAdmin
         .from('profiles')
-        .select('tenant_id, role, is_super_admin, role_id, roles(name, permissions)')
+        .select('tenant_id, role, branch_id, is_super_admin, role_id, roles(name, permissions)')
         .eq('id', callerUser.id)
         .maybeSingle();
 
@@ -102,30 +102,55 @@ Deno.serve(async (req: Request) => {
         );
       }
 
-      const { data: targetProf, error: targetErr } = await supabaseAdmin
+      // Profil hâlâ duruyorsa: tenant + sube kontrolu + waiter/courier device temizliği
+      // Profil yoksa (ör. delete_tenant_user RPC zaten sildi): auth.users hayalette
+      //   kalmasın diye doğrudan silmeye geç. Caller yetkisi zaten doğrulandı.
+      const tenantId = callerProf.tenant_id as string;
+      const callerRoleStr = String((callerProf as { role?: string }).role || '');
+      const callerBranch = (callerProf as { branch_id?: string }).branch_id || null;
+
+      const { data: targetProf } = await supabaseAdmin
         .from('profiles')
-        .select('tenant_id, role')
+        .select('tenant_id, role, branch_id')
         .eq('id', target_user_id)
         .maybeSingle();
 
-      if (targetErr || !targetProf) {
-        return new Response(
-          JSON.stringify({ success: false, error: 'Kullanıcı bulunamadı' }),
-          { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
-      }
-
-      if ((targetProf as { tenant_id?: string }).tenant_id !== callerProf.tenant_id) {
-        return new Response(
-          JSON.stringify({ success: false, error: 'Farklı işletmeye ait kullanıcı silinemez' }),
-          { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
-      }
-
-      const tenantId = callerProf.tenant_id as string;
-      const targetRole = String((targetProf as { role?: string }).role || '');
-
-      if (['waiter', 'courier'].includes(targetRole)) {
+      if (targetProf) {
+        if ((targetProf as { tenant_id?: string }).tenant_id !== callerProf.tenant_id) {
+          return new Response(
+            JSON.stringify({ success: false, error: 'Farklı işletmeye ait kullanıcı silinemez' }),
+            { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+        // Sube muduru sadece KENDI subesindeki kullaniciyi silebilir
+        if (callerRoleStr === 'manager') {
+          const targetBranch = (targetProf as { branch_id?: string }).branch_id || null;
+          if (!callerBranch || targetBranch !== callerBranch) {
+            return new Response(
+              JSON.stringify({ success: false, error: 'Sube muduru sadece kendi subesindeki kullanicilari silebilir.' }),
+              { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+            );
+          }
+        }
+        const targetRole = String((targetProf as { role?: string }).role || '');
+        if (['waiter', 'courier'].includes(targetRole)) {
+          await Promise.all([
+            supabaseAdmin
+              .from('device_bindings')
+              .update({ status: 'inactive' } as Record<string, unknown>)
+              .eq('tenant_id', tenantId)
+              .eq('waiter_id', target_user_id),
+            supabaseAdmin
+              .from('device_binding_requests')
+              .update({ status: 'rejected' } as Record<string, unknown>)
+              .eq('tenant_id', tenantId)
+              .eq('waiter_id', target_user_id)
+              .in('status', ['pending', 'accepted']),
+          ]);
+        }
+      } else {
+        // Profil yok ama auth.users'da olabilir — yine de waiter/courier
+        // device kayıtlarını tarayıp pasifleştirelim ki yetim cihaz kalmasın.
         await Promise.all([
           supabaseAdmin
             .from('device_bindings')
@@ -141,15 +166,69 @@ Deno.serve(async (req: Request) => {
         ]);
       }
 
+      // auth.users silmeye çalış. Zaten yoksa (404 / not_found) idempotent kabul et.
       const { error: delErr } = await supabaseAdmin.auth.admin.deleteUser(target_user_id);
       if (delErr) {
-        throw delErr;
+        const msg = String(delErr.message || delErr).toLowerCase();
+        const notFound =
+          msg.includes('not found') ||
+          msg.includes('user_not_found') ||
+          msg.includes('does not exist') ||
+          (typeof (delErr as { status?: number }).status === 'number' &&
+            (delErr as { status?: number }).status === 404);
+        if (!notFound) throw delErr;
       }
 
       return new Response(
         JSON.stringify({ success: true }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
+    }
+
+    // Sifre / IP guncellemesi icin de yetki + sube kontrolu
+    if (new_password || allowed_ips !== undefined) {
+      const { data: callerProfX } = await supabaseAdmin
+        .from('profiles')
+        .select('tenant_id, role, branch_id, is_super_admin, role_id, roles(name, permissions)')
+        .eq('id', callerUser.id)
+        .maybeSingle();
+      const isSuper = (callerProfX as { is_super_admin?: boolean } | null)?.is_super_admin === true;
+      if (!isSuper) {
+        if (!callerProfX?.tenant_id || !callerCanManageUsers(callerProfX as Record<string, unknown>)) {
+          return new Response(
+            JSON.stringify({ success: false, error: 'Bu işlem için yetkiniz yok' }),
+            { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+        const callerR = String((callerProfX as { role?: string }).role || '');
+        const callerB = (callerProfX as { branch_id?: string }).branch_id || null;
+        const { data: tgt } = await supabaseAdmin
+          .from('profiles')
+          .select('tenant_id, branch_id')
+          .eq('id', target_user_id)
+          .maybeSingle();
+        if (!tgt) {
+          return new Response(
+            JSON.stringify({ success: false, error: 'Kullanıcı bulunamadı' }),
+            { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+        if ((tgt as { tenant_id?: string }).tenant_id !== callerProfX.tenant_id) {
+          return new Response(
+            JSON.stringify({ success: false, error: 'Farkli isletmenin kullanicisi guncellenemez' }),
+            { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+        if (callerR === 'manager') {
+          const tgtB = (tgt as { branch_id?: string }).branch_id || null;
+          if (!callerB || tgtB !== callerB) {
+            return new Response(
+              JSON.stringify({ success: false, error: 'Sube muduru sadece kendi subesindeki kullanicilari guncelleyebilir.' }),
+              { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+            );
+          }
+        }
+      }
     }
 
     if (new_password) {

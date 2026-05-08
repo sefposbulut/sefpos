@@ -63,5 +63,23 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('scale-weighing-error', listener);
     return () => ipcRenderer.removeListener('scale-weighing-error', listener);
   },
+  cidStart: (opts) => ipcRenderer.invoke('caller-id-start', opts ?? {}),
+  cidStop: () => ipcRenderer.invoke('caller-id-stop'),
+  cidStatus: () => ipcRenderer.invoke('caller-id-status'),
+  onCallerIdRing: (cb) => {
+    const listener = (_, data) => cb(data);
+    ipcRenderer.on('caller-id-ring', listener);
+    return () => ipcRenderer.removeListener('caller-id-ring', listener);
+  },
+  onCallerIdSignal: (cb) => {
+    const listener = (_, data) => cb(data);
+    ipcRenderer.on('caller-id-signal', listener);
+    return () => ipcRenderer.removeListener('caller-id-signal', listener);
+  },
+  onCallerIdError: (cb) => {
+    const listener = (_, data) => cb(data);
+    ipcRenderer.on('caller-id-error', listener);
+    return () => ipcRenderer.removeListener('caller-id-error', listener);
+  },
   isElectron: true,
 });

@@ -62,14 +62,23 @@ export function WaiterApp({ onLogout }: { onLogout: () => void }) {
   const [orderLoading, setOrderLoading] = useState(false);
   /** Zorla çıkış (pasif/silinmiş hesap, ağ dışı). null değilse modal gösterilir. */
   const [forcedExit, setForcedExit] = useState<{ title: string; message: string } | null>(null);
+  /** İlk doğrulama tamamlanmadan UI render edilmez — pasif/silinmiş hesap UI flash'ı engellenir. */
+  const [verifying, setVerifying] = useState(true);
 
   useEffect(() => {
     const saved = localStorage.getItem('waiter_session');
     if (saved) {
-      const waiterSession = JSON.parse(saved);
-      setSession(waiterSession);
-      loadTableGroups(waiterSession.tenant_id, waiterSession.branch_id || null);
-      loadProducts(waiterSession.tenant_id, waiterSession.branch_id || null);
+      try {
+        const waiterSession = JSON.parse(saved);
+        setSession(waiterSession);
+      } catch {
+        localStorage.removeItem('waiter_session');
+        setVerifying(false);
+        onLogout();
+      }
+    } else {
+      setVerifying(false);
+      onLogout();
     }
   }, []);
 
@@ -93,14 +102,18 @@ export function WaiterApp({ onLogout }: { onLogout: () => void }) {
       } catch {
         /* ignore */
       }
+      // Önce localStorage'ı temizle: kullanıcı yenilerse de hemen login'e düşsün (yarış koşulu yok).
+      try { localStorage.removeItem('waiter_session'); } catch { /* ignore */ }
+      try { void supabase.auth.signOut(); } catch { /* ignore */ }
       setForcedExit({ title, message });
+      // İlk doğrulama henüz bitmediyse UI hiç açılmasın.
+      setVerifying(false);
+      // 1.5 sn sonra modal kapanır ve login ekranına dönülür.
       window.setTimeout(() => {
         if (!alive) return;
-        localStorage.removeItem('waiter_session');
-        try { void supabase.auth.signOut(); } catch { /* ignore */ }
         setSession(null);
         onLogout();
-      }, 5000);
+      }, 1500);
     };
 
     const checkAccountState = async () => {
@@ -162,10 +175,17 @@ export function WaiterApp({ onLogout }: { onLogout: () => void }) {
         performExit('Yetkisiz ağ', gate.message);
         return;
       }
+
+      // İlk doğrulama başarılı: UI'ı aç ve veriyi yükle.
+      if (verifying) {
+        setVerifying(false);
+        try { loadTableGroups(session.tenant_id, session.branch_id || null); } catch { /* ignore */ }
+        try { loadProducts(session.tenant_id, session.branch_id || null); } catch { /* ignore */ }
+      }
     };
 
     void checkAccountState();
-    const interval = window.setInterval(() => void checkAccountState(), 30 * 1000);
+    const interval = window.setInterval(() => void checkAccountState(), 15 * 1000);
 
     const onVisible = () => {
       if (document.visibilityState === 'visible') void checkAccountState();
@@ -449,6 +469,44 @@ export function WaiterApp({ onLogout }: { onLogout: () => void }) {
         <div className="text-center">
           <AlertCircle className="w-12 h-12 text-red-500 mx-auto mb-4" />
           <p className="text-white font-semibold">Oturum Bulunamadı</p>
+        </div>
+      </div>
+    );
+  }
+
+  // İlk doğrulama tamamlanana kadar UI render edilmez; forcedExit varsa onun modal'ı görünür.
+  if (verifying && !forcedExit) {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-slate-900">
+        <div className="text-center">
+          <RefreshCw className="w-12 h-12 text-orange-400 mx-auto mb-4 animate-spin" />
+          <p className="text-white font-semibold">Hesap doğrulanıyor…</p>
+          <p className="text-slate-400 text-sm mt-1">Lütfen bekleyin</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (forcedExit && verifying) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
+        <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-6 text-center">
+          <div className="w-14 h-14 rounded-full bg-red-100 flex items-center justify-center mx-auto mb-4">
+            <AlertCircle className="w-8 h-8 text-red-600" />
+          </div>
+          <h3 className="text-lg font-bold text-slate-900 mb-2">{forcedExit.title}</h3>
+          <p className="text-sm text-slate-600 mb-5">{forcedExit.message}</p>
+          <button
+            onClick={() => {
+              localStorage.removeItem('waiter_session');
+              try { void supabase.auth.signOut(); } catch { /* ignore */ }
+              setSession(null);
+              onLogout();
+            }}
+            className="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-2.5 rounded-xl transition-colors"
+          >
+            Giriş Ekranına Dön
+          </button>
         </div>
       </div>
     );

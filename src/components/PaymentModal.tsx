@@ -6,7 +6,13 @@ import {
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
-import type { Customer } from './CariAccounts';
+
+interface PickerCustomer {
+  id: string;
+  name: string;
+  phone?: string | null;
+  current_balance: number;
+}
 
 interface PaymentSplit {
   method: 'cash' | 'credit_card' | 'open_account';
@@ -27,7 +33,7 @@ interface PaymentModalProps {
 const METHOD_LABELS: Record<PaymentSplit['method'], string> = {
   cash: 'Nakit',
   credit_card: 'Kart',
-  open_account: 'Veresiye',
+  open_account: 'Cari hesap',
 };
 
 const METHOD_ICONS: Record<PaymentSplit['method'], React.ReactNode> = {
@@ -47,7 +53,7 @@ interface CustomerPickerProps {
 
 function CustomerPicker({ tenantId, selected, onSelect, amount }: CustomerPickerProps) {
   const [search, setSearch] = useState('');
-  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [customers, setCustomers] = useState<PickerCustomer[]>([]);
   const [loading, setLoading] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
   const [addName, setAddName] = useState('');
@@ -72,13 +78,13 @@ function CustomerPicker({ tenantId, selected, onSelect, amount }: CustomerPicker
       } catch (e) {}
     }
     const { data } = await (supabase.from('customers' as any) as any)
-      .select('id, name, phone, balance')
+      .select('id, name, phone, current_balance')
       .eq('tenant_id', tenantId)
       .eq('is_active', true)
       .order('name');
     if (data) {
       sessionStorage.setItem(cacheKey, JSON.stringify({ data, timestamp: Date.now() }));
-      setCustomers(data as unknown as Customer[]);
+      setCustomers(data as unknown as PickerCustomer[]);
     }
     setLoading(false);
   }, [tenantId]);
@@ -93,10 +99,18 @@ function CustomerPicker({ tenantId, selected, onSelect, amount }: CustomerPicker
     if (!addName.trim()) return;
     setAddSaving(true);
     const { data } = await (supabase.from('customers' as any) as any)
-      .insert({ tenant_id: tenantId, name: addName.trim(), phone: addPhone.trim() || null, is_active: true })
-      .select()
+      .insert({
+        tenant_id: tenantId,
+        name: addName.trim(),
+        phone: addPhone.trim() || null,
+        is_active: true,
+        current_balance: 0,
+        credit_limit: 0,
+      })
+      .select('id, name')
       .single();
     if (data) {
+      try { sessionStorage.removeItem(`customers_${tenantId}`); } catch { /* ignore */ }
       onSelect({ id: data.id, name: data.name });
       setExpanded(false);
     }
@@ -114,7 +128,7 @@ function CustomerPicker({ tenantId, selected, onSelect, amount }: CustomerPicker
           <div>
             <div className="text-sm font-black text-slate-800">{selected.name}</div>
             <div className="text-xs text-orange-600">
-              Veresiye: {amount.toFixed(2)} ₺ eklenecek
+              Cari hesaba: {amount.toFixed(2)} ₺ borç yazılacak
             </div>
           </div>
         </div>
@@ -224,8 +238,8 @@ function CustomerPicker({ tenantId, selected, onSelect, amount }: CustomerPicker
                 </div>
               </div>
               <div className="flex items-center gap-1 ml-2">
-                {c.balance > 0 && (
-                  <span className="text-xs text-red-500 font-bold">{c.balance.toFixed(0)}₺</span>
+                {c.current_balance > 0 && (
+                  <span className="text-xs text-red-500 font-bold">{Number(c.current_balance).toFixed(0)}₺</span>
                 )}
                 <ChevronRight className="w-3.5 h-3.5 text-slate-300" />
               </div>
@@ -238,7 +252,7 @@ function CustomerPicker({ tenantId, selected, onSelect, amount }: CustomerPicker
         <div className="px-3 py-2 bg-amber-50 border-t border-orange-200">
           <div className="flex items-center gap-1.5 text-xs text-amber-700">
             <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-            Veresiye için cari müşteri seçimi zorunludur
+            Cari ödeme için müşteri seçimi zorunludur
           </div>
         </div>
       )}
@@ -303,7 +317,7 @@ export function PaymentModal({
     setSplits(prev => prev.map((s, i) => i === idx ? { ...s, amount: fill.toFixed(2) } : s));
   };
 
-  const handleSubmit = async () => {
+  const handleSubmit = () => {
     if (submitting) return;
 
     for (const split of splits) {
@@ -313,43 +327,29 @@ export function PaymentModal({
         return;
       }
       if (split.method === 'open_account' && !split.customerId) {
-        alert('Veresiye için cari müşteri seçimi zorunludur');
+        alert('Cari hesap ödemesi için müşteri seçin');
         return;
       }
     }
 
+    // UI'ı anında kapat. DB yazımı arka planda tek tek (sıralı, paymentTransactions
+    // state yarışı olmaması için) — hata olursa OrderPanel.handleAddPayment alert atar.
+    const splitsSnapshot = splits.slice();
+    const printOnComplete = printReceipt;
     setSubmitting(true);
-    try {
-      for (let i = 0; i < splits.length; i++) {
-        const split = splits[i];
-        const amt = parseFloat(split.amount);
-        const isLast = i === splits.length - 1;
-        await onPayment(split.method, amt, isLast ? printReceipt : false, split.customerId);
-
-        // Record veresiye transaction
-        if (split.method === 'open_account' && split.customerId && tenant) {
-          await (supabase.from('customer_transactions' as any) as any).insert({
-            tenant_id: tenant.id,
-            customer_id: split.customerId,
-            type: 'sale',
-            amount: amt,
-            description: 'Sipariş veresiyesi',
-          });
-          const { data: cust } = await (supabase.from('customers' as any) as any)
-            .select('balance')
-            .eq('id', split.customerId)
-            .maybeSingle();
-          if (cust) {
-            await (supabase.from('customers' as any) as any)
-              .update({ balance: (cust.balance || 0) + amt })
-              .eq('id', split.customerId);
-          }
+    onClose();
+    void (async () => {
+      try {
+        for (let i = 0; i < splitsSnapshot.length; i++) {
+          const split = splitsSnapshot[i];
+          const amt = parseFloat(split.amount);
+          const isLast = i === splitsSnapshot.length - 1;
+          await onPayment(split.method, amt, isLast ? printOnComplete : false, split.customerId);
         }
+      } finally {
+        setSubmitting(false);
       }
-      onClose();
-    } finally {
-      setSubmitting(false);
-    }
+    })();
   };
 
   const hasInvalidOpenAccount = splits.some(s => s.method === 'open_account' && !s.customerId);
