@@ -22,6 +22,9 @@ interface DayStats {
   onlineOrders: number;
   completedOrders: number;
   cancelledOrders: number;
+  cancelledRevenue: number;
+  itemCancelCount: number;
+  itemCancelRevenue: number;
   avgOrderValue: number;
   topProducts: { name: string; quantity: number; revenue: number }[];
   hourlyRevenue: { hour: number; revenue: number; orders: number }[];
@@ -59,7 +62,7 @@ function getBusinessDayRange(): { start: Date; end: Date } {
 }
 
 export function EndOfDay({ onClose }: EndOfDayProps) {
-  const { tenant, activeBranch, branches, isOwnerOrAdmin, isManager, permissions } = useAuth();
+  const { tenant, activeBranch, branches, isOwnerOrAdmin, isManager, permissions, profile, user } = useAuth();
   const [stats, setStats] = useState<DayStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedBranch, setSelectedBranch] = useState<string>(activeBranch?.id || 'all');
@@ -244,16 +247,31 @@ export function EndOfDay({ onClose }: EndOfDayProps) {
       txQuery = txQuery.eq('branch_id', effectiveBranch);
     }
 
-    const [{ data: orders }, { data: transactions }] = await Promise.all([
+    let cancelLogsQuery = (supabase as any)
+      .from('order_cancel_logs')
+      .select('quantity, unit_price, branch_id')
+      .eq('tenant_id', tenant.id)
+      .gte('created_at', startDate.toISOString())
+      .lte('created_at', endDate.toISOString());
+    if (effectiveBranch !== 'all') {
+      cancelLogsQuery = cancelLogsQuery.eq('branch_id', effectiveBranch);
+    }
+
+    const [{ data: orders }, { data: transactions }, { data: cancelLogs }] = await Promise.all([
       ordersQuery,
       txQuery,
+      cancelLogsQuery,
     ]);
 
     const ordersData = orders || [];
     const txData = transactions || [];
+    const cancelLogsData = (cancelLogs || []) as Array<{ quantity: number; unit_price: number }>;
 
     const completed = ordersData.filter(o => o.status === 'completed');
     const cancelled = ordersData.filter(o => o.status === 'cancelled');
+    const cancelledRevenue = cancelled.reduce((s, o: any) => s + Number(o.total || o.total_amount || 0), 0);
+    const itemCancelCount = cancelLogsData.reduce((s, l) => s + Number(l.quantity || 0), 0);
+    const itemCancelRevenue = cancelLogsData.reduce((s, l) => s + Number(l.quantity || 0) * Number(l.unit_price || 0), 0);
 
     const cashRevenue = txData
       .filter(t => t.transaction_type === 'order_payment' && t.payment_method === 'cash')
@@ -342,6 +360,9 @@ export function EndOfDay({ onClose }: EndOfDayProps) {
       onlineOrders: ordersData.filter(o => o.order_type === 'delivery').length,
       completedOrders: completed.length,
       cancelledOrders: cancelled.length,
+      cancelledRevenue,
+      itemCancelCount,
+      itemCancelRevenue,
       avgOrderValue: completed.length > 0 ? totalRevenue / completed.length : 0,
       topProducts,
       hourlyRevenue,
@@ -381,101 +402,128 @@ export function EndOfDay({ onClose }: EndOfDayProps) {
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; }
   body {
-    font-family: 'Segoe UI', 'Arial Black', Arial, 'Helvetica Neue', Helvetica, sans-serif;
-    font-size: 14px;
-    line-height: 1.4;
+    font-family: 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+    font-size: 13px;
+    line-height: 1.45;
     color: #000;
     width: 74mm;
-    font-weight: 700;
+    font-weight: 500;
     -webkit-font-smoothing: antialiased;
     text-rendering: geometricPrecision;
   }
-  * { color: #000 !important; }
+  * { color: #000; }
   .center { text-align: center; }
   .right { text-align: right; }
-  .bold { font-weight: 900; }
-  .xlarge { font-size: 20px; font-weight: 900; letter-spacing: 0.3px; }
-  .large { font-size: 16px; font-weight: 900; }
-  .small { font-size: 12px; font-weight: 700; }
-  .muted { font-weight: 700; }
-  .line { border-top: 2px dashed #000; margin: 6px 0; }
-  .double { border-top: 3px solid #000; margin: 6px 0; }
-  .row { display: flex; justify-content: space-between; gap: 8px; margin: 4px 0; }
-  .row .l { flex: 1; font-weight: 700; }
-  .row .r { white-space: nowrap; font-weight: 900; }
-  .row.bold .l, .row.bold .r { font-weight: 900; }
+  .bold { font-weight: 700; }
+  .xlarge { font-size: 17px; font-weight: 700; letter-spacing: 0.5px; }
+  .large { font-size: 14px; font-weight: 700; letter-spacing: 0.3px; text-transform: uppercase; }
+  .section { font-size: 12px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; margin-top: 6px; }
+  .small { font-size: 11px; font-weight: 500; }
+  .muted { font-weight: 500; opacity: 0.85; }
+  .line { border-top: 1px solid #000; margin: 5px 0; opacity: 0.6; }
+  .double { border-top: 2px solid #000; margin: 6px 0; }
+  .row { display: flex; justify-content: space-between; gap: 8px; margin: 3px 0; }
+  .row .l { flex: 1; font-weight: 500; }
+  .row .r { white-space: nowrap; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .row.bold .l, .row.bold .r { font-weight: 700; }
+  .row.neg .r { color: #000; }
   .totalbox {
     background: #000;
-    color: #fff !important;
-    padding: 8px 10px;
-    border: 2px solid #000;
-    border-radius: 4px;
+    color: #fff;
+    padding: 8px 12px;
     margin: 8px 0;
     display: flex;
     justify-content: space-between;
-    font-weight: 900;
-    font-size: 17px;
-    letter-spacing: 0.3px;
+    font-weight: 700;
+    font-size: 15px;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
   }
-  .totalbox * { color: #fff !important; }
-  .footer { margin-top: 10px; text-align: center; font-size: 11px; font-weight: 700; }
+  .totalbox * { color: #fff; }
+  .meta { font-size: 11px; font-weight: 500; line-height: 1.5; }
+  .meta b { font-weight: 700; }
+  .signature {
+    margin-top: 14px;
+    padding-top: 10px;
+    border-top: 1px solid #000;
+    font-size: 11px;
+    line-height: 1.55;
+  }
+  .signature .lbl { font-weight: 700; letter-spacing: 0.3px; text-transform: uppercase; font-size: 10px; }
+  .footer { margin-top: 8px; text-align: center; font-size: 10px; font-weight: 500; opacity: 0.7; }
   @media print {
     body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   }
 </style>
 </head>
 <body>
-  <div class="center bold xlarge">${printSettings.restaurantName || tenant.name || 'ŞefPOS'}</div>
+  <div class="center xlarge">${printSettings.restaurantName || tenant.name || 'ŞefPOS'}</div>
   <div class="center small">${branchLabel || ''}</div>
-  <div class="double"></div>
-  <div class="center bold large">GÜN SONU RAPORU</div>
-  <div class="center">${formatBusinessDateTR(businessDate)}</div>
-  <div class="center small">${timeNow}</div>
-  <div class="center small">Aralık: ${periodLabel}</div>
   <div class="line"></div>
+  <div class="center large">Gün Sonu Raporu</div>
+  <div class="center small"><b>${formatBusinessDateTR(businessDate)}</b></div>
+  <div class="center small muted">${timeNow}</div>
+  <div class="center small muted">Aralık: ${periodLabel}</div>
+  <div class="double"></div>
 
-  <div class="bold">ÖDEME YÖNTEMLERİ</div>
+  <div class="section">Ödeme Yöntemleri</div>
   <div class="line"></div>
   <div class="row"><span class="l">Nakit</span><span class="r">${fmt(stats.cashRevenue)} ₺</span></div>
   <div class="row"><span class="l">Kredi Kartı</span><span class="r">${fmt(stats.cardRevenue)} ₺</span></div>
   <div class="row"><span class="l">Cari Hesap</span><span class="r">${fmt(stats.openAccountRevenue)} ₺</span></div>
-  <div class="totalbox"><span>TOPLAM CİRO</span><span>${fmt(stats.totalRevenue)} ₺</span></div>
+  <div class="totalbox"><span>Toplam Ciro</span><span>${fmt(stats.totalRevenue)} ₺</span></div>
 
-  <div class="bold">KASA ÖZETİ</div>
+  <div class="section">Kasa Özeti</div>
   <div class="line"></div>
   <div class="row"><span class="l">Nakit Satış</span><span class="r">+${fmt(stats.cashRevenue)} ₺</span></div>
   <div class="row"><span class="l">Nakit Giriş</span><span class="r">+${fmt(stats.cashIn)} ₺</span></div>
   <div class="row"><span class="l">Nakit Çıkış</span><span class="r">-${fmt(stats.cashOut)} ₺</span></div>
   <div class="row"><span class="l">Giderler</span><span class="r">-${fmt(stats.expenses)} ₺</span></div>
   <div class="line"></div>
-  <div class="row bold"><span class="l">NET KASA</span><span class="r">${fmt(stats.netCash)} ₺</span></div>
+  <div class="row bold"><span class="l">Net Kasa</span><span class="r">${fmt(stats.netCash)} ₺</span></div>
   <div class="double"></div>
 
-  <div class="bold">SİPARİŞ ÖZETİ</div>
+  <div class="section">Sipariş Özeti</div>
   <div class="line"></div>
   <div class="row"><span class="l">Toplam Sipariş</span><span class="r">${stats.totalOrders}</span></div>
   <div class="row"><span class="l">Tamamlanan</span><span class="r">${stats.completedOrders}</span></div>
-  <div class="row"><span class="l">İptal Edilen</span><span class="r">${stats.cancelledOrders}</span></div>
   <div class="row"><span class="l">Masa Siparişi</span><span class="r">${stats.dineInOrders}</span></div>
   <div class="row"><span class="l">Paket Servis</span><span class="r">${stats.takeawayOrders}</span></div>
   <div class="row"><span class="l">Online Sipariş</span><span class="r">${stats.onlineOrders}</span></div>
   <div class="line"></div>
   <div class="row"><span class="l">Ort. Sipariş Tutarı</span><span class="r">${fmt(stats.avgOrderValue)} ₺</span></div>
+  <div class="double"></div>
+
+  <div class="section">İptaller</div>
+  <div class="line"></div>
+  <div class="row"><span class="l">İptal Edilen Sipariş</span><span class="r">${stats.cancelledOrders} ad</span></div>
+  <div class="row"><span class="l">İptal Sipariş Tutarı</span><span class="r">${fmt(stats.cancelledRevenue)} ₺</span></div>
+  <div class="row"><span class="l">İptal Edilen Ürün</span><span class="r">${stats.itemCancelCount} ad</span></div>
+  <div class="row"><span class="l">İptal Ürün Tutarı</span><span class="r">${fmt(stats.itemCancelRevenue)} ₺</span></div>
+  <div class="line"></div>
+  <div class="row bold"><span class="l">TOPLAM İPTAL</span><span class="r">${fmt(stats.cancelledRevenue + stats.itemCancelRevenue)} ₺</span></div>
+
   ${stats.topProducts.length > 0 ? `
   <div class="double"></div>
-  <div class="bold">EN ÇOK SATANLAR</div>
+  <div class="section">En Çok Satanlar</div>
   <div class="line"></div>
   ${stats.topProducts.slice(0, 8).map((p, i) => `<div class="row"><span class="l">${i + 1}. ${p.name}</span><span class="r">${p.quantity} ad / ${fmt(p.revenue)} ₺</span></div>`).join('')}
   ` : ''}
   ${(openTables.length > 0 || pendingOrders.length > 0) ? `
   <div class="double"></div>
-  <div class="bold">UYARI</div>
+  <div class="section">Uyarı</div>
   <div class="line"></div>
   ${openTables.length > 0 ? `<div class="row"><span class="l">Açık Masa</span><span class="r">${openTables.length}</span></div>` : ''}
   ${pendingOrders.length > 0 ? `<div class="row"><span class="l">Bekleyen Sipariş</span><span class="r">${pendingOrders.length}</span></div>` : ''}
   ` : ''}
-  <div class="line"></div>
-  <div class="footer">Sistem tarafından ${timeNow} oluşturuldu</div>
+
+  <div class="signature">
+    <div class="lbl">Raporu Alan / Günü Kapatan</div>
+    <div><b>${(profile?.full_name || profile?.email || user?.email || '-')}</b></div>
+    <div class="muted small">${profile?.role ? 'Yetki: ' + profile.role : ''}</div>
+    <div class="muted small">Tarih/Saat: ${timeNow}</div>
+  </div>
+  <div class="footer">Bu rapor ŞefPOS tarafından otomatik oluşturulmuştur.</div>
   <br/><br/>
   <script>
     window.addEventListener('load', () => {
