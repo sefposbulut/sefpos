@@ -131,6 +131,24 @@ function App() {
 
   const isElectron = useMemo(() => !!(window as any).electronAPI, []);
   const uiPrefs = useUiPrefs();
+  // POS modu (Tam Ekran / Header gizle) sadece masaustu (md+) icin etkin.
+  // Mobilde zaten alan dar ve farkli optimizasyonlar var; orada Header
+  // kalmali. Pencere kuculunce otomatik devre disi kalir.
+  const [isDesktopViewport, setIsDesktopViewport] = useState(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return true;
+    return window.matchMedia('(min-width: 768px)').matches;
+  });
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return;
+    const mq = window.matchMedia('(min-width: 768px)');
+    const handler = (e: MediaQueryListEvent) => setIsDesktopViewport(e.matches);
+    if (mq.addEventListener) {
+      mq.addEventListener('change', handler);
+      return () => mq.removeEventListener('change', handler);
+    }
+    mq.addListener(handler);
+    return () => mq.removeListener(handler);
+  }, []);
   const { user, profile, tenant, loading, refreshProfile, activeBranch, signOut, profileLoadFailed } = useAuth();
   const [selectedTable, setSelectedTable] = useState<Table | null>(null);
   const [currentPage, setCurrentPage] = useState('tables');
@@ -501,7 +519,8 @@ function App() {
 
   const show = (page: string) => currentPage === page;
 
-  const headerHidden = uiPrefs.headerHidden;
+  // Mobilde efektif olarak her zaman header acik.
+  const headerHidden = uiPrefs.headerHidden && isDesktopViewport;
 
   // CSS `zoom` Chromium/Electron'da gercek anlamda layout boyutlandirir
   // (tarayicinin Ctrl +/- kalitesinde, modal/positioning bozulmasiz).

@@ -462,10 +462,10 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
                 </button>
               </div>
 
-              {/* Tam Ekran POS — ust meunyu gizler, kalicidir. */}
+              {/* Tam Ekran POS — ust meunyu gizler, kalicidir. Sadece masaustu. */}
               <button
                 onClick={() => setHeaderHidden(true)}
-                className="p-1.5 md:p-2 text-slate-600 hover:text-slate-900 rounded-lg hover:bg-slate-100 transition-all active:scale-95"
+                className="hidden md:inline-flex p-1.5 md:p-2 text-slate-600 hover:text-slate-900 rounded-lg hover:bg-slate-100 transition-all active:scale-95"
                 title="Tam Ekran POS modu (üst menüyü gizle)"
               >
                 <Minimize2 className="w-4 h-4 md:w-5 md:h-5" />
