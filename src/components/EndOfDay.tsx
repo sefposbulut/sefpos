@@ -75,8 +75,41 @@ export function EndOfDay({ onClose }: EndOfDayProps) {
   const [closeSuccess, setCloseSuccess] = useState<string | null>(null);
   const [showCloseConfirm, setShowCloseConfirm] = useState(false);
   const [openTables, setOpenTables] = useState<Array<{ id: string; table_number: string }>>([]);
-  const [pendingOrders, setPendingOrders] = useState<Array<{ id: string; order_type: string; status: string; table_id: string | null }>>([]);
+  const [pendingOrders, setPendingOrders] = useState<Array<{ id: string; order_number: string | null; total: number | null; order_type: string; status: string; table_id: string | null; created_at?: string }>>([]);
+  const [showPendingList, setShowPendingList] = useState(false);
+  const [completingPending, setCompletingPending] = useState(false);
   const [reopening, setReopening] = useState(false);
+
+  // Bekleyen siparis tipi etiketi
+  const orderTypeLabel = (t: string): string => {
+    if (t === 'dine_in') return 'Masa';
+    if (t === 'takeaway') return 'Paket';
+    if (t === 'delivery') return 'Online';
+    return t || 'Diğer';
+  };
+
+  // Tum bekleyen siparisleri (kapatilacak sube icin) "completed" olarak isaretle.
+  // Yalnizca tipik orphan kayitlari icin: tamamlanmamis paket/online/eski siparisler.
+  const completeAllPending = async () => {
+    if (!effectiveBranchForShift || pendingOrders.length === 0) return;
+    if (!confirm(`${pendingOrders.length} bekleyen sipariş "tamamlandı" olarak işaretlenecek.\n\nBunu yalnızca bu siparişlerin gerçekten tamamlandığından eminseniz yapın.\nDevam edilsin mi?`)) return;
+    setCompletingPending(true);
+    setCloseError(null);
+    try {
+      const ids = pendingOrders.map(o => o.id);
+      const { error } = await (supabase as any)
+        .from('orders')
+        .update({ status: 'completed', completed_at: new Date().toISOString() })
+        .in('id', ids);
+      if (error) throw error;
+      setCloseSuccess(`${ids.length} sipariş tamamlandı olarak işaretlendi.`);
+      await loadStats();
+    } catch (e: any) {
+      setCloseError(e?.message || 'Siparişler güncellenemedi');
+    } finally {
+      setCompletingPending(false);
+    }
+  };
 
   const handleReopenDay = async () => {
     if (!todayClosure) return;
@@ -257,14 +290,15 @@ export function EndOfDay({ onClose }: EndOfDayProps) {
 
       const pendingQuery = (supabase as any)
         .from('orders')
-        .select('id, status, order_type, table_id, branch_id')
+        .select('id, order_number, total, status, order_type, table_id, branch_id, created_at')
         .eq('tenant_id', tenant.id)
         .eq('branch_id', closeBranchId)
-        .in('status', ['pending', 'preparing', 'ready', 'served', 'in_progress', 'open']);
+        .in('status', ['pending', 'preparing', 'ready', 'served', 'in_progress', 'open'])
+        .order('created_at', { ascending: false });
 
       const [{ data: openTbls }, { data: pendingOrds }] = await Promise.all([tablesQuery, pendingQuery]);
       setOpenTables(((openTbls || []) as Array<{ id: string; table_number: string }>));
-      setPendingOrders(((pendingOrds || []) as Array<{ id: string; order_type: string; status: string; table_id: string | null }>));
+      setPendingOrders(((pendingOrds || []) as any));
     } else {
       setOpenTables([]);
       setPendingOrders([]);
@@ -526,7 +560,15 @@ export function EndOfDay({ onClose }: EndOfDayProps) {
                   <Lock className="w-5 h-5 text-white" />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="font-black text-slate-800">Gün Sonu Kapatma</p>
+                  <p className="font-black text-slate-800">
+                    Gün Sonu Kapatma
+                    {effectiveBranchForShift && (
+                      <span className="ml-2 inline-flex items-center gap-1 text-[11px] font-bold text-slate-700 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded-full align-middle">
+                        <Building2 className="w-3 h-3" />
+                        {branches.find(b => b.id === effectiveBranchForShift)?.name || 'Şube'}
+                      </span>
+                    )}
+                  </p>
                   <p className="text-xs text-slate-600">
                     Bütün vardiyalar kapatıldıktan sonra {formatBusinessDateTR(businessDate)} işgününü kilitleyin.
                     {activeShift && <span className="ml-1 text-rose-700 font-bold">Şu an açık vardiya var: {activeShift.shift_name}</span>}
@@ -539,10 +581,52 @@ export function EndOfDay({ onClose }: EndOfDayProps) {
                         </span>
                       )}
                       {pendingOrders.length > 0 && (
-                        <span className="inline-flex items-center gap-1 text-[11px] font-black text-amber-700 bg-amber-100 border border-amber-200 px-2 py-0.5 rounded-full">
-                          <AlertTriangle className="w-3 h-3" /> {pendingOrders.length} bekleyen sipariş
-                        </span>
+                        <>
+                          <span className="inline-flex items-center gap-1 text-[11px] font-black text-amber-700 bg-amber-100 border border-amber-200 px-2 py-0.5 rounded-full">
+                            <AlertTriangle className="w-3 h-3" /> {pendingOrders.length} bekleyen sipariş
+                          </span>
+                          {(() => {
+                            const grp: Record<string, number> = {};
+                            pendingOrders.forEach(o => { const k = orderTypeLabel(o.order_type); grp[k] = (grp[k] || 0) + 1; });
+                            return Object.entries(grp).map(([k, n]) => (
+                              <span key={k} className="text-[11px] font-bold text-slate-600 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded-full">
+                                {n} × {k}
+                              </span>
+                            ));
+                          })()}
+                          <button
+                            onClick={() => setShowPendingList(s => !s)}
+                            className="text-[11px] font-bold text-blue-700 hover:text-blue-900 underline"
+                          >
+                            {showPendingList ? 'Listeyi Kapat' : 'Listele'}
+                          </button>
+                        </>
                       )}
+                    </div>
+                  )}
+                  {showPendingList && pendingOrders.length > 0 && (
+                    <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50/60 p-2 max-h-44 overflow-y-auto text-[11px] space-y-1">
+                      {pendingOrders.map(o => (
+                        <div key={o.id} className="flex items-center justify-between gap-2 bg-white border border-amber-100 rounded px-2 py-1">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className="font-bold text-slate-700 truncate">#{o.order_number || o.id.slice(0, 8)}</span>
+                            <span className="text-slate-500">{orderTypeLabel(o.order_type)}</span>
+                            <span className="text-slate-400 italic">{o.status}</span>
+                          </div>
+                          <span className="text-slate-700 font-bold whitespace-nowrap">{fmt(Number(o.total || 0))} ₺</span>
+                        </div>
+                      ))}
+                      <div className="pt-1.5 flex items-center justify-end">
+                        <button
+                          onClick={completeAllPending}
+                          disabled={completingPending}
+                          className="text-[11px] font-bold bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1 rounded disabled:opacity-50 flex items-center gap-1"
+                          title="Bu siparişleri tamamlandı olarak işaretle"
+                        >
+                          {completingPending ? <RefreshCw className="w-3 h-3 animate-spin" /> : <CheckCircle className="w-3 h-3" />}
+                          Tümünü Tamamlandı İşaretle
+                        </button>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -866,8 +950,11 @@ export function EndOfDay({ onClose }: EndOfDayProps) {
               <div className="flex-1 min-w-0">
                 <p className="text-[10px] uppercase font-black tracking-widest opacity-90">Gün Sonu Kapatma</p>
                 <h3 className="text-lg font-black truncate">{formatBusinessDateTR(businessDate)}</h3>
-                <p className="text-xs opacity-90 mt-0.5">
-                  {selectedBranch === 'all' ? 'Şube seçilmedi' : (branches.find(b => b.id === selectedBranch)?.name || 'Şube')}
+                <p className="text-xs opacity-90 mt-0.5 flex items-center gap-1">
+                  <Building2 className="w-3 h-3" />
+                  {effectiveBranchForShift
+                    ? (branches.find(b => b.id === effectiveBranchForShift)?.name || 'Şube')
+                    : 'Şube seçilmedi'}
                 </p>
               </div>
               <button onClick={() => !closingDay && setShowCloseConfirm(false)} disabled={closingDay} className="p-1.5 rounded-lg hover:bg-white/10">
