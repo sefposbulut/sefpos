@@ -2,13 +2,14 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { useActiveShift } from '../lib/useActiveShift';
-import { computeBusinessDate, formatBusinessDateTR, shiftDurationLabel, suggestShiftNo } from '../lib/businessDay';
-import { loadPrintSettings, printHtml } from '../lib/printService';
+import { computeBusinessDate, formatBusinessDateTR, shiftDurationLabel, suggestShiftNo, shiftIcon } from '../lib/businessDay';
+import { loadPrintSettings } from '../lib/printService';
+import { printShiftReport, loadShiftPrintFormat, saveShiftPrintFormat, type ShiftPrintFormat } from '../lib/shiftReportPrint';
 import {
   Clock, PlayCircle, StopCircle, Banknote, AlertTriangle, CheckCircle,
   XCircle, RefreshCw, History, TrendingUp, TrendingDown, User, Lock,
   Layers, Plus, Minus, Calculator, Printer, Building2, Sun, Moon, Sunset,
-  ShieldAlert, FileCheck2,
+  ShieldAlert, FileCheck2, Receipt, FileText as FileText2,
 } from 'lucide-react';
 
 interface ShiftDefinition {
@@ -90,11 +91,6 @@ function fmt(n: number | null | undefined): string {
   return new Intl.NumberFormat('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(v);
 }
 
-function shiftIcon(no: number) {
-  if (no === 1) return Sun;
-  if (no === 2) return Sunset;
-  return Moon;
-}
 
 interface CountInputProps {
   mode: 'total' | 'denom';
@@ -271,6 +267,9 @@ export function ShiftManager() {
   // Day close
   const [closingDay, setClosingDay] = useState(false);
   const [dayCloseError, setDayCloseError] = useState<string | null>(null);
+
+  const [printFormat, setPrintFormat] = useState<ShiftPrintFormat>(loadShiftPrintFormat());
+  useEffect(() => { saveShiftPrintFormat(printFormat); }, [printFormat]);
 
   const businessDate = computeBusinessDate();
 
@@ -449,6 +448,7 @@ export function ShiftManager() {
     setOpening(true);
     setOpenError(null);
     try {
+      const selectedDef = definitions.find((d) => d.shift_no === openShiftNo);
       const { data, error } = await (supabase as any).rpc('start_shift', {
         p_branch_id: effectiveBranchId,
         p_shift_no: openShiftNo,
@@ -457,6 +457,7 @@ export function ShiftManager() {
         p_terminal_id: openTerminal || null,
         p_terminal_name: openTerminal || null,
         p_notes: openNotes || null,
+        p_shift_definition_id: selectedDef?.id || null,
       });
       if (error) throw error;
       setShowOpenModal(false);
@@ -523,48 +524,19 @@ export function ShiftManager() {
     }
   };
 
-  const printZReport = (shift: ShiftRow) => {
+  const printZReport = (shift: ShiftRow, formatOverride?: ShiftPrintFormat) => {
     const ps = loadPrintSettings();
     const branchLabel = branches.find((b) => b.id === shift.branch_id)?.name || '';
-    const html = `
-      <div class="center bold xlarge">${ps.restaurantName || tenant?.name || 'ŞefPOS'}</div>
-      <div class="line"></div>
-      <div class="center bold large">VARDİYA Z RAPORU</div>
-      <div class="center">${shift.shift_name}</div>
-      <div class="center">${branchLabel}</div>
-      <div class="center">${formatBusinessDateTR(shift.business_date)}</div>
-      <div class="line"></div>
-      <div class="row"><span>Açılış</span><span>${new Date(shift.opened_at).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })}</span></div>
-      <div class="row"><span>Kapanış</span><span>${shift.closed_at ? new Date(shift.closed_at).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' }) : '-'}</span></div>
-      <div class="line"></div>
-      <div class="row bold"><span>ÖDEME ÖZETİ</span><span></span></div>
-      <div class="line"></div>
-      <div class="row"><span>Nakit</span><span>${fmt(shift.cash_revenue)} ₺</span></div>
-      <div class="row"><span>Kredi Kartı</span><span>${fmt(shift.card_revenue)} ₺</span></div>
-      <div class="row"><span>Cari Hesap</span><span>${fmt(shift.open_account_revenue)} ₺</span></div>
-      <div class="row bold"><span>TOPLAM</span><span>${fmt(shift.total_revenue)} ₺</span></div>
-      <div class="line"></div>
-      <div class="row bold"><span>KASA</span><span></span></div>
-      <div class="line"></div>
-      <div class="row"><span>Açılış Nakit</span><span>${fmt(shift.opening_cash)} ₺</span></div>
-      <div class="row"><span>Nakit Giriş</span><span>+${fmt(shift.cash_in_total)} ₺</span></div>
-      <div class="row"><span>Nakit Çıkış</span><span>-${fmt(shift.cash_out_total)} ₺</span></div>
-      <div class="row"><span>Giderler</span><span>-${fmt(shift.expense_total)} ₺</span></div>
-      <div class="row"><span>Beklenen</span><span>${fmt(shift.expected_cash)} ₺</span></div>
-      <div class="row"><span>Sayılan</span><span>${fmt(shift.closing_cash || 0)} ₺</span></div>
-      <div class="row bold"><span>FARK</span><span>${shift.cash_difference >= 0 ? '+' : ''}${fmt(shift.cash_difference)} ₺</span></div>
-      <div class="line"></div>
-      <div class="row"><span>Sipariş</span><span>${shift.order_count}</span></div>
-      <div class="line"></div>
-      ${shift.closing_notes ? `<div class="center small">${shift.closing_notes}</div><div class="line"></div>` : ''}
-      <div class="footer">Sistem tarafından oluşturuldu</div>
-      <br><br><br>
-    `;
-    try {
-      printHtml(html, ps.defaultReceiptPrinter || '');
-    } catch {
-      // no-op
-    }
+    void printShiftReport(
+      shift,
+      {
+        title: 'VARDİYA Z RAPORU',
+        restaurantName: ps.restaurantName || tenant?.name || 'ŞefPOS',
+        branchName: branchLabel,
+        userName: shift.opener_name || '',
+      },
+      formatOverride || printFormat,
+    );
   };
 
   // Computed: bugünün vardiyaları
@@ -814,7 +786,23 @@ export function ShiftManager() {
         <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
           <div className="px-5 py-3 border-b border-slate-100 flex items-center gap-2">
             <History className="w-4 h-4 text-slate-500" />
-            <h3 className="font-black text-slate-800">Vardiya Geçmişi</h3>
+            <h3 className="font-black text-slate-800 flex-1">Vardiya Geçmişi</h3>
+            <div className="hidden sm:flex items-center gap-1 p-1 bg-slate-100 rounded-lg border border-slate-200" title="Z raporu yazdırma formatı">
+              <button
+                type="button"
+                onClick={() => setPrintFormat('80mm')}
+                className={`px-2.5 py-1.5 rounded-md text-[11px] font-black inline-flex items-center gap-1 transition ${printFormat === '80mm' ? 'bg-white shadow text-orange-700' : 'text-slate-500 hover:text-slate-700'}`}
+              >
+                <Receipt className="w-3 h-3" /> 80 mm
+              </button>
+              <button
+                type="button"
+                onClick={() => setPrintFormat('a4')}
+                className={`px-2.5 py-1.5 rounded-md text-[11px] font-black inline-flex items-center gap-1 transition ${printFormat === 'a4' ? 'bg-white shadow text-orange-700' : 'text-slate-500 hover:text-slate-700'}`}
+              >
+                <FileText2 className="w-3 h-3" /> A4
+              </button>
+            </div>
           </div>
           {history.length === 0 ? (
             <div className="p-8 text-center text-sm text-slate-500">Geçmiş kayıt yok.</div>

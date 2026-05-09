@@ -1,11 +1,11 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { LogOut, User, Settings, ChevronDown, MapPin, Check, Building2, Zap, ZoomIn, ZoomOut, Bell, Headphones as HeadphonesIcon, X, Send, Sparkles, Phone, Mail, ArrowLeft, LayoutGrid, Sun, Sunset, Moon, PlayCircle, Lock } from 'lucide-react';
+import { LogOut, User, Settings, ChevronDown, MapPin, Check, Building2, Zap, ZoomIn, ZoomOut, Bell, Headphones as HeadphonesIcon, X, Send, Sparkles, Phone, Mail, ArrowLeft, LayoutGrid, PlayCircle, Lock } from 'lucide-react';
 import { WaiterCallBell } from './WaiterCallBell';
 import { supabase } from '../lib/supabase';
 import { getTrialInfo, formatTrialRemaining } from '../lib/tenantTrial';
 import { useActiveShift } from '../lib/useActiveShift';
-import { shiftDurationLabel } from '../lib/businessDay';
+import { shiftDurationLabel, shiftIcon } from '../lib/businessDay';
 
 const isElectron = !!(window as any).electronAPI;
 
@@ -69,12 +69,6 @@ const PAGE_LABELS: Record<string, string> = {
   cash: 'Kasa',
   shifts: 'Vardiyalar',
 };
-
-function shiftIcon(no: number) {
-  if (no === 1) return Sun;
-  if (no === 2) return Sunset;
-  return Moon;
-}
 
 export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackToTables, onOpenShifts }: HeaderProps) {
   const { profile, tenant, user, signOut, activeBranch, branches, setActiveBranch, shiftsEnabled, permissions } = useAuth();

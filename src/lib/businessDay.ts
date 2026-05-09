@@ -54,3 +54,21 @@ export function shiftDurationLabel(openedAt: string, closedAt?: string | null): 
   if (h > 0) return `${h}sa ${m}dk`;
   return `${m}dk`;
 }
+
+import { Sun, Sunset, Moon, Layers, Coffee, Briefcase, Stars } from 'lucide-react';
+
+/**
+ * Vardiya numarasina gore ikon (genisletilmis 1..9).
+ * 1 Sabah, 2 Ogle, 3 Aksam, 4 Gece, 5+ esnek/ek vardiyalar (genel ikonlar).
+ */
+export function shiftIcon(no: number): typeof Sun {
+  switch (no) {
+    case 1: return Sun;
+    case 2: return Sunset;
+    case 3: return Moon;
+    case 4: return Stars;
+    case 5: return Coffee;
+    case 6: return Briefcase;
+    default: return Layers;
+  }
+}

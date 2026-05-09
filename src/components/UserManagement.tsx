@@ -538,6 +538,8 @@ export function UserManagement() {
   const [editingUser, setEditingUser] = useState<string | null>(null);
   const [selectedRole, setSelectedRole] = useState<string>('');
   const [selectedBranch, setSelectedBranch] = useState<string>('');
+  const [selectedShiftDef, setSelectedShiftDef] = useState<string>('');
+  const [shiftDefinitions, setShiftDefinitions] = useState<Array<{ id: string; branch_id: string; shift_no: number; name: string; is_active: boolean }>>([]);
   const [showAddUser, setShowAddUser] = useState(false);
   const [addingUser, setAddingUser] = useState(false);
   // Sube muduru icin filtre kendi subesine zorlanir (RLS de zaten kisitlar
@@ -571,6 +573,7 @@ export function UserManagement() {
       loadRoles();
       loadBranches();
       loadUsers();
+      loadShiftDefinitions();
     }
   }, [tenant]);
 
@@ -598,6 +601,21 @@ export function UserManagement() {
       .order('is_main', { ascending: false })
       .order('name');
     if (data) setBranches(data as Branch[]);
+  };
+
+  const loadShiftDefinitions = async () => {
+    if (!tenant) return;
+    try {
+      const { data } = await (supabase as any)
+        .from('shift_definitions')
+        .select('id, branch_id, shift_no, name, is_active')
+        .eq('tenant_id', tenant.id)
+        .eq('is_active', true)
+        .order('shift_no', { ascending: true });
+      setShiftDefinitions((data || []) as Array<{ id: string; branch_id: string; shift_no: number; name: string; is_active: boolean }>);
+    } catch {
+      setShiftDefinitions([]);
+    }
   };
 
   const loadUsers = async () => {
@@ -700,6 +718,7 @@ export function UserManagement() {
     const updateData: Record<string, unknown> = { role_id: selectedRole };
     if (selectedBranch) updateData.branch_id = selectedBranch;
     else updateData.branch_id = null;
+    updateData.shift_definition_id = selectedShiftDef || null;
     const { error } = await supabase.from('profiles').update(updateData).eq('id', userId);
     if (!error) {
       setEditingUser(null);
@@ -1251,7 +1270,7 @@ export function UserManagement() {
                       <button onClick={() => setIpLockModal(u)} className={`p-1.5 rounded-lg transition ${u.allowed_ips ? 'text-blue-600 bg-blue-50' : 'text-gray-400 bg-gray-100 hover:text-blue-600 hover:bg-blue-50'}`} title="IP Kilidi">
                         <Shield className="w-4 h-4" />
                       </button>
-                      <button onClick={() => { setEditingUser(u.id); setSelectedRole(u.role_id || ''); setSelectedBranch(u.branch_id || ''); }} className="text-orange-600 hover:text-orange-700 p-1.5 bg-orange-50 rounded-lg transition">
+                      <button onClick={() => { setEditingUser(u.id); setSelectedRole(u.role_id || ''); setSelectedBranch(u.branch_id || ''); setSelectedShiftDef(((u as any).shift_definition_id as string) || ''); }} className="text-orange-600 hover:text-orange-700 p-1.5 bg-orange-50 rounded-lg transition">
                         <Edit2 className="w-5 h-5" />
                       </button>
                       <button onClick={() => setDeleteConfirm(u)} className="text-red-600 hover:text-red-700 p-1.5 bg-red-50 rounded-lg transition">
@@ -1270,6 +1289,23 @@ export function UserManagement() {
                     <option value="">Şube Atanmamış</option>
                     {branches.map((b) => (<option key={b.id} value={b.id}>{b.name}</option>))}
                   </select>
+                  {(() => {
+                    const branchForShift = selectedBranch || (u.branch_id || '');
+                    const branchDefs = shiftDefinitions.filter((d) => !branchForShift || d.branch_id === branchForShift);
+                    if (!shiftDefinitions.length) return null;
+                    return (
+                      <select
+                        value={selectedShiftDef}
+                        onChange={(e) => setSelectedShiftDef(e.target.value)}
+                        className="w-full px-3 py-2 border border-amber-200 bg-amber-50 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500 text-sm"
+                      >
+                        <option value="">Vardiya: Otomatik (saate göre)</option>
+                        {branchDefs.map((d) => (
+                          <option key={d.id} value={d.id}>{`Vardiya: ${d.name}`}</option>
+                        ))}
+                      </select>
+                    );
+                  })()}
                 </div>
               ) : (
                 <div className="flex items-center justify-between">
@@ -1352,13 +1388,46 @@ export function UserManagement() {
                   </td>
                   <td className="px-4 py-3 text-sm">
                     {editingUser === u.id ? (
-                      <select value={selectedRole} onChange={(e) => setSelectedRole(e.target.value)} className="px-3 py-1 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500">
-                        {roles.map((role) => (<option key={role.id} value={role.id}>{role.name}</option>))}
-                      </select>
+                      <div className="space-y-1.5">
+                        <select value={selectedRole} onChange={(e) => setSelectedRole(e.target.value)} className="px-3 py-1 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500 w-full">
+                          {roles.map((role) => (<option key={role.id} value={role.id}>{role.name}</option>))}
+                        </select>
+                        {(() => {
+                          const branchForShift = selectedBranch || (u.branch_id || '');
+                          const branchDefs = shiftDefinitions.filter((d) => !branchForShift || d.branch_id === branchForShift);
+                          if (!shiftDefinitions.length) return null;
+                          return (
+                            <select
+                              value={selectedShiftDef}
+                              onChange={(e) => setSelectedShiftDef(e.target.value)}
+                              className="w-full px-2 py-1 border border-amber-200 bg-amber-50 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500 text-xs"
+                              title="Bu kullanıcıya atanan vardiya"
+                            >
+                              <option value="">Vardiya: Otomatik</option>
+                              {branchDefs.map((d) => (
+                                <option key={d.id} value={d.id}>{d.name}</option>
+                              ))}
+                            </select>
+                          );
+                        })()}
+                      </div>
                     ) : (
-                      <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-orange-100 text-orange-800">
-                        {u.roles?.name || 'Atanmamış'}
-                      </span>
+                      <div className="space-y-1">
+                        <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-orange-100 text-orange-800">
+                          {u.roles?.name || 'Atanmamış'}
+                        </span>
+                        {(() => {
+                          const sd = (u as any).shift_definition_id as string | null;
+                          if (!sd) return null;
+                          const def = shiftDefinitions.find((d) => d.id === sd);
+                          if (!def) return null;
+                          return (
+                            <div className="text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-200 rounded-full px-2 py-0.5 inline-block">
+                              ⏱ {def.name}
+                            </div>
+                          );
+                        })()}
+                      </div>
                     )}
                   </td>
                   <td className="px-4 py-3 text-sm text-gray-600">
@@ -1392,7 +1461,7 @@ export function UserManagement() {
                         <button onClick={() => setIpLockModal(u)} className={`p-1.5 rounded-lg transition ${u.allowed_ips ? 'text-blue-600 bg-blue-50' : 'text-gray-400 hover:text-blue-600 hover:bg-blue-50'}`} title="IP Kilidi">
                           <Shield className="w-4 h-4" />
                         </button>
-                        <button onClick={() => { setEditingUser(u.id); setSelectedRole(u.role_id || ''); setSelectedBranch(u.branch_id || ''); }} className="text-orange-600 hover:text-orange-700 p-1.5 hover:bg-orange-50 rounded-lg transition">
+                        <button onClick={() => { setEditingUser(u.id); setSelectedRole(u.role_id || ''); setSelectedBranch(u.branch_id || ''); setSelectedShiftDef(((u as any).shift_definition_id as string) || ''); }} className="text-orange-600 hover:text-orange-700 p-1.5 hover:bg-orange-50 rounded-lg transition">
                           <Edit2 className="w-5 h-5" />
                         </button>
                         <button onClick={() => setDeleteConfirm(u)} className="text-red-600 hover:text-red-700 p-1.5 hover:bg-red-50 rounded-lg transition">

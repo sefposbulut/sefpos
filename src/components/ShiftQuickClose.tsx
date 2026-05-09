@@ -2,18 +2,13 @@ import { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useActiveShift } from '../lib/useActiveShift';
 import { supabase } from '../lib/supabase';
-import { loadPrintSettings, printHtml } from '../lib/printService';
-import { shiftDurationLabel } from '../lib/businessDay';
+import { loadPrintSettings } from '../lib/printService';
+import { shiftDurationLabel, shiftIcon } from '../lib/businessDay';
+import { printShiftReport, loadShiftPrintFormat, saveShiftPrintFormat, type ShiftPrintFormat } from '../lib/shiftReportPrint';
 import {
-  StopCircle, X, Sun, Sunset, Moon, RefreshCw, AlertTriangle, CheckCircle,
-  Banknote, CreditCard, FileText, ShoppingCart, Printer, Clock,
+  StopCircle, X, RefreshCw, AlertTriangle, CheckCircle,
+  Banknote, CreditCard, FileText, ShoppingCart, Printer, Clock, Receipt, FileText as FileText2,
 } from 'lucide-react';
-
-function shiftIcon(no: number) {
-  if (no === 1) return Sun;
-  if (no === 2) return Sunset;
-  return Moon;
-}
 
 function fmt(n: number | null | undefined): string {
   return new Intl.NumberFormat('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Number(n || 0));
@@ -90,6 +85,11 @@ export function ShiftQuickClose({ open, onClose }: Props) {
   const [closeError, setCloseError] = useState<string | null>(null);
   const [closedShift, setClosedShift] = useState<any | null>(null);
   const [counted, setCounted] = useState<string>('');
+  const [printFormat, setPrintFormat] = useState<ShiftPrintFormat>(loadShiftPrintFormat());
+
+  useEffect(() => {
+    saveShiftPrintFormat(printFormat);
+  }, [printFormat]);
 
   useEffect(() => {
     if (!open) {
@@ -128,43 +128,20 @@ export function ShiftQuickClose({ open, onClose }: Props) {
     }
   };
 
-  const printPersonalZ = (shift: any) => {
+  const printPersonalZ = (shift: any, formatOverride?: ShiftPrintFormat) => {
     const ps = loadPrintSettings();
     const branchLabel = branches.find((b) => b.id === shift.branch_id)?.name || '';
-    const html = `
-      <div class="center bold xlarge">${ps.restaurantName || tenant?.name || 'ŞefPOS'}</div>
-      <div class="line"></div>
-      <div class="center bold large">KİŞİSEL Z RAPORU</div>
-      <div class="center">${shift.shift_name}</div>
-      <div class="center">${profile?.full_name || ''}</div>
-      <div class="center">${branchLabel}</div>
-      <div class="line"></div>
-      <div class="row"><span>Açılış</span><span>${new Date(shift.opened_at).toLocaleString('tr-TR')}</span></div>
-      <div class="row"><span>Kapanış</span><span>${shift.closed_at ? new Date(shift.closed_at).toLocaleString('tr-TR') : '-'}</span></div>
-      <div class="row"><span>Süre</span><span>${shiftDurationLabel(shift.opened_at, shift.closed_at)}</span></div>
-      <div class="line"></div>
-      <div class="row bold"><span>SATIŞLARIM</span><span></span></div>
-      <div class="line"></div>
-      <div class="row"><span>Nakit</span><span>${fmt(shift.cash_revenue)} ₺</span></div>
-      <div class="row"><span>Kredi Kartı</span><span>${fmt(shift.card_revenue)} ₺</span></div>
-      <div class="row"><span>Cari Hesap</span><span>${fmt(shift.open_account_revenue)} ₺</span></div>
-      <div class="row bold"><span>TOPLAM</span><span>${fmt(shift.total_revenue)} ₺</span></div>
-      <div class="line"></div>
-      <div class="row"><span>Açılış Nakit</span><span>${fmt(shift.opening_cash)} ₺</span></div>
-      <div class="row"><span>Beklenen</span><span>${fmt(shift.expected_cash)} ₺</span></div>
-      <div class="row"><span>Sayılan</span><span>${fmt(shift.closing_cash || 0)} ₺</span></div>
-      <div class="row bold"><span>FARK</span><span>${shift.cash_difference >= 0 ? '+' : ''}${fmt(shift.cash_difference)} ₺</span></div>
-      <div class="line"></div>
-      <div class="row"><span>Sipariş</span><span>${shift.order_count}</span></div>
-      <div class="line"></div>
-      <div class="footer">Teşekkürler ${profile?.full_name || ''}</div>
-      <br><br><br>
-    `;
-    try {
-      printHtml(html, ps.defaultReceiptPrinter || '');
-    } catch {
-      // no-op
-    }
+    void printShiftReport(
+      shift,
+      {
+        title: 'KİŞİSEL Z RAPORU',
+        restaurantName: ps.restaurantName || tenant?.name || 'ŞefPOS',
+        branchName: branchLabel,
+        userName: profile?.full_name || '',
+        footer: `Teşekkürler ${profile?.full_name || ''}`,
+      },
+      formatOverride || printFormat,
+    );
   };
 
   if (!open) return null;
@@ -176,7 +153,9 @@ export function ShiftQuickClose({ open, onClose }: Props) {
           <ClosedSummary
             shift={closedShift}
             profileName={profile?.full_name || ''}
-            onPrint={() => printPersonalZ(closedShift)}
+            printFormat={printFormat}
+            onChangeFormat={setPrintFormat}
+            onPrint={(f) => printPersonalZ(closedShift, f)}
             onClose={onClose}
           />
         ) : !activeShift ? (
@@ -232,6 +211,13 @@ export function ShiftQuickClose({ open, onClose }: Props) {
                 </div>
               )}
 
+              {confirming && (
+                <div>
+                  <label className="text-xs font-bold text-slate-600 mb-1 block">Z Raporu Yazdırma Formatı</label>
+                  <FormatSegment value={printFormat} onChange={setPrintFormat} />
+                </div>
+              )}
+
               {closeError && (
                 <div className="text-sm text-rose-600 bg-rose-50 border border-rose-200 rounded-lg p-2 flex items-start gap-2">
                   <AlertTriangle className="w-4 h-4 mt-0.5" />
@@ -276,7 +262,7 @@ function Mini({ label, value, icon: Icon, color }: { label: string; value: strin
   );
 }
 
-function ClosedSummary({ shift, profileName, onPrint, onClose }: { shift: any; profileName: string; onPrint: () => void; onClose: () => void }) {
+function ClosedSummary({ shift, profileName, printFormat, onChangeFormat, onPrint, onClose }: { shift: any; profileName: string; printFormat: ShiftPrintFormat; onChangeFormat: (f: ShiftPrintFormat) => void; onPrint: (f: ShiftPrintFormat) => void; onClose: () => void }) {
   const diffColor = shift.cash_difference === 0
     ? 'text-emerald-600'
     : shift.cash_difference > 0
@@ -309,15 +295,44 @@ function ClosedSummary({ shift, profileName, onPrint, onClose }: { shift: any; p
             <p className={`text-base font-black mt-0.5 ${diffColor}`}>{shift.cash_difference >= 0 ? '+' : ''}{fmt(shift.cash_difference)} ₺</p>
           </div>
         </div>
+        <div>
+          <label className="text-xs font-bold text-slate-600 mb-1 block">Yazdırma Formatı</label>
+          <FormatSegment value={printFormat} onChange={onChangeFormat} />
+        </div>
       </div>
       <div className="px-5 py-4 bg-slate-50 border-t border-slate-200 flex items-center gap-2 justify-end">
-        <button onClick={onPrint} className="px-4 py-2.5 rounded-lg text-sm font-bold text-slate-700 border border-slate-200 hover:bg-white flex items-center gap-2">
-          <Printer className="w-4 h-4" /> Tekrar Yazdır
+        <button onClick={() => onPrint(printFormat)} className="px-4 py-2.5 rounded-lg text-sm font-bold text-slate-700 border border-slate-200 hover:bg-white flex items-center gap-2">
+          <Printer className="w-4 h-4" /> Yazdır
         </button>
         <button onClick={onClose} className="px-5 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-black text-sm shadow">
           Tamam
         </button>
       </div>
     </>
+  );
+}
+
+function FormatSegment({ value, onChange }: { value: ShiftPrintFormat; onChange: (f: ShiftPrintFormat) => void }) {
+  return (
+    <div className="inline-flex w-full p-1 bg-slate-100 rounded-lg border border-slate-200">
+      <button
+        type="button"
+        onClick={() => onChange('80mm')}
+        className={`flex-1 px-3 py-2 rounded-md text-xs font-black inline-flex items-center justify-center gap-1.5 transition ${
+          value === '80mm' ? 'bg-white shadow text-orange-700' : 'text-slate-500 hover:text-slate-700'
+        }`}
+      >
+        <Receipt className="w-3.5 h-3.5" /> 80 mm Fiş
+      </button>
+      <button
+        type="button"
+        onClick={() => onChange('a4')}
+        className={`flex-1 px-3 py-2 rounded-md text-xs font-black inline-flex items-center justify-center gap-1.5 transition ${
+          value === 'a4' ? 'bg-white shadow text-orange-700' : 'text-slate-500 hover:text-slate-700'
+        }`}
+      >
+        <FileText2 className="w-3.5 h-3.5" /> A4 Sayfa
+      </button>
+    </div>
   );
 }

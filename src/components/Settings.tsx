@@ -2061,6 +2061,7 @@ export function Settings({ onClose }: SettingsProps) {
               </div>
 
               <ShiftsToggleCard />
+              <ShiftDefinitionsCard />
 
               <div className="bg-white border-2 border-gray-200 rounded-xl p-5">
                 <div className="flex items-center justify-between mb-4">
@@ -3049,6 +3050,322 @@ function ShiftsToggleCard() {
           {error || ok}
         </div>
       )}
+    </div>
+  );
+}
+
+// ===========================================================================
+// Vardiya Tanimlari yonetimi (admin)
+// ===========================================================================
+
+interface ShiftDefinitionRow {
+  id: string;
+  tenant_id: string;
+  branch_id: string;
+  shift_no: number;
+  name: string;
+  start_time: string | null;
+  end_time: string | null;
+  color: string | null;
+  is_active: boolean;
+}
+
+const SHIFT_DEF_COLORS = [
+  { value: '#f97316', label: 'Turuncu' },
+  { value: '#0ea5e9', label: 'Mavi' },
+  { value: '#475569', label: 'Antrasit' },
+  { value: '#10b981', label: 'Yeşil' },
+  { value: '#a855f7', label: 'Mor' },
+  { value: '#ef4444', label: 'Kırmızı' },
+  { value: '#eab308', label: 'Sarı' },
+  { value: '#06b6d4', label: 'Camgöbeği' },
+];
+
+function ShiftDefinitionsCard() {
+  const { tenant, activeBranch, isOwnerOrAdmin, shiftsEnabled } = useAuth();
+  const tenantId = tenant?.id || null;
+  const branchId = activeBranch?.id || null;
+
+  const [list, setList] = useState<ShiftDefinitionRow[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [savingId, setSavingId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
+
+  const reload = async () => {
+    if (!tenantId || !branchId) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const { data, error: e } = await (supabase as any)
+        .from('shift_definitions')
+        .select('id, tenant_id, branch_id, shift_no, name, start_time, end_time, color, is_active')
+        .eq('tenant_id', tenantId)
+        .eq('branch_id', branchId)
+        .order('shift_no', { ascending: true });
+      if (e) throw e;
+      setList(((data || []) as ShiftDefinitionRow[]));
+    } catch (e: any) {
+      setError(e?.message || 'Vardiya tanımları alınamadı');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void reload();
+  }, [tenantId, branchId]);
+
+  const upsert = async (row: Partial<ShiftDefinitionRow> & { id?: string }) => {
+    if (!tenantId || !branchId) return;
+    setSavingId(row.id || 'new');
+    setError(null);
+    try {
+      if (row.id) {
+        const { error: e } = await (supabase as any)
+          .from('shift_definitions')
+          .update({
+            name: row.name,
+            shift_no: row.shift_no,
+            start_time: row.start_time,
+            end_time: row.end_time,
+            color: row.color,
+            is_active: row.is_active,
+          })
+          .eq('id', row.id);
+        if (e) throw e;
+      } else {
+        const { error: e } = await (supabase as any)
+          .from('shift_definitions')
+          .insert({
+            tenant_id: tenantId,
+            branch_id: branchId,
+            shift_no: row.shift_no,
+            name: row.name,
+            start_time: row.start_time || null,
+            end_time: row.end_time || null,
+            color: row.color || '#f97316',
+            is_active: row.is_active ?? true,
+          });
+        if (e) throw e;
+        setAdding(false);
+      }
+      await reload();
+    } catch (e: any) {
+      setError(e?.message || 'Kayıt başarısız');
+    } finally {
+      setSavingId(null);
+    }
+  };
+
+  const remove = async (id: string) => {
+    if (!confirm('Bu vardiya tanımını silmek istiyor musunuz? Mevcut açılmış vardiya kayıtları silinmez.')) return;
+    setSavingId(id);
+    setError(null);
+    try {
+      const { error: e } = await (supabase as any)
+        .from('shift_definitions')
+        .delete()
+        .eq('id', id);
+      if (e) throw e;
+      await reload();
+    } catch (e: any) {
+      setError(e?.message || 'Silinemedi');
+    } finally {
+      setSavingId(null);
+    }
+  };
+
+  const usedNos = new Set(list.map((d) => d.shift_no));
+  const nextNo = (() => {
+    for (let i = 1; i <= 9; i++) if (!usedNos.has(i)) return i;
+    return 9;
+  })();
+
+  if (!shiftsEnabled) return null;
+
+  return (
+    <div className="bg-white border-2 border-gray-200 rounded-xl p-5">
+      <div className="flex items-start gap-3 mb-4 flex-wrap">
+        <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-amber-500 to-orange-600 text-white flex items-center justify-center shadow shrink-0">
+          <Clock className="w-6 h-6" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <h4 className="font-bold text-gray-800">Vardiya Tanımları</h4>
+          <p className="text-sm text-gray-500 mt-0.5">
+            Şubenize özel vardiyalar (1–9 arası, esnek). Örn: <b>2 vardiya</b> (Gündüz/Gece), <b>3 vardiya</b> (Sabah/Öğle/Akşam) veya farklı kombinasyonlar.
+            Kullanıcılara vardiya ataması yaparsanız giriş sonrası otomatik o vardiya seçili gelir.
+          </p>
+        </div>
+        <button
+          onClick={() => setAdding(true)}
+          disabled={!isOwnerOrAdmin || adding || list.length >= 9}
+          className="shrink-0 inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-orange-600 hover:bg-orange-700 text-white text-sm font-bold shadow disabled:opacity-50"
+        >
+          <Plus className="w-4 h-4" /> Yeni
+        </button>
+      </div>
+
+      {error && (
+        <div className="mb-3 text-sm rounded-lg px-3 py-2 bg-rose-50 text-rose-700 border border-rose-200">{error}</div>
+      )}
+
+      {loading ? (
+        <div className="text-sm text-slate-500 py-4 flex items-center gap-2"><RefreshCw className="w-4 h-4 animate-spin" /> Yükleniyor…</div>
+      ) : (
+        <div className="space-y-2">
+          {list.length === 0 && !adding && (
+            <div className="text-sm text-slate-400 italic py-4 text-center border border-dashed border-slate-200 rounded-lg">
+              Tanımlı vardiya yok. <b>Yeni</b> ile bir vardiya ekleyin.
+            </div>
+          )}
+          {list.map((row) => (
+            <ShiftDefinitionEditor
+              key={row.id}
+              initial={row}
+              disabled={!isOwnerOrAdmin}
+              saving={savingId === row.id}
+              onSave={(patch) => upsert({ ...row, ...patch })}
+              onDelete={() => remove(row.id)}
+            />
+          ))}
+          {adding && (
+            <ShiftDefinitionEditor
+              isNew
+              initial={{ shift_no: nextNo, name: 'Yeni Vardiya', start_time: '', end_time: '', color: '#f97316', is_active: true }}
+              disabled={!isOwnerOrAdmin}
+              saving={savingId === 'new'}
+              onSave={(patch) => upsert(patch)}
+              onCancel={() => setAdding(false)}
+            />
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ShiftDefinitionEditor({
+  initial,
+  isNew,
+  disabled,
+  saving,
+  onSave,
+  onCancel,
+  onDelete,
+}: {
+  initial: Partial<ShiftDefinitionRow>;
+  isNew?: boolean;
+  disabled?: boolean;
+  saving?: boolean;
+  onSave: (patch: Partial<ShiftDefinitionRow>) => void;
+  onCancel?: () => void;
+  onDelete?: () => void;
+}) {
+  const [shiftNo, setShiftNo] = useState<number>(initial.shift_no || 1);
+  const [name, setName] = useState<string>(initial.name || '');
+  const [startTime, setStartTime] = useState<string>((initial.start_time || '').slice(0, 5));
+  const [endTime, setEndTime] = useState<string>((initial.end_time || '').slice(0, 5));
+  const [color, setColor] = useState<string>(initial.color || '#f97316');
+  const [isActive, setIsActive] = useState<boolean>(initial.is_active ?? true);
+
+  return (
+    <div className="border border-slate-200 rounded-xl p-3 bg-slate-50">
+      <div className="grid grid-cols-12 gap-2 items-center">
+        <div className="col-span-2 sm:col-span-1">
+          <label className="text-[10px] font-black text-slate-500 uppercase">No</label>
+          <input
+            type="number" min={1} max={9}
+            value={shiftNo}
+            onChange={(e) => setShiftNo(Number(e.target.value) || 1)}
+            disabled={disabled}
+            className="w-full px-2 py-1.5 rounded-md border border-slate-200 text-sm font-black text-center"
+          />
+        </div>
+        <div className="col-span-10 sm:col-span-4">
+          <label className="text-[10px] font-black text-slate-500 uppercase">İsim</label>
+          <input
+            type="text" value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Sabah Vardiyası"
+            disabled={disabled}
+            className="w-full px-2 py-1.5 rounded-md border border-slate-200 text-sm"
+          />
+        </div>
+        <div className="col-span-6 sm:col-span-2">
+          <label className="text-[10px] font-black text-slate-500 uppercase">Başlangıç</label>
+          <input
+            type="time" value={startTime}
+            onChange={(e) => setStartTime(e.target.value)}
+            disabled={disabled}
+            className="w-full px-2 py-1.5 rounded-md border border-slate-200 text-sm"
+          />
+        </div>
+        <div className="col-span-6 sm:col-span-2">
+          <label className="text-[10px] font-black text-slate-500 uppercase">Bitiş</label>
+          <input
+            type="time" value={endTime}
+            onChange={(e) => setEndTime(e.target.value)}
+            disabled={disabled}
+            className="w-full px-2 py-1.5 rounded-md border border-slate-200 text-sm"
+          />
+        </div>
+        <div className="col-span-8 sm:col-span-2">
+          <label className="text-[10px] font-black text-slate-500 uppercase">Renk</label>
+          <select
+            value={color}
+            onChange={(e) => setColor(e.target.value)}
+            disabled={disabled}
+            style={{ borderLeft: `8px solid ${color}` }}
+            className="w-full px-2 py-1.5 rounded-md border border-slate-200 text-sm"
+          >
+            {SHIFT_DEF_COLORS.map((c) => (
+              <option key={c.value} value={c.value}>{c.label}</option>
+            ))}
+          </select>
+        </div>
+        <div className="col-span-4 sm:col-span-1 flex items-end">
+          <label className="inline-flex items-center gap-1.5 cursor-pointer text-xs font-bold text-slate-700 mt-4">
+            <input type="checkbox" checked={isActive} onChange={(e) => setIsActive(e.target.checked)} disabled={disabled} className="w-4 h-4 accent-orange-600" />
+            Aktif
+          </label>
+        </div>
+      </div>
+      <div className="flex items-center gap-2 mt-3 justify-end">
+        {!isNew && onDelete && (
+          <button
+            onClick={onDelete}
+            disabled={disabled || saving}
+            className="px-3 py-1.5 rounded-md border border-rose-200 text-rose-600 hover:bg-rose-50 text-xs font-bold inline-flex items-center gap-1 disabled:opacity-50"
+          >
+            <Trash2 className="w-3.5 h-3.5" /> Sil
+          </button>
+        )}
+        {isNew && onCancel && (
+          <button
+            onClick={onCancel}
+            disabled={saving}
+            className="px-3 py-1.5 rounded-md text-slate-500 hover:bg-slate-100 text-xs font-bold"
+          >
+            İptal
+          </button>
+        )}
+        <button
+          onClick={() => onSave({
+            shift_no: shiftNo,
+            name: name.trim() || `Vardiya ${shiftNo}`,
+            start_time: startTime || null,
+            end_time: endTime || null,
+            color,
+            is_active: isActive,
+          })}
+          disabled={disabled || saving}
+          className="px-3 py-1.5 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black inline-flex items-center gap-1 shadow disabled:opacity-50"
+        >
+          {saving ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+          {isNew ? 'Ekle' : 'Kaydet'}
+        </button>
+      </div>
     </div>
   );
 }
