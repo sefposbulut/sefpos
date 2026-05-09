@@ -111,6 +111,33 @@ export function EndOfDay({ onClose }: EndOfDayProps) {
     }
   };
 
+  // Sadece "orphan" (masasi kapali ya da silinmis) bekleyenleri otomatik temizler.
+  // Gercek bekleyen masalar / paket / online dokunulmaz.
+  const autoCleanupOrphans = async () => {
+    if (!tenant || !effectiveBranchForShift) return;
+    setCompletingPending(true);
+    setCloseError(null);
+    setCloseSuccess(null);
+    try {
+      const { data, error } = await (supabase as any).rpc('cleanup_orphan_pending_orders', {
+        p_tenant_id: tenant.id,
+        p_branch_id: effectiveBranchForShift,
+      });
+      if (error) throw error;
+      const n = Number(data || 0);
+      if (n > 0) {
+        setCloseSuccess(`${n} orphan (masası kapalı) sipariş otomatik tamamlandı olarak işaretlendi.`);
+      } else {
+        setCloseSuccess('Otomatik temizlenecek orphan sipariş bulunamadı.');
+      }
+      await loadStats();
+    } catch (e: any) {
+      setCloseError(e?.message || 'Otomatik temizlik başarısız');
+    } finally {
+      setCompletingPending(false);
+    }
+  };
+
   const handleReopenDay = async () => {
     if (!todayClosure) return;
     if (!confirm('Bu kapatılmış günü yeniden açmak istiyor musunuz?\n\nGünü yeniden açtığınızda yeni vardiya açılabilir, satışlar bu güne işlenir. Bu işlem audit kaydı bırakır.')) return;
@@ -600,6 +627,17 @@ export function EndOfDay({ onClose }: EndOfDayProps) {
                           >
                             {showPendingList ? 'Listeyi Kapat' : 'Listele'}
                           </button>
+                          {isOwnerOrAdmin && (
+                            <button
+                              onClick={autoCleanupOrphans}
+                              disabled={completingPending}
+                              className="text-[11px] font-bold text-emerald-700 hover:text-emerald-900 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full disabled:opacity-50 inline-flex items-center gap-1"
+                              title="Masası kapalı / silinmiş orphan siparişleri otomatik temizle"
+                            >
+                              {completingPending ? <RefreshCw className="w-3 h-3 animate-spin" /> : <CheckCircle className="w-3 h-3" />}
+                              Otomatik Temizle
+                            </button>
+                          )}
                         </>
                       )}
                     </div>
