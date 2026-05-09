@@ -381,38 +381,44 @@ export function EndOfDay({ onClose }: EndOfDayProps) {
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; }
   body {
-    font-family: 'Segoe UI', 'Arial', 'Helvetica Neue', Helvetica, sans-serif;
-    font-size: 13px;
-    line-height: 1.35;
+    font-family: 'Segoe UI', 'Arial Black', Arial, 'Helvetica Neue', Helvetica, sans-serif;
+    font-size: 14px;
+    line-height: 1.4;
     color: #000;
     width: 74mm;
+    font-weight: 700;
     -webkit-font-smoothing: antialiased;
+    text-rendering: geometricPrecision;
   }
+  * { color: #000 !important; }
   .center { text-align: center; }
   .right { text-align: right; }
-  .bold { font-weight: 700; }
-  .xlarge { font-size: 18px; font-weight: 800; }
-  .large { font-size: 15px; font-weight: 700; }
-  .small { font-size: 11px; color: #333; }
-  .muted { color: #555; }
-  .line { border-top: 1px dashed #888; margin: 6px 0; }
-  .double { border-top: 2px solid #000; margin: 6px 0; }
-  .row { display: flex; justify-content: space-between; gap: 8px; margin: 3px 0; }
-  .row .l { flex: 1; }
-  .row .r { white-space: nowrap; font-weight: 600; }
-  .row.bold .l, .row.bold .r { font-weight: 800; }
+  .bold { font-weight: 900; }
+  .xlarge { font-size: 20px; font-weight: 900; letter-spacing: 0.3px; }
+  .large { font-size: 16px; font-weight: 900; }
+  .small { font-size: 12px; font-weight: 700; }
+  .muted { font-weight: 700; }
+  .line { border-top: 2px dashed #000; margin: 6px 0; }
+  .double { border-top: 3px solid #000; margin: 6px 0; }
+  .row { display: flex; justify-content: space-between; gap: 8px; margin: 4px 0; }
+  .row .l { flex: 1; font-weight: 700; }
+  .row .r { white-space: nowrap; font-weight: 900; }
+  .row.bold .l, .row.bold .r { font-weight: 900; }
   .totalbox {
     background: #000;
-    color: #fff;
-    padding: 6px 8px;
+    color: #fff !important;
+    padding: 8px 10px;
+    border: 2px solid #000;
     border-radius: 4px;
-    margin: 6px 0;
+    margin: 8px 0;
     display: flex;
     justify-content: space-between;
-    font-weight: 800;
-    font-size: 15px;
+    font-weight: 900;
+    font-size: 17px;
+    letter-spacing: 0.3px;
   }
-  .footer { margin-top: 10px; text-align: center; font-size: 10px; color: #777; }
+  .totalbox * { color: #fff !important; }
+  .footer { margin-top: 10px; text-align: center; font-size: 11px; font-weight: 700; }
   @media print {
     body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   }
