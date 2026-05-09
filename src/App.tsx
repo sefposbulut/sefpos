@@ -498,7 +498,12 @@ function App() {
     <div className="min-h-screen bg-slate-50">
       {isLocked && <PinLockScreen onUnlock={() => setIsLocked(false)} />}
 
-      <Header onOpenSettings={() => setShowSettings(true)} onOpenOnboarding={() => setShowOnboarding(true)} />
+      <Header
+        onOpenSettings={() => setShowSettings(true)}
+        onOpenOnboarding={() => setShowOnboarding(true)}
+        currentPage={currentPage}
+        onBackToTables={() => handleNavigate('tables')}
+      />
       <MainMenu
         onNavigate={handleNavigate}
         currentPage={currentPage}
