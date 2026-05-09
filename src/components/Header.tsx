@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { LogOut, User, Settings, ChevronDown, MapPin, Check, Building2, Zap, ZoomIn, ZoomOut, Bell, Headphones as HeadphonesIcon, X, Send, Sparkles } from 'lucide-react';
+import { LogOut, User, Settings, ChevronDown, MapPin, Check, Building2, Zap, ZoomIn, ZoomOut, Bell, Headphones as HeadphonesIcon, X, Send, Sparkles, Phone, Mail } from 'lucide-react';
 import { WaiterCallBell } from './WaiterCallBell';
 import { supabase } from '../lib/supabase';
 import { getTrialInfo, formatTrialRemaining } from '../lib/tenantTrial';
@@ -59,6 +59,7 @@ export function Header({ onOpenSettings, onOpenOnboarding }: HeaderProps) {
   const [supportPriority, setSupportPriority] = useState<'low' | 'medium' | 'high'>('medium');
   const [supportLoading, setSupportLoading] = useState(false);
   const [supportSent, setSupportSent] = useState(false);
+  const [showTrialInfo, setShowTrialInfo] = useState(false);
 
   const trialInfo = getTrialInfo(tenant as any);
   const showTrialBadge = trialInfo.isTrial;
@@ -193,19 +194,15 @@ export function Header({ onOpenSettings, onOpenOnboarding }: HeaderProps) {
 
             <div className="flex items-center space-x-1.5 md:space-x-2">
               {showTrialBadge && (
-                <div
+                <button
+                  type="button"
+                  onClick={() => setShowTrialInfo(true)}
                   title={
                     trialInfo.expired
-                      ? 'Deneme süreniz sona erdi — lisans aktif edin'
-                      : `${formatTrialRemaining(trialInfo)} kaldı`
+                      ? 'Deneme süreniz sona erdi — detay için tıklayın'
+                      : `${formatTrialRemaining(trialInfo)} kaldı — detay için tıklayın`
                   }
-                  className={`hidden sm:inline-flex items-center gap-2 pl-1 pr-3 py-1 rounded-full border shadow-sm transition ${
-                    trialInfo.expired
-                      ? 'bg-red-50 border-red-200'
-                      : trialUrgent
-                        ? 'bg-amber-50 border-amber-300 ring-1 ring-amber-200'
-                        : 'bg-white border-slate-200'
-                  }`}
+                  className="hidden sm:inline-flex items-center gap-2 pl-1 pr-3 py-1 rounded-full bg-transparent hover:bg-slate-100/70 transition active:scale-95"
                 >
                   <span
                     className={`w-7 h-7 rounded-full flex items-center justify-center shadow-inner ${
@@ -216,10 +213,10 @@ export function Header({ onOpenSettings, onOpenOnboarding }: HeaderProps) {
                   >
                     <Sparkles className="w-3.5 h-3.5 text-white" />
                   </span>
-                  <div className="flex items-baseline gap-1.5 leading-none">
+                  <span className="flex items-baseline gap-1.5 leading-none">
                     <span
                       className={`text-[9px] md:text-[10px] uppercase tracking-[0.12em] font-bold ${
-                        trialInfo.expired ? 'text-red-700' : 'text-slate-500'
+                        trialInfo.expired ? 'text-red-600' : 'text-slate-500'
                       }`}
                     >
                       Deneme
@@ -235,8 +232,8 @@ export function Header({ onOpenSettings, onOpenOnboarding }: HeaderProps) {
                     >
                       {trialInfo.expired ? 'Süre bitti' : formatTrialRemaining(trialInfo)}
                     </span>
-                  </div>
-                </div>
+                  </span>
+                </button>
               )}
 
               {branches.length > 0 && (
@@ -396,6 +393,144 @@ export function Header({ onOpenSettings, onOpenOnboarding }: HeaderProps) {
           </div>
         </div>
       </header>
+
+      {showTrialInfo && tenant && (
+        <>
+          <div
+            className="fixed inset-0 z-[60] bg-slate-900/40 backdrop-blur-sm"
+            onClick={() => setShowTrialInfo(false)}
+          />
+          <div className="fixed inset-0 z-[61] flex items-center justify-center p-4 pointer-events-none">
+            <div className="pointer-events-auto w-full max-w-md bg-white rounded-3xl shadow-2xl overflow-hidden">
+              <div className="bg-gradient-to-br from-amber-400 via-orange-500 to-rose-500 px-6 py-7 text-white text-center relative">
+                <button
+                  onClick={() => setShowTrialInfo(false)}
+                  className="absolute top-3 right-3 p-1.5 rounded-lg hover:bg-white/20 transition"
+                  title="Kapat"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+                <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-white/20 backdrop-blur mb-3 ring-4 ring-white/20">
+                  <Sparkles className="w-7 h-7" />
+                </div>
+                <h3 className="text-xl font-black tracking-tight">Değerli Müşterimiz</h3>
+                <p className="text-white/90 text-sm mt-1">
+                  Hesabınız ŞefPOS&apos;a başarıyla kaydedildi.
+                </p>
+              </div>
+
+              <div className="p-6">
+                <div className="bg-slate-50 rounded-2xl p-4 mb-4">
+                  <p className="text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-2">
+                    Kayıt Bilgileri
+                  </p>
+                  <div className="space-y-1.5 text-sm">
+                    <div className="flex justify-between gap-3">
+                      <span className="text-slate-500">Firma</span>
+                      <span className="font-bold text-slate-800 text-right truncate">
+                        {tenant.name}
+                      </span>
+                    </div>
+                    {profile?.full_name && (
+                      <div className="flex justify-between gap-3">
+                        <span className="text-slate-500">Yetkili</span>
+                        <span className="font-semibold text-slate-700 text-right truncate">
+                          {profile.full_name}
+                        </span>
+                      </div>
+                    )}
+                    {(tenant as any)?.email && (
+                      <div className="flex justify-between gap-3">
+                        <span className="text-slate-500">E-posta</span>
+                        <span className="font-semibold text-slate-700 text-right truncate">
+                          {(tenant as any).email}
+                        </span>
+                      </div>
+                    )}
+                    {(tenant as any)?.created_at && (
+                      <div className="flex justify-between gap-3">
+                        <span className="text-slate-500">Kayıt Tarihi</span>
+                        <span className="font-semibold text-slate-700">
+                          {new Date((tenant as any).created_at).toLocaleDateString('tr-TR', {
+                            day: '2-digit',
+                            month: 'long',
+                            year: 'numeric',
+                          })}
+                        </span>
+                      </div>
+                    )}
+                    <div className="flex justify-between gap-3 pt-1.5 mt-1.5 border-t border-slate-200">
+                      <span className="text-slate-500">Deneme Durumu</span>
+                      <span
+                        className={`font-extrabold ${
+                          trialInfo.expired ? 'text-red-600' : 'text-orange-600'
+                        }`}
+                      >
+                        {trialInfo.expired
+                          ? 'Süre doldu'
+                          : `${formatTrialRemaining(trialInfo)} kaldı`}
+                      </span>
+                    </div>
+                    {trialInfo.endDate && !trialInfo.expired && (
+                      <div className="flex justify-between gap-3">
+                        <span className="text-slate-500">Bitiş</span>
+                        <span className="font-semibold text-slate-700">
+                          {trialInfo.endDate.toLocaleDateString('tr-TR', {
+                            day: '2-digit',
+                            month: 'long',
+                            year: 'numeric',
+                          })}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <p className="text-sm text-slate-600 leading-relaxed text-center mb-5">
+                  Tüm ŞefPOS modüllerini ücretsiz deneme süresi boyunca sınırsız
+                  kullanabilirsiniz. Süre sonunda hizmet kesintisiz devam etsin
+                  diye bir paket seçmek ister misiniz?
+                </p>
+
+                <div className="rounded-2xl border-2 border-orange-200 bg-orange-50/60 p-4">
+                  <p className="text-xs font-bold text-orange-700 uppercase tracking-wider text-center mb-3">
+                    Paket bilgisi için iletişim
+                  </p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <a
+                      href="tel:+905442449080"
+                      className="flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs md:text-sm transition active:scale-95"
+                    >
+                      <Phone className="w-4 h-4" />
+                      0544 244 90 80
+                    </a>
+                    <a
+                      href={`mailto:bilgi@sefpos.com.tr?subject=${encodeURIComponent(
+                        'ŞefPOS Paket Bilgisi',
+                      )}&body=${encodeURIComponent(
+                        `Merhaba,\n\nFirma: ${tenant.name}\nYetkili: ${
+                          profile?.full_name || ''
+                        }\n\nPaket bilgisi almak istiyorum.`,
+                      )}`}
+                      className="flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs md:text-sm transition active:scale-95"
+                    >
+                      <Mail className="w-4 h-4" />
+                      bilgi@sefpos.com.tr
+                    </a>
+                  </div>
+                </div>
+
+                <button
+                  onClick={() => setShowTrialInfo(false)}
+                  className="w-full mt-4 py-2.5 text-slate-500 hover:text-slate-700 font-semibold text-sm transition"
+                >
+                  Kapat
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
 
       {showNotifications && (
         <>
