@@ -528,16 +528,22 @@ function App() {
         />
       )}
 
-      {/* Header gizliyken sag ust kosede mini gosterme dugmesi (POS modu) */}
+      {/* Header gizliyken sag ALT kosede minimal FAB — sayfa icerigine binmez,
+          dokunmatik POS'ta parmagin dogal cektigi alanda durur. */}
       {headerHidden && (
         <button
           type="button"
           onClick={() => setHeaderHidden(false)}
           title="Üst menüyü göster (POS modundan çık)"
-          className="fixed top-1.5 right-2 z-[55] inline-flex items-center gap-1 px-2.5 py-1.5 rounded-full bg-slate-900/80 hover:bg-slate-900 text-white text-[11px] font-bold shadow-lg backdrop-blur active:scale-95"
+          aria-label="Üst menüyü göster"
+          className="group fixed bottom-3 right-3 z-[60] inline-flex items-center gap-1.5 h-11 pl-2.5 pr-3 rounded-full bg-slate-900/85 hover:bg-slate-900 text-white shadow-2xl backdrop-blur ring-1 ring-white/10 active:scale-95 transition-all"
         >
-          <Maximize2 className="w-3.5 h-3.5" />
-          <span className="hidden sm:inline">Menü</span>
+          <span className="w-7 h-7 rounded-full bg-white/15 flex items-center justify-center">
+            <Maximize2 className="w-4 h-4" />
+          </span>
+          <span className="text-[11px] font-bold tracking-wide max-w-0 overflow-hidden opacity-0 group-hover:max-w-[80px] group-hover:opacity-100 group-hover:ml-0.5 transition-all duration-200 whitespace-nowrap">
+            ÜST MENÜ
+          </span>
         </button>
       )}
 
