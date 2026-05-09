@@ -3,7 +3,7 @@ import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { loadPrintSettings } from '../lib/printService';
 import { useActiveShift } from '../lib/useActiveShift';
-import { computeBusinessDate, formatBusinessDateTR } from '../lib/businessDay';
+import { computeBusinessDate, formatBusinessDateTR, getBusinessDayRange as getBusinessDayRangeLib } from '../lib/businessDay';
 import {
   BarChart3, TrendingUp, TrendingDown, DollarSign, ShoppingCart,
   Clock, Calendar, Printer, RefreshCw,
@@ -45,33 +45,18 @@ function toLocalDT(d: Date) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-function getBusinessDayRange(): { start: Date; end: Date } {
-  const now = new Date();
-  const hour = now.getHours();
-  const start = new Date(now);
-  const end = new Date(now);
-  if (hour < 6) {
-    start.setDate(start.getDate() - 1);
-  }
-  start.setHours(6, 0, 0, 0);
-  if (hour >= 6) {
-    end.setDate(end.getDate() + 1);
-  }
-  end.setHours(4, 0, 0, 0);
-  return { start, end };
-}
 
 export function EndOfDay({ onClose }: EndOfDayProps) {
-  const { tenant, activeBranch, branches, isOwnerOrAdmin, isManager, permissions, profile, user } = useAuth();
+  const { tenant, activeBranch, branches, isOwnerOrAdmin, isManager, permissions, profile, user, businessDayStartHour } = useAuth();
   const [stats, setStats] = useState<DayStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedBranch, setSelectedBranch] = useState<string>(activeBranch?.id || 'all');
   const [expandedSection, setExpandedSection] = useState<string | null>('summary');
   const [startDT, setStartDT] = useState<string>(() => {
-    return toLocalDT(getBusinessDayRange().start);
+    return toLocalDT(getBusinessDayRangeLib(new Date(), businessDayStartHour).start);
   });
   const [endDT, setEndDT] = useState<string>(() => {
-    return toLocalDT(getBusinessDayRange().end);
+    return toLocalDT(getBusinessDayRangeLib(new Date(), businessDayStartHour).end);
   });
   const [closingDay, setClosingDay] = useState(false);
   const [closeError, setCloseError] = useState<string | null>(null);
@@ -164,8 +149,9 @@ export function EndOfDay({ onClose }: EndOfDayProps) {
     tenantId: tenant?.id || null,
     branchId: effectiveBranchForShift,
     enabled: !!tenant,
+    cutoffHour: businessDayStartHour,
   });
-  const businessDate = useMemo(() => computeBusinessDate(), []);
+  const businessDate = useMemo(() => computeBusinessDate(new Date(), businessDayStartHour), [businessDayStartHour]);
 
   const requestCloseDay = () => {
     setCloseError(null);
@@ -782,22 +768,24 @@ export function EndOfDay({ onClose }: EndOfDayProps) {
             <div className="flex gap-2 flex-wrap">
               {[
                 {
-                  label: 'Bugünün İşgünü (06:00–04:00)',
-                  action: () => { const r = getBusinessDayRange(); setStartDT(toLocalDT(r.start)); setEndDT(toLocalDT(r.end)); }
+                  label: `Bugünün İşgünü (${String(businessDayStartHour).padStart(2,'0')}:00 başlangıçlı)`,
+                  action: () => { const r = getBusinessDayRangeLib(new Date(), businessDayStartHour); setStartDT(toLocalDT(r.start)); setEndDT(toLocalDT(r.end)); }
                 },
                 {
                   label: 'Dünün İşgünü',
                   action: () => {
-                    const s = new Date(); s.setDate(s.getDate() - 1); s.setHours(6, 0, 0, 0);
-                    const e = new Date(); e.setHours(4, 0, 0, 0);
-                    setStartDT(toLocalDT(s)); setEndDT(toLocalDT(e));
+                    const yesterday = new Date(); yesterday.setDate(yesterday.getDate() - 1);
+                    const r = getBusinessDayRangeLib(yesterday, businessDayStartHour);
+                    setStartDT(toLocalDT(r.start)); setEndDT(toLocalDT(r.end));
                   }
                 },
                 {
                   label: 'Bu Hafta',
                   action: () => {
-                    const s = new Date(); s.setDate(s.getDate() - ((s.getDay() + 6) % 7)); s.setHours(6, 0, 0, 0);
-                    const e = new Date(); e.setDate(e.getDate() + 1); e.setHours(4, 0, 0, 0);
+                    const cutoff = businessDayStartHour;
+                    const s = new Date(); s.setDate(s.getDate() - ((s.getDay() + 6) % 7)); s.setHours(cutoff, 0, 0, 0);
+                    const endHour = cutoff - 2 < 0 ? cutoff - 2 + 24 : cutoff - 2;
+                    const e = new Date(); e.setDate(e.getDate() + 1); e.setHours(endHour, 0, 0, 0);
                     setStartDT(toLocalDT(s)); setEndDT(toLocalDT(e));
                   }
                 },

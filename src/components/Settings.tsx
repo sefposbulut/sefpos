@@ -2061,6 +2061,7 @@ export function Settings({ onClose }: SettingsProps) {
               </div>
 
               <ShiftsToggleCard />
+              <BusinessDayCutoffCard />
               <ShiftDefinitionsCard />
 
               <div className="bg-white border-2 border-gray-200 rounded-xl p-5">
@@ -3050,6 +3051,144 @@ function ShiftsToggleCard() {
           {error || ok}
         </div>
       )}
+    </div>
+  );
+}
+
+// ===========================================================================
+// Is gunu cutoff saati (kart) — tenant ve sube bazli
+// ===========================================================================
+
+const HOURS_LIST = Array.from({ length: 24 }, (_, i) => i);
+
+function BusinessDayCutoffCard() {
+  const { tenant, isOwnerOrAdmin, branches, refreshBranches, refreshProfile } = useAuth() as any;
+  const [tenantHour, setTenantHour] = useState<number>(6);
+  const [branchOverrides, setBranchOverrides] = useState<Record<string, number | null>>({});
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [ok, setOk] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (tenant) {
+      const v = (tenant as any).business_day_start_hour;
+      setTenantHour(typeof v === 'number' ? v : 6);
+    }
+    const map: Record<string, number | null> = {};
+    branches.forEach((b: any) => { map[b.id] = typeof b.business_day_start_hour === 'number' ? b.business_day_start_hour : null; });
+    setBranchOverrides(map);
+  }, [tenant, branches]);
+
+  const saveAll = async () => {
+    if (!tenant) return;
+    setSaving(true); setError(null); setOk(null);
+    try {
+      const { error: tErr } = await (supabase as any)
+        .from('tenants')
+        .update({ business_day_start_hour: tenantHour })
+        .eq('id', tenant.id);
+      if (tErr) throw tErr;
+
+      // Sube override'larini paralel kaydet
+      const updates = Object.entries(branchOverrides).map(([id, h]) =>
+        (supabase as any).from('branches').update({ business_day_start_hour: h }).eq('id', id)
+      );
+      const results = await Promise.all(updates);
+      const failed = results.find((r: any) => r?.error);
+      if (failed) throw failed.error;
+
+      setOk('İş günü başlangıç saati güncellendi. Sayfayı yenileyince geçerli olur.');
+      await refreshBranches();
+      await refreshProfile();
+    } catch (e: any) {
+      setError(e?.message || 'Kaydedilemedi');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="bg-white border-2 border-gray-200 rounded-xl p-5">
+      <div className="flex items-start gap-3 flex-wrap">
+        <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-sky-500 to-indigo-600 text-white flex items-center justify-center shadow shrink-0">
+          <Clock className="w-6 h-6" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <h4 className="font-bold text-gray-800">İş Günü Başlangıç Saati</h4>
+          <p className="text-sm text-gray-500 mt-0.5">
+            Yeni iş günü kaçta başlar? Bu saatten önceki satışlar <b>önceki</b> iş gününe yazılır,
+            sonraki satışlar <b>yeni</b> güne. Örn. saat 5'i seçerseniz sabah 04:30'daki bir
+            satış dünkü güne, 05:30'daki yeni güne yazılır.
+          </p>
+          {!isOwnerOrAdmin && (
+            <div className="mt-2 text-[11px] text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full inline-block border border-amber-200">
+              Bu ayarı yalnız sahip/yönetici değiştirebilir
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="mt-4 grid gap-3">
+        <div className="rounded-xl bg-slate-50 border border-slate-200 p-3">
+          <label className="block text-xs font-bold text-slate-600 mb-1">İşletme Geneli (Varsayılan)</label>
+          <select
+            value={tenantHour}
+            onChange={(e) => setTenantHour(parseInt(e.target.value, 10))}
+            disabled={!isOwnerOrAdmin}
+            className="w-full md:w-48 px-3 py-2 rounded-lg border border-slate-200 bg-white font-bold text-slate-800 disabled:opacity-50"
+          >
+            {HOURS_LIST.map(h => (
+              <option key={h} value={h}>{String(h).padStart(2,'0')}:00</option>
+            ))}
+          </select>
+        </div>
+
+        {branches.length > 0 && (
+          <div className="rounded-xl bg-slate-50 border border-slate-200 p-3">
+            <div className="text-xs font-bold text-slate-600 mb-2">Şube Bazında (override)</div>
+            <div className="grid gap-2">
+              {branches.map((b: any) => {
+                const cur = branchOverrides[b.id];
+                return (
+                  <div key={b.id} className="flex items-center gap-2 flex-wrap">
+                    <span className="font-bold text-slate-700 text-sm flex-1 min-w-0 truncate">{b.name}</span>
+                    <select
+                      value={cur === null || cur === undefined ? '' : String(cur)}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setBranchOverrides(prev => ({ ...prev, [b.id]: v === '' ? null : parseInt(v, 10) }));
+                      }}
+                      disabled={!isOwnerOrAdmin}
+                      className="px-2 py-1.5 rounded-lg border border-slate-200 bg-white font-bold text-slate-800 text-sm disabled:opacity-50"
+                    >
+                      <option value="">İşletme varsayılanı ({String(tenantHour).padStart(2,'0')}:00)</option>
+                      {HOURS_LIST.map(h => (
+                        <option key={h} value={h}>{String(h).padStart(2,'0')}:00</option>
+                      ))}
+                    </select>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        <div className="flex items-center gap-2 justify-end">
+          <button
+            onClick={saveAll}
+            disabled={saving || !isOwnerOrAdmin}
+            className="px-4 py-2.5 rounded-xl bg-sky-600 hover:bg-sky-700 text-white font-black text-sm disabled:opacity-50 inline-flex items-center gap-2"
+          >
+            {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <CheckCircle className="w-4 h-4" />}
+            Kaydet
+          </button>
+        </div>
+        {(error || ok) && (
+          <div className={`text-sm rounded-lg px-3 py-2 ${error ? 'bg-rose-50 text-rose-700 border border-rose-200' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'}`}>
+            {error || ok}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

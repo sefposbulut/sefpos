@@ -30,6 +30,8 @@ interface Options {
   /** Sadece bu kullanicinin acik vardiyasini izle (paralel-mod / kisisel rozet). */
   userId?: string | null;
   enabled?: boolean;
+  /** Is gunu cutoff saati (0-23). Default 6. AuthContext.businessDayStartHour'tan verin. */
+  cutoffHour?: number;
 }
 
 /**
@@ -38,7 +40,7 @@ interface Options {
  * - 60sn polling fallback (sekme arka plana inerse uyani uyandir)
  * - userId verilirse: yalniz o kullanicinin acik vardiyasi
  */
-export function useActiveShift({ branchId, tenantId, userId, enabled = true }: Options) {
+export function useActiveShift({ branchId, tenantId, userId, enabled = true, cutoffHour }: Options) {
   const [activeShift, setActiveShift] = useState<ActiveShift | null>(null);
   const [todayClosure, setTodayClosure] = useState<DailyClosureSnapshot | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
@@ -46,10 +48,12 @@ export function useActiveShift({ branchId, tenantId, userId, enabled = true }: O
 
   const todayBusinessDate = useCallback((): string => {
     const now = new Date();
-    if (now.getHours() < 6) now.setDate(now.getDate() - 1);
+    let cutoff = typeof cutoffHour === 'number' ? Math.floor(cutoffHour) : 6;
+    if (cutoff < 0) cutoff = 0; if (cutoff > 23) cutoff = 23;
+    if (now.getHours() < cutoff) now.setDate(now.getDate() - 1);
     const pad = (n: number) => String(n).padStart(2, '0');
     return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
-  }, []);
+  }, [cutoffHour]);
 
   const refresh = useCallback(async () => {
     if (!enabled || !tenantId) return;

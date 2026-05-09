@@ -24,12 +24,13 @@ interface Props {
  * ozeti + "Vardiyami Bitir" akisi. Bitirince kisisel Z raporu modal'i.
  */
 export function ShiftQuickClose({ open, onClose }: Props) {
-  const { tenant, user, profile, activeBranch, branches } = useAuth();
+  const { tenant, user, profile, activeBranch, branches, businessDayStartHour } = useAuth();
   const { activeShift, refresh } = useActiveShift({
     tenantId: tenant?.id || null,
     branchId: activeBranch?.id || null,
     userId: user?.id || null,
     enabled: !!tenant && open,
+    cutoffHour: businessDayStartHour,
   });
 
   const [stats, setStats] = useState<{ cash: number; card: number; openAcc: number; expense: number; cashIn: number; cashOut: number; orders: number } | null>(null);

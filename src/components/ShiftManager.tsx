@@ -221,7 +221,7 @@ function CountInput({ mode, setMode, total, setTotal, breakdown, setBreakdown, h
 }
 
 export function ShiftManager() {
-  const { tenant, user, profile, activeBranch, branches, isOwnerOrAdmin, permissions } = useAuth();
+  const { tenant, user, profile, activeBranch, branches, isOwnerOrAdmin, permissions, businessDayStartHour } = useAuth();
   const tenantId = tenant?.id || null;
 
   const [selectedBranch, setSelectedBranch] = useState<string>(activeBranch?.id || (branches[0]?.id || ''));
@@ -234,6 +234,7 @@ export function ShiftManager() {
     branchId: effectiveBranchId,
     userId: user?.id || null,
     enabled: !!tenantId,
+    cutoffHour: businessDayStartHour,
   });
   const [allOpenShifts, setAllOpenShifts] = useState<ShiftRow[]>([]);
 
@@ -247,7 +248,7 @@ export function ShiftManager() {
 
   // Open / Close modals
   const [showOpenModal, setShowOpenModal] = useState(false);
-  const [openShiftNo, setOpenShiftNo] = useState<number>(suggestShiftNo());
+  const [openShiftNo, setOpenShiftNo] = useState<number>(suggestShiftNo(new Date(), businessDayStartHour));
   const [openMode, setOpenMode] = useState<'total' | 'denom'>('total');
   const [openTotal, setOpenTotal] = useState<string>('');
   const [openBreakdown, setOpenBreakdown] = useState<Record<string, number>>({});
@@ -271,7 +272,7 @@ export function ShiftManager() {
   const [printFormat, setPrintFormat] = useState<ShiftPrintFormat>(loadShiftPrintFormat());
   useEffect(() => { saveShiftPrintFormat(printFormat); }, [printFormat]);
 
-  const businessDate = computeBusinessDate();
+  const businessDate = computeBusinessDate(new Date(), businessDayStartHour);
 
   // Load definitions
   useEffect(() => {
@@ -430,8 +431,8 @@ export function ShiftManager() {
 
   const suggestedNo = useMemo(() => {
     const def = definitions.find((d) => !usedShiftNos.has(d.shift_no));
-    return def?.shift_no || suggestShiftNo();
-  }, [definitions, usedShiftNos]);
+    return def?.shift_no || suggestShiftNo(new Date(), businessDayStartHour);
+  }, [definitions, usedShiftNos, businessDayStartHour]);
 
   useEffect(() => {
     if (showOpenModal) {

@@ -72,13 +72,14 @@ const PAGE_LABELS: Record<string, string> = {
 };
 
 export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackToTables, onOpenShifts }: HeaderProps) {
-  const { profile, tenant, user, signOut, activeBranch, branches, setActiveBranch, shiftsEnabled, permissions } = useAuth();
+  const { profile, tenant, user, signOut, activeBranch, branches, setActiveBranch, shiftsEnabled, permissions, businessDayStartHour } = useAuth();
   const canUseShifts = !!permissions?.can_use_shifts;
   const { activeShift, todayClosure } = useActiveShift({
     tenantId: tenant?.id || null,
     branchId: activeBranch?.id || null,
     userId: user?.id || null,
     enabled: !!tenant && shiftsEnabled && canUseShifts,
+    cutoffHour: businessDayStartHour,
   });
   const [showBranchMenu, setShowBranchMenu] = useState(false);
   const uiPrefs = useUiPrefs();

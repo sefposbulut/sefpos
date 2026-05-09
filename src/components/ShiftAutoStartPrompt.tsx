@@ -26,11 +26,12 @@ interface ShiftDefRow {
  * - Atama yoksa, tanimli vardiyalardan birini secmesi istenir.
  */
 export function ShiftAutoStartPrompt() {
-  const { tenant, user, profile, activeBranch, shiftsEnabled, permissions } = useAuth();
+  const { tenant, user, profile, activeBranch, shiftsEnabled, permissions, businessDayStartHour } = useAuth();
   const tenantId = tenant?.id || null;
   const branchId = activeBranch?.id || null;
   const { activeShift, todayClosure, loading } = useActiveShift({
     tenantId, branchId, userId: user?.id || null, enabled: !!tenantId && shiftsEnabled,
+    cutoffHour: businessDayStartHour,
   });
 
   const sessionKey = tenant && user ? `sefpos_shift_prompt_dismissed_${tenant.id}_${user.id}` : '';

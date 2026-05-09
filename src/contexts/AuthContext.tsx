@@ -86,6 +86,11 @@ interface AuthContextType {
   isOwnerOrAdmin: boolean;
   /** tenants.shifts_enabled — vardiya/gun sonu sistemi acik mi (Settings'ten admin acar). */
   shiftsEnabled: boolean;
+  /**
+   * Aktif subenin (yoksa tenant'in) is gunu baslangic saati (0-23, default 6).
+   * Gun degisim/cutoff hesaplari icin businessDay yardimcilarina verilir.
+   */
+  businessDayStartHour: number;
   signIn: (email: string, password: string) => Promise<{ error: any }>;
   signUp: (
     email: string,
@@ -671,6 +676,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const isOwnerOrAdmin = profile?.role === 'owner' || profile?.role === 'admin' || !!profile?.is_super_admin;
   const shiftsEnabled = !!(tenant as any)?.shifts_enabled;
+  const branchCutoff: number | null | undefined = (activeBranch as any)?.business_day_start_hour;
+  const tenantCutoff: number | null | undefined = (tenant as any)?.business_day_start_hour;
+  const businessDayStartHour: number = (() => {
+    const raw = typeof branchCutoff === 'number' ? branchCutoff
+      : typeof tenantCutoff === 'number' ? tenantCutoff
+      : 6;
+    if (!Number.isFinite(raw)) return 6;
+    const v = Math.floor(raw);
+    if (v < 0) return 0;
+    if (v > 23) return 23;
+    return v;
+  })();
 
   return (
     <AuthContext.Provider value={{
@@ -684,6 +701,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       profileLoadFailed,
       isOwnerOrAdmin,
       shiftsEnabled,
+      businessDayStartHour,
       signIn,
       signUp,
       signOut,
