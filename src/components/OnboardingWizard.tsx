@@ -3,6 +3,7 @@ import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { isLocalMode } from '../lib/sqlDb';
 import { TR_CITY_NAMES, getDistricts } from '../lib/turkeyCitiesDistricts';
+import { getTrialInfo } from '../lib/tenantTrial';
 import { CheckCircle, ChefHat, UtensilsCrossed, MapPin, Phone, Globe, Building2, ArrowRight, ArrowLeft, LayoutGrid, Users, Wifi, Star, WifiOff, RefreshCw, Server, Zap, Shield, Globe as Globe2 } from 'lucide-react';
 
 /** Zorunlu alan etiketinde kucuk kirmizi nokta */
@@ -134,6 +135,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
   const finalPrefix = (groupPrefix.trim() || computeAutoPrefix(groupName))
     .toLocaleUpperCase('tr-TR')
     .slice(0, 4);
+  const tenantTrialInfo = useMemo(() => getTrialInfo(tenant as any), [tenant]);
 
   const markLocalOnboardingDone = async () => {
     if (!tenant) return;
@@ -822,7 +824,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
                 Artık siparişlerinizi yönetmeye başlayabilirsiniz.
               </p>
 
-              <div className={`inline-flex items-center gap-2 px-4 py-2 rounded-full text-sm font-semibold mb-6 border ${
+              <div className={`inline-flex items-center gap-2 px-4 py-2 rounded-full text-sm font-semibold mb-4 border ${
                 deploymentMode === 'offline' ? 'bg-slate-100 text-slate-700 border-slate-300' :
                 deploymentMode === 'online' ? 'bg-blue-100 text-blue-700 border-blue-300' :
                 'bg-emerald-100 text-emerald-700 border-emerald-300'
@@ -834,6 +836,34 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
                 {deploymentMode === 'online' && 'Bulut Bağlantılı Mod aktif'}
                 {deploymentMode === 'hybrid' && 'Karma Mod aktif'}
               </div>
+
+              {/* Trial hosgeldin karti — yalniz yeni acilan ve trial planda olan tenant'larda goster */}
+              {(() => {
+                const ti = tenantTrialInfo;
+                if (!ti.isTrial) return null;
+                const endStr = ti.endDate
+                  ? ti.endDate.toLocaleDateString('tr-TR', { day: '2-digit', month: 'long', year: 'numeric' })
+                  : '';
+                return (
+                  <div className="mb-6 mx-auto max-w-md text-left rounded-2xl border-2 border-amber-200 bg-gradient-to-br from-amber-50 via-orange-50 to-rose-50 p-4 shadow-sm">
+                    <div className="flex items-start gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-400 to-orange-500 text-white flex items-center justify-center shadow-sm shrink-0">
+                        <Star className="w-5 h-5" />
+                      </div>
+                      <div className="flex-1">
+                        <p className="font-black text-amber-900 text-sm">
+                          Hediyemiz: 3 gün ücretsiz deneme süresi başladı
+                        </p>
+                        <p className="text-xs text-amber-800/90 mt-1 leading-snug">
+                          Tüm ŞefPOS modüllerini sınırsız kullanabilirsiniz. Süre sonunda
+                          {endStr && <> (<span className="font-bold">{endStr}</span>)</>} lisansı aktif etmezseniz
+                          giriş ekranı kilitlenir. Aktivasyon için: <span className="font-semibold text-amber-900">0850 309 04 04</span> · WhatsApp · destek@aykasoft.com.tr
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
 
               <div className="grid grid-cols-2 gap-3 mb-8 text-left">
                 {[

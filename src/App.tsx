@@ -19,6 +19,8 @@ import { UserManagement } from './components/UserManagement';
 import { OnlineOrders } from './components/OnlineOrders';
 import { TakeawayOrders } from './components/TakeawayOrders';
 import { OnboardingWizard } from './components/OnboardingWizard';
+import { TrialExpiredOverlay } from './components/TrialExpiredOverlay';
+import { getTrialInfo } from './lib/tenantTrial';
 import { AdminPanel } from './components/AdminPanel';
 import { Customers } from './components/customers/Customers';
 import { EndOfDay } from './components/EndOfDay';
@@ -478,6 +480,16 @@ function App() {
       setShowOnboarding(false);
       await refreshProfile();
     }} />;
+  }
+
+  // Trial bittiyse super_admin / aykasoft hesaplari haric tum app erisimi engelle.
+  // - Onboarding tamamlanmadan ekran gosterilmez (ust adim daha onemli).
+  // - Lisans aktif edildiginde (subscription_status: active/expired ise plan != trial)
+  //   bu blok otomatik kapanir.
+  const trialInfo = getTrialInfo(tenant);
+  const isAdminRole = profile?.role === 'super_admin';
+  if (trialInfo.expired && tenant && !isAdminRole) {
+    return <TrialExpiredOverlay />;
   }
 
   const show = (page: string) => currentPage === page;

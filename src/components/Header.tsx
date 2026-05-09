@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { LogOut, User, Settings, ChevronDown, MapPin, Check, Building2, Zap, ZoomIn, ZoomOut, Bell, Headphones as HeadphonesIcon, X, Send } from 'lucide-react';
+import { LogOut, User, Settings, ChevronDown, MapPin, Check, Building2, Zap, ZoomIn, ZoomOut, Bell, Headphones as HeadphonesIcon, X, Send, Sparkles } from 'lucide-react';
 import { WaiterCallBell } from './WaiterCallBell';
 import { supabase } from '../lib/supabase';
+import { getTrialInfo, formatTrialRemaining } from '../lib/tenantTrial';
 
 const isElectron = !!(window as any).electronAPI;
 
@@ -56,20 +57,9 @@ export function Header({ onOpenSettings, onOpenOnboarding }: HeaderProps) {
   const [supportLoading, setSupportLoading] = useState(false);
   const [supportSent, setSupportSent] = useState(false);
 
-  const trialInfo = (() => {
-    if (!tenant || tenant.subscription_status !== 'trial') return null;
-    const now = Date.now();
-    const trialEndMs = tenant.subscription_expires_at
-      ? new Date(tenant.subscription_expires_at).getTime()
-      : (new Date(tenant.created_at).getTime() + (3 * 24 * 60 * 60 * 1000));
-    if (!Number.isFinite(trialEndMs)) return null;
-    const remainingMs = trialEndMs - now;
-    const remainingDays = Math.max(0, Math.ceil(remainingMs / (24 * 60 * 60 * 1000)));
-    return {
-      remainingDays,
-      expired: remainingMs <= 0,
-    };
-  })();
+  const trialInfo = getTrialInfo(tenant as any);
+  const showTrialBadge = trialInfo.isTrial;
+  const trialUrgent = trialInfo.isTrial && (trialInfo.expired || trialInfo.remainingHours <= 24);
 
   useEffect(() => {
     if (!isElectron) return;
@@ -240,22 +230,36 @@ export function Header({ onOpenSettings, onOpenOnboarding }: HeaderProps) {
                       </>
                     )}
                   </div>
-                  {trialInfo && (
-                    <p
-                      className={`hidden md:block text-[10px] font-semibold mt-0.5 ${
-                        trialInfo.expired ? 'text-red-600' : 'text-amber-600'
-                      }`}
-                    >
-                      {trialInfo.expired
-                        ? 'Deneme süresi doldu'
-                        : `Deneme: ${trialInfo.remainingDays} gün`}
-                    </p>
-                  )}
                 </div>
               </div>
             </div>
 
             <div className="flex items-center space-x-1.5 md:space-x-2">
+              {showTrialBadge && (
+                <div
+                  title={
+                    trialInfo.expired
+                      ? 'Deneme süreniz sona erdi — lisans aktif edin'
+                      : `${formatTrialRemaining(trialInfo)} kaldı`
+                  }
+                  className={`hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-[11px] md:text-xs font-bold border shadow-sm transition ${
+                    trialUrgent
+                      ? 'bg-gradient-to-r from-red-500 to-orange-500 text-white border-red-400 animate-pulse'
+                      : 'bg-gradient-to-r from-amber-50 to-orange-50 text-orange-700 border-orange-200'
+                  }`}
+                >
+                  <Sparkles className="w-3.5 h-3.5" />
+                  {trialInfo.expired ? (
+                    <span>Deneme bitti</span>
+                  ) : (
+                    <>
+                      <span className="hidden md:inline">Deneme:&nbsp;</span>
+                      <span>{formatTrialRemaining(trialInfo)}</span>
+                    </>
+                  )}
+                </div>
+              )}
+
               {branches.length > 0 && (
                 <div className="relative">
                   <button
