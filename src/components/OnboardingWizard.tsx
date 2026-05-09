@@ -1,8 +1,14 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { isLocalMode } from '../lib/sqlDb';
-import { CheckCircle, ChefHat, UtensilsCrossed, MapPin, Phone, Globe, ArrowRight, ArrowLeft, LayoutGrid, Users, Wifi, Star, WifiOff, RefreshCw, Server, Zap, Shield, Globe as Globe2 } from 'lucide-react';
+import { TR_CITY_NAMES, getDistricts } from '../lib/turkeyCitiesDistricts';
+import { CheckCircle, ChefHat, UtensilsCrossed, MapPin, Phone, Globe, Building2, ArrowRight, ArrowLeft, LayoutGrid, Users, Wifi, Star, WifiOff, RefreshCw, Server, Zap, Shield, Globe as Globe2 } from 'lucide-react';
+
+/** Zorunlu alan etiketinde kucuk kirmizi nokta */
+const ReqDot = () => (
+  <span aria-hidden className="inline-block w-1.5 h-1.5 rounded-full bg-red-500 ml-1 align-middle" title="Zorunlu" />
+);
 
 interface OnboardingWizardProps {
   onComplete: () => Promise<void>;
@@ -103,8 +109,13 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
   const [bizInfo, setBizInfo] = useState({
     address: '',
     phone: '',
+    city: '',
+    district: '',
     website: '',
   });
+  const [bizErrors, setBizErrors] = useState<Partial<Record<'address' | 'phone' | 'city' | 'district', string>>>({});
+
+  const districtOptions = useMemo(() => getDistricts(bizInfo.city), [bizInfo.city]);
 
   const [tableCount, setTableCount] = useState(10);
   const [customTableCount, setCustomTableCount] = useState('');
@@ -143,25 +154,56 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
   };
 
   const handleBizInfoNext = async () => {
+    const errs: typeof bizErrors = {};
+    if (!bizInfo.address.trim()) errs.address = 'Adres zorunludur';
+    if (!bizInfo.phone.trim() || bizInfo.phone.replace(/\D/g, '').length < 10)
+      errs.phone = 'Geçerli bir telefon girin';
+    if (!bizInfo.city) errs.city = 'İl seçin';
+    if (!bizInfo.district) errs.district = 'İlçe seçin';
+    setBizErrors(errs);
+    if (Object.keys(errs).length) {
+      setError('Lütfen kırmızı nokta ile işaretli zorunlu alanları doldurun.');
+      return;
+    }
+
     setLoading(true);
     setError('');
     try {
+      const cleanPhone = bizInfo.phone.replace(/\s+/g, '');
       if (!isLocalMode() && tenant) {
         await supabase.from('tenants').update({
-          address: bizInfo.address || null,
-          phone: bizInfo.phone || null,
+          address: bizInfo.address.trim(),
+          phone: cleanPhone,
+          city: bizInfo.city,
+          district: bizInfo.district,
         }).eq('id', tenant.id);
 
         if (activeBranch) {
           await supabase.from('branches').update({
-            address: bizInfo.address || '',
-            phone: bizInfo.phone || '',
+            address: bizInfo.address.trim(),
+            phone: cleanPhone,
+            city: bizInfo.city,
+            district: bizInfo.district,
           }).eq('id', activeBranch.id);
+        }
+      } else if (isLocalMode()) {
+        const api = (window as any).electronAPI;
+        if (api?.localDbWrite && tenant) {
+          await api.localDbWrite({
+            table: 'tenants',
+            row: {
+              id: tenant.id,
+              address: bizInfo.address.trim(),
+              phone: cleanPhone,
+              city: bizInfo.city,
+              district: bizInfo.district,
+            },
+          });
         }
       }
       setStep(4);
-    } catch {
-      setError('Bilgiler kaydedilemedi, lütfen tekrar deneyin.');
+    } catch (err: any) {
+      setError('Bilgiler kaydedilemedi: ' + (err?.message || 'Lütfen tekrar deneyin.'));
     } finally {
       setLoading(false);
     }
@@ -499,41 +541,119 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
           {step === 3 && (
             <div>
               <h2 className="text-2xl font-black text-slate-800 mb-1">İşletme Bilgileri</h2>
-              <p className="text-slate-400 mb-6">Bu bilgiler isteğe bağlıdır, istediğiniz zaman güncelleyebilirsiniz.</p>
+              <p className="text-slate-400 mb-6">
+                Aşağıdaki bilgiler işletme kimliğinizi oluşturur ve fişlerde / raporlarda kullanılır.
+                <span className="ml-1 inline-flex items-center gap-1 text-slate-500 text-xs">
+                  Kırmızı nokta <span className="inline-block w-1.5 h-1.5 rounded-full bg-red-500 align-middle" /> ile işaretli alanlar zorunludur.
+                </span>
+              </p>
 
               <div className="space-y-4">
                 <div>
-                  <label className="block text-sm font-semibold text-slate-700 mb-2 flex items-center gap-2">
-                    <MapPin className="w-4 h-4 text-orange-500" /> Adres
+                  <label className="text-sm font-semibold text-slate-700 mb-2 flex items-center gap-2">
+                    <MapPin className="w-4 h-4 text-orange-500" /> Adres<ReqDot />
                   </label>
                   <input
                     type="text"
                     value={bizInfo.address}
-                    onChange={(e) => setBizInfo(p => ({ ...p, address: e.target.value }))}
-                    placeholder="Restoran adresiniz"
-                    className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-orange-400 focus:border-transparent outline-none transition"
+                    onChange={(e) => {
+                      setBizInfo((p) => ({ ...p, address: e.target.value }));
+                      if (bizErrors.address) setBizErrors((p) => ({ ...p, address: undefined }));
+                    }}
+                    placeholder="Mahalle, sokak, no"
+                    className={`w-full px-4 py-3 rounded-xl border outline-none transition ${
+                      bizErrors.address
+                        ? 'border-red-400 focus:ring-2 focus:ring-red-300'
+                        : 'border-slate-200 focus:ring-2 focus:ring-orange-400 focus:border-transparent'
+                    }`}
                   />
+                  {bizErrors.address && <p className="text-xs text-red-600 mt-1">{bizErrors.address}</p>}
                 </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-sm font-semibold text-slate-700 mb-2 flex items-center gap-2">
+                      <Building2 className="w-4 h-4 text-orange-500" /> İl<ReqDot />
+                    </label>
+                    <select
+                      value={bizInfo.city}
+                      onChange={(e) => {
+                        setBizInfo((p) => ({ ...p, city: e.target.value, district: '' }));
+                        if (bizErrors.city) setBizErrors((p) => ({ ...p, city: undefined }));
+                      }}
+                      className={`w-full px-4 py-3 rounded-xl border outline-none transition bg-white ${
+                        bizErrors.city
+                          ? 'border-red-400 focus:ring-2 focus:ring-red-300'
+                          : 'border-slate-200 focus:ring-2 focus:ring-orange-400 focus:border-transparent'
+                      }`}
+                    >
+                      <option value="">Seçin...</option>
+                      {TR_CITY_NAMES.map((n) => (
+                        <option key={n} value={n}>
+                          {n}
+                        </option>
+                      ))}
+                    </select>
+                    {bizErrors.city && <p className="text-xs text-red-600 mt-1">{bizErrors.city}</p>}
+                  </div>
+
+                  <div>
+                    <label className="text-sm font-semibold text-slate-700 mb-2 flex items-center gap-2">
+                      <MapPin className="w-4 h-4 text-orange-500" /> İlçe<ReqDot />
+                    </label>
+                    <select
+                      value={bizInfo.district}
+                      onChange={(e) => {
+                        setBizInfo((p) => ({ ...p, district: e.target.value }));
+                        if (bizErrors.district) setBizErrors((p) => ({ ...p, district: undefined }));
+                      }}
+                      disabled={!bizInfo.city}
+                      className={`w-full px-4 py-3 rounded-xl border outline-none transition bg-white disabled:bg-slate-50 disabled:text-slate-400 ${
+                        bizErrors.district
+                          ? 'border-red-400 focus:ring-2 focus:ring-red-300'
+                          : 'border-slate-200 focus:ring-2 focus:ring-orange-400 focus:border-transparent'
+                      }`}
+                    >
+                      <option value="">{bizInfo.city ? 'Seçin...' : 'Önce il seçin'}</option>
+                      {districtOptions.map((d) => (
+                        <option key={d} value={d}>
+                          {d}
+                        </option>
+                      ))}
+                    </select>
+                    {bizErrors.district && <p className="text-xs text-red-600 mt-1">{bizErrors.district}</p>}
+                  </div>
+                </div>
+
                 <div>
-                  <label className="block text-sm font-semibold text-slate-700 mb-2 flex items-center gap-2">
-                    <Phone className="w-4 h-4 text-orange-500" /> Telefon
+                  <label className="text-sm font-semibold text-slate-700 mb-2 flex items-center gap-2">
+                    <Phone className="w-4 h-4 text-orange-500" /> Telefon<ReqDot />
                   </label>
                   <input
                     type="tel"
                     value={bizInfo.phone}
-                    onChange={(e) => setBizInfo(p => ({ ...p, phone: e.target.value }))}
+                    onChange={(e) => {
+                      setBizInfo((p) => ({ ...p, phone: e.target.value }));
+                      if (bizErrors.phone) setBizErrors((p) => ({ ...p, phone: undefined }));
+                    }}
                     placeholder="0212 000 00 00"
-                    className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-orange-400 focus:border-transparent outline-none transition"
+                    className={`w-full px-4 py-3 rounded-xl border outline-none transition ${
+                      bizErrors.phone
+                        ? 'border-red-400 focus:ring-2 focus:ring-red-300'
+                        : 'border-slate-200 focus:ring-2 focus:ring-orange-400 focus:border-transparent'
+                    }`}
                   />
+                  {bizErrors.phone && <p className="text-xs text-red-600 mt-1">{bizErrors.phone}</p>}
                 </div>
+
                 <div>
-                  <label className="block text-sm font-semibold text-slate-700 mb-2 flex items-center gap-2">
+                  <label className="text-sm font-semibold text-slate-700 mb-2 flex items-center gap-2">
                     <Globe className="w-4 h-4 text-orange-500" /> Web Sitesi <span className="text-slate-400 font-normal">(isteğe bağlı)</span>
                   </label>
                   <input
                     type="url"
                     value={bizInfo.website}
-                    onChange={(e) => setBizInfo(p => ({ ...p, website: e.target.value }))}
+                    onChange={(e) => setBizInfo((p) => ({ ...p, website: e.target.value }))}
                     placeholder="www.restoraniniz.com"
                     className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-orange-400 focus:border-transparent outline-none transition"
                   />
@@ -558,12 +678,6 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
                   {!loading && <ArrowRight className="w-4 h-4" />}
                 </button>
               </div>
-              <button
-                onClick={() => setStep(4)}
-                className="mt-3 w-full text-slate-400 hover:text-slate-600 text-sm py-2 transition"
-              >
-                Bu adımı atla
-              </button>
             </div>
           )}
 

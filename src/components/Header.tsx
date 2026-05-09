@@ -190,16 +190,68 @@ export function Header({ onOpenSettings, onOpenOnboarding }: HeaderProps) {
         <div className="px-3 md:px-6">
           <div className="flex justify-between items-center h-14 md:h-20">
             <div className="flex items-center space-x-2 md:space-x-3 ml-12 md:ml-16">
-              <img src={logoSrc} alt="ŞefPOS" className="hidden md:block md:h-12 md:w-auto md:rounded-none object-contain flex-shrink-0" />
-              <div className="hidden md:block">
-                <p className="text-xs text-slate-500">{tenant?.name}</p>
-                {trialInfo && (
-                  <p className={`text-[11px] font-semibold mt-0.5 ${trialInfo.expired ? 'text-red-600' : 'text-amber-600'}`}>
-                    {trialInfo.expired
-                      ? 'Deneme suresi doldu'
-                      : `Deneme suresi: ${trialInfo.remainingDays} gun`}
+              <img src={logoSrc} alt="ŞefPOS" className="hidden md:block md:h-10 md:w-auto md:rounded-none object-contain flex-shrink-0" />
+              {/* Kurumsal kimlik kartı: tenant logosu (yoksa bas harf rozeti) + isletme adi + sef pos alt etiketi */}
+              <div className="flex items-center gap-2.5 pl-0 md:pl-3 md:border-l md:border-slate-200">
+                {(() => {
+                  const logoUrl = (tenant as any)?.logo_url as string | undefined;
+                  const name = (tenant?.name || '').trim();
+                  const initials = name
+                    ? name
+                        .split(/\s+/)
+                        .filter(Boolean)
+                        .slice(0, 2)
+                        .map((w) => w[0])
+                        .join('')
+                        .toUpperCase()
+                    : 'ŞP';
+                  return logoUrl ? (
+                    <img
+                      src={logoUrl}
+                      alt={name}
+                      className="w-9 h-9 md:w-11 md:h-11 rounded-xl object-cover ring-2 ring-orange-100 flex-shrink-0"
+                    />
+                  ) : (
+                    <div
+                      className="w-9 h-9 md:w-11 md:h-11 rounded-xl bg-gradient-to-br from-orange-500 to-red-600 text-white font-black flex items-center justify-center text-sm md:text-base shadow-sm ring-2 ring-orange-100 flex-shrink-0"
+                      title={name}
+                    >
+                      {initials}
+                    </div>
+                  );
+                })()}
+                <div className="leading-tight min-w-0">
+                  <p
+                    className="text-sm md:text-base font-extrabold text-slate-800 tracking-tight truncate max-w-[140px] md:max-w-[260px]"
+                    title={tenant?.name || ''}
+                  >
+                    {tenant?.name || 'İşletme'}
                   </p>
-                )}
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[10px] md:text-[11px] font-semibold uppercase tracking-wider text-orange-600">
+                      ŞefPOS
+                    </span>
+                    {activeBranch?.name && (
+                      <>
+                        <span className="text-slate-300 text-[10px]">•</span>
+                        <span className="text-[10px] md:text-[11px] text-slate-500 truncate max-w-[100px] md:max-w-[180px]">
+                          {activeBranch.name}
+                        </span>
+                      </>
+                    )}
+                  </div>
+                  {trialInfo && (
+                    <p
+                      className={`hidden md:block text-[10px] font-semibold mt-0.5 ${
+                        trialInfo.expired ? 'text-red-600' : 'text-amber-600'
+                      }`}
+                    >
+                      {trialInfo.expired
+                        ? 'Deneme süresi doldu'
+                        : `Deneme: ${trialInfo.remainingDays} gün`}
+                    </p>
+                  )}
+                </div>
               </div>
             </div>
 
