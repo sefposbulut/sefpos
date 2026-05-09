@@ -1,11 +1,12 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { LogOut, User, Settings, ChevronDown, MapPin, Check, Building2, Zap, ZoomIn, ZoomOut, Bell, Headphones as HeadphonesIcon, X, Send, Sparkles, Phone, Mail, ArrowLeft, LayoutGrid, PlayCircle, Lock } from 'lucide-react';
+import { LogOut, User, Settings, ChevronDown, MapPin, Check, Building2, Zap, ZoomIn, ZoomOut, Bell, Headphones as HeadphonesIcon, X, Send, Sparkles, Phone, Mail, ArrowLeft, LayoutGrid, PlayCircle, Lock, Minimize2 } from 'lucide-react';
 import { WaiterCallBell } from './WaiterCallBell';
 import { supabase } from '../lib/supabase';
 import { getTrialInfo, formatTrialRemaining } from '../lib/tenantTrial';
 import { useActiveShift } from '../lib/useActiveShift';
 import { shiftDurationLabel, shiftIcon } from '../lib/businessDay';
+import { useUiPrefs, setHeaderHidden, setUiScale, bumpUiScale, resetUiScale, UI_SCALE_MIN, UI_SCALE_MAX, UI_SCALE_STEP } from '../lib/uiPrefs';
 
 const isElectron = !!(window as any).electronAPI;
 
@@ -80,7 +81,8 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
     enabled: !!tenant && shiftsEnabled && canUseShifts,
   });
   const [showBranchMenu, setShowBranchMenu] = useState(false);
-  const [zoom, setZoom] = useState(1);
+  const uiPrefs = useUiPrefs();
+  const zoom = uiPrefs.uiScale;
   const [showSupport, setShowSupport] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
   const [tickets, setTickets] = useState<Notification[]>([]);
@@ -97,12 +99,17 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
   const showTrialBadge = trialInfo.isTrial;
   const trialUrgent = trialInfo.isTrial && (trialInfo.expired || trialInfo.remainingHours <= 24);
 
+  // Electron uzerinde calisirken (varsa) Electron'in zoom state'ini de
+  // uygulamamiz tercihine senkronize et — boylece pencere yenilense bile
+  // ayni olcekte acilir.
   useEffect(() => {
     if (!isElectron) return;
-    (window as any).electronAPI.getZoom().then((z: number | null) => {
-      if (z) setZoom(z);
-    });
-  }, []);
+    try {
+      (window as any).electronAPI?.setZoom?.(uiPrefs.uiScale);
+    } catch {
+      /* ignore */
+    }
+  }, [isElectron, uiPrefs.uiScale]);
 
   useEffect(() => {
     if (!tenant || !user) return;
@@ -179,10 +186,7 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
   };
 
   const changeZoom = (delta: number) => {
-    if (!isElectron) return;
-    const next = Math.min(2, Math.max(0.5, parseFloat((zoom + delta).toFixed(1))));
-    setZoom(next);
-    (window as any).electronAPI.setZoom(next);
+    bumpUiScale(delta);
   };
 
   const handleSupportSubmit = async () => {
@@ -431,25 +435,41 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
                 <Settings className="w-4 h-4 md:w-5 md:h-5" />
               </button>
 
-              {isElectron && (
-                <div className="hidden md:flex items-center gap-1 bg-slate-100 rounded-lg px-1 py-1">
-                  <button
-                    onClick={() => changeZoom(-0.1)}
-                    className="p-1.5 rounded hover:bg-slate-200 transition-all active:scale-95 text-slate-600"
-                    title="Küçült"
-                  >
-                    <ZoomOut className="w-4 h-4" />
-                  </button>
-                  <span className="text-xs font-bold text-slate-600 w-9 text-center">{Math.round(zoom * 100)}%</span>
-                  <button
-                    onClick={() => changeZoom(0.1)}
-                    className="p-1.5 rounded hover:bg-slate-200 transition-all active:scale-95 text-slate-600"
-                    title="Büyüt"
-                  >
-                    <ZoomIn className="w-4 h-4" />
-                  </button>
-                </div>
-              )}
+              {/* Arayuz olcegi (her ortamda calisir, kalicidir). */}
+              <div className="hidden md:flex items-center gap-1 bg-slate-100 rounded-lg px-1 py-1">
+                <button
+                  onClick={() => changeZoom(-UI_SCALE_STEP)}
+                  disabled={zoom <= UI_SCALE_MIN + 0.001}
+                  className="p-1.5 rounded hover:bg-slate-200 transition-all active:scale-95 text-slate-600 disabled:opacity-40"
+                  title="Arayüzü küçült"
+                >
+                  <ZoomOut className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={() => resetUiScale()}
+                  className="text-xs font-bold text-slate-600 w-12 text-center hover:bg-slate-200 rounded py-1 active:scale-95"
+                  title="%100'e döndür"
+                >
+                  {Math.round(zoom * 100)}%
+                </button>
+                <button
+                  onClick={() => changeZoom(UI_SCALE_STEP)}
+                  disabled={zoom >= UI_SCALE_MAX - 0.001}
+                  className="p-1.5 rounded hover:bg-slate-200 transition-all active:scale-95 text-slate-600 disabled:opacity-40"
+                  title="Arayüzü büyüt"
+                >
+                  <ZoomIn className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Tam Ekran POS — ust meunyu gizler, kalicidir. */}
+              <button
+                onClick={() => setHeaderHidden(true)}
+                className="p-1.5 md:p-2 text-slate-600 hover:text-slate-900 rounded-lg hover:bg-slate-100 transition-all active:scale-95"
+                title="Tam Ekran POS modu (üst menüyü gizle)"
+              >
+                <Minimize2 className="w-4 h-4 md:w-5 md:h-5" />
+              </button>
 
               <button
                 onClick={() => {

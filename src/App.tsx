@@ -32,6 +32,8 @@ import { QuickSale } from './components/QuickSale';
 import { ShiftManager } from './components/ShiftManager';
 import { ShiftAutoStartPrompt } from './components/ShiftAutoStartPrompt';
 import { ShiftQuickClose } from './components/ShiftQuickClose';
+import { useUiPrefs, setHeaderHidden } from './lib/uiPrefs';
+import { Maximize2 } from 'lucide-react';
 import { Database, supabase } from './lib/supabase';
 import { isSqlServerMode } from './lib/sqlDb';
 import { queryCache } from './lib/queryCache';
@@ -498,17 +500,47 @@ function App() {
 
   const show = (page: string) => currentPage === page;
 
+  const uiPrefs = useUiPrefs();
+  const headerHidden = uiPrefs.headerHidden;
+
+  // CSS `zoom` Chromium/Electron'da gercek anlamda layout boyutlandirir
+  // (tarayicinin Ctrl +/- kalitesinde, modal/positioning bozulmasiz).
+  // POS hedefi Chromium tabanli oldugu icin guvenli. 1 ise uygulanmaz.
+  const rootZoomStyle = uiPrefs.uiScale !== 1
+    ? ({ zoom: uiPrefs.uiScale } as React.CSSProperties & { zoom?: number | string })
+    : undefined;
+
   return (
-    <div className="min-h-screen bg-slate-50">
+    <div
+      className="min-h-screen bg-slate-50"
+      data-header-hidden={headerHidden ? 'true' : 'false'}
+      style={rootZoomStyle}
+    >
       {isLocked && <PinLockScreen onUnlock={() => setIsLocked(false)} />}
 
-      <Header
-        onOpenSettings={() => setShowSettings(true)}
-        onOpenOnboarding={() => setShowOnboarding(true)}
-        currentPage={currentPage}
-        onBackToTables={() => handleNavigate('tables')}
-        onOpenShifts={() => setShowShiftQuickClose(true)}
-      />
+      {!headerHidden && (
+        <Header
+          onOpenSettings={() => setShowSettings(true)}
+          onOpenOnboarding={() => setShowOnboarding(true)}
+          currentPage={currentPage}
+          onBackToTables={() => handleNavigate('tables')}
+          onOpenShifts={() => setShowShiftQuickClose(true)}
+        />
+      )}
+
+      {/* Header gizliyken sag ust kosede mini gosterme dugmesi (POS modu) */}
+      {headerHidden && (
+        <button
+          type="button"
+          onClick={() => setHeaderHidden(false)}
+          title="Üst menüyü göster (POS modundan çık)"
+          className="fixed top-1.5 right-2 z-[55] inline-flex items-center gap-1 px-2.5 py-1.5 rounded-full bg-slate-900/80 hover:bg-slate-900 text-white text-[11px] font-bold shadow-lg backdrop-blur active:scale-95"
+        >
+          <Maximize2 className="w-3.5 h-3.5" />
+          <span className="hidden sm:inline">Menü</span>
+        </button>
+      )}
+
       <ShiftAutoStartPrompt />
       <ShiftQuickClose open={showShiftQuickClose} onClose={() => setShowShiftQuickClose(false)} />
       <MainMenu

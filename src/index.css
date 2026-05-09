@@ -58,6 +58,22 @@
   }
 }
 
+/* ===========================================================================
+   Tam Ekran POS modu — useUiPrefs.headerHidden true iken App kok divine
+   `data-header-hidden="true"` koyuluyor. Sayfa wrapper'larinda yer kaplayan
+   top-14 / md:top-20 ofsetlerini sifirliyoruz; boylece icerik tam yukseklige
+   yayiliyor. Hicbir bilesene dokunmadan etkin.
+   ========================================================================= */
+[data-header-hidden="true"] .fixed.inset-0.top-14,
+[data-header-hidden="true"] .fixed.inset-0[class*=" top-14"] {
+  top: 0 !important;
+}
+@media (min-width: 768px) {
+  [data-header-hidden="true"] .fixed.inset-0[class*="md:top-20"] {
+    top: 0 !important;
+  }
+}
+
 input[type="range"]::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
