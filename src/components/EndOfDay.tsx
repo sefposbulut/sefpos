@@ -1,14 +1,14 @@
 import { useState, useEffect, useMemo } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
-import { loadPrintSettings, printHtml } from '../lib/printService';
+import { loadPrintSettings } from '../lib/printService';
 import { useActiveShift } from '../lib/useActiveShift';
 import { computeBusinessDate, formatBusinessDateTR } from '../lib/businessDay';
 import {
   BarChart3, TrendingUp, TrendingDown, DollarSign, ShoppingCart,
   Clock, Calendar, Printer, RefreshCw,
   Banknote, CreditCard, FileText, CheckCircle, XCircle,
-  ChevronDown, ChevronUp, Building2, Lock, AlertTriangle
+  ChevronDown, ChevronUp, Building2, Lock, AlertTriangle, X
 } from 'lucide-react';
 
 interface DayStats {
@@ -73,6 +73,9 @@ export function EndOfDay({ onClose }: EndOfDayProps) {
   const [closingDay, setClosingDay] = useState(false);
   const [closeError, setCloseError] = useState<string | null>(null);
   const [closeSuccess, setCloseSuccess] = useState<string | null>(null);
+  const [showCloseConfirm, setShowCloseConfirm] = useState(false);
+  const [openTables, setOpenTables] = useState<Array<{ id: string; table_number: string }>>([]);
+  const [pendingOrders, setPendingOrders] = useState<Array<{ id: string; order_type: string; status: string; table_id: string | null }>>([]);
 
   const effectiveBranchForShift = isOwnerOrAdmin ? (selectedBranch !== 'all' ? selectedBranch : null) : (activeBranch?.id || null);
   const { activeShift, todayClosure, refresh: refreshShift } = useActiveShift({
@@ -82,13 +85,21 @@ export function EndOfDay({ onClose }: EndOfDayProps) {
   });
   const businessDate = useMemo(() => computeBusinessDate(), []);
 
-  const handleCloseDay = async () => {
+  const requestCloseDay = () => {
+    setCloseError(null);
+    setCloseSuccess(null);
     if (!effectiveBranchForShift) {
       setCloseError('Şube seçimi gerekli (Tüm Şubeler ile gün kapatılamaz).');
       return;
     }
+    setShowCloseConfirm(true);
+  };
+
+  const confirmCloseDay = async () => {
+    if (!effectiveBranchForShift) return;
     if (activeShift) {
       setCloseError('Önce açık vardiyayı kapatın.');
+      setShowCloseConfirm(false);
       return;
     }
     setClosingDay(true);
@@ -102,6 +113,7 @@ export function EndOfDay({ onClose }: EndOfDayProps) {
       });
       if (error) throw error;
       setCloseSuccess('Gün başarıyla kapatıldı.');
+      setShowCloseConfirm(false);
       await refreshShift();
       await loadStats();
     } catch (e: any) {
@@ -203,6 +215,29 @@ export function EndOfDay({ onClose }: EndOfDayProps) {
       .map(([hour, v]) => ({ hour: parseInt(hour), ...v }))
       .filter(h => h.orders > 0 || h.revenue > 0);
 
+    // Acik masa + bekleyen siparis sayilari (kapanis kontrolu icin)
+    let tablesQuery = (supabase as any)
+      .from('restaurant_tables')
+      .select('id, table_number, status, current_order_id, branch_id')
+      .eq('tenant_id', tenant.id)
+      .neq('status', 'available');
+    if (effectiveBranch !== 'all') {
+      tablesQuery = tablesQuery.eq('branch_id', effectiveBranch);
+    }
+
+    let pendingQuery = (supabase as any)
+      .from('orders')
+      .select('id, status, order_type, table_id, branch_id')
+      .eq('tenant_id', tenant.id)
+      .in('status', ['pending', 'preparing', 'ready', 'served', 'in_progress', 'open']);
+    if (effectiveBranch !== 'all') {
+      pendingQuery = pendingQuery.eq('branch_id', effectiveBranch);
+    }
+
+    const [{ data: openTbls }, { data: pendingOrds }] = await Promise.all([tablesQuery, pendingQuery]);
+    setOpenTables(((openTbls || []) as Array<{ id: string; table_number: string }>));
+    setPendingOrders(((pendingOrds || []) as Array<{ id: string; order_type: string; status: string; table_id: string | null }>));
+
     setStats({
       totalRevenue,
       cashRevenue,
@@ -221,7 +256,7 @@ export function EndOfDay({ onClose }: EndOfDayProps) {
       cashIn,
       cashOut,
       netCash,
-      openTables: 0,
+      openTables: (openTbls || []).length,
       totalCovers: 0,
     });
     setLoading(false);
@@ -232,55 +267,118 @@ export function EndOfDay({ onClose }: EndOfDayProps) {
   const dtOpts: Intl.DateTimeFormatOptions = { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' };
   const periodLabel = `${new Date(startDT).toLocaleString('tr-TR', dtOpts)} – ${new Date(endDT).toLocaleString('tr-TR', dtOpts)}`;
 
+  /**
+   * Gun sonu raporunu tarayicinin yerel yazdirma dialogu ile bastirir.
+   * 80 mm fis genisliginde sayfa acilir; kullanici yazici ve seceneklerini
+   * kendi secer (Chrome / Edge / Firefox PDF / fiziksel termal yazici).
+   */
   const printEndOfDayReport = () => {
     if (!stats || !tenant) return;
     const printSettings = loadPrintSettings();
     const branchLabel = selectedBranch === 'all' ? 'Tüm Şubeler' : (branches.find(b => b.id === selectedBranch)?.name || '');
-    const timeNow = new Date().toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
+    const timeNow = new Date().toLocaleString('tr-TR');
 
-    const html = `
-      <div class="center bold xlarge">${printSettings.restaurantName || tenant.name || 'ŞefPOS'}</div>
-      <div class="line"></div>
-      <div class="center bold large">GÜN SONU RAPORU</div>
-      <div class="center">${periodLabel}</div>
-      <div class="center">${timeNow}</div>
-      ${branchLabel ? `<div class="center">${branchLabel}</div>` : ''}
-      <div class="line"></div>
-      <div class="row bold"><span>ÖDEME YÖNTEMLERİ</span><span></span></div>
-      <div class="line"></div>
-      <div class="row"><span>Nakit</span><span>${fmt(stats.cashRevenue)} ₺</span></div>
-      <div class="row"><span>Kredi Kartı</span><span>${fmt(stats.cardRevenue)} ₺</span></div>
-      <div class="row"><span>Cari Hesap</span><span>${fmt(stats.openAccountRevenue)} ₺</span></div>
-      <div class="line"></div>
-      <div class="row bold"><span>TOPLAM CİRO</span><span>${fmt(stats.totalRevenue)} ₺</span></div>
-      <div class="line"></div>
-      <div class="row bold"><span>KASA ÖZETİ</span><span></span></div>
-      <div class="line"></div>
-      <div class="row"><span>Nakit Satış</span><span>+${fmt(stats.cashRevenue)} ₺</span></div>
-      <div class="row"><span>Nakit Giriş</span><span>+${fmt(stats.cashIn)} ₺</span></div>
-      <div class="row"><span>Nakit Çıkış</span><span>-${fmt(stats.cashOut)} ₺</span></div>
-      <div class="row"><span>Giderler</span><span>-${fmt(stats.expenses)} ₺</span></div>
-      <div class="line"></div>
-      <div class="row bold"><span>NET KASA</span><span>${fmt(stats.netCash)} ₺</span></div>
-      <div class="line"></div>
-      <div class="row bold"><span>SİPARİŞ ÖZETİ</span><span></span></div>
-      <div class="line"></div>
-      <div class="row"><span>Toplam Sipariş</span><span>${stats.totalOrders}</span></div>
-      <div class="row"><span>Tamamlanan</span><span>${stats.completedOrders}</span></div>
-      <div class="row"><span>İptal Edilen</span><span>${stats.cancelledOrders}</span></div>
-      <div class="row"><span>Ort. Sipariş Tutarı</span><span>${fmt(stats.avgOrderValue)} ₺</span></div>
-      <div class="line"></div>
-      ${stats.topProducts.length > 0 ? `
-      <div class="row bold"><span>EN ÇOK SATANLAR</span><span></span></div>
-      <div class="line"></div>
-      ${stats.topProducts.slice(0, 5).map((p, i) => `<div class="row"><span>${i + 1}. ${p.name}</span><span>${p.quantity} adet</span></div>`).join('')}
-      <div class="line"></div>
-      ` : ''}
-      <div class="footer">Sistem tarafından oluşturuldu</div>
-      <br><br><br>
-    `;
+    const html = `<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="utf-8" />
+<title>Gün Sonu Raporu — ${formatBusinessDateTR(businessDate)}</title>
+<style>
+  @page { size: 80mm auto; margin: 3mm; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { font-family: 'Consolas', 'Courier New', monospace; font-size: 12px; color: #000; width: 74mm; }
+  .center { text-align: center; }
+  .right { text-align: right; }
+  .bold { font-weight: 700; }
+  .xlarge { font-size: 16px; }
+  .large { font-size: 14px; }
+  .small { font-size: 10px; color: #444; }
+  .line { border-top: 1px dashed #000; margin: 4px 0; }
+  .double { border-top: 2px solid #000; margin: 4px 0; }
+  .row { display: flex; justify-content: space-between; gap: 6px; margin: 2px 0; }
+  .row .l { flex: 1; }
+  .row .r { white-space: nowrap; font-weight: 700; }
+  .footer { margin-top: 8px; text-align: center; font-size: 10px; color: #555; }
+  table { width: 100%; border-collapse: collapse; }
+  td { padding: 1px 0; vertical-align: top; }
+  td.right { text-align: right; }
+  @media print {
+    body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  }
+</style>
+</head>
+<body>
+  <div class="center bold xlarge">${printSettings.restaurantName || tenant.name || 'ŞefPOS'}</div>
+  <div class="center small">${branchLabel || ''}</div>
+  <div class="double"></div>
+  <div class="center bold large">GÜN SONU RAPORU</div>
+  <div class="center">${formatBusinessDateTR(businessDate)}</div>
+  <div class="center small">${timeNow}</div>
+  <div class="center small">Aralık: ${periodLabel}</div>
+  <div class="line"></div>
 
-    printHtml(html, printSettings.defaultReceiptPrinter || '');
+  <div class="bold">ÖDEME YÖNTEMLERİ</div>
+  <div class="line"></div>
+  <div class="row"><span class="l">Nakit</span><span class="r">${fmt(stats.cashRevenue)} ₺</span></div>
+  <div class="row"><span class="l">Kredi Kartı</span><span class="r">${fmt(stats.cardRevenue)} ₺</span></div>
+  <div class="row"><span class="l">Cari Hesap</span><span class="r">${fmt(stats.openAccountRevenue)} ₺</span></div>
+  <div class="double"></div>
+  <div class="row bold large"><span class="l">TOPLAM CİRO</span><span class="r">${fmt(stats.totalRevenue)} ₺</span></div>
+  <div class="double"></div>
+
+  <div class="bold">KASA ÖZETİ</div>
+  <div class="line"></div>
+  <div class="row"><span class="l">Nakit Satış</span><span class="r">+${fmt(stats.cashRevenue)} ₺</span></div>
+  <div class="row"><span class="l">Nakit Giriş</span><span class="r">+${fmt(stats.cashIn)} ₺</span></div>
+  <div class="row"><span class="l">Nakit Çıkış</span><span class="r">-${fmt(stats.cashOut)} ₺</span></div>
+  <div class="row"><span class="l">Giderler</span><span class="r">-${fmt(stats.expenses)} ₺</span></div>
+  <div class="line"></div>
+  <div class="row bold"><span class="l">NET KASA</span><span class="r">${fmt(stats.netCash)} ₺</span></div>
+  <div class="double"></div>
+
+  <div class="bold">SİPARİŞ ÖZETİ</div>
+  <div class="line"></div>
+  <div class="row"><span class="l">Toplam Sipariş</span><span class="r">${stats.totalOrders}</span></div>
+  <div class="row"><span class="l">Tamamlanan</span><span class="r">${stats.completedOrders}</span></div>
+  <div class="row"><span class="l">İptal Edilen</span><span class="r">${stats.cancelledOrders}</span></div>
+  <div class="row"><span class="l">Masa Siparişi</span><span class="r">${stats.dineInOrders}</span></div>
+  <div class="row"><span class="l">Paket Servis</span><span class="r">${stats.takeawayOrders}</span></div>
+  <div class="row"><span class="l">Online Sipariş</span><span class="r">${stats.onlineOrders}</span></div>
+  <div class="line"></div>
+  <div class="row"><span class="l">Ort. Sipariş Tutarı</span><span class="r">${fmt(stats.avgOrderValue)} ₺</span></div>
+  ${stats.topProducts.length > 0 ? `
+  <div class="double"></div>
+  <div class="bold">EN ÇOK SATANLAR</div>
+  <div class="line"></div>
+  ${stats.topProducts.slice(0, 8).map((p, i) => `<div class="row"><span class="l">${i + 1}. ${p.name}</span><span class="r">${p.quantity} ad / ${fmt(p.revenue)} ₺</span></div>`).join('')}
+  ` : ''}
+  ${(openTables.length > 0 || pendingOrders.length > 0) ? `
+  <div class="double"></div>
+  <div class="bold">UYARI</div>
+  <div class="line"></div>
+  ${openTables.length > 0 ? `<div class="row"><span class="l">Açık Masa</span><span class="r">${openTables.length}</span></div>` : ''}
+  ${pendingOrders.length > 0 ? `<div class="row"><span class="l">Bekleyen Sipariş</span><span class="r">${pendingOrders.length}</span></div>` : ''}
+  ` : ''}
+  <div class="line"></div>
+  <div class="footer">Sistem tarafından ${timeNow} oluşturuldu</div>
+  <br/><br/>
+  <script>
+    window.addEventListener('load', () => {
+      setTimeout(() => { window.focus(); window.print(); }, 200);
+    });
+  </script>
+</body>
+</html>`;
+
+    const w = window.open('', 'sefpos-end-of-day', 'width=420,height=900');
+    if (!w) {
+      setCloseError('Pop-up engelleyici yazdırma penceresini bloke etti. Tarayıcı pop-up izni verip tekrar deneyin.');
+      return;
+    }
+    w.document.open();
+    w.document.write(html);
+    w.document.close();
   };
 
   const toggleSection = (s: string) => setExpandedSection(prev => prev === s ? null : s);
@@ -368,9 +466,23 @@ export function EndOfDay({ onClose }: EndOfDayProps) {
                     Bütün vardiyalar kapatıldıktan sonra {formatBusinessDateTR(businessDate)} işgününü kilitleyin.
                     {activeShift && <span className="ml-1 text-rose-700 font-bold">Şu an açık vardiya var: {activeShift.shift_name}</span>}
                   </p>
+                  {(openTables.length > 0 || pendingOrders.length > 0) && (
+                    <div className="mt-2 flex items-center gap-2 flex-wrap">
+                      {openTables.length > 0 && (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-black text-rose-700 bg-rose-100 border border-rose-200 px-2 py-0.5 rounded-full">
+                          <AlertTriangle className="w-3 h-3" /> {openTables.length} açık masa
+                        </span>
+                      )}
+                      {pendingOrders.length > 0 && (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-black text-amber-700 bg-amber-100 border border-amber-200 px-2 py-0.5 rounded-full">
+                          <AlertTriangle className="w-3 h-3" /> {pendingOrders.length} bekleyen sipariş
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
                 <button
-                  onClick={handleCloseDay}
+                  onClick={requestCloseDay}
                   disabled={closingDay || !!activeShift}
                   className="bg-slate-900 hover:bg-slate-800 text-white font-black px-4 py-2.5 rounded-lg shadow disabled:opacity-50 flex items-center gap-2"
                 >
@@ -677,6 +789,119 @@ export function EndOfDay({ onClose }: EndOfDayProps) {
           </div>
         )}
       </div>
+
+      {/* Gun sonu kapatma onay modal'i */}
+      {showCloseConfirm && stats && (
+        <div className="fixed inset-0 bg-black/60 z-[70] flex items-center justify-center p-3" onClick={() => !closingDay && setShowCloseConfirm(false)}>
+          <div className="bg-white rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden max-h-[92vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <div className={`px-5 py-4 text-white flex items-start gap-3 ${(activeShift || openTables.length > 0 || pendingOrders.length > 0) ? 'bg-gradient-to-r from-rose-600 to-orange-600' : 'bg-gradient-to-r from-slate-800 to-slate-900'}`}>
+              <div className="w-10 h-10 rounded-xl bg-white/20 flex items-center justify-center backdrop-blur shrink-0">
+                <Lock className="w-5 h-5" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-[10px] uppercase font-black tracking-widest opacity-90">Gün Sonu Kapatma</p>
+                <h3 className="text-lg font-black truncate">{formatBusinessDateTR(businessDate)}</h3>
+                <p className="text-xs opacity-90 mt-0.5">
+                  {selectedBranch === 'all' ? 'Şube seçilmedi' : (branches.find(b => b.id === selectedBranch)?.name || 'Şube')}
+                </p>
+              </div>
+              <button onClick={() => !closingDay && setShowCloseConfirm(false)} disabled={closingDay} className="p-1.5 rounded-lg hover:bg-white/10">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-3">
+              {/* Uyarilar */}
+              {(activeShift || openTables.length > 0 || pendingOrders.length > 0) && (
+                <div className="rounded-xl bg-rose-50 border-2 border-rose-200 p-3 space-y-2">
+                  <div className="flex items-center gap-2 text-rose-800 font-black text-sm">
+                    <AlertTriangle className="w-4 h-4" /> Dikkat — kapatmadan önce kontrol edin
+                  </div>
+                  <div className="space-y-1.5">
+                    {activeShift && (
+                      <div className="flex items-start gap-2 text-sm text-rose-800">
+                        <XCircle className="w-4 h-4 mt-0.5 shrink-0" />
+                        <span><b>Açık vardiya:</b> {activeShift.shift_name} — gün kapatmak için önce vardiyayı bitirin.</span>
+                      </div>
+                    )}
+                    {openTables.length > 0 && (
+                      <div className="flex items-start gap-2 text-sm text-rose-800">
+                        <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+                        <span>
+                          <b>{openTables.length} açık masa</b> var:{' '}
+                          <span className="text-xs">
+                            {openTables.slice(0, 8).map(t => t.table_number).join(', ')}
+                            {openTables.length > 8 ? ` … +${openTables.length - 8}` : ''}
+                          </span>
+                        </span>
+                      </div>
+                    )}
+                    {pendingOrders.length > 0 && (
+                      <div className="flex items-start gap-2 text-sm text-rose-800">
+                        <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+                        <span><b>{pendingOrders.length} bekleyen sipariş</b> var (henüz tamamlanmamış / iptal edilmemiş).</span>
+                      </div>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-rose-700 mt-2">
+                    Yine de kapatırsanız bu kayıtlar geçersiz duruma düşmez; ertesi gün de görünmeye devam eder ama gün <b>kilitli</b> sayılır ve yeni vardiya açılamaz.
+                  </p>
+                </div>
+              )}
+
+              {/* Ozet */}
+              <div className="rounded-xl bg-slate-50 border border-slate-200 p-3 space-y-1.5">
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-slate-600">Toplam Ciro</span>
+                  <span className="font-black text-slate-800">{fmt(stats.totalRevenue)} ₺</span>
+                </div>
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-slate-600">Net Kasa</span>
+                  <span className={`font-black ${stats.netCash >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>{fmt(stats.netCash)} ₺</span>
+                </div>
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-slate-600">Sipariş</span>
+                  <span className="font-black text-slate-800">{stats.completedOrders} / {stats.totalOrders}</span>
+                </div>
+              </div>
+
+              {closeError && (
+                <div className="text-sm text-rose-600 bg-rose-50 border border-rose-200 rounded-lg p-2 flex items-start gap-2">
+                  <AlertTriangle className="w-4 h-4 mt-0.5" />
+                  <span className="flex-1 whitespace-pre-line">{closeError}</span>
+                </div>
+              )}
+            </div>
+
+            <div className="px-5 py-4 bg-slate-50 border-t border-slate-200 flex items-center gap-2 justify-end flex-wrap">
+              <button
+                onClick={printEndOfDayReport}
+                disabled={closingDay}
+                className="px-3 py-2 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 text-slate-700 font-bold text-sm flex items-center gap-2"
+                title="Gün sonu raporunu yazdır"
+              >
+                <Printer className="w-4 h-4" /> Raporu Yazdır
+              </button>
+              <button
+                onClick={() => !closingDay && setShowCloseConfirm(false)}
+                disabled={closingDay}
+                className="px-4 py-2 rounded-lg text-sm font-bold text-slate-600 hover:bg-slate-100"
+              >
+                Vazgeç
+              </button>
+              <button
+                onClick={confirmCloseDay}
+                disabled={closingDay || !!activeShift}
+                className="px-5 py-2.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white font-black text-sm shadow disabled:opacity-50 flex items-center gap-2"
+                title={activeShift ? 'Önce açık vardiyayı kapatın' : 'Günü kilitle'}
+              >
+                {closingDay ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Lock className="w-4 h-4" />}
+                {(openTables.length > 0 || pendingOrders.length > 0) ? 'Yine de Kapat' : 'Günü Kapat'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
