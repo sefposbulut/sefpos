@@ -71,7 +71,15 @@ export function Auth({ onBackToLanding }: AuthProps = {}) {
   const [registerErrors, setRegisterErrors] = useState<Partial<Record<RegisterFieldKey, string>>>({});
   /** 1 = yalnızca cep + SMS; 2 = firma, ad soyad, e-posta, şifre */
   const [registerWizardStep, setRegisterWizardStep] = useState<1 | 2>(1);
+  /** Supabase rate-limit (429) sonrasi geri sayim — kullanici butonu spamlemesin diye */
+  const [signupCooldown, setSignupCooldown] = useState(0);
   const { signIn, signUp } = useAuth();
+
+  useEffect(() => {
+    if (signupCooldown <= 0) return;
+    const t = window.setInterval(() => setSignupCooldown((s) => Math.max(0, s - 1)), 1000);
+    return () => window.clearInterval(t);
+  }, [signupCooldown]);
 
   const registerFieldRing = (key: RegisterFieldKey) =>
     registerErrors[key] ? REGISTER_FIELD_RING_ERROR : REGISTER_FIELD_RING_OK;
@@ -432,10 +440,25 @@ export function Auth({ onBackToLanding }: AuthProps = {}) {
           'Domain\'in (varsayılan: sefpos.com.tr) MX kaydı olmadığı için reddediliyor. ' +
           'Çözüm: Cloudflare DNS panelinden MX kaydı ekleyin VEYA .env\'de VITE_PHONE_AUTH_EMAIL_DOMAIN ile MX\'i olan başka bir domain belirtin.',
         );
-      else if (low.includes('rate limit') || low.includes('too many requests') || msg.includes('429'))
+      else if (
+        low.includes('rate limit') ||
+        low.includes('too many requests') ||
+        low.includes('over_email_send_rate_limit') ||
+        low.includes('over_request_rate_limit') ||
+        low.includes('email rate limit exceeded') ||
+        msg.includes('429') ||
+        /you can only request this after \d+/i.test(msg)
+      ) {
+        // Supabase 429 mesajinda cogu zaman "after X seconds" yazar — yakala, geri sayima koy.
+        const m = msg.match(/after\s+(\d+)\s+(?:seconds|saniye|s\b)/i);
+        const wait = m ? Math.min(900, parseInt(m[1], 10)) : 60;
+        setSignupCooldown(wait);
         setError(
-          'Çok sık deneme yapıldı (e-posta / kayıt sınırı). Lütfen birkaç dakika bekleyip tekrar deneyin.',
+          `Onay e-postası / kayıt sınırına takıldınız (Supabase). ${wait} sn beklemeniz gerekiyor.\n` +
+          `Kalıcı çözüm: Supabase Dashboard → Authentication → Providers → Email bölümünden ` +
+          `"Confirm email" seçeneğini KAPATIN (telefon OTP zaten doğruluyor) ya da Custom SMTP bağlayın.`,
         );
+      }
       else if (msg.includes('OTP'))
         setError('SMS doğrulama kodu geçersiz veya süresi doldu');
       else if (
@@ -970,14 +993,14 @@ export function Auth({ onBackToLanding }: AuthProps = {}) {
                   )}
 
                   {error && (
-                    <div className="bg-red-500/10 border border-red-500/30 text-red-400 px-4 py-3 rounded-lg text-sm">
+                    <div className="bg-red-500/10 border border-red-500/30 text-red-400 px-4 py-3 rounded-lg text-sm whitespace-pre-line leading-relaxed">
                       {error}
                     </div>
                   )}
 
                   <button
                     type="submit"
-                    disabled={loading}
+                    disabled={loading || signupCooldown > 0}
                     className="w-full bg-gradient-to-r from-orange-600 to-orange-500 hover:from-orange-700 hover:to-orange-600 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold py-3 rounded-lg text-sm transition-all duration-200 flex items-center justify-center gap-2"
                   >
                     {loading ? (
@@ -985,6 +1008,8 @@ export function Auth({ onBackToLanding }: AuthProps = {}) {
                         <div className="w-4 h-4 border-2 border-orange-200 border-t-white rounded-full animate-spin" />
                         Kaydediliyor...
                       </>
+                    ) : signupCooldown > 0 ? (
+                      <>Tekrar dene ({signupCooldown}s)</>
                     ) : (
                       <>
                         Kayıt ol ve kuruluma geç
