@@ -121,10 +121,19 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
   const [customTableCount, setCustomTableCount] = useState('');
   const [selectedPreset, setSelectedPreset] = useState(10);
   const [groupName, setGroupName] = useState('Salon');
+  const [groupPrefix, setGroupPrefix] = useState('S');
+  /** Kullanici prefix'i elle degistirdiyse salon adi degisiminde uzerine yazma. */
+  const [prefixManual, setPrefixManual] = useState(false);
+
+  const computeAutoPrefix = (name: string): string =>
+    (name || '').trim().slice(0, 1).toLocaleUpperCase('tr-TR') || 'M';
 
   const finalTableCount = selectedPreset === 0
     ? parseInt(customTableCount) || 0
     : tableCount;
+  const finalPrefix = (groupPrefix.trim() || computeAutoPrefix(groupName))
+    .toLocaleUpperCase('tr-TR')
+    .slice(0, 4);
 
   const markLocalOnboardingDone = async () => {
     if (!tenant) return;
@@ -227,7 +236,6 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
 
         if (groupName.trim()) {
           groupId = crypto.randomUUID();
-          const prefix = groupName.trim().substring(0, 3).toUpperCase();
           await api.localDbWrite({
             table: 'table_groups',
             row: {
@@ -235,7 +243,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
               tenant_id: tenant.id,
               branch_id: activeBranch.id,
               name: groupName.trim(),
-              prefix,
+              prefix: finalPrefix,
               color: '#f97316',
             },
           });
@@ -248,7 +256,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
               id: crypto.randomUUID(),
               tenant_id: tenant.id,
               branch_id: activeBranch.id,
-              table_number: `${i + 1}`,
+              table_number: `${finalPrefix}-${i + 1}`,
               capacity: 4,
               status: 'available',
               size: 'medium',
@@ -268,10 +276,9 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
       let groupId: string | null = null;
 
       if (groupName.trim()) {
-        const prefix = groupName.trim().substring(0, 3).toUpperCase();
         const { data: groupData, error: groupError } = await supabase
           .from('table_groups')
-          .insert({ tenant_id: tenant.id, branch_id: activeBranch.id, name: groupName.trim(), prefix, color: '#f97316' })
+          .insert({ tenant_id: tenant.id, branch_id: activeBranch.id, name: groupName.trim(), prefix: finalPrefix, color: '#f97316' })
           .select('id')
           .single();
         if (groupError) {
@@ -296,7 +303,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
       const tables = Array.from({ length: finalTableCount }, (_, i) => ({
         tenant_id: tenant.id,
         branch_id: activeBranch.id,
-        table_number: `${i + 1}`,
+        table_number: `${finalPrefix}-${i + 1}`,
         capacity: 4,
         status: 'available' as const,
         size: 'medium',
@@ -686,15 +693,35 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
               <h2 className="text-2xl font-black text-slate-800 mb-1">Masaları Oluştur</h2>
               <p className="text-slate-400 mb-6">Kaç masa ile başlamak istiyorsunuz? Sonradan ekleyebilirsiniz.</p>
 
-              <div className="mb-5">
-                <label className="block text-sm font-semibold text-slate-700 mb-2">Salon / Bölge Adı</label>
-                <input
-                  type="text"
-                  value={groupName}
-                  onChange={(e) => setGroupName(e.target.value)}
-                  placeholder="Örn: Salon, Teras, Bahçe"
-                  className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-orange-400 focus:border-transparent outline-none transition"
-                />
+              <div className="mb-5 grid grid-cols-3 gap-3">
+                <div className="col-span-2">
+                  <label className="block text-sm font-semibold text-slate-700 mb-2">Salon / Bölge Adı</label>
+                  <input
+                    type="text"
+                    value={groupName}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setGroupName(v);
+                      if (!prefixManual) setGroupPrefix(computeAutoPrefix(v));
+                    }}
+                    placeholder="Örn: Salon, Teras, Bahçe"
+                    className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-orange-400 focus:border-transparent outline-none transition"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-slate-700 mb-2">Masa Öneki</label>
+                  <input
+                    type="text"
+                    value={groupPrefix}
+                    maxLength={4}
+                    onChange={(e) => {
+                      setPrefixManual(true);
+                      setGroupPrefix(e.target.value.toLocaleUpperCase('tr-TR'));
+                    }}
+                    placeholder="S"
+                    className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-orange-400 focus:border-transparent outline-none transition text-center font-bold uppercase tracking-widest"
+                  />
+                </div>
               </div>
 
               <div className="mb-5">
@@ -734,7 +761,16 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
                 <p className="text-orange-700 text-sm font-medium">
                   {groupName.trim() && `"${groupName}" bölgesi altında `}
                   <span className="font-black">{finalTableCount} masa</span> oluşturulacak.
-                  Her masanın kapasitesi 4 kişi olarak ayarlanır.
+                  {finalTableCount > 0 && (
+                    <>
+                      {' '}Numaralandırma:{' '}
+                      <span className="font-mono font-bold">
+                        {finalPrefix}-1, {finalPrefix}-2
+                        {finalTableCount > 3 ? `, … ${finalPrefix}-${finalTableCount}` : finalTableCount === 3 ? `, ${finalPrefix}-3` : ''}
+                      </span>
+                      .
+                    </>
+                  )}
                 </p>
               </div>
 
