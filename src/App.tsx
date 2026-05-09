@@ -29,6 +29,7 @@ import { CancelLogs } from './components/CancelLogs';
 import { PinLockScreen } from './components/PinLockScreen';
 import { Inventory } from './components/inventory/Inventory';
 import { QuickSale } from './components/QuickSale';
+import { ShiftManager } from './components/ShiftManager';
 import { Database, supabase } from './lib/supabase';
 import { isSqlServerMode } from './lib/sqlDb';
 import { queryCache } from './lib/queryCache';
@@ -503,6 +504,7 @@ function App() {
         onOpenOnboarding={() => setShowOnboarding(true)}
         currentPage={currentPage}
         onBackToTables={() => handleNavigate('tables')}
+        onOpenShifts={() => handleNavigate('shifts')}
       />
       <MainMenu
         onNavigate={handleNavigate}
@@ -562,6 +564,8 @@ function App() {
           <QuickSale />
         </div>
       )}
+
+      {show('shifts') && <ShiftManager />}
 
       {selectedTable && (
         <OrderPanel

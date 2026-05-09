@@ -1,12 +1,14 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { loadPrintSettings, printHtml } from '../lib/printService';
+import { useActiveShift } from '../lib/useActiveShift';
+import { computeBusinessDate, formatBusinessDateTR } from '../lib/businessDay';
 import {
   BarChart3, TrendingUp, TrendingDown, DollarSign, ShoppingCart,
   Clock, Calendar, Printer, RefreshCw,
   Banknote, CreditCard, FileText, CheckCircle, XCircle,
-  ChevronDown, ChevronUp, Building2
+  ChevronDown, ChevronUp, Building2, Lock, AlertTriangle
 } from 'lucide-react';
 
 interface DayStats {
@@ -57,7 +59,7 @@ function getBusinessDayRange(): { start: Date; end: Date } {
 }
 
 export function EndOfDay({ onClose }: EndOfDayProps) {
-  const { tenant, activeBranch, branches, isOwnerOrAdmin, isManager } = useAuth();
+  const { tenant, activeBranch, branches, isOwnerOrAdmin, isManager, permissions } = useAuth();
   const [stats, setStats] = useState<DayStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedBranch, setSelectedBranch] = useState<string>(activeBranch?.id || 'all');
@@ -68,6 +70,46 @@ export function EndOfDay({ onClose }: EndOfDayProps) {
   const [endDT, setEndDT] = useState<string>(() => {
     return toLocalDT(getBusinessDayRange().end);
   });
+  const [closingDay, setClosingDay] = useState(false);
+  const [closeError, setCloseError] = useState<string | null>(null);
+  const [closeSuccess, setCloseSuccess] = useState<string | null>(null);
+
+  const effectiveBranchForShift = isOwnerOrAdmin ? (selectedBranch !== 'all' ? selectedBranch : null) : (activeBranch?.id || null);
+  const { activeShift, todayClosure, refresh: refreshShift } = useActiveShift({
+    tenantId: tenant?.id || null,
+    branchId: effectiveBranchForShift,
+    enabled: !!tenant,
+  });
+  const businessDate = useMemo(() => computeBusinessDate(), []);
+
+  const handleCloseDay = async () => {
+    if (!effectiveBranchForShift) {
+      setCloseError('Şube seçimi gerekli (Tüm Şubeler ile gün kapatılamaz).');
+      return;
+    }
+    if (activeShift) {
+      setCloseError('Önce açık vardiyayı kapatın.');
+      return;
+    }
+    setClosingDay(true);
+    setCloseError(null);
+    setCloseSuccess(null);
+    try {
+      const { error } = await (supabase as any).rpc('close_business_day', {
+        p_branch_id: effectiveBranchForShift,
+        p_business_date: businessDate,
+        p_notes: null,
+      });
+      if (error) throw error;
+      setCloseSuccess('Gün başarıyla kapatıldı.');
+      await refreshShift();
+      await loadStats();
+    } catch (e: any) {
+      setCloseError(e?.message || 'Gün kapatılamadı');
+    } finally {
+      setClosingDay(false);
+    }
+  };
 
   useEffect(() => {
     if (tenant) loadStats();
@@ -304,6 +346,52 @@ export function EndOfDay({ onClose }: EndOfDayProps) {
               </button>
             </div>
           </div>
+
+          {/* Day status / close-day banner */}
+          {todayClosure ? (
+            <div className="rounded-xl border-2 border-amber-300 bg-amber-50 p-4 flex items-center gap-3">
+              <Lock className="w-6 h-6 text-amber-700" />
+              <div className="flex-1">
+                <p className="font-black text-amber-900">Bu gün kapatıldı</p>
+                <p className="text-xs text-amber-800">{formatBusinessDateTR(todayClosure.business_date)} • {new Date(todayClosure.closed_at).toLocaleString('tr-TR')}</p>
+              </div>
+            </div>
+          ) : (
+            permissions.can_end_of_day && effectiveBranchForShift && (
+              <div className="rounded-xl border border-slate-200 bg-gradient-to-r from-rose-50 via-orange-50 to-amber-50 p-4 flex items-start md:items-center gap-3 flex-wrap">
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-rose-500 to-orange-600 flex items-center justify-center shadow shrink-0">
+                  <Lock className="w-5 h-5 text-white" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-black text-slate-800">Gün Sonu Kapatma</p>
+                  <p className="text-xs text-slate-600">
+                    Bütün vardiyalar kapatıldıktan sonra {formatBusinessDateTR(businessDate)} işgününü kilitleyin.
+                    {activeShift && <span className="ml-1 text-rose-700 font-bold">Şu an açık vardiya var: {activeShift.shift_name}</span>}
+                  </p>
+                </div>
+                <button
+                  onClick={handleCloseDay}
+                  disabled={closingDay || !!activeShift}
+                  className="bg-slate-900 hover:bg-slate-800 text-white font-black px-4 py-2.5 rounded-lg shadow disabled:opacity-50 flex items-center gap-2"
+                >
+                  {closingDay ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Lock className="w-4 h-4" />}
+                  Günü Kapat
+                </button>
+              </div>
+            )
+          )}
+          {closeError && (
+            <div className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-sm p-3 flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 mt-0.5" />
+              <span className="flex-1 whitespace-pre-line">{closeError}</span>
+            </div>
+          )}
+          {closeSuccess && (
+            <div className="rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-700 text-sm p-3 flex items-start gap-2">
+              <CheckCircle className="w-4 h-4 mt-0.5" />
+              <span className="flex-1">{closeSuccess}</span>
+            </div>
+          )}
 
           <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
             <div className="flex items-center gap-2 mb-3">

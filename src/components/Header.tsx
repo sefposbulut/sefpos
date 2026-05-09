@@ -1,9 +1,11 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { LogOut, User, Settings, ChevronDown, MapPin, Check, Building2, Zap, ZoomIn, ZoomOut, Bell, Headphones as HeadphonesIcon, X, Send, Sparkles, Phone, Mail, ArrowLeft, LayoutGrid } from 'lucide-react';
+import { LogOut, User, Settings, ChevronDown, MapPin, Check, Building2, Zap, ZoomIn, ZoomOut, Bell, Headphones as HeadphonesIcon, X, Send, Sparkles, Phone, Mail, ArrowLeft, LayoutGrid, Sun, Sunset, Moon, PlayCircle, Lock } from 'lucide-react';
 import { WaiterCallBell } from './WaiterCallBell';
 import { supabase } from '../lib/supabase';
 import { getTrialInfo, formatTrialRemaining } from '../lib/tenantTrial';
+import { useActiveShift } from '../lib/useActiveShift';
+import { shiftDurationLabel } from '../lib/businessDay';
 
 const isElectron = !!(window as any).electronAPI;
 
@@ -38,6 +40,8 @@ interface HeaderProps {
   currentPage?: string;
   /** Header icindeki "Masalara Dön" butonunun aksiyonu (genelde onNavigate('tables')). */
   onBackToTables?: () => void;
+  /** Aktif vardiya rozetine tiklayinca yonlendirilecek aksiyon (genelde onNavigate('shifts')). */
+  onOpenShifts?: () => void;
 }
 
 interface Notification {
@@ -63,10 +67,22 @@ const PAGE_LABELS: Record<string, string> = {
   'cancel-logs': 'İptal Kayıtları',
   inventory: 'Stok / Reçete',
   cash: 'Kasa',
+  shifts: 'Vardiyalar',
 };
 
-export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackToTables }: HeaderProps) {
+function shiftIcon(no: number) {
+  if (no === 1) return Sun;
+  if (no === 2) return Sunset;
+  return Moon;
+}
+
+export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackToTables, onOpenShifts }: HeaderProps) {
   const { profile, tenant, user, signOut, activeBranch, branches, setActiveBranch } = useAuth();
+  const { activeShift, todayClosure } = useActiveShift({
+    tenantId: tenant?.id || null,
+    branchId: activeBranch?.id || null,
+    enabled: !!tenant,
+  });
   const [showBranchMenu, setShowBranchMenu] = useState(false);
   const [zoom, setZoom] = useState(1);
   const [showSupport, setShowSupport] = useState(false);
@@ -283,6 +299,14 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
                     </span>
                   </span>
                 </button>
+              )}
+
+              {tenant && (
+                <ShiftBadge
+                  activeShift={activeShift}
+                  dayLocked={!!todayClosure}
+                  onClick={onOpenShifts}
+                />
               )}
 
               {branches.length > 0 && (
@@ -711,5 +735,62 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
         </>
       )}
     </>
+  );
+}
+
+interface ShiftBadgeProps {
+  activeShift: ReturnType<typeof useActiveShift>['activeShift'];
+  dayLocked: boolean;
+  onClick?: () => void;
+}
+function ShiftBadge({ activeShift, dayLocked, onClick }: ShiftBadgeProps) {
+  if (dayLocked && !activeShift) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        title="Gün kapatıldı — Vardiyalar"
+        className="hidden sm:inline-flex items-center gap-1.5 pl-1 pr-2.5 py-1 rounded-full bg-amber-50 hover:bg-amber-100 border border-amber-200 transition active:scale-95"
+      >
+        <span className="w-6 h-6 rounded-full bg-gradient-to-br from-amber-500 to-orange-600 text-white flex items-center justify-center shadow-inner">
+          <Lock className="w-3 h-3" />
+        </span>
+        <span className="text-[10px] uppercase tracking-wider font-bold text-amber-700">Gün Kapalı</span>
+      </button>
+    );
+  }
+  if (!activeShift) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        title="Aktif vardiya yok — Vardiyalar sayfasını aç"
+        className="hidden sm:inline-flex items-center gap-1.5 pl-1 pr-2.5 py-1 rounded-full bg-rose-50 hover:bg-rose-100 border border-rose-200 transition active:scale-95"
+      >
+        <span className="w-6 h-6 rounded-full bg-gradient-to-br from-rose-500 to-orange-600 text-white flex items-center justify-center shadow-inner animate-pulse">
+          <PlayCircle className="w-3.5 h-3.5" />
+        </span>
+        <span className="text-[10px] uppercase tracking-wider font-bold text-rose-700">Vardiya Yok</span>
+      </button>
+    );
+  }
+  const Icon = shiftIcon(activeShift.shift_no);
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={`${activeShift.shift_name} • ${activeShift.opener_full_name || ''} • ${shiftDurationLabel(activeShift.opened_at)}`}
+      className="hidden sm:inline-flex items-center gap-1.5 pl-1 pr-2.5 py-1 rounded-full bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 transition active:scale-95"
+    >
+      <span className="w-6 h-6 rounded-full bg-gradient-to-br from-emerald-500 to-green-600 text-white flex items-center justify-center shadow-inner">
+        <Icon className="w-3.5 h-3.5" />
+      </span>
+      <span className="flex items-baseline gap-1.5 leading-none">
+        <span className="text-[9px] uppercase tracking-[0.12em] font-bold text-emerald-600">Vardiya</span>
+        <span className="text-xs md:text-sm font-extrabold text-emerald-800 whitespace-nowrap">
+          {activeShift.shift_name.replace(' Vardiyasi', '').replace(' Vardiyası', '')}
+        </span>
+      </span>
+    </button>
   );
 }
