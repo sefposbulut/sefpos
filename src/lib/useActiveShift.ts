@@ -27,6 +27,8 @@ export interface DailyClosureSnapshot {
 interface Options {
   branchId?: string | null;
   tenantId?: string | null;
+  /** Sadece bu kullanicinin acik vardiyasini izle (paralel-mod / kisisel rozet). */
+  userId?: string | null;
   enabled?: boolean;
 }
 
@@ -34,8 +36,9 @@ interface Options {
  * Aktif (open) vardiya + bugun kapatilmis gun bilgisini canli takip eder.
  * - Realtime: shifts + daily_closures
  * - 60sn polling fallback (sekme arka plana inerse uyani uyandir)
+ * - userId verilirse: yalniz o kullanicinin acik vardiyasi
  */
-export function useActiveShift({ branchId, tenantId, enabled = true }: Options) {
+export function useActiveShift({ branchId, tenantId, userId, enabled = true }: Options) {
   const [activeShift, setActiveShift] = useState<ActiveShift | null>(null);
   const [todayClosure, setTodayClosure] = useState<DailyClosureSnapshot | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
@@ -63,6 +66,7 @@ export function useActiveShift({ branchId, tenantId, enabled = true }: Options) 
           .order('opened_at', { ascending: false })
           .limit(1);
         if (branchId) q = q.eq('branch_id', branchId);
+        if (userId) q = q.eq('opened_by', userId);
         const { data: shiftRows } = await q;
         const shift = (shiftRows && shiftRows[0]) || null;
 
@@ -104,7 +108,7 @@ export function useActiveShift({ branchId, tenantId, enabled = true }: Options) 
     refresh();
 
     const channel = supabase
-      .channel(`shift-watch-${tenantId}-${branchId || 'all'}`)
+      .channel(`shift-watch-${tenantId}-${branchId || 'all'}-${userId || 'all'}`)
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'shifts', filter: `tenant_id=eq.${tenantId}` },
@@ -138,7 +142,7 @@ export function useActiveShift({ branchId, tenantId, enabled = true }: Options) 
       document.removeEventListener('visibilitychange', onVis);
       window.clearInterval(id);
     };
-  }, [enabled, tenantId, branchId, refresh]);
+  }, [enabled, tenantId, branchId, userId, refresh]);
 
   return { activeShift, todayClosure, loading, refresh };
 }

@@ -227,16 +227,19 @@ function CountInput({ mode, setMode, total, setTotal, breakdown, setBreakdown, h
 export function ShiftManager() {
   const { tenant, user, profile, activeBranch, branches, isOwnerOrAdmin, permissions } = useAuth();
   const tenantId = tenant?.id || null;
-  const branchId = (isOwnerOrAdmin ? null : activeBranch?.id) || activeBranch?.id || null;
 
   const [selectedBranch, setSelectedBranch] = useState<string>(activeBranch?.id || (branches[0]?.id || ''));
   const effectiveBranchId = isOwnerOrAdmin ? (selectedBranch || null) : (activeBranch?.id || null);
 
+  // Header'daki rozet zaten kisisel; bu sayfada da kendi vardiyamizi gosterelim.
+  // Admin tum acik vardiyalari liste icinde gorur (asagida tum_acik karti).
   const { activeShift, todayClosure, loading: shiftLoading, refresh } = useActiveShift({
     tenantId,
     branchId: effectiveBranchId,
+    userId: user?.id || null,
     enabled: !!tenantId,
   });
+  const [allOpenShifts, setAllOpenShifts] = useState<ShiftRow[]>([]);
 
   const [definitions, setDefinitions] = useState<ShiftDefinition[]>([]);
   const [history, setHistory] = useState<ShiftRow[]>([]);
@@ -299,6 +302,8 @@ export function ShiftManager() {
         .order('opened_at', { ascending: false })
         .limit(30);
       if (effectiveBranchId) q = q.eq('branch_id', effectiveBranchId);
+      // Normal kullanici sadece kendi gecmisini gorur
+      if (!isOwnerOrAdmin && user?.id) q = q.eq('opened_by', user.id);
       const { data: rows } = await q;
       // attach opener / closer names
       const userIds = new Set<string>();
@@ -330,10 +335,38 @@ export function ShiftManager() {
       if (effectiveBranchId) dq = dq.eq('branch_id', effectiveBranchId);
       const { data: cl } = await dq;
       setTodayClosures(cl || []);
+
+      // Admin: tum acik vardiyalar (paralel mod gorunumu)
+      if (isOwnerOrAdmin) {
+        let oq = (supabase as any)
+          .from('shifts')
+          .select('*')
+          .eq('tenant_id', tenantId)
+          .eq('status', 'open')
+          .order('opened_at', { ascending: false });
+        if (effectiveBranchId) oq = oq.eq('branch_id', effectiveBranchId);
+        const { data: opens } = await oq;
+        const oUserIds = new Set<string>();
+        (opens || []).forEach((r: any) => { if (r.opened_by) oUserIds.add(r.opened_by); });
+        let openMap: Record<string, string> = {};
+        if (oUserIds.size > 0) {
+          const { data: profs2 } = await (supabase as any)
+            .from('profiles')
+            .select('id,full_name')
+            .in('id', Array.from(oUserIds));
+          (profs2 || []).forEach((p: any) => { openMap[p.id] = p.full_name; });
+        }
+        setAllOpenShifts((opens || []).map((r: any) => ({
+          ...r,
+          opener_name: r.opened_by ? openMap[r.opened_by] : null,
+        })));
+      } else {
+        setAllOpenShifts([]);
+      }
     } finally {
       setLoadingHistory(false);
     }
-  }, [tenantId, effectiveBranchId]);
+  }, [tenantId, effectiveBranchId, isOwnerOrAdmin, user?.id]);
 
   useEffect(() => {
     loadHistory();
@@ -739,6 +772,41 @@ export function ShiftManager() {
                 <span className="flex-1 whitespace-pre-line">{dayCloseError}</span>
               </div>
             )}
+          </div>
+        )}
+
+        {/* Admin: paralel acik vardiyalar */}
+        {isOwnerOrAdmin && allOpenShifts.length > 0 && (
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden mb-5">
+            <div className="px-5 py-3 border-b border-slate-100 flex items-center gap-2">
+              <User className="w-4 h-4 text-emerald-500" />
+              <h3 className="font-black text-slate-800">Şu An Çalışan Vardiyalar ({allOpenShifts.length})</h3>
+            </div>
+            <div className="divide-y divide-slate-100">
+              {allOpenShifts.map((s) => {
+                const Icon = shiftIcon(s.shift_no);
+                const isMine = s.opened_by === user?.id;
+                return (
+                  <div key={s.id} className={`p-4 flex items-center gap-3 ${isMine ? 'bg-emerald-50/50' : ''}`}>
+                    <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-emerald-500 to-green-600 text-white flex items-center justify-center shadow shrink-0">
+                      <Icon className="w-5 h-5" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-black text-slate-800 text-sm">{s.opener_name || 'Kullanıcı'}</span>
+                        {isMine && <span className="text-[9px] font-black px-1.5 py-0.5 rounded-full bg-emerald-200 text-emerald-800">SİZ</span>}
+                        <span className="text-xs font-bold text-slate-500">{s.shift_name}</span>
+                      </div>
+                      <p className="text-[11px] text-slate-500 mt-0.5">
+                        {new Date(s.opened_at).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })}'den beri • {shiftDurationLabel(s.opened_at)}
+                        {s.terminal_name && ` • ${s.terminal_name}`}
+                      </p>
+                    </div>
+                    <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">AÇIK</span>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         )}
 

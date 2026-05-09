@@ -80,6 +80,8 @@ interface AuthContextType {
   loading: boolean;
   profileLoadFailed: boolean;
   isOwnerOrAdmin: boolean;
+  /** tenants.shifts_enabled — vardiya/gun sonu sistemi acik mi (Settings'ten admin acar). */
+  shiftsEnabled: boolean;
   signIn: (email: string, password: string) => Promise<{ error: any }>;
   signUp: (
     email: string,
@@ -658,6 +660,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const isOwnerOrAdmin = profile?.role === 'owner' || profile?.role === 'admin' || !!profile?.is_super_admin;
+  const shiftsEnabled = !!(tenant as any)?.shifts_enabled;
 
   return (
     <AuthContext.Provider value={{
@@ -670,6 +673,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       loading,
       profileLoadFailed,
       isOwnerOrAdmin,
+      shiftsEnabled,
       signIn,
       signUp,
       signOut,

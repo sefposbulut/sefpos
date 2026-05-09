@@ -77,11 +77,12 @@ function shiftIcon(no: number) {
 }
 
 export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackToTables, onOpenShifts }: HeaderProps) {
-  const { profile, tenant, user, signOut, activeBranch, branches, setActiveBranch } = useAuth();
+  const { profile, tenant, user, signOut, activeBranch, branches, setActiveBranch, shiftsEnabled } = useAuth();
   const { activeShift, todayClosure } = useActiveShift({
     tenantId: tenant?.id || null,
     branchId: activeBranch?.id || null,
-    enabled: !!tenant,
+    userId: user?.id || null,
+    enabled: !!tenant && shiftsEnabled,
   });
   const [showBranchMenu, setShowBranchMenu] = useState(false);
   const [zoom, setZoom] = useState(1);
@@ -301,7 +302,7 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
                 </button>
               )}
 
-              {tenant && (
+              {tenant && shiftsEnabled && (
                 <ShiftBadge
                   activeShift={activeShift}
                   dayLocked={!!todayClosure}
@@ -456,7 +457,18 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
               )}
 
               <button
-                onClick={signOut}
+                onClick={() => {
+                  if (shiftsEnabled && activeShift) {
+                    const ok = window.confirm(
+                      `Açık vardiyanız var (${activeShift.shift_name}).\n\nÖnce vardiyayı bitirmek ister misiniz?\n\n• TAMAM: Vardiyamı bitir penceresini aç\n• İPTAL: Vardiyayı açık bırakıp çık`,
+                    );
+                    if (ok) {
+                      onOpenShifts && onOpenShifts();
+                      return;
+                    }
+                  }
+                  signOut();
+                }}
                 className="flex items-center space-x-1 md:space-x-2 text-white bg-gradient-to-r from-red-600 to-red-700 px-2 py-1.5 md:px-4 md:py-2 rounded-lg hover:shadow-lg transition-all active:scale-95"
               >
                 <LogOut className="w-3.5 h-3.5 md:w-4 md:h-4" />

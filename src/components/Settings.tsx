@@ -3,7 +3,7 @@ import { supabase } from '../lib/supabase';
 import { createClient } from '@supabase/supabase-js';
 import { useAuth } from '../contexts/AuthContext';
 import { Database } from '../lib/supabase';
-import { X, Plus, Trash2, Settings as SettingsIcon, Building2, ToggleLeft, ToggleRight, Printer, AlertCircle, MapPin, Phone, Save, CreditCard as Edit2, User, Store, CheckCircle, Wifi, WifiOff, Globe, RefreshCw, Lock, ShieldCheck, Eye, EyeOff, Package, CheckSquare, Square, Database as DatabaseIcon, Receipt, Pencil, Scale, Loader, QrCode, PhoneIncoming, FlaskConical } from 'lucide-react';
+import { X, Plus, Trash2, Settings as SettingsIcon, Building2, ToggleLeft, ToggleRight, Printer, AlertCircle, MapPin, Phone, Save, CreditCard as Edit2, User, Store, CheckCircle, Wifi, WifiOff, Globe, RefreshCw, Lock, ShieldCheck, Eye, EyeOff, Package, CheckSquare, Square, Database as DatabaseIcon, Receipt, Pencil, Scale, Loader, QrCode, PhoneIncoming, FlaskConical, Clock } from 'lucide-react';
 import {
   isCallerIdAvailable,
   startCallerId,
@@ -2060,6 +2060,8 @@ export function Settings({ onClose }: SettingsProps) {
                 <p className="text-slate-300 text-sm">Çalışma modu, internet bağlantısı ve sistem durumu</p>
               </div>
 
+              <ShiftsToggleCard />
+
               <div className="bg-white border-2 border-gray-200 rounded-xl p-5">
                 <div className="flex items-center justify-between mb-4">
                   <div className="flex items-center gap-2">
@@ -2979,6 +2981,74 @@ function ScaleTestSection() {
           </ul>
         </div>
       </div>
+    </div>
+  );
+}
+
+function ShiftsToggleCard() {
+  const { tenant, refreshProfile, isOwnerOrAdmin, shiftsEnabled } = useAuth();
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [ok, setOk] = useState<string | null>(null);
+
+  const toggle = async (next: boolean) => {
+    if (!tenant) return;
+    setSaving(true);
+    setError(null);
+    setOk(null);
+    try {
+      const { error } = await (supabase as any)
+        .from('tenants')
+        .update({ shifts_enabled: next })
+        .eq('id', tenant.id);
+      if (error) throw error;
+      setOk(next ? 'Vardiya sistemi açıldı.' : 'Vardiya sistemi kapatıldı.');
+      await refreshProfile();
+    } catch (e: any) {
+      setError(e?.message || 'Güncellenemedi');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="bg-white border-2 border-gray-200 rounded-xl p-5">
+      <div className="flex items-start gap-3 flex-wrap">
+        <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-orange-500 to-rose-600 text-white flex items-center justify-center shadow shrink-0">
+          <Clock className="w-6 h-6" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <h4 className="font-bold text-gray-800">Vardiya & Gün Sonu Sistemi</h4>
+          <p className="text-sm text-gray-500 mt-0.5">
+            Açıkken: kasiyer giriş yaptığında <b>"Vardiyanız başlatıldı"</b> denir, kapatınca kişisel Z raporu çıkar. Aynı anda birden fazla kullanıcı kendi vardiyasında olabilir. Kapalıyken: vardiya/gün sonu özellikleri tamamen gizlenir.
+          </p>
+          <div className="mt-3 flex items-center gap-2 flex-wrap">
+            <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${shiftsEnabled ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>
+              DURUM: {shiftsEnabled ? 'AÇIK' : 'KAPALI'}
+            </span>
+            {!isOwnerOrAdmin && (
+              <span className="text-[11px] text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full border border-amber-200">
+                Bu ayarı yalnız sahip/yönetici değiştirebilir
+              </span>
+            )}
+          </div>
+        </div>
+        <button
+          onClick={() => toggle(!shiftsEnabled)}
+          disabled={saving || !isOwnerOrAdmin}
+          className={`shrink-0 inline-flex items-center gap-2 px-4 py-2.5 rounded-xl font-black text-white shadow disabled:opacity-50 transition ${
+            shiftsEnabled ? 'bg-gradient-to-r from-rose-500 to-orange-600 hover:from-rose-600 hover:to-orange-700' : 'bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-600 hover:to-green-700'
+          }`}
+        >
+          {shiftsEnabled ? <ToggleRight className="w-5 h-5" /> : <ToggleLeft className="w-5 h-5" />}
+          {shiftsEnabled ? 'Sistemi Kapat' : 'Sistemi Aç'}
+        </button>
+      </div>
+      {(error || ok) && (
+        <div className={`mt-3 text-sm rounded-lg px-3 py-2 ${error ? 'bg-rose-50 text-rose-700 border border-rose-200' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'}`}>
+          {error || ok}
+        </div>
+      )}
     </div>
   );
 }

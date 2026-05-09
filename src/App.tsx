@@ -30,6 +30,8 @@ import { PinLockScreen } from './components/PinLockScreen';
 import { Inventory } from './components/inventory/Inventory';
 import { QuickSale } from './components/QuickSale';
 import { ShiftManager } from './components/ShiftManager';
+import { ShiftAutoStartPrompt } from './components/ShiftAutoStartPrompt';
+import { ShiftQuickClose } from './components/ShiftQuickClose';
 import { Database, supabase } from './lib/supabase';
 import { isSqlServerMode } from './lib/sqlDb';
 import { queryCache } from './lib/queryCache';
@@ -129,6 +131,7 @@ function App() {
   const { user, profile, tenant, loading, refreshProfile, activeBranch, signOut, profileLoadFailed } = useAuth();
   const [selectedTable, setSelectedTable] = useState<Table | null>(null);
   const [currentPage, setCurrentPage] = useState('tables');
+  const [showShiftQuickClose, setShowShiftQuickClose] = useState(false);
   const [dbMode, setDbMode] = useState<'cloud' | 'sqlserver' | null | 'loading'>('loading');
   const [sqlServerConfigured, setSqlServerConfigured] = useState(false);
   const [showSqlServerSettings, setShowSqlServerSettings] = useState(false);
@@ -504,8 +507,10 @@ function App() {
         onOpenOnboarding={() => setShowOnboarding(true)}
         currentPage={currentPage}
         onBackToTables={() => handleNavigate('tables')}
-        onOpenShifts={() => handleNavigate('shifts')}
+        onOpenShifts={() => setShowShiftQuickClose(true)}
       />
+      <ShiftAutoStartPrompt />
+      <ShiftQuickClose open={showShiftQuickClose} onClose={() => setShowShiftQuickClose(false)} />
       <MainMenu
         onNavigate={handleNavigate}
         currentPage={currentPage}
