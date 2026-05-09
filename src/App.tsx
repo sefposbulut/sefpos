@@ -33,7 +33,7 @@ import { ShiftManager } from './components/ShiftManager';
 import { ShiftAutoStartPrompt } from './components/ShiftAutoStartPrompt';
 import { ShiftQuickClose } from './components/ShiftQuickClose';
 import { useUiPrefs, setHeaderHidden } from './lib/uiPrefs';
-import { Maximize2 } from 'lucide-react';
+import { Maximize2, Menu as MenuIcon } from 'lucide-react';
 import { Database, supabase } from './lib/supabase';
 import { isSqlServerMode } from './lib/sqlDb';
 import { queryCache } from './lib/queryCache';
@@ -528,23 +528,41 @@ function App() {
         />
       )}
 
-      {/* Header gizliyken sag ALT kosede minimal FAB — sayfa icerigine binmez,
-          dokunmatik POS'ta parmagin dogal cektigi alanda durur. */}
+      {/* Header gizliyken sag ALT kosede 2 butonlu mini FAB paneli:
+            • Menu : sol panel (MainMenu) acar — POS modunda da sayfalara erisim
+            • Tam Ekran kapat : Header'i geri acar
+          Sayfa icerigine binmez, dokunmatik parmagin dogal cektigi alanda durur. */}
       {headerHidden && (
-        <button
-          type="button"
-          onClick={() => setHeaderHidden(false)}
-          title="Üst menüyü göster (POS modundan çık)"
-          aria-label="Üst menüyü göster"
-          className="group fixed bottom-3 right-3 z-[60] inline-flex items-center gap-1.5 h-11 pl-2.5 pr-3 rounded-full bg-slate-900/85 hover:bg-slate-900 text-white shadow-2xl backdrop-blur ring-1 ring-white/10 active:scale-95 transition-all"
-        >
-          <span className="w-7 h-7 rounded-full bg-white/15 flex items-center justify-center">
-            <Maximize2 className="w-4 h-4" />
-          </span>
-          <span className="text-[11px] font-bold tracking-wide max-w-0 overflow-hidden opacity-0 group-hover:max-w-[80px] group-hover:opacity-100 group-hover:ml-0.5 transition-all duration-200 whitespace-nowrap">
-            ÜST MENÜ
-          </span>
-        </button>
+        <div className="fixed bottom-3 right-3 z-[60] flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => window.dispatchEvent(new CustomEvent('sefpos-open-main-menu'))}
+            title="Menü"
+            aria-label="Menü"
+            className="group inline-flex items-center gap-1.5 h-11 pl-2.5 pr-3 rounded-full bg-gradient-to-br from-orange-500 to-red-600 hover:from-orange-600 hover:to-red-700 text-white shadow-2xl ring-1 ring-white/10 active:scale-95 transition-all"
+          >
+            <span className="w-7 h-7 rounded-full bg-white/20 flex items-center justify-center">
+              <MenuIcon className="w-4 h-4" />
+            </span>
+            <span className="text-[11px] font-black tracking-wide max-w-0 overflow-hidden opacity-0 group-hover:max-w-[60px] group-hover:opacity-100 group-hover:ml-0.5 transition-all duration-200 whitespace-nowrap">
+              MENÜ
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setHeaderHidden(false)}
+            title="Tam Ekran POS modunu kapat"
+            aria-label="Üst menüyü göster"
+            className="group inline-flex items-center gap-1.5 h-11 pl-2.5 pr-3 rounded-full bg-slate-900/85 hover:bg-slate-900 text-white shadow-2xl backdrop-blur ring-1 ring-white/10 active:scale-95 transition-all"
+          >
+            <span className="w-7 h-7 rounded-full bg-white/15 flex items-center justify-center">
+              <Maximize2 className="w-4 h-4" />
+            </span>
+            <span className="text-[11px] font-bold tracking-wide max-w-0 overflow-hidden opacity-0 group-hover:max-w-[90px] group-hover:opacity-100 group-hover:ml-0.5 transition-all duration-200 whitespace-nowrap">
+              ÜST MENÜ
+            </span>
+          </button>
+        </div>
       )}
 
       <ShiftAutoStartPrompt />

@@ -1,6 +1,7 @@
 import { Package, Users, TrendingUp, Wallet, Clock, Grid3x3, Menu, X, UserCog, ShoppingBag, ShoppingCart, Ban, Settings, Lock, Zap, Boxes, Layers } from 'lucide-react';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
+import { useUiPrefs } from '../lib/uiPrefs';
 
 interface MainMenuProps {
   onNavigate: (page: string) => void;
@@ -13,6 +14,15 @@ export function MainMenu({ onNavigate, currentPage, onOpenSettings, onLockScreen
   const { tenant, permissions, shiftsEnabled } = useAuth();
   const [menuOpen, setMenuOpen] = useState(false);
   const isElectron = !!(window as any).electronAPI;
+  const { headerHidden } = useUiPrefs();
+
+  // Sayfa kabugundan (App.tsx) gelen 'open-main-menu' eventi POS modunda
+  // sag alt FAB'a basildigida tetiklenir → menuyu yan panel olarak acar.
+  useEffect(() => {
+    const handler = () => setMenuOpen(true);
+    window.addEventListener('sefpos-open-main-menu', handler as EventListener);
+    return () => window.removeEventListener('sefpos-open-main-menu', handler as EventListener);
+  }, []);
 
   const menuItems = [
     { id: 'tables', label: 'Masalar', icon: Grid3x3, show: permissions.can_view_tables },
@@ -37,12 +47,14 @@ export function MainMenu({ onNavigate, currentPage, onOpenSettings, onLockScreen
   if (!isElectron) {
     return (
       <>
-        <button
-          onClick={() => setMenuOpen(!menuOpen)}
-          className="fixed top-3 left-3 md:top-4 md:left-4 z-50 p-2 md:p-3 bg-gradient-to-br from-orange-500 to-red-600 text-white rounded-lg md:rounded-xl shadow-lg hover:shadow-xl transition-all active:scale-95"
-        >
-          {menuOpen ? <X size={20} className="md:w-6 md:h-6" /> : <Menu size={20} className="md:w-6 md:h-6" />}
-        </button>
+        {!headerHidden && (
+          <button
+            onClick={() => setMenuOpen(!menuOpen)}
+            className="fixed top-3 left-3 md:top-4 md:left-4 z-50 p-2 md:p-3 bg-gradient-to-br from-orange-500 to-red-600 text-white rounded-lg md:rounded-xl shadow-lg hover:shadow-xl transition-all active:scale-95"
+          >
+            {menuOpen ? <X size={20} className="md:w-6 md:h-6" /> : <Menu size={20} className="md:w-6 md:h-6" />}
+          </button>
+        )}
 
         {menuOpen && (
           <div
@@ -114,12 +126,14 @@ export function MainMenu({ onNavigate, currentPage, onOpenSettings, onLockScreen
 
   return (
     <>
-      <button
-        onClick={() => setMenuOpen(!menuOpen)}
-        className="fixed top-3 left-3 md:top-4 md:left-4 z-50 p-2 md:p-3 bg-gradient-to-br from-orange-500 to-red-600 text-white rounded-lg md:rounded-xl shadow-lg hover:shadow-xl transition-all active:scale-95"
-      >
-        {menuOpen ? <X size={20} className="md:w-6 md:h-6" /> : <Menu size={20} className="md:w-6 md:h-6" />}
-      </button>
+      {!headerHidden && (
+        <button
+          onClick={() => setMenuOpen(!menuOpen)}
+          className="fixed top-3 left-3 md:top-4 md:left-4 z-50 p-2 md:p-3 bg-gradient-to-br from-orange-500 to-red-600 text-white rounded-lg md:rounded-xl shadow-lg hover:shadow-xl transition-all active:scale-95"
+        >
+          {menuOpen ? <X size={20} className="md:w-6 md:h-6" /> : <Menu size={20} className="md:w-6 md:h-6" />}
+        </button>
+      )}
 
       {menuOpen && (
         <div
