@@ -91,6 +91,24 @@ interface AuthContextType {
    * Gun degisim/cutoff hesaplari icin businessDay yardimcilarina verilir.
    */
   businessDayStartHour: number;
+  /**
+   * Is gunu modu:
+   *  - 'cutoff': sabit saatte yeni gun baslar (businessDayStartHour kullanilir)
+   *  - 'manual': cutoff yok; gun ancak "Gunu Kapat" tiklayinca biter (24/7).
+   */
+  businessDayMode: 'cutoff' | 'manual';
+  /**
+   * Aktif subenin guncel is gunu tarihi (YYYY-MM-DD).
+   * - cutoff modunda: businessDayStartHour'a gore client'ta hesaplanir.
+   * - manual modunda: get_current_business_date RPC'den gelir
+   *   (en son daily_closures.business_date + 1, hic kapanma yoksa bugun).
+   */
+  currentBusinessDate: string;
+  /**
+   * Manuel modda is gunu kac saattir acik (UI uyarisi icin).
+   * cutoff modunda her zaman null.
+   */
+  businessDayHoursOpen: number | null;
   signIn: (email: string, password: string) => Promise<{ error: any }>;
   signUp: (
     email: string,
@@ -688,6 +706,62 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (v > 23) return 23;
     return v;
   })();
+  const branchMode: string | null | undefined = (activeBranch as any)?.business_day_mode;
+  const tenantMode: string | null | undefined = (tenant as any)?.business_day_mode;
+  const businessDayMode: 'cutoff' | 'manual' = (
+    branchMode === 'manual' || branchMode === 'cutoff' ? branchMode :
+    tenantMode === 'manual' || tenantMode === 'cutoff' ? tenantMode :
+    'cutoff'
+  ) as 'cutoff' | 'manual';
+
+  const [serverBusinessDate, setServerBusinessDate] = useState<string | null>(null);
+  const [serverHoursOpen, setServerHoursOpen] = useState<number | null>(null);
+
+  // Manuel modda: server tarafli is gunu tarihini cek (cutoff modunda gerekli degil)
+  useEffect(() => {
+    let cancelled = false;
+    if (!activeBranch?.id || businessDayMode !== 'manual') {
+      setServerBusinessDate(null);
+      setServerHoursOpen(null);
+      return;
+    }
+    const fetchIt = async () => {
+      try {
+        const { data, error } = await (supabase as any).rpc('get_current_business_date', {
+          p_branch_id: activeBranch.id,
+        });
+        if (cancelled || error || !data) return;
+        const row = Array.isArray(data) ? data[0] : data;
+        if (row?.business_date) {
+          setServerBusinessDate(String(row.business_date));
+        }
+        if (typeof row?.hours_open === 'number') {
+          setServerHoursOpen(Number(row.hours_open));
+        } else if (typeof row?.hours_open === 'string') {
+          const n = Number(row.hours_open);
+          setServerHoursOpen(Number.isFinite(n) ? n : null);
+        } else {
+          setServerHoursOpen(null);
+        }
+      } catch {
+        // sessizce
+      }
+    };
+    fetchIt();
+    const id = window.setInterval(fetchIt, 60_000);
+    return () => { cancelled = true; window.clearInterval(id); };
+  }, [activeBranch?.id, businessDayMode]);
+
+  const currentBusinessDate: string = (() => {
+    if (businessDayMode === 'manual' && serverBusinessDate) return serverBusinessDate;
+    // cutoff client-side hesabi (geri uyum)
+    const now = new Date();
+    const x = new Date(now);
+    if (x.getHours() < businessDayStartHour) x.setDate(x.getDate() - 1);
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${x.getFullYear()}-${pad(x.getMonth() + 1)}-${pad(x.getDate())}`;
+  })();
+  const businessDayHoursOpen = businessDayMode === 'manual' ? serverHoursOpen : null;
 
   return (
     <AuthContext.Provider value={{
@@ -702,6 +776,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       isOwnerOrAdmin,
       shiftsEnabled,
       businessDayStartHour,
+      businessDayMode,
+      currentBusinessDate,
+      businessDayHoursOpen,
       signIn,
       signUp,
       signOut,

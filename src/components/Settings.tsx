@@ -3061,10 +3061,13 @@ function ShiftsToggleCard() {
 
 const HOURS_LIST = Array.from({ length: 24 }, (_, i) => i);
 
+type DayMode = 'cutoff' | 'manual';
+
 function BusinessDayCutoffCard() {
   const { tenant, isOwnerOrAdmin, branches, refreshBranches, refreshProfile } = useAuth() as any;
   const [tenantHour, setTenantHour] = useState<number>(6);
-  const [branchOverrides, setBranchOverrides] = useState<Record<string, number | null>>({});
+  const [tenantMode, setTenantMode] = useState<DayMode>('cutoff');
+  const [branchOverrides, setBranchOverrides] = useState<Record<string, { hour: number | null; mode: DayMode | null }>>({});
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
@@ -3073,9 +3076,16 @@ function BusinessDayCutoffCard() {
     if (tenant) {
       const v = (tenant as any).business_day_start_hour;
       setTenantHour(typeof v === 'number' ? v : 6);
+      const m = (tenant as any).business_day_mode;
+      setTenantMode(m === 'manual' ? 'manual' : 'cutoff');
     }
-    const map: Record<string, number | null> = {};
-    branches.forEach((b: any) => { map[b.id] = typeof b.business_day_start_hour === 'number' ? b.business_day_start_hour : null; });
+    const map: Record<string, { hour: number | null; mode: DayMode | null }> = {};
+    branches.forEach((b: any) => {
+      map[b.id] = {
+        hour: typeof b.business_day_start_hour === 'number' ? b.business_day_start_hour : null,
+        mode: b.business_day_mode === 'manual' || b.business_day_mode === 'cutoff' ? b.business_day_mode : null,
+      };
+    });
     setBranchOverrides(map);
   }, [tenant, branches]);
 
@@ -3085,19 +3095,24 @@ function BusinessDayCutoffCard() {
     try {
       const { error: tErr } = await (supabase as any)
         .from('tenants')
-        .update({ business_day_start_hour: tenantHour })
+        .update({
+          business_day_start_hour: tenantHour,
+          business_day_mode: tenantMode,
+        })
         .eq('id', tenant.id);
       if (tErr) throw tErr;
 
-      // Sube override'larini paralel kaydet
-      const updates = Object.entries(branchOverrides).map(([id, h]) =>
-        (supabase as any).from('branches').update({ business_day_start_hour: h }).eq('id', id)
+      const updates = Object.entries(branchOverrides).map(([id, v]) =>
+        (supabase as any).from('branches').update({
+          business_day_start_hour: v.hour,
+          business_day_mode: v.mode,
+        }).eq('id', id)
       );
       const results = await Promise.all(updates);
       const failed = results.find((r: any) => r?.error);
       if (failed) throw failed.error;
 
-      setOk('İş günü başlangıç saati güncellendi. Sayfayı yenileyince geçerli olur.');
+      setOk('İş günü ayarları güncellendi. Sayfayı yenileyince geçerli olur.');
       await refreshBranches();
       await refreshProfile();
     } catch (e: any) {
@@ -3114,11 +3129,13 @@ function BusinessDayCutoffCard() {
           <Clock className="w-6 h-6" />
         </div>
         <div className="flex-1 min-w-0">
-          <h4 className="font-bold text-gray-800">İş Günü Başlangıç Saati</h4>
+          <h4 className="font-bold text-gray-800">İş Günü Modu &amp; Başlangıç Saati</h4>
           <p className="text-sm text-gray-500 mt-0.5">
-            Yeni iş günü kaçta başlar? Bu saatten önceki satışlar <b>önceki</b> iş gününe yazılır,
-            sonraki satışlar <b>yeni</b> güne. Örn. saat 5'i seçerseniz sabah 04:30'daki bir
-            satış dünkü güne, 05:30'daki yeni güne yazılır.
+            <b>Otomatik (cutoff)</b>: Yeni iş günü her gün belirli saatte başlar
+            (örn. 05:00). Standart işletmeler için.
+            {' '}
+            <b>Manuel (24/7)</b>: Cutoff yoktur; gün sadece "Günü Kapat"
+            tıklayınca biter. 7 gün 24 saat açık işletmeler için.
           </p>
           {!isOwnerOrAdmin && (
             <div className="mt-2 text-[11px] text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full inline-block border border-amber-200">
@@ -3129,43 +3146,102 @@ function BusinessDayCutoffCard() {
       </div>
 
       <div className="mt-4 grid gap-3">
-        <div className="rounded-xl bg-slate-50 border border-slate-200 p-3">
-          <label className="block text-xs font-bold text-slate-600 mb-1">İşletme Geneli (Varsayılan)</label>
-          <select
-            value={tenantHour}
-            onChange={(e) => setTenantHour(parseInt(e.target.value, 10))}
-            disabled={!isOwnerOrAdmin}
-            className="w-full md:w-48 px-3 py-2 rounded-lg border border-slate-200 bg-white font-bold text-slate-800 disabled:opacity-50"
-          >
-            {HOURS_LIST.map(h => (
-              <option key={h} value={h}>{String(h).padStart(2,'0')}:00</option>
-            ))}
-          </select>
+        <div className="rounded-xl bg-slate-50 border border-slate-200 p-3 grid gap-3">
+          <div className="text-xs font-black text-slate-600 uppercase tracking-wide">İşletme Geneli (Varsayılan)</div>
+          <div className="flex gap-2 flex-wrap">
+            <button
+              type="button"
+              onClick={() => isOwnerOrAdmin && setTenantMode('cutoff')}
+              disabled={!isOwnerOrAdmin}
+              className={`px-3 py-2 rounded-lg text-sm font-black border-2 disabled:opacity-50 ${
+                tenantMode === 'cutoff'
+                  ? 'bg-sky-600 text-white border-sky-700'
+                  : 'bg-white text-slate-700 border-slate-200 hover:border-sky-300'
+              }`}
+            >
+              Otomatik (cutoff)
+            </button>
+            <button
+              type="button"
+              onClick={() => isOwnerOrAdmin && setTenantMode('manual')}
+              disabled={!isOwnerOrAdmin}
+              className={`px-3 py-2 rounded-lg text-sm font-black border-2 disabled:opacity-50 ${
+                tenantMode === 'manual'
+                  ? 'bg-indigo-600 text-white border-indigo-700'
+                  : 'bg-white text-slate-700 border-slate-200 hover:border-indigo-300'
+              }`}
+            >
+              Manuel (24/7)
+            </button>
+          </div>
+          {tenantMode === 'cutoff' && (
+            <div>
+              <label className="block text-xs font-bold text-slate-600 mb-1">Başlangıç Saati</label>
+              <select
+                value={tenantHour}
+                onChange={(e) => setTenantHour(parseInt(e.target.value, 10))}
+                disabled={!isOwnerOrAdmin}
+                className="w-full md:w-48 px-3 py-2 rounded-lg border border-slate-200 bg-white font-bold text-slate-800 disabled:opacity-50"
+              >
+                {HOURS_LIST.map(h => (
+                  <option key={h} value={h}>{String(h).padStart(2,'0')}:00</option>
+                ))}
+              </select>
+            </div>
+          )}
+          {tenantMode === 'manual' && (
+            <div className="text-[11px] text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-lg px-3 py-2 leading-relaxed">
+              Manuel modda gün ancak <b>Günü Kapat</b>'a tıklayınca biter.
+              Bir sonraki satış otomatik olarak <b>yeni iş gününe</b> yazılır.
+              Saatten bağımsızdır. 24/7 işletmeler için önerilir.
+            </div>
+          )}
         </div>
 
         {branches.length > 0 && (
           <div className="rounded-xl bg-slate-50 border border-slate-200 p-3">
-            <div className="text-xs font-bold text-slate-600 mb-2">Şube Bazında (override)</div>
-            <div className="grid gap-2">
+            <div className="text-xs font-black text-slate-600 uppercase tracking-wide mb-2">Şube Bazında (override)</div>
+            <div className="grid gap-3">
               {branches.map((b: any) => {
-                const cur = branchOverrides[b.id];
+                const cur = branchOverrides[b.id] || { hour: null, mode: null };
+                const effMode: DayMode = cur.mode || tenantMode;
                 return (
-                  <div key={b.id} className="flex items-center gap-2 flex-wrap">
-                    <span className="font-bold text-slate-700 text-sm flex-1 min-w-0 truncate">{b.name}</span>
-                    <select
-                      value={cur === null || cur === undefined ? '' : String(cur)}
-                      onChange={(e) => {
-                        const v = e.target.value;
-                        setBranchOverrides(prev => ({ ...prev, [b.id]: v === '' ? null : parseInt(v, 10) }));
-                      }}
-                      disabled={!isOwnerOrAdmin}
-                      className="px-2 py-1.5 rounded-lg border border-slate-200 bg-white font-bold text-slate-800 text-sm disabled:opacity-50"
-                    >
-                      <option value="">İşletme varsayılanı ({String(tenantHour).padStart(2,'0')}:00)</option>
-                      {HOURS_LIST.map(h => (
-                        <option key={h} value={h}>{String(h).padStart(2,'0')}:00</option>
-                      ))}
-                    </select>
+                  <div key={b.id} className="rounded-lg bg-white border border-slate-200 p-2 grid gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-bold text-slate-700 text-sm flex-1 min-w-0 truncate">{b.name}</span>
+                      <select
+                        value={cur.mode || ''}
+                        onChange={(e) => {
+                          const v = e.target.value as '' | DayMode;
+                          setBranchOverrides(prev => ({ ...prev, [b.id]: { ...(prev[b.id] || { hour: null, mode: null }), mode: v === '' ? null : v } }));
+                        }}
+                        disabled={!isOwnerOrAdmin}
+                        className="px-2 py-1.5 rounded-lg border border-slate-200 bg-white font-bold text-slate-800 text-sm disabled:opacity-50"
+                      >
+                        <option value="">Mod: İşletme ({tenantMode === 'manual' ? 'Manuel' : 'Otomatik'})</option>
+                        <option value="cutoff">Otomatik (cutoff)</option>
+                        <option value="manual">Manuel (24/7)</option>
+                      </select>
+                    </div>
+                    {effMode === 'cutoff' && (
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-[11px] text-slate-500 font-bold">Başlangıç saati:</span>
+                        <select
+                          value={cur.hour === null || cur.hour === undefined ? '' : String(cur.hour)}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            setBranchOverrides(prev => ({ ...prev, [b.id]: { ...(prev[b.id] || { hour: null, mode: null }), hour: v === '' ? null : parseInt(v, 10) } }));
+                          }}
+                          disabled={!isOwnerOrAdmin}
+                          className="px-2 py-1.5 rounded-lg border border-slate-200 bg-white font-bold text-slate-800 text-sm disabled:opacity-50"
+                        >
+                          <option value="">İşletme varsayılanı ({String(tenantHour).padStart(2,'0')}:00)</option>
+                          {HOURS_LIST.map(h => (
+                            <option key={h} value={h}>{String(h).padStart(2,'0')}:00</option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
                   </div>
                 );
               })}

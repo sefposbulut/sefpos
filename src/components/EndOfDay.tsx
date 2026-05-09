@@ -47,7 +47,7 @@ function toLocalDT(d: Date) {
 
 
 export function EndOfDay({ onClose }: EndOfDayProps) {
-  const { tenant, activeBranch, branches, isOwnerOrAdmin, isManager, permissions, profile, user, businessDayStartHour } = useAuth();
+  const { tenant, activeBranch, branches, isOwnerOrAdmin, isManager, permissions, profile, user, businessDayStartHour, businessDayMode, currentBusinessDate, businessDayHoursOpen } = useAuth();
   const [stats, setStats] = useState<DayStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedBranch, setSelectedBranch] = useState<string>(activeBranch?.id || 'all');
@@ -151,7 +151,11 @@ export function EndOfDay({ onClose }: EndOfDayProps) {
     enabled: !!tenant,
     cutoffHour: businessDayStartHour,
   });
-  const businessDate = useMemo(() => computeBusinessDate(new Date(), businessDayStartHour), [businessDayStartHour]);
+  // Manuel modda: AuthContext'ten gelen RPC sonucunu kullan; cutoff modunda lokal hesap.
+  const businessDate = useMemo(() => {
+    if (businessDayMode === 'manual' && currentBusinessDate) return currentBusinessDate;
+    return computeBusinessDate(new Date(), businessDayStartHour);
+  }, [businessDayMode, currentBusinessDate, businessDayStartHour]);
 
   const requestCloseDay = () => {
     setCloseError(null);
@@ -639,11 +643,26 @@ export function EndOfDay({ onClose }: EndOfDayProps) {
                         {branches.find(b => b.id === effectiveBranchForShift)?.name || 'Şube'}
                       </span>
                     )}
+                    <span className={`ml-2 inline-flex items-center gap-1 text-[10px] font-black px-2 py-0.5 rounded-full align-middle ${
+                      businessDayMode === 'manual'
+                        ? 'bg-indigo-100 text-indigo-800 border border-indigo-200'
+                        : 'bg-sky-100 text-sky-800 border border-sky-200'
+                    }`}>
+                      {businessDayMode === 'manual'
+                        ? 'MANUEL MOD (24/7)'
+                        : `OTOMATİK · ${String(businessDayStartHour).padStart(2,'0')}:00 başlangıç`}
+                    </span>
                   </p>
                   <p className="text-xs text-slate-600">
                     Bütün vardiyalar kapatıldıktan sonra {formatBusinessDateTR(businessDate)} işgününü kilitleyin.
                     {activeShift && <span className="ml-1 text-rose-700 font-bold">Şu an açık vardiya var: {activeShift.shift_name}</span>}
                   </p>
+                  {businessDayMode === 'manual' && businessDayHoursOpen !== null && businessDayHoursOpen >= 20 && (
+                    <p className="text-[11px] text-amber-700 mt-1 font-bold flex items-center gap-1">
+                      <AlertTriangle className="w-3 h-3" />
+                      Bu iş günü <b>{Math.round(businessDayHoursOpen)} saattir</b> açık. Kapatmayı düşünebilirsiniz.
+                    </p>
+                  )}
                   {(openTables.length > 0 || pendingOrders.length > 0) && (
                     <div className="mt-2 flex items-center gap-2 flex-wrap">
                       {openTables.length > 0 && (
