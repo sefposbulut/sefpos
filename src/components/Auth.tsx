@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, invokeEdgeFunction } from '../lib/supabase';
-import { normalizeTurkishMobileDigits, phoneToAuthEmail, pinToAuthPassword } from '../lib/phoneAuthEmail';
+import { normalizeTurkishMobileDigits, pinToAuthPassword } from '../lib/phoneAuthEmail';
 import { resolveLoginIdentifier } from '../lib/panelUserLoginResolve';
 import { isCapacitorNative } from '../lib/capacitorPlatform';
 import { Bike, Lock, Building2, Phone, ArrowRight, Sparkles, ChefHat, User, Mail, ShieldCheck, BarChart3, Wifi, Smartphone, Printer, CreditCard } from 'lucide-react';
@@ -388,8 +388,21 @@ export function Auth({ onBackToLanding }: AuthProps = {}) {
           return;
         }
 
-        const email = phoneToAuthEmail(cleaned);
-        const { error } = await signUp(email, password, fullName, tenantName, registerEmail.trim().toLowerCase());
+        // Müşteri kaydında Auth e-postası olarak girdiği gerçek iletişim e-postası
+        // kullanılır. Telefon raw_user_meta_data ile gönderilip handle_new_user
+        // trigger'ı tarafından profiles.phone'a yazılır. Boylece panel girişinde
+        // telefonla login (panelUserLoginResolve) bu profiles.phone uzerinden
+        // gerçek email'i bulup oturum açar — sentetik @sefpos.com.tr e-postasına
+        // (MX olmayan domain → 400 invalid email) ihtiyaç kalmaz.
+        const realEmail = registerEmail.trim().toLowerCase();
+        const { error } = await signUp(
+          realEmail,
+          password,
+          fullName,
+          tenantName,
+          realEmail,
+          registerNorm,
+        );
         if (error) throw error;
         try {
           sessionStorage.setItem('shefpos_phone_first_signup', '1');

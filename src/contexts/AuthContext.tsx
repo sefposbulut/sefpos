@@ -81,7 +81,14 @@ interface AuthContextType {
   profileLoadFailed: boolean;
   isOwnerOrAdmin: boolean;
   signIn: (email: string, password: string) => Promise<{ error: any }>;
-  signUp: (email: string, password: string, fullName: string, tenantName: string, contactEmail?: string) => Promise<{ error: any }>;
+  signUp: (
+    email: string,
+    password: string,
+    fullName: string,
+    tenantName: string,
+    contactEmail?: string,
+    phone?: string,
+  ) => Promise<{ error: any }>;
   signOut: () => Promise<void>;
   refreshProfile: () => Promise<void>;
   refreshBranches: () => Promise<void>;
@@ -492,7 +499,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return { error: null };
   };
 
-  const signUp = async (email: string, password: string, fullName: string, tenantName: string, contactEmail?: string) => {
+  const signUp = async (
+    email: string,
+    password: string,
+    fullName: string,
+    tenantName: string,
+    contactEmail?: string,
+    phone?: string,
+  ) => {
     const { data, error } = await supabase.auth.signUp({
       email,
       password,
@@ -501,6 +515,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           full_name: fullName,
           tenant_name: tenantName,
           contact_email: contactEmail || null,
+          // Telefon → handle_new_user trigger'i normalize edip profiles.phone'a yazar.
+          // Boylece telefon ile login akisi (panelUserLoginResolve) profiles.phone
+          // uzerinden gercek email'i bulur — sentetik @sefpos.com.tr e-postasina
+          // gerek kalmaz, MX olmayan domain hatasi olusmaz.
+          phone: phone || null,
         },
       },
     });
