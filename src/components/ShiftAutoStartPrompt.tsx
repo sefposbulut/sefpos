@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useActiveShift } from '../lib/useActiveShift';
 import { supabase } from '../lib/supabase';
-import { PlayCircle, X, Sun, Sunset, Moon, RefreshCw, AlertTriangle, Clock } from 'lucide-react';
+import { PlayCircle, X, Sun, Sunset, Moon, RefreshCw, AlertTriangle, Clock, ChevronDown } from 'lucide-react';
 
 function suggestShiftLabel(): { no: number; name: string; Icon: any } {
   const h = new Date().getHours();
@@ -37,14 +37,15 @@ export function ShiftAutoStartPrompt() {
   const [opening, setOpening] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [openingCash, setOpeningCash] = useState<string>('');
+  const [showCashField, setShowCashField] = useState<boolean>(false);
 
-  // Eligible roles: cashier, manager, waiter, owner, admin
-  const eligibleRole = profile?.role && ['owner', 'admin', 'manager', 'cashier', 'waiter'].includes(profile.role);
+  // Sadece "Vardiya Kullan" yetkisi olanlara goster (UserManagement'tan ayarlanir)
+  const eligible = !!permissions?.can_use_shifts;
 
   useEffect(() => {
     if (!shiftsEnabled || loading || !user || !tenant) return;
     if (todayClosure) return;
-    if (!eligibleRole) return;
+    if (!eligible) return;
 
     if (activeShift) {
       const shown = sessionStorage.getItem(welcomeKey);
@@ -61,7 +62,7 @@ export function ShiftAutoStartPrompt() {
     if (!dismissed) {
       setOpen(true);
     }
-  }, [shiftsEnabled, loading, user, tenant, activeShift, todayClosure, eligibleRole, sessionKey, welcomeKey]);
+  }, [shiftsEnabled, loading, user, tenant, activeShift, todayClosure, eligible, sessionKey, welcomeKey]);
 
   const handleStart = async () => {
     if (!branchId) {
@@ -117,45 +118,44 @@ export function ShiftAutoStartPrompt() {
 
       {open && (
         <div className="fixed inset-0 bg-black/60 z-[60] flex items-end md:items-center justify-center p-3" onClick={() => !opening && handleSkip()}>
-          <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
-            <div className="bg-gradient-to-r from-orange-500 via-rose-500 to-orange-600 text-white px-5 py-4 flex items-center gap-3">
-              <div className="w-12 h-12 rounded-xl bg-white/20 flex items-center justify-center backdrop-blur">
-                <sug.Icon className="w-6 h-6" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-[10px] uppercase font-black tracking-widest opacity-90">Hoş geldiniz</p>
-                <h3 className="text-lg font-black truncate">{profile?.full_name || 'Kullanıcı'}</h3>
-              </div>
-              <button onClick={handleSkip} disabled={opening} className="p-2 rounded-lg hover:bg-white/10">
-                <X className="w-5 h-5" />
+          <div className="bg-white rounded-2xl w-full max-w-sm shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
+            <div className="bg-gradient-to-r from-orange-500 via-rose-500 to-orange-600 text-white px-5 py-5 text-center relative">
+              <button onClick={handleSkip} disabled={opening} className="absolute right-3 top-3 p-1.5 rounded-lg hover:bg-white/10">
+                <X className="w-4 h-4" />
               </button>
+              <div className="w-14 h-14 mx-auto rounded-2xl bg-white/20 flex items-center justify-center backdrop-blur mb-2">
+                <sug.Icon className="w-7 h-7" />
+              </div>
+              <p className="text-[10px] uppercase font-black tracking-widest opacity-90">Hoş geldiniz</p>
+              <h3 className="text-xl font-black mt-0.5">{profile?.full_name || 'Kullanıcı'}</h3>
+              <p className="text-xs opacity-90 mt-1">Vardiyanızı başlatmak ister misiniz?</p>
             </div>
-            <div className="p-5 space-y-4">
-              <div className="bg-orange-50 border border-orange-200 rounded-xl p-3 flex items-start gap-3">
-                <Clock className="w-5 h-5 text-orange-600 mt-0.5" />
+            <div className="p-5 space-y-3">
+              {!showCashField ? (
+                <button
+                  type="button"
+                  onClick={() => setShowCashField(true)}
+                  className="w-full text-xs font-bold text-slate-500 hover:text-orange-600 inline-flex items-center justify-center gap-1.5 py-1"
+                >
+                  <ChevronDown className="w-3 h-3" /> Açılış nakit ekle (opsiyonel)
+                </button>
+              ) : (
                 <div>
-                  <p className="font-black text-orange-900 text-sm">Vardiyanızı başlatın</p>
-                  <p className="text-xs text-orange-800 mt-0.5">
-                    Şu anki saate göre önerilen vardiya: <b>{sug.name}</b>. Kasaya başlangıç tutarınızı girip başlatın — tüm satışlarınız bu vardiyaya kaydedilir.
-                  </p>
+                  <label className="text-xs font-bold text-slate-600 mb-1 block">Kasadaki Açılış Nakit (₺)</label>
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    step="0.01"
+                    min="0"
+                    value={openingCash}
+                    onChange={(e) => setOpeningCash(e.target.value)}
+                    placeholder="0,00"
+                    autoFocus
+                    className="w-full px-3 py-2.5 text-lg font-black text-slate-800 rounded-lg border-2 border-slate-200 focus:border-orange-400 focus:ring-4 focus:ring-orange-100 outline-none"
+                  />
+                  <p className="text-[11px] text-slate-400 mt-1">Boş bırakırsanız 0 ile başlar.</p>
                 </div>
-              </div>
-
-              <div>
-                <label className="text-xs font-bold text-slate-600 mb-1 block">Açılış Nakit (₺)</label>
-                <input
-                  type="number"
-                  inputMode="decimal"
-                  step="0.01"
-                  min="0"
-                  value={openingCash}
-                  onChange={(e) => setOpeningCash(e.target.value)}
-                  placeholder="0,00"
-                  autoFocus
-                  className="w-full px-4 py-3 text-2xl font-black text-slate-800 rounded-xl border-2 border-slate-200 focus:border-orange-400 focus:ring-4 focus:ring-orange-100 outline-none"
-                />
-                <p className="text-[11px] text-slate-500 mt-1">Kasaya koyduğunuz para üstü / yedek nakit. Boşsa 0 ile başlar.</p>
-              </div>
+              )}
 
               {error && (
                 <div className="text-sm text-rose-600 bg-rose-50 border border-rose-200 rounded-lg p-2 flex items-start gap-2">
@@ -163,22 +163,22 @@ export function ShiftAutoStartPrompt() {
                   <span className="flex-1 whitespace-pre-line">{error}</span>
                 </div>
               )}
-            </div>
-            <div className="px-5 py-4 bg-slate-50 border-t border-slate-200 flex items-center gap-2 justify-end">
-              <button
-                onClick={handleSkip}
-                disabled={opening}
-                className="px-4 py-2.5 rounded-lg text-sm font-bold text-slate-600 hover:bg-slate-100"
-              >
-                Şimdi değil
-              </button>
+
               <button
                 onClick={handleStart}
                 disabled={opening}
-                className="px-5 py-2.5 rounded-lg bg-gradient-to-r from-orange-500 to-red-600 text-white font-black text-sm shadow disabled:opacity-50 flex items-center gap-2"
+                className="w-full px-5 py-3 rounded-xl bg-gradient-to-r from-orange-500 to-red-600 text-white font-black text-base shadow disabled:opacity-50 flex items-center justify-center gap-2"
               >
-                {opening ? <RefreshCw className="w-4 h-4 animate-spin" /> : <PlayCircle className="w-4 h-4" />}
+                {opening ? <RefreshCw className="w-5 h-5 animate-spin" /> : <PlayCircle className="w-5 h-5" />}
                 Vardiyamı Başlat
+              </button>
+
+              <button
+                onClick={handleSkip}
+                disabled={opening}
+                className="w-full text-center text-xs font-bold text-slate-400 hover:text-slate-700 py-1"
+              >
+                Şimdi değil
               </button>
             </div>
           </div>

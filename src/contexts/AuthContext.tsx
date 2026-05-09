@@ -38,6 +38,8 @@ export interface UserPermissions {
   can_view_cancel_logs: boolean;
   can_manage_users: boolean;
   can_manage_settings: boolean;
+  /** Vardiya kullanim yetkisi — kapaliyken Header rozeti, otomatik prompt ve Vardiyalar menusu gosterilmez. */
+  can_use_shifts: boolean;
 }
 
 const DEFAULT_OWNER_PERMISSIONS: UserPermissions = {
@@ -53,6 +55,7 @@ const DEFAULT_OWNER_PERMISSIONS: UserPermissions = {
   can_view_cancel_logs: true,
   can_manage_users: true,
   can_manage_settings: true,
+  can_use_shifts: true,
 };
 
 const DEFAULT_WAITER_PERMISSIONS: UserPermissions = {
@@ -68,6 +71,7 @@ const DEFAULT_WAITER_PERMISSIONS: UserPermissions = {
   can_view_cancel_logs: false,
   can_manage_users: false,
   can_manage_settings: false,
+  can_use_shifts: false,
 };
 
 interface AuthContextType {
@@ -118,6 +122,10 @@ function buildPermissionsFromRole(profile: Profile | null, roleData?: Role | nul
       can_view_cancel_logs: p.can_view_cancel_logs ?? false,
       can_manage_users: p.can_manage_users ?? false,
       can_manage_settings: p.can_manage_settings ?? false,
+      // Geriye uyumluluk: rol kaydinda alan yoksa, kasa yetkisi olanlara veya
+      // odeme alabilenlere otomatik aktif et — boylece eski hesaplar Settings'ten
+      // sistem acildiginda dogrudan calismaya baslar.
+      can_use_shifts: p.can_use_shifts ?? (p.can_manage_cash_register || p.can_process_payments || false),
     };
   }
 
@@ -131,6 +139,7 @@ function buildPermissionsFromRole(profile: Profile | null, roleData?: Role | nul
       can_manage_cash_register: true,
       can_end_of_day: true,
       can_view_cancel_logs: true,
+      can_use_shifts: true,
     };
   }
 
@@ -140,6 +149,7 @@ function buildPermissionsFromRole(profile: Profile | null, roleData?: Role | nul
       can_process_payments: true,
       can_manage_cash_register: true,
       can_end_of_day: true,
+      can_use_shifts: true,
     };
   }
 

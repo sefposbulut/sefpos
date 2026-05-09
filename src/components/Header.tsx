@@ -77,12 +77,13 @@ function shiftIcon(no: number) {
 }
 
 export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackToTables, onOpenShifts }: HeaderProps) {
-  const { profile, tenant, user, signOut, activeBranch, branches, setActiveBranch, shiftsEnabled } = useAuth();
+  const { profile, tenant, user, signOut, activeBranch, branches, setActiveBranch, shiftsEnabled, permissions } = useAuth();
+  const canUseShifts = !!permissions?.can_use_shifts;
   const { activeShift, todayClosure } = useActiveShift({
     tenantId: tenant?.id || null,
     branchId: activeBranch?.id || null,
     userId: user?.id || null,
-    enabled: !!tenant && shiftsEnabled,
+    enabled: !!tenant && shiftsEnabled && canUseShifts,
   });
   const [showBranchMenu, setShowBranchMenu] = useState(false);
   const [zoom, setZoom] = useState(1);
@@ -302,7 +303,7 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
                 </button>
               )}
 
-              {tenant && shiftsEnabled && (
+              {tenant && shiftsEnabled && canUseShifts && (
                 <ShiftBadge
                   activeShift={activeShift}
                   dayLocked={!!todayClosure}
@@ -458,7 +459,7 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
 
               <button
                 onClick={() => {
-                  if (shiftsEnabled && activeShift) {
+                  if (shiftsEnabled && canUseShifts && activeShift) {
                     const ok = window.confirm(
                       `Açık vardiyanız var (${activeShift.shift_name}).\n\nÖnce vardiyayı bitirmek ister misiniz?\n\n• TAMAM: Vardiyamı bitir penceresini aç\n• İPTAL: Vardiyayı açık bırakıp çık`,
                     );

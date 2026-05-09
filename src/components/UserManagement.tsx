@@ -36,6 +36,7 @@ const PERMISSION_DEFS: PermissionDef[] = [
   { key: 'can_manage_discounts', label: 'İndirim Uygula', description: 'Siparişe indirim/iskonto ekleyebilir', color: 'yellow' },
   { key: 'can_manage_products', label: 'Ürün/Stok Yönetimi', description: 'Ürün ekleyebilir, fiyat değiştirebilir, kategori yönetebilir', color: 'purple' },
   { key: 'can_manage_cash_register', label: 'Kasa Yönetimi', description: 'Kasayı açıp kapatabilir, nakit işlem yapabilir', color: 'teal' },
+  { key: 'can_use_shifts', label: 'Vardiya Kullan', description: 'Vardiya açıp kapatabilir, kişisel Z raporu alabilir (Vardiya sistemi açıkken)', color: 'amber' },
   { key: 'can_view_reports', label: 'Raporları Görüntüle', description: 'Satış ve personel raporlarına erişebilir', color: 'indigo' },
   { key: 'can_end_of_day', label: 'Gün Sonu', description: 'Gün sonu kapanış işlemini yapabilir', color: 'slate' },
   { key: 'can_view_cancel_logs', label: 'İptal Kayıtları', description: 'İptal edilen sipariş kayıtlarını görebilir', color: 'red' },
@@ -56,6 +57,7 @@ const colorMap: Record<string, { bg: string; text: string; border: string }> = {
   red: { bg: 'bg-red-50', text: 'text-red-700', border: 'border-red-200' },
   rose: { bg: 'bg-rose-50', text: 'text-rose-700', border: 'border-rose-200' },
   gray: { bg: 'bg-gray-50', text: 'text-gray-700', border: 'border-gray-200' },
+  amber: { bg: 'bg-amber-50', text: 'text-amber-700', border: 'border-amber-200' },
 };
 
 interface ConfirmModalProps {

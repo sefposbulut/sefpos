@@ -25,7 +25,7 @@ export function MainMenu({ onNavigate, currentPage, onOpenSettings, onLockScreen
     { id: 'customers', label: 'Cari Hesaplar', icon: Users, show: permissions.can_process_payments || permissions.can_manage_products },
     { id: 'reports', label: 'Raporlar', icon: TrendingUp, show: permissions.can_view_reports },
     { id: 'cashier', label: 'Kasa', icon: Wallet, show: permissions.can_manage_cash_register },
-    { id: 'shifts', label: 'Vardiyalar', icon: Layers, show: shiftsEnabled && (permissions.can_manage_cash_register || permissions.can_end_of_day) },
+    { id: 'shifts', label: 'Vardiyalar', icon: Layers, show: shiftsEnabled && (permissions.can_use_shifts || permissions.can_end_of_day) },
     { id: 'endofday', label: 'Gün Sonu', icon: Clock, show: permissions.can_end_of_day },
     { id: 'cancel-logs', label: 'İptal Kayıtları', icon: Ban, show: permissions.can_view_cancel_logs },
   ];
