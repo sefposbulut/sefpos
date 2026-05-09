@@ -142,6 +142,14 @@ export function EndOfDay({ onClose }: EndOfDayProps) {
     }
   };
 
+  // activeBranch ilk render'da null olabilir; sonra geldiginde
+  // selectedBranch hala 'all' kalmasin, kullanicinin bulundugu subeye senkronize et.
+  useEffect(() => {
+    if (activeBranch?.id && selectedBranch === 'all') {
+      setSelectedBranch(activeBranch.id);
+    }
+  }, [activeBranch?.id]);
+
   useEffect(() => {
     if (tenant) loadStats();
   }, [tenant, startDT, endDT, selectedBranch]);
@@ -234,28 +242,33 @@ export function EndOfDay({ onClose }: EndOfDayProps) {
       .map(([hour, v]) => ({ hour: parseInt(hour), ...v }))
       .filter(h => h.orders > 0 || h.revenue > 0);
 
-    // Acik masa + bekleyen siparis sayilari (kapanis kontrolu icin)
-    let tablesQuery = (supabase as any)
-      .from('restaurant_tables')
-      .select('id, table_number, status, current_order_id, branch_id')
-      .eq('tenant_id', tenant.id)
-      .neq('status', 'available');
-    if (effectiveBranch !== 'all') {
-      tablesQuery = tablesQuery.eq('branch_id', effectiveBranch);
-    }
+    // Acik masa + bekleyen siparis sayilari (KAPANIS kontrolu icin)
+    // Onemli: gun sonu kapanisi her zaman TEK bir sube icin yapilir.
+    // Admin "Tum Subeler" gorunumunde olsa bile bu uyarilar yalnizca
+    // kapatilacak subeye (effectiveBranchForShift) ait olmalidir.
+    const closeBranchId = effectiveBranchForShift;
+    if (closeBranchId) {
+      const tablesQuery = (supabase as any)
+        .from('restaurant_tables')
+        .select('id, table_number, status, current_order_id, branch_id')
+        .eq('tenant_id', tenant.id)
+        .eq('branch_id', closeBranchId)
+        .neq('status', 'available');
 
-    let pendingQuery = (supabase as any)
-      .from('orders')
-      .select('id, status, order_type, table_id, branch_id')
-      .eq('tenant_id', tenant.id)
-      .in('status', ['pending', 'preparing', 'ready', 'served', 'in_progress', 'open']);
-    if (effectiveBranch !== 'all') {
-      pendingQuery = pendingQuery.eq('branch_id', effectiveBranch);
-    }
+      const pendingQuery = (supabase as any)
+        .from('orders')
+        .select('id, status, order_type, table_id, branch_id')
+        .eq('tenant_id', tenant.id)
+        .eq('branch_id', closeBranchId)
+        .in('status', ['pending', 'preparing', 'ready', 'served', 'in_progress', 'open']);
 
-    const [{ data: openTbls }, { data: pendingOrds }] = await Promise.all([tablesQuery, pendingQuery]);
-    setOpenTables(((openTbls || []) as Array<{ id: string; table_number: string }>));
-    setPendingOrders(((pendingOrds || []) as Array<{ id: string; order_type: string; status: string; table_id: string | null }>));
+      const [{ data: openTbls }, { data: pendingOrds }] = await Promise.all([tablesQuery, pendingQuery]);
+      setOpenTables(((openTbls || []) as Array<{ id: string; table_number: string }>));
+      setPendingOrders(((pendingOrds || []) as Array<{ id: string; order_type: string; status: string; table_id: string | null }>));
+    } else {
+      setOpenTables([]);
+      setPendingOrders([]);
+    }
 
     setStats({
       totalRevenue,
@@ -275,7 +288,7 @@ export function EndOfDay({ onClose }: EndOfDayProps) {
       cashIn,
       cashOut,
       netCash,
-      openTables: (openTbls || []).length,
+      openTables: 0, // setOpenTables zaten ayrica state'i guncelliyor
       totalCovers: 0,
     });
     setLoading(false);
