@@ -410,13 +410,30 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     let cancelled = false;
+    // En son baglanmis user.id — ayni user icin profile/tenant/branches yeniden
+    // yuklemeyi engellemek icin ref. Token refresh sirasinda app'in "yenileniyor"
+    // hissi vermesini onler (UX kritik).
+    let lastLoadedUserId: string | null = null;
 
-    const applySession = async (session: Session | null) => {
+    const applySession = async (session: Session | null, opts?: { force?: boolean }) => {
       if (cancelled) return;
       if (session?.user) {
+        // Ayni user — sadece user objesi guncellensin, profile reload YOK
+        if (!opts?.force && lastLoadedUserId === session.user.id) {
+          // Reference comparison'i yutmak icin: user state'i sadece id degisirse setle
+          setUser((prev) => (prev?.id === session.user.id ? prev : session.user));
+          if (loading && !cancelled) setLoading(false);
+          return;
+        }
+        lastLoadedUserId = session.user.id;
         setUser(session.user);
         await loadProfile(session.user.id);
       } else {
+        if (lastLoadedUserId === null) {
+          if (loading && !cancelled) setLoading(false);
+          return;
+        }
+        lastLoadedUserId = null;
         setUser(null);
         setProfile(null);
         setTenant(null);
@@ -435,14 +452,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((event, session) => {
+      // INITIAL_SESSION zaten getSession ile islendi.
+      // TOKEN_REFRESHED + ayni user icin profile reload gerekmez (UX kritik).
+      // SIGNED_IN ayni user.id ile gelirse de skip olacak (applySession icindeki id kontrolu).
       if (event === 'INITIAL_SESSION') return;
-      void applySession(session);
+      // USER_UPDATED metadata degisikligi anlamina gelir → profile yeniden yuklenir.
+      const force = event === 'USER_UPDATED';
+      void applySession(session, { force });
     });
 
     return () => {
       cancelled = true;
       subscription.unsubscribe();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const signIn = async (email: string, password: string) => {
@@ -568,19 +591,65 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setPrintAgentTenantId(tenant?.id ?? null);
   }, [tenant]);
 
+  // is_active polling — sadece sayfa gorunurken calisir.
+  // Tab arkaplandayken network spam olmasin, sayfaya geri donuldugunde anlik check yapilir.
+  // ÖNEMLI: Kullanici sadece silindiginde veya is_active=false olduğunda
+  // çıkış yaptırılır. Token refresh / sayfa gorunurluk degisikliği oturumu KAPATMAZ.
   useEffect(() => {
     if (!user || isLocalMode() || isSqlServerMode()) return;
-    const timer = setInterval(async () => {
-      const { data } = await supabase
-        .from('profiles')
-        .select('is_active')
-        .eq('id', user.id)
-        .maybeSingle();
-      if ((data as any)?.is_active === false) {
-        await forceSignOutForBlockedProfile();
+    let cancelled = false;
+    let timer: ReturnType<typeof setInterval> | null = null;
+
+    const checkActive = async () => {
+      if (cancelled) return;
+      try {
+        const { data, error } = await supabase
+          .from('profiles')
+          .select('is_active')
+          .eq('id', user.id)
+          .maybeSingle();
+        // Network/PostgREST hatasinda KESINLIKLE cikis yaptırma — geçici hata olabilir.
+        if (error) return;
+        // data === null → satır silinmiş demektir (kullanici silinmiş).
+        if (data === null || (data as any)?.is_active === false) {
+          await forceSignOutForBlockedProfile();
+        }
+      } catch {
+        /* network hatası: sessizce geç, oturumu koru */
       }
-    }, 30000);
-    return () => clearInterval(timer);
+    };
+
+    const start = () => {
+      if (timer) return;
+      timer = setInterval(checkActive, 60_000);
+    };
+    const stop = () => {
+      if (timer) {
+        clearInterval(timer);
+        timer = null;
+      }
+    };
+
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        // Sayfaya geri dönüldü → tek bir hızlı kontrol + interval başlat.
+        void checkActive();
+        start();
+      } else {
+        stop();
+      }
+    };
+
+    if (document.visibilityState === 'visible') {
+      start();
+    }
+    document.addEventListener('visibilitychange', onVisibility);
+
+    return () => {
+      cancelled = true;
+      stop();
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
   }, [user?.id]);
 
   const setActiveBranch = (branch: Branch) => {
