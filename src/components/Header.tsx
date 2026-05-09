@@ -375,11 +375,11 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
                 </div>
               )}
 
-              <div className="flex items-center space-x-2 px-2.5 py-1.5 md:px-3 bg-slate-50 rounded-lg max-w-[160px] md:max-w-[240px]">
-                <User className="w-4 h-4 text-slate-500" />
-                <div>
+              <div className="flex items-center gap-1.5 sm:gap-2 px-1.5 py-1.5 sm:px-2.5 md:px-3 bg-slate-50 rounded-lg max-w-[44px] sm:max-w-[160px] md:max-w-[240px] min-w-0 flex-shrink overflow-hidden" title={userLabel}>
+                <User className="w-4 h-4 text-slate-500 flex-shrink-0" />
+                <div className="min-w-0 hidden sm:block">
                   <p className="text-xs md:text-sm font-medium text-slate-700 truncate">{userLabel}</p>
-                  <p className="text-xs text-slate-500">{roleLabels[profile?.role || ''] || profile?.role}</p>
+                  <p className="text-[10px] md:text-xs text-slate-500 truncate">{roleLabels[profile?.role || ''] || profile?.role}</p>
                 </div>
               </div>
 
@@ -421,7 +421,7 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
 
               <button
                 onClick={() => { setShowSupport(!showSupport); setShowNotifications(false); }}
-                className="p-1.5 md:p-2 text-slate-600 hover:text-slate-900 rounded-lg hover:bg-slate-100 transition-all active:scale-95"
+                className="hidden sm:inline-flex p-1.5 md:p-2 text-slate-600 hover:text-slate-900 rounded-lg hover:bg-slate-100 transition-all active:scale-95"
                 title="Destek"
               >
                 <HeadphonesIcon className="w-4 h-4 md:w-5 md:h-5" />
@@ -429,7 +429,7 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
 
               <button
                 onClick={onOpenSettings}
-                className="p-1.5 md:p-2 text-slate-600 hover:text-slate-900 rounded-lg hover:bg-slate-100 transition-all active:scale-95"
+                className="hidden sm:inline-flex p-1.5 md:p-2 text-slate-600 hover:text-slate-900 rounded-lg hover:bg-slate-100 transition-all active:scale-95"
                 title="Ayarlar"
               >
                 <Settings className="w-4 h-4 md:w-5 md:h-5" />
@@ -484,10 +484,11 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
                   }
                   signOut();
                 }}
-                className="flex items-center space-x-1 md:space-x-2 text-white bg-gradient-to-r from-red-600 to-red-700 px-2 py-1.5 md:px-4 md:py-2 rounded-lg hover:shadow-lg transition-all active:scale-95"
+                className="flex items-center gap-1 md:gap-2 text-white bg-gradient-to-r from-red-600 to-red-700 px-2 py-1.5 md:px-4 md:py-2 rounded-lg hover:shadow-lg transition-all active:scale-95 flex-shrink-0"
+                title="Çıkış"
               >
                 <LogOut className="w-3.5 h-3.5 md:w-4 md:h-4" />
-                <span className="text-xs md:text-sm font-medium">Çıkış</span>
+                <span className="hidden sm:inline text-xs md:text-sm font-medium">Çıkış</span>
               </button>
             </div>
           </div>
