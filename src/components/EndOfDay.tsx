@@ -76,6 +76,25 @@ export function EndOfDay({ onClose }: EndOfDayProps) {
   const [showCloseConfirm, setShowCloseConfirm] = useState(false);
   const [openTables, setOpenTables] = useState<Array<{ id: string; table_number: string }>>([]);
   const [pendingOrders, setPendingOrders] = useState<Array<{ id: string; order_type: string; status: string; table_id: string | null }>>([]);
+  const [reopening, setReopening] = useState(false);
+
+  const handleReopenDay = async () => {
+    if (!todayClosure) return;
+    if (!confirm('Bu kapatılmış günü yeniden açmak istiyor musunuz?\n\nGünü yeniden açtığınızda yeni vardiya açılabilir, satışlar bu güne işlenir. Bu işlem audit kaydı bırakır.')) return;
+    setReopening(true);
+    setCloseError(null);
+    try {
+      const { error } = await (supabase as any).rpc('reopen_business_day', { p_id: (todayClosure as any).id });
+      if (error) throw error;
+      setCloseSuccess('Gün yeniden açıldı.');
+      await refreshShift();
+      await loadStats();
+    } catch (e: any) {
+      setCloseError(e?.message || 'Gün yeniden açılamadı');
+    } finally {
+      setReopening(false);
+    }
+  };
 
   const effectiveBranchForShift = isOwnerOrAdmin ? (selectedBranch !== 'all' ? selectedBranch : null) : (activeBranch?.id || null);
   const { activeShift, todayClosure, refresh: refreshShift } = useActiveShift({
@@ -287,22 +306,39 @@ export function EndOfDay({ onClose }: EndOfDayProps) {
   @page { size: 80mm auto; margin: 3mm; }
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; }
-  body { font-family: 'Consolas', 'Courier New', monospace; font-size: 12px; color: #000; width: 74mm; }
+  body {
+    font-family: 'Segoe UI', 'Arial', 'Helvetica Neue', Helvetica, sans-serif;
+    font-size: 13px;
+    line-height: 1.35;
+    color: #000;
+    width: 74mm;
+    -webkit-font-smoothing: antialiased;
+  }
   .center { text-align: center; }
   .right { text-align: right; }
   .bold { font-weight: 700; }
-  .xlarge { font-size: 16px; }
-  .large { font-size: 14px; }
-  .small { font-size: 10px; color: #444; }
-  .line { border-top: 1px dashed #000; margin: 4px 0; }
-  .double { border-top: 2px solid #000; margin: 4px 0; }
-  .row { display: flex; justify-content: space-between; gap: 6px; margin: 2px 0; }
+  .xlarge { font-size: 18px; font-weight: 800; }
+  .large { font-size: 15px; font-weight: 700; }
+  .small { font-size: 11px; color: #333; }
+  .muted { color: #555; }
+  .line { border-top: 1px dashed #888; margin: 6px 0; }
+  .double { border-top: 2px solid #000; margin: 6px 0; }
+  .row { display: flex; justify-content: space-between; gap: 8px; margin: 3px 0; }
   .row .l { flex: 1; }
-  .row .r { white-space: nowrap; font-weight: 700; }
-  .footer { margin-top: 8px; text-align: center; font-size: 10px; color: #555; }
-  table { width: 100%; border-collapse: collapse; }
-  td { padding: 1px 0; vertical-align: top; }
-  td.right { text-align: right; }
+  .row .r { white-space: nowrap; font-weight: 600; }
+  .row.bold .l, .row.bold .r { font-weight: 800; }
+  .totalbox {
+    background: #000;
+    color: #fff;
+    padding: 6px 8px;
+    border-radius: 4px;
+    margin: 6px 0;
+    display: flex;
+    justify-content: space-between;
+    font-weight: 800;
+    font-size: 15px;
+  }
+  .footer { margin-top: 10px; text-align: center; font-size: 10px; color: #777; }
   @media print {
     body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   }
@@ -323,9 +359,7 @@ export function EndOfDay({ onClose }: EndOfDayProps) {
   <div class="row"><span class="l">Nakit</span><span class="r">${fmt(stats.cashRevenue)} ₺</span></div>
   <div class="row"><span class="l">Kredi Kartı</span><span class="r">${fmt(stats.cardRevenue)} ₺</span></div>
   <div class="row"><span class="l">Cari Hesap</span><span class="r">${fmt(stats.openAccountRevenue)} ₺</span></div>
-  <div class="double"></div>
-  <div class="row bold large"><span class="l">TOPLAM CİRO</span><span class="r">${fmt(stats.totalRevenue)} ₺</span></div>
-  <div class="double"></div>
+  <div class="totalbox"><span>TOPLAM CİRO</span><span>${fmt(stats.totalRevenue)} ₺</span></div>
 
   <div class="bold">KASA ÖZETİ</div>
   <div class="line"></div>
@@ -447,12 +481,30 @@ export function EndOfDay({ onClose }: EndOfDayProps) {
 
           {/* Day status / close-day banner */}
           {todayClosure ? (
-            <div className="rounded-xl border-2 border-amber-300 bg-amber-50 p-4 flex items-center gap-3">
-              <Lock className="w-6 h-6 text-amber-700" />
-              <div className="flex-1">
-                <p className="font-black text-amber-900">Bu gün kapatıldı</p>
-                <p className="text-xs text-amber-800">{formatBusinessDateTR(todayClosure.business_date)} • {new Date(todayClosure.closed_at).toLocaleString('tr-TR')}</p>
+            <div className="rounded-xl border-2 border-amber-300 bg-amber-50 p-4 flex items-start gap-3 flex-wrap">
+              <Lock className="w-6 h-6 text-amber-700 mt-0.5 shrink-0" />
+              <div className="flex-1 min-w-0">
+                <p className="font-black text-amber-900">Bu iş günü kapatıldı</p>
+                <p className="text-xs text-amber-800 mt-0.5">
+                  <b>{formatBusinessDateTR(todayClosure.business_date)}</b> • Kapatma: {new Date(todayClosure.closed_at).toLocaleString('tr-TR')}
+                </p>
+                <p className="text-xs text-amber-800 mt-1.5 leading-relaxed">
+                  Yeni satışlar yarın <b>06:00</b>'da otomatik başlayacak yeni iş gününe yazılır.
+                  Yeni vardiya açmak için yeni günün başlamasını bekleyin.
+                  {isOwnerOrAdmin && ' Hatalı bir kapanış ise yan taraftaki "Günü Yeniden Aç" butonunu kullanabilirsiniz.'}
+                </p>
               </div>
+              {isOwnerOrAdmin && (
+                <button
+                  onClick={handleReopenDay}
+                  disabled={reopening}
+                  className="bg-white hover:bg-amber-100 border-2 border-amber-300 text-amber-800 font-black px-4 py-2 rounded-lg shadow-sm text-sm flex items-center gap-2 disabled:opacity-50"
+                  title="Bu günü yeniden açar — sadece yönetici"
+                >
+                  {reopening ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Lock className="w-4 h-4" />}
+                  Günü Yeniden Aç
+                </button>
+              )}
             </div>
           ) : (
             permissions.can_end_of_day && effectiveBranchForShift && (
@@ -863,6 +915,19 @@ export function EndOfDay({ onClose }: EndOfDayProps) {
                   <span className="text-slate-600">Sipariş</span>
                   <span className="font-black text-slate-800">{stats.completedOrders} / {stats.totalOrders}</span>
                 </div>
+              </div>
+
+              {/* Kapanis sonrasi davranis aciklamasi (TR/dunya standardi) */}
+              <div className="rounded-xl bg-blue-50 border border-blue-200 p-3 space-y-1.5">
+                <div className="flex items-center gap-2 text-blue-900 font-black text-sm">
+                  <Lock className="w-4 h-4" /> Kapatınca ne olur?
+                </div>
+                <ul className="text-xs text-blue-900 space-y-1 list-disc pl-5">
+                  <li>Bu gün için <b>yeni vardiya açılamaz</b> ve fişler yeni günün hesabına geçer.</li>
+                  <li>Yeni iş günü otomatik olarak <b>yarın 06:00</b>'da başlar.</li>
+                  <li>Z raporu <b>kalıcıdır</b>; ileride raporlarda her zaman görüntülenebilir.</li>
+                  <li>Hatalı kapanışta yalnızca <b>yönetici</b> "Günü Yeniden Aç" yapabilir.</li>
+                </ul>
               </div>
 
               {closeError && (
