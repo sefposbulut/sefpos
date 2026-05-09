@@ -18,9 +18,12 @@ const roleLabels: Record<string, string> = {
   super_admin: 'Süper Admin',
 };
 
+// Header'da gosterilen ana logo. Kullanicinin atttigi yeni
+// "ŞefPOS chef-hat" logosu, sadece bu konumda kullanilir; Auth/Onboarding/Landing
+// hala /logo.png kullanir.
 const logoSrc = isElectron
-  ? new URL('../../public/logo.png', import.meta.url).href
-  : '/logo.png';
+  ? new URL('../../public/logo-header.png', import.meta.url).href
+  : '/logo-header.png';
 
 interface HeaderProps {
   onOpenSettings: () => void;
@@ -179,59 +182,13 @@ export function Header({ onOpenSettings, onOpenOnboarding }: HeaderProps) {
       <header className="fixed top-0 left-0 right-0 bg-white shadow-sm border-b border-slate-200 z-30">
         <div className="px-3 md:px-6">
           <div className="flex justify-between items-center h-14 md:h-20">
-            <div className="flex items-center space-x-2 md:space-x-3 ml-12 md:ml-16">
-              <img src={logoSrc} alt="ŞefPOS" className="hidden md:block md:h-10 md:w-auto md:rounded-none object-contain flex-shrink-0" />
-              {/* Kurumsal kimlik kartı: tenant logosu (yoksa bas harf rozeti) + isletme adi + sef pos alt etiketi */}
-              <div className="flex items-center gap-2.5 pl-0 md:pl-3 md:border-l md:border-slate-200">
-                {(() => {
-                  const logoUrl = (tenant as any)?.logo_url as string | undefined;
-                  const name = (tenant?.name || '').trim();
-                  const initials = name
-                    ? name
-                        .split(/\s+/)
-                        .filter(Boolean)
-                        .slice(0, 2)
-                        .map((w) => w[0])
-                        .join('')
-                        .toUpperCase()
-                    : 'ŞP';
-                  return logoUrl ? (
-                    <img
-                      src={logoUrl}
-                      alt={name}
-                      className="w-9 h-9 md:w-11 md:h-11 rounded-xl object-cover ring-2 ring-orange-100 flex-shrink-0"
-                    />
-                  ) : (
-                    <div
-                      className="w-9 h-9 md:w-11 md:h-11 rounded-xl bg-gradient-to-br from-orange-500 to-red-600 text-white font-black flex items-center justify-center text-sm md:text-base shadow-sm ring-2 ring-orange-100 flex-shrink-0"
-                      title={name}
-                    >
-                      {initials}
-                    </div>
-                  );
-                })()}
-                <div className="leading-tight min-w-0">
-                  <p
-                    className="text-sm md:text-base font-extrabold text-slate-800 tracking-tight truncate max-w-[140px] md:max-w-[260px]"
-                    title={tenant?.name || ''}
-                  >
-                    {tenant?.name || 'İşletme'}
-                  </p>
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-[10px] md:text-[11px] font-semibold uppercase tracking-wider text-orange-600">
-                      ŞefPOS
-                    </span>
-                    {activeBranch?.name && (
-                      <>
-                        <span className="text-slate-300 text-[10px]">•</span>
-                        <span className="text-[10px] md:text-[11px] text-slate-500 truncate max-w-[100px] md:max-w-[180px]">
-                          {activeBranch.name}
-                        </span>
-                      </>
-                    )}
-                  </div>
-                </div>
-              </div>
+            <div className="flex items-center ml-12 md:ml-16">
+              <img
+                src={logoSrc}
+                alt="ŞefPOS"
+                className="h-9 md:h-12 w-auto object-contain flex-shrink-0 select-none"
+                draggable={false}
+              />
             </div>
 
             <div className="flex items-center space-x-1.5 md:space-x-2">
@@ -242,21 +199,43 @@ export function Header({ onOpenSettings, onOpenOnboarding }: HeaderProps) {
                       ? 'Deneme süreniz sona erdi — lisans aktif edin'
                       : `${formatTrialRemaining(trialInfo)} kaldı`
                   }
-                  className={`hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-[11px] md:text-xs font-bold border shadow-sm transition ${
-                    trialUrgent
-                      ? 'bg-gradient-to-r from-red-500 to-orange-500 text-white border-red-400 animate-pulse'
-                      : 'bg-gradient-to-r from-amber-50 to-orange-50 text-orange-700 border-orange-200'
+                  className={`hidden sm:inline-flex items-center gap-2 pl-1 pr-3 py-1 rounded-full border shadow-sm transition ${
+                    trialInfo.expired
+                      ? 'bg-red-50 border-red-200'
+                      : trialUrgent
+                        ? 'bg-amber-50 border-amber-300 ring-1 ring-amber-200'
+                        : 'bg-white border-slate-200'
                   }`}
                 >
-                  <Sparkles className="w-3.5 h-3.5" />
-                  {trialInfo.expired ? (
-                    <span>Deneme bitti</span>
-                  ) : (
-                    <>
-                      <span className="hidden md:inline">Deneme:&nbsp;</span>
-                      <span>{formatTrialRemaining(trialInfo)}</span>
-                    </>
-                  )}
+                  <span
+                    className={`w-7 h-7 rounded-full flex items-center justify-center shadow-inner ${
+                      trialInfo.expired
+                        ? 'bg-gradient-to-br from-red-500 to-rose-600'
+                        : 'bg-gradient-to-br from-amber-400 via-orange-500 to-rose-500'
+                    }`}
+                  >
+                    <Sparkles className="w-3.5 h-3.5 text-white" />
+                  </span>
+                  <div className="flex items-baseline gap-1.5 leading-none">
+                    <span
+                      className={`text-[9px] md:text-[10px] uppercase tracking-[0.12em] font-bold ${
+                        trialInfo.expired ? 'text-red-700' : 'text-slate-500'
+                      }`}
+                    >
+                      Deneme
+                    </span>
+                    <span
+                      className={`text-sm md:text-base font-extrabold whitespace-nowrap ${
+                        trialInfo.expired
+                          ? 'text-red-700'
+                          : trialUrgent
+                            ? 'text-orange-700'
+                            : 'text-slate-800'
+                      }`}
+                    >
+                      {trialInfo.expired ? 'Süre bitti' : formatTrialRemaining(trialInfo)}
+                    </span>
+                  </div>
                 </div>
               )}
 
