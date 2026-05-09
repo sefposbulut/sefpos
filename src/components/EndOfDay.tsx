@@ -419,8 +419,8 @@ export function EndOfDay({ onClose }: EndOfDayProps) {
   .large { font-size: 14px; font-weight: 700; letter-spacing: 0.3px; text-transform: uppercase; }
   .section { font-size: 12px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; margin-top: 6px; }
   .small { font-size: 11px; font-weight: 500; }
-  .muted { font-weight: 500; opacity: 0.85; }
-  .line { border-top: 1px solid #000; margin: 5px 0; opacity: 0.6; }
+  .muted { font-weight: 500; }
+  .line { border-top: 1px solid #000; margin: 5px 0; }
   .double { border-top: 2px solid #000; margin: 6px 0; }
   .row { display: flex; justify-content: space-between; gap: 8px; margin: 3px 0; }
   .row .l { flex: 1; font-weight: 500; }
@@ -445,12 +445,16 @@ export function EndOfDay({ onClose }: EndOfDayProps) {
   .signature {
     margin-top: 14px;
     padding-top: 10px;
-    border-top: 1px solid #000;
-    font-size: 11px;
+    border-top: 2px solid #000;
+    font-size: 12px;
     line-height: 1.55;
+    color: #000;
   }
-  .signature .lbl { font-weight: 700; letter-spacing: 0.3px; text-transform: uppercase; font-size: 10px; }
-  .footer { margin-top: 8px; text-align: center; font-size: 10px; font-weight: 500; opacity: 0.7; }
+  .signature * { color: #000; }
+  .signature .lbl { font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase; font-size: 11px; margin-bottom: 2px; }
+  .signature .name { font-weight: 700; font-size: 13px; }
+  .signature .info { font-weight: 600; font-size: 11px; }
+  .footer { margin-top: 8px; text-align: center; font-size: 10px; font-weight: 500; }
   @media print {
     body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   }
@@ -519,9 +523,9 @@ export function EndOfDay({ onClose }: EndOfDayProps) {
 
   <div class="signature">
     <div class="lbl">Raporu Alan / Günü Kapatan</div>
-    <div><b>${(profile?.full_name || profile?.email || user?.email || '-')}</b></div>
-    <div class="muted small">${profile?.role ? 'Yetki: ' + profile.role : ''}</div>
-    <div class="muted small">Tarih/Saat: ${timeNow}</div>
+    <div class="name">${(profile?.full_name || profile?.email || user?.email || '-')}</div>
+    ${profile?.role ? `<div class="info">Yetki: ${profile.role}</div>` : ''}
+    <div class="info">Tarih/Saat: ${timeNow}</div>
   </div>
   <div class="footer">Bu rapor ŞefPOS tarafından otomatik oluşturulmuştur.</div>
   <br/><br/>
