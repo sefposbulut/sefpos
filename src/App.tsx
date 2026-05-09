@@ -130,6 +130,7 @@ function App() {
   });
 
   const isElectron = useMemo(() => !!(window as any).electronAPI, []);
+  const uiPrefs = useUiPrefs();
   const { user, profile, tenant, loading, refreshProfile, activeBranch, signOut, profileLoadFailed } = useAuth();
   const [selectedTable, setSelectedTable] = useState<Table | null>(null);
   const [currentPage, setCurrentPage] = useState('tables');
@@ -500,7 +501,6 @@ function App() {
 
   const show = (page: string) => currentPage === page;
 
-  const uiPrefs = useUiPrefs();
   const headerHidden = uiPrefs.headerHidden;
 
   // CSS `zoom` Chromium/Electron'da gercek anlamda layout boyutlandirir
