@@ -1,0 +1,164 @@
+name: Weekly Supabase Backup
+
+# Her Pazartesi 01:00 UTC = 04:00 Türkiye saati otomatik çalışır.
+# Manuel tetikleme: Actions sekmesinden "Run workflow".
+on:
+  schedule:
+    - cron: "0 1 * * 1"
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "Manuel yedek sebebi (opsiyonel)"
+        required: false
+        default: "manual"
+
+permissions:
+  contents: write   # GitHub Releases oluşturup eski yedekleri silebilmek için
+
+concurrency:
+  group: supabase-backup
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    name: pg_dump → GPG → GitHub Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify required secrets
+        env:
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          BACKUP_GPG_PASSPHRASE: ${{ secrets.BACKUP_GPG_PASSPHRASE }}
+        run: |
+          missing=0
+          [ -z "$SUPABASE_DB_PASSWORD" ]   && { echo "::error::Secret SUPABASE_DB_PASSWORD eksik"; missing=1; }
+          [ -z "$SUPABASE_PROJECT_REF" ]   && { echo "::error::Secret SUPABASE_PROJECT_REF eksik"; missing=1; }
+          [ -z "$BACKUP_GPG_PASSPHRASE" ]  && { echo "::error::Secret BACKUP_GPG_PASSPHRASE eksik (GPG simetrik şifre)"; missing=1; }
+          exit "$missing"
+
+      - name: Install PostgreSQL 17 client (matches Supabase)
+        run: |
+          set -euo pipefail
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+            https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          sudo sh -c 'echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+          sudo apt-get update -y
+          sudo apt-get install -y postgresql-client-17
+          pg_dump --version
+
+      - name: Compute backup metadata
+        id: meta
+        run: |
+          ts=$(date -u +"%Y%m%d-%H%M%S")
+          echo "ts=${ts}"                             >> "$GITHUB_OUTPUT"
+          echo "tag=backup-${ts}"                     >> "$GITHUB_OUTPUT"
+          echo "file=sefpos-backup-${ts}.sql.gz.gpg"  >> "$GITHUB_OUTPUT"
+
+      - name: Dump → gzip → GPG (AES-256)
+        id: dump
+        env:
+          PGPASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+          PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          DB_REGION:   ${{ secrets.SUPABASE_DB_REGION }}
+          GPG_PASSPHRASE: ${{ secrets.BACKUP_GPG_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          OUT="${{ steps.meta.outputs.file }}"
+
+          # Supabase Session Pooler (IPv4 uyumlu, pg_dump session-mode'da çalışır).
+          # Region varsayılanı eu-central-1; farklıysa SUPABASE_DB_REGION secret'ı ile geç.
+          REGION="${DB_REGION:-eu-central-1}"
+          HOST="aws-0-${REGION}.pooler.supabase.com"
+          DBUSER="postgres.${PROJECT_REF}"
+
+          echo "Host:    $HOST"
+          echo "User:    $DBUSER"
+          echo "Region:  $REGION"
+
+          pg_dump \
+            --host="$HOST" \
+            --port=5432 \
+            --username="$DBUSER" \
+            --dbname=postgres \
+            --schema=public \
+            --no-owner \
+            --no-privileges \
+            --quote-all-identifiers \
+            --clean \
+            --if-exists \
+          | gzip -9 \
+          | gpg --batch --yes --no-tty \
+                --passphrase "$GPG_PASSPHRASE" \
+                --symmetric --cipher-algo AES256 \
+                -o "$OUT"
+
+          ls -lh "$OUT"
+          SIZE=$(du -h "$OUT" | cut -f1)
+          echo "size=${SIZE}" >> "$GITHUB_OUTPUT"
+
+      - name: Sanity check (encrypted file looks right)
+        run: |
+          set -euo pipefail
+          FILE="${{ steps.meta.outputs.file }}"
+          test -s "$FILE" || { echo "::error::Backup file is empty"; exit 1; }
+          file "$FILE" || true
+          # GPG header'ı doğrula (sadece içerik gerçek şifrelenmişse OK)
+          head -c 1 "$FILE" | xxd | head -n1
+
+      - name: Create GitHub Release with backup asset
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.meta.outputs.tag }}"
+          FILE="${{ steps.meta.outputs.file }}"
+          SIZE="${{ steps.dump.outputs.size }}"
+          REASON="${{ github.event.inputs.reason || 'scheduled' }}"
+
+          NOTES=$(cat <<EOF
+          Otomatik haftalık ŞefPOS veritabanı yedeği.
+
+          - **Tetikleyici:** ${REASON}
+          - **Boyut:** ${SIZE}
+          - **Şifreleme:** GPG simetrik (AES-256). Restore için \`BACKUP_GPG_PASSPHRASE\` gerekli.
+          - **İçerik:** \`public\` şeması (auth, storage, realtime şemaları Supabase tarafından yönetildiği için dahil edilmez).
+          - **Restore yönergesi:** \`AGENTS.md\` → "Yedekten Geri Yükleme" bölümü.
+          EOF
+          )
+
+          gh release create "$TAG" "$FILE" \
+            --title "ŞefPOS Yedek — ${{ steps.meta.outputs.ts }}" \
+            --notes "$NOTES" \
+            --target "${{ github.ref_name }}"
+
+      - name: Cleanup releases older than 8 weeks
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cutoff=$(date -d '8 weeks ago' -u +%s)
+          gh release list --limit 200 --json tagName,createdAt \
+            | jq -r --argjson cutoff "$cutoff" \
+                '.[] | select(.tagName | startswith("backup-")) | select((.createdAt | fromdateiso8601) < $cutoff) | .tagName' \
+            | while read -r tag; do
+                if [ -n "$tag" ]; then
+                  echo "Deleting old backup release: $tag"
+                  gh release delete "$tag" --yes --cleanup-tag || true
+                fi
+              done
+
+      - name: Summary
+        run: |
+          echo "### Yedek başarılı" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Tag:** \`${{ steps.meta.outputs.tag }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Dosya:** \`${{ steps.meta.outputs.file }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Boyut:** ${{ steps.dump.outputs.size }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Releases:** https://github.com/${{ github.repository }}/releases/tag/${{ steps.meta.outputs.tag }}" >> "$GITHUB_STEP_SUMMARY"

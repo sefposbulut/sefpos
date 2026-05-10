@@ -22,6 +22,7 @@ This file is the permanent project memory for this repository.
 
 - CI workflow: `.github/workflows/ci.yml`
 - Supabase migration workflow: `.github/workflows/supabase-migrations.yml`
+- Supabase weekly backup workflow: `.github/workflows/supabase-backup.yml`
 - Dependency automation: `.github/dependabot.yml`
 
 Required GitHub secrets for automation:
@@ -29,6 +30,36 @@ Required GitHub secrets for automation:
 - `SUPABASE_ACCESS_TOKEN`
 - `SUPABASE_PROJECT_REF` (must be `xdfnozfuuzctubijbnds`)
 - `SUPABASE_DB_PASSWORD`
+- `BACKUP_GPG_PASSPHRASE` — yedekleri AES-256 simetrik şifrelemek için kullanılan parola. Güçlü, en az 32 karakter, sadece `1Password` / `Bitwarden` gibi parola yöneticisinde sakla. **Kaybedersen yedekler açılamaz.**
+- `SUPABASE_DB_REGION` *(opsiyonel)* — Supabase Session Pooler bölgesi. Varsayılan `eu-central-1`. Project Studio → Settings → Database → "Connection Pooler" altındaki host adından (`aws-0-<region>.pooler.supabase.com`) okunur; farklıysa secret olarak set et.
+
+## Yedekleme stratejisi
+
+Üç katman:
+
+1. **Supabase Pro daily backup** — bedava, otomatik, son 7 gün, Studio → Database → Backups.
+2. **Haftalık dış yedek** — `.github/workflows/supabase-backup.yml`. Her Pazartesi 04:00 TR (01:00 UTC). `pg_dump` → gzip → GPG (AES-256) → GitHub Releases (`backup-YYYYMMDD-HHMMSS`). 8 haftadan eski release'ler otomatik silinir. Manuel tetik: GitHub Actions → "Weekly Supabase Backup" → "Run workflow".
+3. **PITR (opsiyonel, ücretli)** — Supabase Pro üzerine $100/ay. Saniye saniye geri dönüş. Bütçe izin verirse Studio → Project Settings → Add ons → Point in Time Recovery.
+
+### Yedekten Geri Yükleme
+
+Sadece **boş / yedek** bir Supabase projesine restore et — production veritabanına direkt restore çalıştırma. Adımlar:
+
+```bash
+# 1) GitHub Releases'ten yedeği indir
+gh release download backup-YYYYMMDD-HHMMSS \
+  --repo sefposbulut/sefpos \
+  --pattern '*.sql.gz.gpg'
+
+# 2) GPG ile çöz + gunzip
+gpg --batch --passphrase "$BACKUP_GPG_PASSPHRASE" --decrypt sefpos-backup-*.sql.gz.gpg \
+  | gunzip > restore.sql
+
+# 3) Hedef DB'ye uygula (yedek/staging proje connection string'i)
+psql "$TARGET_DATABASE_URL" -f restore.sql
+```
+
+Acil durumda doğrulanmış geri yükleme adımları için her ay **bir kez kuru tatbikat** önerilir (boş bir yedek Supabase projesine restore + SELECT count(*) ile satır sayılarını karşılaştır).
 
 ## Local Environment Contract
 
