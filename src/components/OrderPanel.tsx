@@ -8,7 +8,7 @@ import { X, Plus, Minus, ShoppingCart, Trash2, Search, ChevronUp, ChevronDown, A
 import { PaymentModal } from './PaymentModal';
 import { TableToPackageTransferModal } from './TableToPackageTransferModal';
 import { ScaleWeighingModal } from './ScaleWeighingModal';
-import { loadPrintSettings, printKitchenReceipts, printHtml, buildReceiptHtml, printTakeawayReceipt } from '../lib/printService';
+import { loadPrintSettings, printKitchenReceipts, printToAdisyonPrinter, buildReceiptHtml, printTakeawayReceipt } from '../lib/printService';
 import { sendSaleToHugin } from '../lib/huginTps';
 import { queryCache } from '../lib/queryCache';
 import { isLocalMode } from '../lib/sqlDb';
@@ -42,6 +42,23 @@ function orderPanelMobileFromWidth(prev: boolean, width: number): boolean {
   if (width <= ORDER_PANEL_MOBILE_MAX_PX) return true;
   if (width >= ORDER_PANEL_DESKTOP_MIN_PX) return false;
   return prev;
+}
+
+/** Ödeme modalı açıkken periyodik uzatılır; yenileme/crash sonrası en geç ~4 dk içinde kilit sunucu tarafından düşer. */
+const PAYMENT_LOCK_TTL_MS = 4 * 60 * 1000;
+
+function getPaymentLockTabSession(): string {
+  try {
+    const k = 'sefpos.payment-lock-tab';
+    let s = sessionStorage.getItem(k);
+    if (!s) {
+      s = crypto.randomUUID();
+      sessionStorage.setItem(k, s);
+    }
+    return s;
+  } catch {
+    return `fallback-${Date.now()}`;
+  }
 }
 
 interface ScaleBarcodeResult {
@@ -395,32 +412,134 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
     if (table.table_number === 0 || !table.id) return true;
     const { data } = await supabase
       .from('restaurant_tables')
-      .select('payment_locked, payment_locked_at')
+      .select('payment_locked, payment_locked_at, payment_lock_expires_at, payment_locked_by_session')
       .eq('id', table.id)
       .maybeSingle();
 
     if (data?.payment_locked) {
-      const lockedAt = data.payment_locked_at ? new Date(data.payment_locked_at).getTime() : 0;
-      const staleMs = 10 * 60 * 1000;
-      const isStale = Date.now() - lockedAt > staleMs;
-      if (isStale) {
-        await supabase.from('restaurant_tables').update({ payment_locked: false, payment_locked_at: null }).eq('id', table.id);
+      const now = Date.now();
+      const lockedAtMs = data.payment_locked_at ? new Date(data.payment_locked_at).getTime() : 0;
+      const expiresMs = data.payment_lock_expires_at ? new Date(data.payment_lock_expires_at).getTime() : 0;
+      const staleWindowMs = 4 * 60 * 1000;
+      const expiredByDeadline = expiresMs > 0 && expiresMs < now;
+      const staleByLockedAt = lockedAtMs > 0 && now - lockedAtMs > staleWindowMs;
+      const orphanLock = !data.payment_locked_at && !data.payment_lock_expires_at;
+      if (expiredByDeadline || staleByLockedAt || orphanLock) {
+        await supabase
+          .from('restaurant_tables')
+          .update({
+            payment_locked: false,
+            payment_locked_at: null,
+            payment_locked_by_session: null,
+            payment_lock_expires_at: null,
+          })
+          .eq('id', table.id);
         emitTableStateChanged({ id: table.id, payment_locked: false });
       } else {
         setPaymentLockedWarning(true);
         return false;
       }
     }
-    await supabase.from('restaurant_tables').update({ payment_locked: true, payment_locked_at: new Date().toISOString() }).eq('id', table.id);
+    const expiresIso = new Date(Date.now() + PAYMENT_LOCK_TTL_MS).toISOString();
+    await supabase
+      .from('restaurant_tables')
+      .update({
+        payment_locked: true,
+        payment_locked_at: new Date().toISOString(),
+        payment_lock_expires_at: expiresIso,
+        payment_locked_by_session: getPaymentLockTabSession(),
+      })
+      .eq('id', table.id);
     emitTableStateChanged({ id: table.id, payment_locked: true });
     return true;
   };
 
   const unlockTable = async () => {
     if (table.table_number === 0 || !table.id) return;
-    await supabase.from('restaurant_tables').update({ payment_locked: false, payment_locked_at: null }).eq('id', table.id);
+    await supabase
+      .from('restaurant_tables')
+      .update({
+        payment_locked: false,
+        payment_locked_at: null,
+        payment_lock_expires_at: null,
+        payment_locked_by_session: null,
+      })
+      .eq('id', table.id);
     emitTableStateChanged({ id: table.id, payment_locked: false });
   };
+
+  // Ödeme modalı açıkken kilit süresini periyodik uzat — gerçek ödeme uzun
+  // sürerken süre dolup kilit düşmez. Sekme yenilenince heartbeat kesilir;
+  // `unlock_stale_payment_locks` + süre dolunca kilit kendiliğinden kalkar.
+  useEffect(() => {
+    if (!showPayment || table.table_number === 0 || !table.id) return;
+    const bump = () => {
+      const expiresIso = new Date(Date.now() + PAYMENT_LOCK_TTL_MS).toISOString();
+      void supabase
+        .from('restaurant_tables')
+        .update({ payment_lock_expires_at: expiresIso })
+        .eq('id', table.id)
+        .eq('payment_locked', true);
+    };
+    const id = setInterval(bump, 60 * 1000);
+    bump();
+    return () => clearInterval(id);
+  }, [showPayment, table.id, table.table_number]);
+
+  /**
+   * OrderPanel'i kapat. Kapanmadan ONCE masaya en guncel durumu (occupied + total)
+   * optimistik olarak yay; boylece izgaraya donuldugunde masa kutusu **anlik**
+   * yesile doner ve son tutari gosterir, realtime gecikmesini beklemez.
+   */
+  const handleClose = useCallback(() => {
+    if (table.table_number !== 0 && table.id) {
+      const orderId = currentOrder?.id || table.current_order_id;
+      const existingTotal = existingOrderItems.reduce(
+        (s, i) => s + Number((i as any).total_amount || 0),
+        0
+      );
+      const cartTotal = cart.reduce((s, i) => {
+        if (i.weightedPrice !== undefined) return s + Number(i.weightedPrice || 0);
+        const unit = i.product.price + (i.variant ? i.variant.price_modifier : 0);
+        return s + unit * i.quantity;
+      }, 0);
+      const totalAmount = existingTotal + cartTotal;
+      // En az bir kayitli sipariş satiri varsa masa "occupied"; sadece sepete
+      // eklenip kaydedilmemis ürünler kapanma esnasinda DB'ye gitmediyse masa
+      // bos kalir (zaten dogru davranis).
+      if (orderId && existingOrderItems.length > 0) {
+        emitTableStateChanged({
+          id: table.id,
+          status: 'occupied' as any,
+          current_order_id: orderId,
+          session_start: ((table as unknown as { session_start?: string | null }).session_start) ||
+            new Date().toISOString(),
+          payment_locked: false,
+          order: {
+            id: orderId,
+            total_amount: totalAmount,
+            order_number:
+              currentOrder?.order_number || (table.order?.order_number || ''),
+            payment_status:
+              (currentOrder?.payment_status as string | null) ||
+              (table.order?.payment_status as string | null) ||
+              'unpaid',
+          },
+        });
+      }
+    }
+    void unlockTable();
+    onClose();
+  }, [
+    table,
+    currentOrder?.id,
+    currentOrder?.order_number,
+    currentOrder?.payment_status,
+    existingOrderItems,
+    cart,
+    emitTableStateChanged,
+    onClose,
+  ]);
 
   const applyOrderStockMovements = useCallback(async (orderId: string, items: (OrderItem & { products: Product })[]) => {
     if (!tenant) return;
@@ -1424,7 +1543,7 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
             tableLabel,
             orderNumber: orderNum,
             items: kitchenItems,
-            categories,
+            waiterName: profile?.full_name || profile?.email || user.email || undefined,
           });
         }
 
@@ -1632,6 +1751,29 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
     if (isTempOrderId(currentOrder.id)) {
       alert('Sipariş sunucuya yazılıyor; birkaç saniye sonra tekrar deneyin.');
       return;
+    }
+
+    // Hizli optimistik kapanis: nakit/kart ile yeterli odeme yapildiginda
+    // payment_transactions INSERT round-trip'ini beklemeden masa kutusunu
+    // ANLIK bosalt + paneli kapat. DB yazimi arka planda devam eder; hata
+    // olursa restaurant_tables realtime ile gercek state geri gelir.
+    if (method !== 'open_account' && table.table_number !== 0 && table.id) {
+      const currentPaid = paymentTransactions.reduce(
+        (s, p) => s + Number(p.amount || 0),
+        0,
+      );
+      const { total: orderTotal } = calculateTotal();
+      if (currentPaid + Number(amount || 0) + 0.01 >= orderTotal) {
+        emitTableStateChanged({
+          id: table.id,
+          status: 'available' as any,
+          current_order_id: null,
+          session_start: null,
+          payment_locked: false,
+          order: null,
+        });
+        queueMicrotask(() => onClose());
+      }
     }
 
     if (method === 'open_account') {
@@ -1920,8 +2062,13 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
               paymentMethod: payMethod,
               footer: printSettings.receiptFooter,
               waiterName: (currentOrder as any).waiter_name || undefined,
+              printStyle: printSettings.printStyle,
             });
-            printHtml(html, printSettings.defaultReceiptPrinter);
+            void printToAdisyonPrinter(printSettings, html).then((r) => {
+              if (!r.success) {
+                console.warn('[ŞefPOS] Adisyon yazdırılamadı:', r.error);
+              }
+            });
           }
         }, 50);
       }
@@ -2236,7 +2383,8 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
             </div>
             <h2 className="text-xl font-bold text-slate-800 mb-2">Masa Kilitli</h2>
             <p className="text-slate-600 mb-6">
-              Bu masa şu anda başka bir kasada ödeme alınıyor. Lütfen bekleyin.
+              Bu masa şu anda başka bir kasada ödeme alınıyor olabilir. Birkaç dakika bekleyin veya
+              Masalar ekranına dönüp yenileyin; ödeme ekranı kesilmiş eski kilitler otomatik düşer.
             </p>
             <button
               onClick={() => setPaymentLockedWarning(false)}
@@ -2531,7 +2679,7 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
                 </>
               )}
               <button
-                onClick={() => { unlockTable(); onClose(); }}
+                onClick={handleClose}
                 className="text-white p-2 rounded-lg active:scale-95 bg-white/20"
               >
                 <X className="w-6 h-6" />
@@ -2580,7 +2728,7 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
                   </>
                 )}
                 <button
-                  onClick={() => { unlockTable(); onClose(); }}
+                  onClick={handleClose}
                   className="text-white hover:bg-white/20 p-2 lg:p-3 rounded-xl transition-all active:scale-95"
                 >
                   <X className="w-5 h-5 lg:w-7 lg:h-7" />
@@ -2979,11 +3127,11 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
                           partialPaymentMarkedRef.current = false;
                           partialPaymentRemainingRef.current = 0;
                         }
-                        setShowPayment(true);
-                        if (cart.length > 0) void handleSubmitOrder();
                         void (async () => {
                           const canPay = await lockTableForPayment();
-                          if (!canPay) setShowPayment(false);
+                          if (!canPay) return;
+                          setShowPayment(true);
+                          if (cart.length > 0) void handleSubmitOrder();
                         })();
                       }}
                       disabled={payButtonBlocked || submitBusy}
@@ -3430,6 +3578,11 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
                           onClick={async () => {
                             if (!currentOrder) return;
                             const printSettings = loadPrintSettings();
+                            const adisyon = (printSettings.defaultReceiptPrinter || '').trim();
+                            if (!adisyon) {
+                              alert('Adisyon fişi için Ayarlar → Yazıcılar bölümünden "Adisyon yazıcısı" seçin.');
+                              return;
+                            }
                             const tableLabel = table.table_number === 0 ? 'Paket' : `Masa ${table.table_number}`;
                             const { discountAmount, total } = calculateTotal();
                             const html = buildReceiptHtml({
@@ -3451,8 +3604,10 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
                               discountAmount,
                               total,
                               footer: printSettings.receiptFooter,
+                              printStyle: printSettings.printStyle,
                             });
-                            printHtml(html, printSettings.defaultReceiptPrinter || '');
+                            const r = await printToAdisyonPrinter(printSettings, html);
+                            if (!r.success) alert(r.error || 'Yazdırılamadı');
                           }}
                           className="px-3 bg-gradient-to-r from-slate-500 to-slate-600 hover:from-slate-600 hover:to-slate-700 text-white font-bold py-4 rounded-xl transition-colors duration-75 shadow-lg active:scale-95 flex items-center gap-1.5"
                           title="Adisyon Yazdır"
@@ -3478,11 +3633,11 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
                               partialPaymentMarkedRef.current = false;
                               partialPaymentRemainingRef.current = 0;
                             }
-                            setShowPayment(true);
-                            if (cart.length > 0) void handleSubmitOrder();
                             void (async () => {
                               const canPay = await lockTableForPayment();
-                              if (!canPay) setShowPayment(false);
+                              if (!canPay) return;
+                              setShowPayment(true);
+                              if (cart.length > 0) void handleSubmitOrder();
                             })();
                           }}
                           disabled={payButtonBlocked || submitBusy}

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   X, Banknote, CreditCard, Receipt, Percent, Printer,
   Plus, Trash2, Users, Search, Phone, ChevronRight,
@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
+import { loadPrintSettings, PRINT_SETTINGS_REMOTE_UPDATED_EVENT, PRINT_SETTINGS_CONTEXT_EVENT } from '../lib/printService';
 
 interface PickerCustomer {
   id: string;
@@ -274,8 +275,50 @@ export function PaymentModal({
   const [splits, setSplits] = useState<PaymentSplit[]>([
     { method: 'cash', amount: remainingAmount.toFixed(2) }
   ]);
-  const [printReceipt, setPrintReceipt] = useState(true);
+  // "Adisyon Yazdır" toggle'ının açılış değeri restoranın Ayarlar →
+  // Yazıcılar bölümünden seçtiği `receiptPrintDefaultOn` ayarına bağlıdır.
+  // Varsayılan kapalıdır; kullanıcı isterse açar. Restoran her ödemede
+  // otomatik adisyon basmak isterse Ayarlar'dan bu seçeneği açar.
+  const [printReceipt, setPrintReceipt] = useState<boolean>(() => {
+    try {
+      return loadPrintSettings().receiptPrintDefaultOn === true;
+    } catch {
+      return false;
+    }
+  });
+  // Bulut/şube değişiminde ayar tazelendiğinde toggle başlangıç durumunu
+  // güncelle (kullanıcı manuel değiştirmediği sürece).
+  const printReceiptManuallyToggledRef = useRef(false);
+  useEffect(() => {
+    const refresh = () => {
+      if (printReceiptManuallyToggledRef.current) return;
+      try {
+        setPrintReceipt(loadPrintSettings().receiptPrintDefaultOn === true);
+      } catch { /* yoksay */ }
+    };
+    window.addEventListener(PRINT_SETTINGS_REMOTE_UPDATED_EVENT, refresh);
+    window.addEventListener(PRINT_SETTINGS_CONTEXT_EVENT, refresh);
+    return () => {
+      window.removeEventListener(PRINT_SETTINGS_REMOTE_UPDATED_EVENT, refresh);
+      window.removeEventListener(PRINT_SETTINGS_CONTEXT_EVENT, refresh);
+    };
+  }, []);
   const [submitting, setSubmitting] = useState(false);
+
+  // Mobilde tutar input'una otomatik focus verirsek sanal klavye anında
+  // sayfayı kaplıyor — kullanıcı sadece bakmak istese bile rahatsız edici.
+  // Desktop'ta klavye yok, autoFocus rahatlık katıyor; mobilde input'a
+  // dokunulmadıkça klavye çıkmasın.
+  const [isMobile, setIsMobile] = useState(() =>
+    typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches
+  );
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const mq = window.matchMedia('(max-width: 767px)');
+    const onChange = () => setIsMobile(mq.matches);
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
 
   useEffect(() => {
     setSplits([{ method: 'cash', amount: remainingAmount.toFixed(2) }]);
@@ -467,7 +510,7 @@ export function PaymentModal({
                     onChange={(e) => updateSplit(idx, 'amount', e.target.value)}
                     className="flex-1 min-w-0 px-3 py-2 border-2 rounded-xl text-xl sm:text-2xl font-black focus:border-green-500 focus:outline-none text-right"
                     placeholder="0.00"
-                    autoFocus={idx === 0}
+                    autoFocus={idx === 0 && !isMobile}
                   />
                   <span className="text-slate-500 font-bold text-sm">₺</span>
                   <button
@@ -501,7 +544,10 @@ export function PaymentModal({
           </div>
 
           <button
-            onClick={() => setPrintReceipt(v => !v)}
+            onClick={() => {
+              printReceiptManuallyToggledRef.current = true;
+              setPrintReceipt(v => !v);
+            }}
             className={`w-full flex items-center justify-between px-4 py-2.5 rounded-xl border-2 transition-all active:scale-95 ${
               printReceipt
                 ? 'border-blue-500 bg-blue-50'

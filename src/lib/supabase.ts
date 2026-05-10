@@ -214,6 +214,59 @@ const realSupabase = createClient(supabaseUrl, supabaseAnonKey, {
           }),
         );
       }
+      // Offline / yavas baglantida her isteyi sonsuza kadar bekletmemek icin
+      // belirli timeout uygula (auth ve realtime haric, onlar tarayici default
+      // davranisinda kalsin). Boylece tarayici "donmus" gibi gozukmez; kullanici
+      // cache/snapshot uzerinden cogu UI'i gorur.
+      const isAuth = href.includes('/auth/v1/');
+      const isRealtime = href.includes('/realtime/');
+      const fetchOptions: RequestInit = init ? { ...(init as RequestInit) } : {};
+
+      // Auth (özellikle getSession / token refresh) offline veya yavaş bağlantıda
+      // sonsuza kadar bekliyordu → "Oturum kontrol ediliyor..." ekranı kilitleniyordu.
+      // 10 sn içinde dönmeyen auth çağrılarını AbortError ile keseriz; AuthContext
+      // .catch() içinde loading=false yapacak ve kullanıcı login ekranına düşecek.
+      if (isAuth && typeof AbortController !== 'undefined' && !fetchOptions.signal) {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 10000);
+        fetchOptions.signal = controller.signal;
+        return nativeFetch(input as RequestInfo, fetchOptions).finally(() => clearTimeout(timer));
+      }
+
+      if (!isAuth && !isRealtime && typeof AbortController !== 'undefined' && !fetchOptions.signal) {
+        const controller = new AbortController();
+        const timeoutMs = navigator.onLine === false ? 1500 : 12000;
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
+        fetchOptions.signal = controller.signal;
+        return nativeFetch(input as RequestInfo, fetchOptions)
+          .finally(() => clearTimeout(timer))
+          .then(async (res) => {
+            if (import.meta.env.DEV && method === 'GET' && href.includes(REST_BRANCH_PRODUCT_STOCKS)) {
+              if (res.ok && res.status >= 200 && res.status < 300) {
+                clearDevBranchProductStocksTableMissing();
+              } else if (res.status === 404) {
+                rememberDevBranchProductStocksTableMissing();
+              }
+            }
+            return res;
+          })
+          .catch((err) => {
+            // Offline veya timeout: bos 200 cevap don ki UI cache'e dussun ve
+            // PostgREST hatasi gibi gosterilmesin. Mutasyonlar (POST/PUT/PATCH/
+            // DELETE) icin gercek hatayi devret.
+            const isReadOnly = !method || method === 'GET' || method === 'HEAD';
+            if (isReadOnly) {
+              if (import.meta.env.DEV) {
+                console.warn('[ŞefPOS] Network bekleme aşıldı, cache kullanılacak:', href, err?.message);
+              }
+              return new Response(JSON.stringify([]), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+              });
+            }
+            throw err;
+          });
+      }
       return nativeFetch(input as RequestInfo, init as RequestInit | undefined).then(async (res) => {
         if (import.meta.env.DEV && href.includes('/auth/v1/') && !res.ok) {
           try {

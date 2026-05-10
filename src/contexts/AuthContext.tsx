@@ -3,8 +3,14 @@ import { User, Session } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
 import { Database } from '../lib/supabase';
 import { isSqlServerMode, isLocalMode } from '../lib/sqlDb';
-import { fetchCloudTableGridSnapshot, prefetchCloudTableGrid } from '../lib/tableGridData';
-import { setPrintAgentBranchId, setPrintAgentTenantId, registerElectronPrinters, isElectron } from '../lib/printService';
+import { prefetchCloudTableGrid } from '../lib/tableGridData';
+import {
+  setPrintAgentBranchId,
+  setPrintAgentTenantId,
+  registerElectronPrinters,
+  isElectron,
+  fetchPrintSettingsFromCloud,
+} from '../lib/printService';
 
 type Profile = Database['public']['Tables']['profiles']['Row'];
 type Tenant = Database['public']['Tables']['tenants']['Row'];
@@ -221,12 +227,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (!nextBranch) {
         nextBranch = branchList.find((b) => b.is_main) || branchList[0] || null;
       }
+      // Masa snapshot'ini login akisini bloklamadan tetikle: TableGrid kendi
+      // taraf indaki sessionStorage/RAM cache'inden anlik tile'lari cizer; bu
+      // arka plan istegi tamamlandiginda da otomatik olarak guncellenir.
       if (nextBranch && !isLocalMode() && !isSqlServerMode()) {
-        try {
-          await fetchCloudTableGridSnapshot(tenantId, nextBranch.id);
-        } catch {
-          prefetchCloudTableGrid(tenantId, nextBranch.id);
-        }
+        prefetchCloudTableGrid(tenantId, nextBranch.id);
       }
       setActiveBranchState(nextBranch);
     } catch {
@@ -480,9 +485,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (!cancelled) setLoading(false);
     };
 
-    void supabase.auth.getSession().then(({ data: { session } }) => {
-      void applySession(session);
-    });
+    // Safety net: getSession() bazı Electron / offline senaryolarında çok uzun
+    // sürebiliyor ve "Oturum kontrol ediliyor..." ekranı sonsuza kalıyor. 8 sn
+    // sonunda hala loading true ise zorla false'a çek; kullanıcı login ekranına
+    // düşer ve manuel giriş yapabilir. Sonradan getSession() resolve olursa
+    // applySession yine doğru durumu yansıtır.
+    const safetyTimer = window.setTimeout(() => {
+      if (!cancelled) {
+        setLoading((prev) => (prev ? false : prev));
+      }
+    }, 8000);
+
+    void supabase.auth
+      .getSession()
+      .then(({ data: { session } }) => applySession(session))
+      .catch(() => {
+        if (!cancelled) setLoading(false);
+      })
+      .finally(() => {
+        window.clearTimeout(safetyTimer);
+      });
 
     const {
       data: { subscription },
@@ -498,6 +520,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     return () => {
       cancelled = true;
+      window.clearTimeout(safetyTimer);
       subscription.unsubscribe();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -625,6 +648,30 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     setPrintAgentTenantId(tenant?.id ?? null);
   }, [tenant]);
+
+  // Tenant veya aktif şube değiştiğinde bulut tarafındaki yazıcı ayarlarını
+  // çek. Böylece Electron kasada yapılan kategori → yazıcı eşlemesi web ve
+  // mobil tarafında otomatik görünür; her cihazda ayrı yapılandırma şart
+  // olmaz. Hata olursa lokal cache aktif kalır.
+  useEffect(() => {
+    if (!tenant?.id) return;
+    if (isLocalMode() || isSqlServerMode()) return;
+    let cancelled = false;
+    void fetchPrintSettingsFromCloud()
+      .then((res) => {
+        if (cancelled) return;
+        if (res) {
+          console.info('[ŞefPOS] yazıcı ayarları buluttan yüklendi', {
+            tenant: tenant.id,
+            branch: activeBranch?.id ?? null,
+          });
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [tenant?.id, activeBranch?.id]);
 
   // is_active polling — sadece sayfa gorunurken calisir.
   // Tab arkaplandayken network spam olmasin, sayfaya geri donuldugunde anlik check yapilir.

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import {
@@ -6,9 +6,12 @@ import {
   ToggleLeft, ToggleRight, Settings2, AlertCircle, X, ChevronDown, Wifi, WifiOff
 } from 'lucide-react';
 import {
-  PrinterDevice, PrinterConfig, PrintSettings, PrintAgentStatus,
+  PrinterDevice, PrinterConfig, PrintSettings, PrintStyleSettings, PrintAgentStatus,
   loadPrintSettings, savePrintSettings, getAvailablePrinters,
-  isElectron, checkPrintAgent, checkPrintAgentDetailed, buildKitchenHtml, buildReceiptHtml, printHtml
+  isElectron, checkPrintAgent, checkPrintAgentDetailed, buildKitchenHtml, buildReceiptHtml, printHtml,
+  getKitchenRoutePrinters, resolveCategoryPrinter, assignCategoryToKitchenPrinter,
+  PRINT_SETTINGS_CONTEXT_EVENT,
+  PRINT_SETTINGS_REMOTE_UPDATED_EVENT
 } from '../lib/printService';
 
 interface Category {
@@ -80,6 +83,38 @@ export function PrinterSettings() {
     }
   }, [tenant]);
 
+  // Auto-save: settings her degistiginde localStorage'a kaydet.
+  // Boylece kategori -> yazici eslemesi, varsayilan yazici, vb. tum
+  // degisiklikler ek bir "Kaydet" tiklamasi gerektirmeden hemen aktif olur
+  // ve OrderPanel bir sonraki loadPrintSettings() cagrisinda yeni esleme ile
+  // mutfak fisi gonderir.
+  const skipFirstAutoSave = useRef(true);
+  useEffect(() => {
+    if (skipFirstAutoSave.current) {
+      skipFirstAutoSave.current = false;
+      return;
+    }
+    savePrintSettings(settings);
+  }, [settings]);
+
+  // Tenant veya şube değişirse (kullanıcı sağ üstten şube değiştirdi vb.)
+  // localStorage anahtarı dinamik olarak değişir; ayarları yeniden yükleyerek
+  // başka tenant/branch ile karışmasını önle.
+  useEffect(() => {
+    const refreshFromCache = () => {
+      skipFirstAutoSave.current = true; // taze yüklemeyi auto-save tetiklemesin
+      setSettings(loadPrintSettings());
+    };
+    window.addEventListener(PRINT_SETTINGS_CONTEXT_EVENT, refreshFromCache);
+    // Buluttan başka bir cihazda (Electron kasa, web vb.) yapılan ayar
+    // değişikliği indirildiğinde de formu tazele.
+    window.addEventListener(PRINT_SETTINGS_REMOTE_UPDATED_EVENT, refreshFromCache);
+    return () => {
+      window.removeEventListener(PRINT_SETTINGS_CONTEXT_EVENT, refreshFromCache);
+      window.removeEventListener(PRINT_SETTINGS_REMOTE_UPDATED_EVENT, refreshFromCache);
+    };
+  }, []);
+
   const loadCategories = async () => {
     if (!tenant) return;
     const { data } = await supabase.from('categories').select('id, name').eq('tenant_id', tenant.id).order('sort_order');
@@ -125,6 +160,13 @@ export function PrinterSettings() {
     }));
   };
 
+  const patchPrintStyle = (partial: Partial<PrintStyleSettings>) => {
+    setSettings((p) => ({
+      ...p,
+      printStyle: { ...p.printStyle, ...partial },
+    }));
+  };
+
   const toggleCategory = (printerIndex: number, categoryId: string) => {
     const printer = settings.printers[printerIndex];
     const has = printer.categoryIds.includes(categoryId);
@@ -154,6 +196,7 @@ export function PrinterSettings() {
         discountAmount: 0,
         total: 65,
         footer: settings.receiptFooter,
+        printStyle: settings.printStyle,
       });
     } else {
       html = buildKitchenHtml({
@@ -164,6 +207,7 @@ export function PrinterSettings() {
           { productName: 'Test Ürün 1', quantity: 2 },
           { productName: 'Test Ürün 2', quantity: 1, notes: 'Az baharatlı' },
         ],
+        printStyle: settings.printStyle,
       });
     }
 
@@ -181,7 +225,10 @@ export function PrinterSettings() {
           <Printer className="w-6 h-6" />
           <h3 className="text-lg md:text-2xl font-bold">Yazıcı Ayarları</h3>
         </div>
-        <p className="text-orange-50 text-sm">80mm termal yazıcılarınızı kategorilere göre yapılandırın. Sipariş eklendiğinde otomatik yazdırır.</p>
+        <p className="text-orange-50 text-sm">
+          Mutfak fişleri yalnızca <strong className="text-white">Mutfak / Bar / Özel</strong> tipindeki yazıcılara gider; ürün veya kategori seçiminize göre yönlendirilir.
+          <strong className="text-white"> Adisyon</strong> ise aşağıda seçtiğiniz yazıcıdan çıkar (paket fişi ayrı).
+        </p>
       </div>
 
       {!isElectron() && agentConnected === true && (
@@ -300,9 +347,10 @@ export function PrinterSettings() {
           />
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div>
-            <label className="block text-xs font-bold text-slate-600 mb-1.5 uppercase tracking-wide">Varsayılan Kasa/Fiş Yazıcısı</label>
+            <label className="block text-xs font-bold text-slate-600 mb-1.5 uppercase tracking-wide">Adisyon / müşteri fişi yazıcısı</label>
+            <p className="text-[11px] text-slate-500 mb-1.5">Ödeme sonrası otomatik fiş, Hızlı Satış ve &quot;Adisyon Yazdır&quot; yalnızca bu yazıcıdan çıkar.</p>
             <select
               value={settings.defaultReceiptPrinter}
               onChange={e => setSettings(p => ({ ...p, defaultReceiptPrinter: e.target.value }))}
@@ -310,7 +358,7 @@ export function PrinterSettings() {
             >
               <option value="">Seçilmedi</option>
               {availablePrinters.map(p => (
-                <option key={p.name} value={p.name}>{p.name}{p.isDefault ? ' (Varsayılan)' : ''}</option>
+                <option key={p.name} value={p.name}>{p.name}{p.isDefault ? ' (Windows varsayılan)' : ''}</option>
               ))}
               {availablePrinters.length === 0 && settings.defaultReceiptPrinter && (
                 <option value={settings.defaultReceiptPrinter}>{settings.defaultReceiptPrinter}</option>
@@ -318,18 +366,36 @@ export function PrinterSettings() {
             </select>
           </div>
           <div>
-            <label className="block text-xs font-bold text-slate-600 mb-1.5 uppercase tracking-wide">Varsayılan Paket/Kurye Yazıcısı</label>
+            <label className="block text-xs font-bold text-slate-600 mb-1.5 uppercase tracking-wide">Varsayılan mutfak yazıcısı</label>
+            <p className="text-[11px] text-slate-500 mb-1.5">Ürün/kategori eşleşmezse mutfak fişi buraya gider. Adisyon yazıcısına düşmez.</p>
             <select
-              value={(settings as any).defaultTakeawayPrinter || ''}
+              value={settings.defaultKitchenPrinter}
+              onChange={e => setSettings(p => ({ ...p, defaultKitchenPrinter: e.target.value }))}
+              className="w-full px-3 py-2.5 rounded-lg border border-slate-200 focus:ring-2 focus:ring-orange-400 focus:border-transparent outline-none text-sm"
+            >
+              <option value="">Seçilmedi (mutfak yazıcısı ve kategori şart)</option>
+              {availablePrinters.map(p => (
+                <option key={`k-${p.name}`} value={p.name}>{p.name}{p.isDefault ? ' (Windows varsayılan)' : ''}</option>
+              ))}
+              {availablePrinters.length === 0 && settings.defaultKitchenPrinter && (
+                <option value={settings.defaultKitchenPrinter}>{settings.defaultKitchenPrinter}</option>
+              )}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-bold text-slate-600 mb-1.5 uppercase tracking-wide">Paket / kurye fişi yazıcısı</label>
+            <p className="text-[11px] text-slate-500 mb-1.5">Aşağıda &quot;Paket/Kurye&quot; tipi yazıcı yoksa bu kullanılır; o da yoksa adisyon yazıcısı.</p>
+            <select
+              value={settings.defaultTakeawayPrinter || ''}
               onChange={e => setSettings(p => ({ ...p, defaultTakeawayPrinter: e.target.value }))}
               className="w-full px-3 py-2.5 rounded-lg border border-slate-200 focus:ring-2 focus:ring-orange-400 focus:border-transparent outline-none text-sm"
             >
-              <option value="">Seçilmedi (kasa yazıcısı kullanılır)</option>
+              <option value="">Seçilmedi (önce Paket tipi satır, sonra adisyon)</option>
               {availablePrinters.map(p => (
-                <option key={p.name} value={p.name}>{p.name}{p.isDefault ? ' (Varsayılan)' : ''}</option>
+                <option key={`t-${p.name}`} value={p.name}>{p.name}{p.isDefault ? ' (Windows varsayılan)' : ''}</option>
               ))}
-              {availablePrinters.length === 0 && (settings as any).defaultTakeawayPrinter && (
-                <option value={(settings as any).defaultTakeawayPrinter}>{(settings as any).defaultTakeawayPrinter}</option>
+              {availablePrinters.length === 0 && settings.defaultTakeawayPrinter && (
+                <option value={settings.defaultTakeawayPrinter}>{settings.defaultTakeawayPrinter}</option>
               )}
             </select>
           </div>
@@ -365,15 +431,228 @@ export function PrinterSettings() {
               <p className="font-semibold text-slate-800 text-sm">Otomatik Paket Fişi</p>
               <p className="text-xs text-slate-500">Paket/kurye siparişinde yaz</p>
             </div>
-            <button onClick={() => setSettings(p => ({ ...p, autoPrintTakeaway: !(p as any).autoPrintTakeaway }))}>
-              {(settings as any).autoPrintTakeaway !== false
+            <button onClick={() => setSettings(p => ({ ...p, autoPrintTakeaway: !p.autoPrintTakeaway }))}>
+              {settings.autoPrintTakeaway !== false
                 ? <ToggleRight className="w-10 h-10 text-orange-500" />
+                : <ToggleLeft className="w-10 h-10 text-slate-300" />
+              }
+            </button>
+          </div>
+          <div className="flex items-center justify-between bg-amber-50 rounded-xl p-3 border border-amber-200 md:col-span-3">
+            <div className="pr-3">
+              <p className="font-semibold text-amber-900 text-sm">Ödeme ekranında "Adisyon Yazdır" varsayılan açık</p>
+              <p className="text-xs text-amber-800/80">
+                Açıkken: kasa/garson her ödemede otomatik adisyon basar (kapatabilir).
+                Kapalıyken (önerilen): kullanıcı isterse ödeme alma ekranında butonla açar.
+              </p>
+            </div>
+            <button onClick={() => setSettings(p => ({ ...p, receiptPrintDefaultOn: !p.receiptPrintDefaultOn }))}>
+              {settings.receiptPrintDefaultOn
+                ? <ToggleRight className="w-10 h-10 text-amber-500" />
                 : <ToggleLeft className="w-10 h-10 text-slate-300" />
               }
             </button>
           </div>
         </div>
       </div>
+
+      <div className="bg-white rounded-xl border border-slate-200 p-4 md:p-6 space-y-4">
+        <h4 className="font-bold text-slate-800 text-base border-b border-slate-100 pb-3 flex items-center gap-2">
+          <Settings2 className="w-4 h-4 text-indigo-500" /> Fiş görünümü (font & ek metin)
+        </h4>
+        <p className="text-xs text-slate-500">80 mm termal çıktı; mutfak ve adisyon için punto ve ek satırlar.</p>
+
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          {([
+            ['kitchenTitlePx', 'Mutfak başlık (px)'],
+            ['kitchenBodyPx', 'Mutfak gövde (px)'],
+            ['kitchenItemPx', 'Mutfak ürün satırı (px)'],
+            ['receiptTitlePx', 'Adisyon başlık (px)'],
+          ] as const).map(([key, label]) => (
+            <div key={key}>
+              <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">{label}</label>
+              <input
+                type="number"
+                min={8}
+                max={28}
+                value={settings.printStyle[key]}
+                onChange={(e) => patchPrintStyle({ [key]: Math.min(28, Math.max(8, Number(e.target.value) || 12)) } as Partial<PrintStyleSettings>)}
+                className="w-full px-2 py-2 rounded-lg border border-slate-200 text-sm"
+              />
+            </div>
+          ))}
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <div>
+            <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Adisyon gövde (px)</label>
+            <input
+              type="number"
+              min={8}
+              max={22}
+              value={settings.printStyle.receiptBodyPx}
+              onChange={(e) => patchPrintStyle({ receiptBodyPx: Math.min(22, Math.max(8, Number(e.target.value) || 12)) })}
+              className="w-full px-2 py-2 rounded-lg border border-slate-200 text-sm"
+            />
+          </div>
+          <div>
+            <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Yatay kayma (mm)</label>
+            <div className="flex items-stretch gap-1">
+              <input
+                type="number"
+                min={-15}
+                max={15}
+                step={0.5}
+                value={settings.printStyle.paperOffsetMm}
+                onChange={(e) => patchPrintStyle({ paperOffsetMm: Math.min(15, Math.max(-15, Number(e.target.value) || 0)) })}
+                className="flex-1 px-2 py-2 rounded-lg border border-slate-200 text-sm"
+              />
+              <button
+                type="button"
+                onClick={() => patchPrintStyle({ paperOffsetMm: 0 })}
+                className="px-2 py-2 rounded-lg border border-slate-200 text-xs font-semibold text-slate-500 hover:bg-slate-50"
+                title="Sıfırla"
+              >
+                0
+              </button>
+            </div>
+            <p className="text-[10px] text-slate-400 mt-1">Negatif: sola kaydır · Pozitif: sağa kaydır</p>
+          </div>
+          <label className="flex items-center gap-2 mt-6 md:mt-8 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={settings.printStyle.showKitchenOrderNumber}
+              onChange={(e) => patchPrintStyle({ showKitchenOrderNumber: e.target.checked })}
+              className="rounded border-slate-300"
+            />
+            <span className="text-sm text-slate-700">Mutfak fişinde sipariş numarası göster</span>
+          </label>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div>
+            <label className="block text-xs font-bold text-slate-600 mb-1">Mutfak alt başlık (logo altı, tek satır)</label>
+            <input
+              type="text"
+              value={settings.printStyle.kitchenSubtitle}
+              onChange={(e) => patchPrintStyle({ kitchenSubtitle: e.target.value })}
+              className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"
+              placeholder="Örn: Sipariş hazırlanıyor"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-bold text-slate-600 mb-1">Adisyon alt başlık</label>
+            <input
+              type="text"
+              value={settings.printStyle.receiptSubtitle}
+              onChange={(e) => patchPrintStyle({ receiptSubtitle: e.target.value })}
+              className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"
+              placeholder="Örn: Afiyet olsun"
+            />
+          </div>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div>
+            <label className="block text-xs font-bold text-slate-600 mb-1">Mutfak ek satır (alt, küçük puntolu)</label>
+            <input
+              type="text"
+              value={settings.printStyle.kitchenFooterExtra}
+              onChange={(e) => patchPrintStyle({ kitchenFooterExtra: e.target.value })}
+              className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"
+              placeholder="Örn: İyi çalışmalar"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-bold text-slate-600 mb-1">Adisyon ek satır (teşekkür üstü)</label>
+            <input
+              type="text"
+              value={settings.printStyle.receiptFooterExtra}
+              onChange={(e) => patchPrintStyle({ receiptFooterExtra: e.target.value })}
+              className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"
+              placeholder="Örn: Bizi tercih ettiğiniz için teşekkürler"
+            />
+          </div>
+        </div>
+      </div>
+
+      {categories.length > 0 && (settings.printers.some((p) => p.enabled && (p.type === 'kitchen' || p.type === 'bar' || p.type === 'custom')) || settings.defaultKitchenPrinter) && (
+        <div className="bg-white rounded-xl border border-slate-200 p-4 md:p-6 space-y-4">
+          <div className="border-b border-slate-100 pb-3">
+            <h4 className="font-bold text-slate-800 text-base flex items-center gap-2">
+              <Settings2 className="w-4 h-4 text-emerald-500" /> Kategori → Yazıcı Eşleme
+            </h4>
+            <p className="text-xs text-slate-500 mt-1">
+              Her ürün grubu için tek tıkla yazıcı seçin. Seçim <strong>otomatik kaydedilir</strong> ve bir sonraki sipariş gönderiminden itibaren geçerli olur. <strong>Ürün kartında özel yazıcı yazılıysa</strong> o öncelikli; eşleme yoksa <strong>varsayılan mutfak yazıcısı</strong> devreye girer. Bir kategori aynı anda yalnızca bir mutfak yazıcısına gider (deterministik).
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+            {categories.map((cat) => {
+              const matchedIdx = settings.printers.findIndex(
+                (p) =>
+                  p.enabled &&
+                  (p.type === 'kitchen' || p.type === 'bar' || p.type === 'custom') &&
+                  p.categoryIds.includes(cat.id)
+              );
+              const effective = resolveCategoryPrinter(settings, cat.id);
+              const sourceLabel =
+                effective?.source === 'category'
+                  ? 'Eşlendi'
+                  : effective?.source === 'catch-all'
+                    ? 'Catch-all'
+                    : effective?.source === 'default'
+                      ? 'Varsayılan'
+                      : 'YOK';
+              const sourceColor =
+                effective?.source === 'category'
+                  ? 'bg-emerald-100 text-emerald-700'
+                  : effective
+                    ? 'bg-amber-100 text-amber-700'
+                    : 'bg-red-100 text-red-700';
+              return (
+                <div
+                  key={cat.id}
+                  className="flex flex-col gap-1.5 px-3 py-2.5 rounded-xl border border-slate-200 bg-slate-50"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-semibold text-slate-800 text-sm truncate">{cat.name}</span>
+                    <span
+                      className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide ${sourceColor}`}
+                    >
+                      {sourceLabel}
+                    </span>
+                  </div>
+                  <select
+                    value={matchedIdx === -1 ? '' : String(matchedIdx)}
+                    onChange={(e) => {
+                      const target = e.target.value === '' ? -1 : Number(e.target.value);
+                      setSettings((s) => assignCategoryToKitchenPrinter(s, cat.id, target));
+                    }}
+                    className="w-full px-3 py-2 rounded-lg border border-slate-200 focus:ring-2 focus:ring-orange-400 focus:border-transparent outline-none text-sm bg-white"
+                  >
+                    <option value="">— Otomatik (catch-all / varsayılan) —</option>
+                    {settings.printers.map((p, idx) => {
+                      if (!p.enabled) return null;
+                      const isKitchen =
+                        p.type === 'kitchen' || p.type === 'bar' || p.type === 'custom';
+                      if (!isKitchen) return null;
+                      return (
+                        <option key={idx} value={idx}>
+                          {p.label || p.printerName} ({typeInfo(p.type).label})
+                        </option>
+                      );
+                    })}
+                  </select>
+                  <p className="text-[11px] text-slate-500 truncate">
+                    {effective
+                      ? `→ ${effective.printerName}`
+                      : '⚠ Atanmadı — yukarıdan varsayılan mutfak yazıcısı seçin.'}
+                  </p>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {categories.length > 0 && (
         <div className="bg-white rounded-xl border border-slate-200 p-4 md:p-6 space-y-4">
@@ -436,6 +715,13 @@ export function PrinterSettings() {
             </button>
           </div>
         </div>
+
+        <p className="text-xs text-slate-600 bg-slate-50 border border-slate-200 rounded-lg p-3 leading-relaxed">
+          <span className="font-bold text-slate-800">Yönlendirme sırası: </span>
+          1) Ürün kartındaki yazıcı adı &nbsp;→&nbsp; 2) Yukarıdaki <strong>“Kategori → Yazıcı Eşleme”</strong> seçimi &nbsp;→&nbsp; 3) Kategori listesi boş bırakılan &quot;catch-all&quot; mutfak satırı &nbsp;→&nbsp; 4) <strong>Varsayılan mutfak yazıcısı</strong>.
+          <br />
+          <strong>Fiş/Kasa</strong> ve <strong>Paket/Kurye</strong> tipleri mutfak fişine karışmaz — adisyon için üstteki &quot;Adisyon yazıcısı&quot;nı, paket için &quot;Paket/Kurye&quot; yazıcısını kullanın. Aşağıdaki liste yazıcıların kendisini yönetir; günlük kategori atamasını üstteki panelden yapın.
+        </p>
 
         {availablePrinters.length > 0 && (
           <div className="bg-slate-50 rounded-lg p-3 border border-slate-100">

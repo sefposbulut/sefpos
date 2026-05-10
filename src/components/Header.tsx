@@ -311,17 +311,17 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
               )}
 
               {branches.length > 0 && (
-                <div className="relative">
+                <div className="relative ml-1 md:ml-0">
                   <button
                     onClick={() => setShowBranchMenu(!showBranchMenu)}
-                    className="flex items-center gap-1.5 px-2.5 py-1.5 md:px-3 md:py-2 bg-orange-50 hover:bg-orange-100 border border-orange-200 rounded-lg transition-all active:scale-95 max-w-[130px] md:max-w-none"
+                    className="flex items-center gap-1 md:gap-1.5 px-1.5 py-1 md:px-3 md:py-2 bg-orange-50 hover:bg-orange-100 border border-orange-200 rounded-md md:rounded-lg transition-all active:scale-95 max-w-[88px] md:max-w-none"
                   >
-                    <MapPin className="w-3.5 h-3.5 md:w-4 md:h-4 text-orange-600 flex-shrink-0" />
-                    <span className="text-xs md:text-sm font-semibold text-orange-700 truncate">
+                    <MapPin className="w-3 h-3 md:w-4 md:h-4 text-orange-600 flex-shrink-0" />
+                    <span className="text-[10px] md:text-sm font-semibold text-orange-700 truncate leading-tight">
                       {activeBranch?.name || 'Şube Seç'}
                     </span>
                     {branches.length > 1 && (
-                      <ChevronDown className={`w-3 h-3 md:w-3.5 md:h-3.5 text-orange-500 flex-shrink-0 transition-transform ${showBranchMenu ? 'rotate-180' : ''}`} />
+                      <ChevronDown className={`w-2.5 h-2.5 md:w-3.5 md:h-3.5 text-orange-500 flex-shrink-0 transition-transform ${showBranchMenu ? 'rotate-180' : ''}`} />
                     )}
                   </button>
 

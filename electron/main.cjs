@@ -17,6 +17,28 @@ if (process.platform === 'win32') {
   app.commandLine.appendSwitch('disable-background-timer-throttling');
   app.commandLine.appendSwitch('disable-renderer-backgrounding');
 }
+
+// --------------------------------------------------------------------------
+// Single-instance lock: ikinci kez Sefpos.exe çalıştırılırsa yeni proses
+// hemen kapanır, mevcut pencere öne gelir. Restoran kasalarında yanlışlıkla
+// çift açılan ve veri/print agent çakışmasına yol açan en sık sorunlardan
+// birini engeller.
+// --------------------------------------------------------------------------
+const gotInstanceLock = app.requestSingleInstanceLock();
+if (!gotInstanceLock) {
+  app.quit();
+  process.exit(0);
+}
+app.on('second-instance', () => {
+  if (!mainWindow) return;
+  try {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    if (!mainWindow.isVisible()) mainWindow.show();
+    mainWindow.focus();
+  } catch (_) {
+    /* yoksay */
+  }
+});
 const fs = require('fs');
 const os = require('os');
 const https = require('https');
@@ -1087,6 +1109,25 @@ let realtimeConnected = false;
 let currentTenantId = null;
 let currentUserJwt = null;
 let connectivityLastOnline = null;
+let pendingJobsPollTimer = null;
+
+// Realtime mesajlarını kaçırma sigortası: kasa açık olduğu sürece her 20sn'de
+// bir Supabase'den `pending` joblara da bakar. Mobilden / webten gelen
+// siparişler Realtime düşse bile en geç 20 sn içinde basılır.
+function startPendingJobsPolling() {
+  if (pendingJobsPollTimer) return;
+  pendingJobsPollTimer = setInterval(() => {
+    if (currentTenantId && currentUserJwt) {
+      fetchPendingJobs().catch(() => {});
+    }
+  }, 20000);
+}
+function stopPendingJobsPolling() {
+  if (pendingJobsPollTimer) {
+    clearInterval(pendingJobsPollTimer);
+    pendingJobsPollTimer = null;
+  }
+}
 
 function connectRealtimePrintAgent() {
   // Do not open realtime socket before authenticated tenant context exists.
@@ -1303,10 +1344,22 @@ function createWindow() {
       partition: 'persist:shefpos',
       backgroundThrottling: false,
     },
-    icon: path.join(__dirname, '../public/SEFPOS.png'),
+    // Windows'ta ICO çoklu çözünürlük desteği daha temiz görünür; SEFPOS.ico
+    // bulunamazsa PNG'ye düşer.
+    icon: (() => {
+      const ico = path.join(__dirname, '../public/SEFPOS.ico');
+      const png = path.join(__dirname, '../public/logo.png');
+      try {
+        return fs.existsSync(ico) ? ico : png;
+      } catch {
+        return png;
+      }
+    })(),
     title: 'Sefpos',
     show: false,
-    backgroundColor: '#0f172a',
+    // Splash ile aynı arka plan rengi: ilk pencere açılışında mavi flash yerine
+    // beyaz arka plan görünür.
+    backgroundColor: '#ffffff',
   });
   try {
     if (typeof mainWindow.removeMenu === 'function') {
@@ -1373,10 +1426,39 @@ function createWindow() {
     return { action: 'deny' };
   });
 
+  // Yanlışlıkla X tıklamaya / Alt+F4'e karşı çıkış onayı.
+  // `quitConfirmed = true` olursa veya dev modda ise atlanır; auto-updater
+  // `quitAndInstall` çağırdığında da `quitConfirmed`'i set ediyoruz.
+  mainWindow.on('close', (e) => {
+    if (quitConfirmed) return;
+    if (isDev) return;
+    e.preventDefault();
+    const choice = dialog.showMessageBoxSync(mainWindow, {
+      type: 'question',
+      buttons: ['Vazgeç', 'Evet, Çıkış Yap'],
+      defaultId: 0,
+      cancelId: 0,
+      title: 'ŞefPOS — Çıkış',
+      message: 'ŞefPOS\'tan çıkmak istediğinizden emin misiniz?',
+      detail:
+        'Açık masalar ve bekleyen siparişler kaybolmaz; yalnızca bu terminal kapanır.\nYazıcı agent\'ı ve Caller ID dinleyici de durdurulacak.',
+      noLink: true,
+    });
+    if (choice === 1) {
+      quitConfirmed = true;
+      mainWindow.close();
+    }
+  });
+
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
 }
+
+let quitConfirmed = false;
+app.on('before-quit', () => {
+  quitConfirmed = true;
+});
 
 ipcMain.handle('get-zoom', () => {
   const settings = loadSettings();
@@ -1561,6 +1643,10 @@ ipcMain.handle('register-printers', async (_, { tenantId, branchId, userJwt }) =
     } else {
       fetchPendingJobs();
     }
+
+    // Realtime sigortası: 20sn'lik polling fallback (Realtime düşse veya
+    // mesajı kaçırsa bile mobilden gelen siparişleri yakalar).
+    startPendingJobsPolling();
 
     return { success: true, count: printers.length };
   } catch (err) {
@@ -2065,6 +2151,32 @@ ipcMain.handle('install-update', () => {
 
 ipcMain.handle('get-app-version', () => {
   return app.getVersion();
+});
+
+// Renderer dinamik olarak pencere başlığını günceller:
+// "ŞefPOS — <Tenant> — <Şube> — <Kullanıcı>"
+ipcMain.handle('set-window-title', (_, title) => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    const safe = String(title || 'ŞefPOS').slice(0, 200);
+    try { mainWindow.setTitle(safe); } catch (_) {}
+  }
+  return true;
+});
+
+// Renderer kullanıcı çıkış akışından sonra "kapat" derse onay diyaloğu çıkmasın.
+ipcMain.handle('quit-app', () => {
+  quitConfirmed = true;
+  app.quit();
+  return true;
+});
+
+// "Sistemi yeniden başlat" — tüm pencereleri kapatıp uygulamayı temiz yeniden açar.
+// (Önbellek temizleme veya ağır işlem sonrası kullanıcının "Yeniden başlat" diyebilmesi için.)
+ipcMain.handle('restart-app', () => {
+  quitConfirmed = true;
+  app.relaunch();
+  app.exit(0);
+  return true;
 });
 
 ipcMain.handle('get-ip-address', async () => {

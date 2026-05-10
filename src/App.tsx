@@ -38,6 +38,8 @@ import { Database, supabase } from './lib/supabase';
 import { isSqlServerMode } from './lib/sqlDb';
 import { queryCache } from './lib/queryCache';
 import { SystemNotificationContainer } from './components/SystemNotificationBanner';
+import { PrintStatusToast } from './components/PrintStatusToast';
+import { ElectronDesktopShell } from './components/ElectronDesktopShell';
 import { TerminalLogin, TerminalApp, isTerminalMode, exitTerminalMode } from './components/TerminalMode';
 import { isCapacitorNative } from './lib/capacitorPlatform';
 
@@ -50,76 +52,50 @@ interface SystemNotification {
 
 type Table = Database['public']['Tables']['restaurant_tables']['Row'];
 
+/**
+ * Marka splash: ilk login / Electron baslatma sirasinda kullaniciya bos ekran
+ * yerine ŞefPOS logosu + spinner gosterir. index.html'deki #boot-splash ile ayni
+ * goruntu, ama React mount sonrasi auth/dbMode loading durumlari icin de.
+ */
+const BrandSplash = React.memo(function BrandSplash({ hint }: { hint?: string }) {
+  return (
+    <div
+      className="fixed inset-0 z-[2147483646] flex items-center justify-center"
+      style={{
+        background: '#ffffff',
+        color: '#0f172a',
+        fontFamily: '"Inter", "Segoe UI", Arial, sans-serif',
+      }}
+    >
+      <div className="flex flex-col items-center gap-3 text-center">
+        <img
+          src="/logo.png"
+          alt="SefPOS"
+          className="w-28 h-28 rounded-full object-contain bg-white"
+          style={{ boxShadow: '0 12px 32px rgba(15, 23, 42, .08)', padding: 6 }}
+          onError={(e) => {
+            (e.currentTarget as HTMLImageElement).style.display = 'none';
+          }}
+        />
+        <div className="text-2xl font-extrabold tracking-wide text-slate-900">SefPOS</div>
+        <div className="text-sm font-medium text-slate-500">{hint || 'Yukleniyor...'}</div>
+        <div
+          className="mt-1 w-6 h-6 rounded-full border-[3px] animate-spin"
+          style={{ borderColor: 'rgba(15, 23, 42, 0.08)', borderTopColor: '#f97316' }}
+        />
+      </div>
+    </div>
+  );
+});
+
 const isCourierMode = () => {
   const params = new URLSearchParams(window.location.search);
   return params.has('courier') || !!localStorage.getItem('shefpos_courier_session');
 };
 
-const UpdateBanner = React.memo(function UpdateBanner() {
-  const [updateInfo, setUpdateInfo] = useState<{ version: string } | null>(null);
-  const [downloadPercent, setDownloadPercent] = useState<number | null>(null);
-  const [downloaded, setDownloaded] = useState(false);
-  const [dismissed, setDismissed] = useState(false);
-  const api = (window as any).electronAPI;
-
-  useEffect(() => {
-    if (!api?.onUpdateAvailable) return;
-    api.onUpdateAvailable((info: { version: string }) => setUpdateInfo(info));
-    api.onUpdateDownloadProgress((info: { percent: number }) => setDownloadPercent(info.percent));
-    api.onUpdateDownloaded((info: { version: string }) => { setDownloaded(true); setDownloadPercent(100); setUpdateInfo(info); });
-    return () => api.removeUpdateListeners?.();
-  }, []);
-
-  if (!updateInfo || dismissed) return null;
-
-  return (
-    <div className="fixed bottom-4 right-4 z-[9999] max-w-sm w-full">
-      <div className="bg-slate-800 border border-slate-600 rounded-xl shadow-2xl overflow-hidden">
-        <div className="flex items-start gap-3 p-4">
-          <div className="flex-shrink-0 w-9 h-9 rounded-full bg-blue-500/20 flex items-center justify-center">
-            <svg className="w-5 h-5 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
-          </div>
-          <div className="flex-1 min-w-0">
-            <p className="text-white text-sm font-semibold">Guncelleme Mevcut</p>
-            <p className="text-slate-400 text-xs mt-0.5">Surum {updateInfo.version} hazir</p>
-            {downloadPercent !== null && !downloaded && (
-              <div className="mt-2">
-                <div className="flex justify-between text-xs text-slate-400 mb-1">
-                  <span>Indiriliyor...</span>
-                  <span>%{downloadPercent}</span>
-                </div>
-                <div className="h-1.5 bg-slate-600 rounded-full overflow-hidden">
-                  <div className="h-full bg-blue-500 rounded-full transition-all duration-300" style={{ width: `${downloadPercent}%` }} />
-                </div>
-              </div>
-            )}
-            {downloaded && (
-              <div className="mt-2 flex gap-2">
-                <button
-                  onClick={() => api?.installUpdate?.()}
-                  className="flex-1 py-1.5 px-3 bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium rounded-lg transition-colors"
-                >
-                  Yeniden Baslat ve Yukle
-                </button>
-                <button
-                  onClick={() => setDismissed(true)}
-                  className="py-1.5 px-3 bg-slate-700 hover:bg-slate-600 text-slate-300 text-xs rounded-lg transition-colors"
-                >
-                  Sonra
-                </button>
-              </div>
-            )}
-          </div>
-          {!downloaded && (
-            <button onClick={() => setDismissed(true)} className="flex-shrink-0 text-slate-500 hover:text-slate-300 transition-colors">
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
-            </button>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-});
+// UpdateBanner kaldırıldı — ElectronDesktopShell hem dinamik pencere başlığı
+// (ŞefPOS — Tenant — Şube — Kullanıcı) hem de auto-update bildirimi (turuncu
+// tema, "Yeniden başlat" butonu) işlevini birlikte yapıyor.
 
 function App() {
   const [courierMode, setCourierMode] = useState(isCourierMode);
@@ -154,6 +130,18 @@ function App() {
   const [currentPage, setCurrentPage] = useState('tables');
   const [showShiftQuickClose, setShowShiftQuickClose] = useState(false);
   const [dbMode, setDbMode] = useState<'cloud' | 'sqlserver' | null | 'loading'>('loading');
+  // Always-mounted sayfalar yalnizca bir kez ziyaret edildiklerinde DOM'a girer
+  // ve sonrasinda display:none ile saklanir. POS sicak yolu (tables) en bastan
+  // mount edilir; nadir sayfalar (Products, OnlineOrders, vs.) baslangic
+  // maliyetine eklenmez. Bu hook'lar Rules of Hooks geregi en uste konulmuştur.
+  const mountedPagesRef = useRef<Set<string>>(new Set(['tables']));
+  const [, setMountedPagesVersion] = useState(0);
+  if (currentPage && !mountedPagesRef.current.has(currentPage)) {
+    mountedPagesRef.current.add(currentPage);
+  }
+  useEffect(() => {
+    setMountedPagesVersion((v) => v + 1);
+  }, [currentPage]);
   const [sqlServerConfigured, setSqlServerConfigured] = useState(false);
   const [showSqlServerSettings, setShowSqlServerSettings] = useState(false);
   // /login veya AYKA_ADMIN_PATH açıkken Auth tam sayfa (modal değil).
@@ -386,11 +374,7 @@ function App() {
   }
 
   if (isElectron && dbMode === 'loading') {
-    return (
-      <div className="min-h-screen flex items-center justify-center" style={{ background: 'linear-gradient(160deg, #0f172a 0%, #1e3a5f 55%, #0f2744 100%)' }}>
-        <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-blue-400" />
-      </div>
-    );
+    return <BrandSplash hint="Yerel veritabanı hazırlanıyor..." />;
   }
 
   if (isElectron && dbMode === null) {
@@ -420,7 +404,7 @@ function App() {
     );
   }
 
-  if (loading) return null;
+  if (loading) return <BrandSplash hint="Oturum kontrol ediliyor..." />;
 
   if (user && !profile && profileLoadFailed) {
     const api = (window as any).electronAPI;
@@ -518,6 +502,7 @@ function App() {
   }
 
   const show = (page: string) => currentPage === page;
+  const wasMounted = (page: string) => mountedPagesRef.current.has(page);
 
   // Mobilde efektif olarak her zaman header acik.
   const headerHidden = uiPrefs.headerHidden && isDesktopViewport;
@@ -593,24 +578,34 @@ function App() {
         onLockScreen={() => setIsLocked(true)}
       />
 
-      {/* Always-mounted pages - hidden via display:none for instant switching */}
-      <div style={{ display: show('tables') ? undefined : 'none' }} className="fixed inset-0 top-14 md:top-20 bg-gradient-to-br from-slate-50 to-slate-100 overflow-auto">
-        <div className="p-3 md:p-6">
-          <TableGrid onSelectTable={setSelectedTable} onRefresh={handleTableGridRefresh} onNavigate={handleNavigate} />
+      {/* Always-mounted pages - bir kez ziyaret edilince DOM'da kalir; bundan
+           sonraki gecisler display:none ile aninda olur. Ilk acilista sadece
+           'tables' mounted oldugu icin first paint maliyeti dusuktur. */}
+      {wasMounted('tables') && (
+        <div style={{ display: show('tables') ? undefined : 'none' }} className="fixed inset-0 top-14 md:top-20 bg-gradient-to-br from-slate-50 to-slate-100 overflow-auto">
+          <div className="p-3 md:p-6">
+            <TableGrid onSelectTable={setSelectedTable} onRefresh={handleTableGridRefresh} onNavigate={handleNavigate} />
+          </div>
         </div>
-      </div>
+      )}
 
-      <div style={{ display: show('takeaway') ? undefined : 'none' }} className="fixed inset-0 top-14 md:top-20 overflow-auto">
-        <TakeawayOrders />
-      </div>
+      {wasMounted('takeaway') && (
+        <div style={{ display: show('takeaway') ? undefined : 'none' }} className="fixed inset-0 top-14 md:top-20 overflow-auto">
+          <TakeawayOrders />
+        </div>
+      )}
 
-      <div style={{ display: show('online-orders') ? undefined : 'none' }} className="fixed inset-0 top-14 md:top-20 overflow-auto">
-        <OnlineOrders />
-      </div>
+      {wasMounted('online-orders') && (
+        <div style={{ display: show('online-orders') ? undefined : 'none' }} className="fixed inset-0 top-14 md:top-20 overflow-auto">
+          <OnlineOrders />
+        </div>
+      )}
 
-      <div style={{ display: show('products') ? undefined : 'none' }} className="fixed inset-0 top-14 md:top-20 overflow-hidden">
-        <Products />
-      </div>
+      {wasMounted('products') && (
+        <div style={{ display: show('products') ? undefined : 'none' }} className="fixed inset-0 top-14 md:top-20 overflow-hidden">
+          <Products />
+        </div>
+      )}
 
       {/* On-demand pages */}
       {show('users') && (
@@ -671,7 +666,8 @@ function App() {
         notifications={systemNotifications}
         onDismiss={(id) => setSystemNotifications(prev => prev.filter(n => n.id !== id))}
       />
-      {isElectron && <UpdateBanner />}
+      <PrintStatusToast />
+      <ElectronDesktopShell />
     </div>
   );
 }

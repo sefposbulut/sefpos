@@ -9,7 +9,7 @@ import { PaymentModal } from './PaymentModal';
 import {
   buildReceiptHtml,
   loadPrintSettings,
-  printHtml,
+  printToAdisyonPrinter,
 } from '../lib/printService';
 import { sendSaleToHugin } from '../lib/huginTps';
 import { BarcodeScannerModal } from './BarcodeScannerModal';
@@ -493,8 +493,11 @@ export function QuickSale() {
           total: totalNow,
           paymentMethod: method,
           footer: printSettings.receiptFooter,
+          printStyle: printSettings.printStyle,
         });
-        void printHtml(html, printSettings.defaultReceiptPrinter || '');
+        void printToAdisyonPrinter(printSettings, html).then((r) => {
+          if (!r.success) console.warn('[ŞefPOS] Hızlı satış fişi:', r.error);
+        });
       }
 
       // 10) UI sıfırlama + son satış göstergesi

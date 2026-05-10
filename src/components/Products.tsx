@@ -281,31 +281,46 @@ export function Products() {
   };
 
   useEffect(() => {
-    const ps = loadPrintSettings();
-    const map: Record<string, string> = {};
-    ps.printers.forEach(p => {
-      p.categoryIds.forEach(cid => {
-        if (!map[cid]) map[cid] = p.printerName;
+    const reloadFromPrintSettings = () => {
+      const ps = loadPrintSettings();
+      const map: Record<string, string> = {};
+      ps.printers.forEach(p => {
+        p.categoryIds.forEach(cid => {
+          if (!map[cid]) map[cid] = p.printerName;
+        });
       });
-    });
-    setCategoryPrinterMap(map);
-    setDisabledCategoryIds(ps.disabledCategoryIds || []);
-    const configured = ps.printers.filter(p => p.printerName).map(p => ({ name: p.printerName, label: p.label || p.printerName }));
-    setAvailablePrinters(configured);
+      setCategoryPrinterMap(map);
+      setDisabledCategoryIds(ps.disabledCategoryIds || []);
+      const configured = ps.printers.filter(p => p.printerName).map(p => ({ name: p.printerName, label: p.label || p.printerName }));
+      setAvailablePrinters(configured);
 
-    if ((window as any).electronAPI?.getPrinters) {
-      (window as any).electronAPI.getPrinters().then((printers: any[]) => {
-        if (printers && printers.length > 0) {
-          setAvailablePrinters(prev => {
-            const existingNames = new Set(prev.map(p => p.name));
-            const extras = printers
-              .filter((p: any) => p.name && !existingNames.has(p.name))
-              .map((p: any) => ({ name: p.name, label: p.name }));
-            return [...prev, ...extras];
-          });
-        }
-      }).catch(() => {});
-    }
+      if ((window as any).electronAPI?.getPrinters) {
+        (window as any).electronAPI.getPrinters().then((printers: any[]) => {
+          if (printers && printers.length > 0) {
+            setAvailablePrinters(prev => {
+              const existingNames = new Set(prev.map(p => p.name));
+              const extras = printers
+                .filter((p: any) => p.name && !existingNames.has(p.name))
+                .map((p: any) => ({ name: p.name, label: p.name }));
+              return [...prev, ...extras];
+            });
+          }
+        }).catch(() => {});
+      }
+    };
+
+    reloadFromPrintSettings();
+
+    // Tenant/şube değişimini ve buluttan gelen ayar güncellemelerini dinle.
+    // Böylece Electron kasada yapılan kategori → yazıcı eşlemesi web/mobil
+    // tarafında otomatik gözükür; başka tenant'ın eşlemeleri de karışmaz.
+    const onContext = () => reloadFromPrintSettings();
+    window.addEventListener('sefpos:print-settings-context', onContext);
+    window.addEventListener('sefpos:print-settings-remote-updated', onContext);
+    return () => {
+      window.removeEventListener('sefpos:print-settings-context', onContext);
+      window.removeEventListener('sefpos:print-settings-remote-updated', onContext);
+    };
   }, []);
 
   useEffect(() => {
@@ -1072,14 +1087,38 @@ export function Products() {
     setCategoryPrinterMap(newMap);
 
     const ps = loadPrintSettings();
-    const updatedPrinters = ps.printers.map(p => ({
+    // Önce kategori ID'sini TÜM yazıcılardan temizle (deterministik:
+    // bir kategori en fazla bir yazıcıda eşleşsin).
+    const cleanedPrinters = ps.printers.map(p => ({
       ...p,
       categoryIds: p.categoryIds.filter(cid => cid !== categoryId),
     }));
+
+    let updatedPrinters = cleanedPrinters;
     if (printerName) {
-      const targetPrinter = updatedPrinters.find(p => p.printerName === printerName);
-      if (targetPrinter) {
-        targetPrinter.categoryIds = [...targetPrinter.categoryIds, categoryId];
+      const targetIdx = cleanedPrinters.findIndex(p => p.printerName === printerName);
+      if (targetIdx >= 0) {
+        // Yazıcı zaten config'de — kategoriyi ekle ve enabled olduğundan emin ol.
+        updatedPrinters = cleanedPrinters.map((p, i) =>
+          i === targetIdx
+            ? { ...p, enabled: true, categoryIds: [...p.categoryIds, categoryId] }
+            : p,
+        );
+      } else {
+        // Yazıcı henüz Ayarlar > Yazıcılar'da kayıtlı değil. Otomatik olarak
+        // kitchen tipli yeni bir satır ekle ki esleme gerçekten çalışsın
+        // (aksi halde printKitchenReceipts catch-all veya defaultKitchenPrinter'a düşer).
+        const found = availablePrinters.find(p => p.name === printerName);
+        updatedPrinters = [
+          ...cleanedPrinters,
+          {
+            printerName,
+            label: found?.label || printerName,
+            type: 'kitchen' as const,
+            categoryIds: [categoryId],
+            enabled: true,
+          },
+        ];
       }
     }
     savePrintSettings({ ...ps, printers: updatedPrinters });
@@ -1298,7 +1337,7 @@ export function Products() {
                         <Ban size={10} className="inline" />
                       </span>
                     ) : categoryPrinterMap[cat.id] ? (
-                      <span className="ml-1.5 text-xs opacity-70 inline-flex items-center gap-0.5">
+                      <span className="ml-1.5 text-xs opacity-70 hidden md:inline-flex items-center gap-0.5">
                         <Printer size={9} className="inline" />
                         <span className="text-[10px]">{availablePrinters.find(p => p.name === categoryPrinterMap[cat.id])?.label || categoryPrinterMap[cat.id]}</span>
                       </span>
@@ -1354,7 +1393,7 @@ export function Products() {
                           </button>
                         </div>
                         {!disabledCategoryIds.includes(cat.id) && (
-                          <div className="border-t border-slate-100 pt-2">
+                          <div className="hidden md:block border-t border-slate-100 pt-2">
                             <p className="text-xs text-slate-400 mb-1.5 flex items-center gap-1"><Printer size={10} className="text-orange-500" /> Yazıcı Yönlendirmesi</p>
                             {availablePrinters.length === 0 ? (
                               <button

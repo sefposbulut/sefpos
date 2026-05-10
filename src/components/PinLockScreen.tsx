@@ -1,86 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
-import { Lock, Delete, AlertCircle, LogIn, RotateCcw, X, Trash2, AlertTriangle } from 'lucide-react';
+import { Lock, Delete, AlertCircle, LogIn } from 'lucide-react';
 
 interface PinLockScreenProps {
   onUnlock: () => void;
-}
-
-function ResetConfirmModal({ onConfirm, onCancel }: { onConfirm: () => void; onCancel: () => void }) {
-  const [typed, setTyped] = useState('');
-  const [resetting, setResetting] = useState(false);
-  const CONFIRM_WORD = 'SIFIRLA';
-
-  const handleConfirm = async () => {
-    setResetting(true);
-    await onConfirm();
-    setResetting(false);
-  };
-
-  return (
-    <div className="fixed inset-0 z-[10000] bg-black/85 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6">
-        <div className="flex items-center gap-3 mb-4">
-          <div className="w-10 h-10 bg-red-100 rounded-xl flex items-center justify-center">
-            <AlertTriangle className="w-5 h-5 text-red-600" />
-          </div>
-          <div>
-            <h3 className="font-black text-slate-800">Sistemi Sıfırla</h3>
-            <p className="text-xs text-slate-500">Bu işlem geri alınamaz</p>
-          </div>
-          <button onClick={onCancel} className="ml-auto p-2 hover:bg-slate-100 rounded-lg transition">
-            <X className="w-5 h-5 text-slate-400" />
-          </button>
-        </div>
-
-        <div className="bg-red-50 border border-red-200 rounded-xl p-4 mb-5">
-          <p className="text-sm text-red-700 font-semibold mb-1">Sıfırlama işlemi şunları siler:</p>
-          <ul className="text-sm text-red-600 space-y-1 mt-2">
-            <li className="flex items-center gap-2"><Trash2 className="w-3 h-3" /> Tüm masalar ve masa grupları</li>
-            <li className="flex items-center gap-2"><Trash2 className="w-3 h-3" /> Tüm sipariş geçmişi</li>
-            <li className="flex items-center gap-2"><Trash2 className="w-3 h-3" /> Tüm kasa işlemleri</li>
-            <li className="flex items-center gap-2"><Trash2 className="w-3 h-3" /> Tüm ürünler ve kategoriler</li>
-            <li className="flex items-center gap-2"><Trash2 className="w-3 h-3" /> Online sipariş platformları</li>
-          </ul>
-          <p className="text-xs text-red-500 mt-3">Kullanıcılar, şubeler ve hesap bilgileri korunur.</p>
-        </div>
-
-        <div className="mb-5">
-          <label className="block text-sm font-bold text-slate-700 mb-2">
-            Onaylamak için <span className="text-red-600 font-black">{CONFIRM_WORD}</span> yazın
-          </label>
-          <input
-            type="text"
-            value={typed}
-            onChange={e => setTyped(e.target.value.toUpperCase())}
-            placeholder={CONFIRM_WORD}
-            className="w-full px-4 py-3 rounded-xl border-2 border-slate-200 focus:ring-2 focus:ring-red-400 focus:border-transparent font-mono text-center font-bold tracking-widest text-lg"
-          />
-        </div>
-
-        <div className="flex gap-3">
-          <button
-            onClick={onCancel}
-            className="flex-1 py-3 rounded-xl border-2 border-slate-200 text-slate-600 font-semibold text-sm transition hover:bg-slate-50"
-          >
-            Vazgeç
-          </button>
-          <button
-            onClick={handleConfirm}
-            disabled={typed !== CONFIRM_WORD || resetting}
-            className="flex-1 py-3 rounded-xl bg-red-600 hover:bg-red-700 disabled:opacity-40 text-white font-bold text-sm transition flex items-center justify-center gap-2"
-          >
-            {resetting ? (
-              <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Sıfırlanıyor...</>
-            ) : (
-              <><Trash2 className="w-4 h-4" /> Sistemi Sıfırla</>
-            )}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
 }
 
 export function PinLockScreen({ onUnlock }: PinLockScreenProps) {
@@ -93,7 +17,6 @@ export function PinLockScreen({ onUnlock }: PinLockScreenProps) {
   const [attempts, setAttempts] = useState(0);
   const [locked, setLocked] = useState(false);
   const [lockCountdown, setLockCountdown] = useState(0);
-  const [showResetModal, setShowResetModal] = useState(false);
   const lockTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -174,43 +97,11 @@ export function PinLockScreen({ onUnlock }: PinLockScreenProps) {
     setTimeout(() => setShake(false), 500);
   };
 
-  const handleSystemReset = async () => {
-    if (!tenant) return;
-    const tid = tenant.id;
-
-    const orderIds = (await supabase.from('orders').select('id').eq('tenant_id', tid)).data?.map((o: any) => o.id) || [];
-    if (orderIds.length > 0) {
-      await supabase.from('order_items').delete().in('order_id', orderIds);
-    }
-    await supabase.from('orders').delete().eq('tenant_id', tid);
-    await supabase.from('cash_register_transactions').delete().eq('tenant_id', tid);
-    await supabase.from('restaurant_tables').delete().eq('tenant_id', tid);
-    await supabase.from('table_groups').delete().eq('tenant_id', tid);
-    await supabase.from('online_order_platforms').delete().eq('tenant_id', tid);
-
-    const catIds = (await supabase.from('categories').select('id').eq('tenant_id', tid)).data?.map((c: any) => c.id) || [];
-    if (catIds.length > 0) {
-      await supabase.from('products').delete().in('category_id', catIds);
-    }
-    await supabase.from('categories').delete().eq('tenant_id', tid);
-    await supabase.from('tenants').update({ onboarding_completed: false } as any).eq('id', tid);
-
-    setShowResetModal(false);
-    window.location.reload();
-  };
-
   const dateStr = time.toLocaleDateString('tr-TR', { weekday: 'long', day: 'numeric', month: 'long' });
   const timeStr = time.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
 
   return (
     <div className="fixed inset-0 z-[9999] bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex flex-col items-center justify-between select-none overflow-hidden">
-      {showResetModal && (
-        <ResetConfirmModal
-          onConfirm={handleSystemReset}
-          onCancel={() => setShowResetModal(false)}
-        />
-      )}
-
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
         <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-orange-500/5 rounded-full blur-3xl" />
         <div className="absolute bottom-1/3 right-1/4 w-80 h-80 bg-red-500/5 rounded-full blur-3xl" />
@@ -308,14 +199,6 @@ export function PinLockScreen({ onUnlock }: PinLockScreenProps) {
             <LogIn className="w-6 h-6" />
           </button>
         </div>
-
-        <button
-          onClick={() => setShowResetModal(true)}
-          className="w-full py-3 rounded-2xl border border-red-500/30 text-red-400 hover:bg-red-500/10 hover:text-red-300 transition font-semibold text-sm flex items-center justify-center gap-2"
-        >
-          <RotateCcw className="w-4 h-4" />
-          Sistemi Sıfırla
-        </button>
       </div>
     </div>
   );

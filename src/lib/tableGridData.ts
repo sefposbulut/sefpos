@@ -7,7 +7,8 @@ export type TableGridOrderEmbed = {
   order_number: string;
   payment_status?: string | null;
   amount_paid?: number;
-  amount_remaining?: number;
+  /** Kalan tutar; TableGrid bileşeni bu adı kullanır */
+  remaining_amount?: number;
 };
 
 export type TableGridCachedRow = Record<string, unknown> & {
@@ -36,7 +37,7 @@ export function buildOrderEmbedFromJoin(ord: unknown): TableGridOrderEmbed | und
     order_number: String(o.order_number ?? ''),
     payment_status: (o.payment_status as string | null | undefined) ?? null,
     amount_paid: paid,
-    amount_remaining: Math.max(0, Math.round((total - paid) * 100) / 100),
+    remaining_amount: Math.max(0, Math.round((total - paid) * 100) / 100),
   };
 }
 
@@ -63,32 +64,81 @@ const inflight = new Map<string, Promise<{ tables: TableGridCachedRow[]; groups:
 
 const GRID_SNAP_PREFIX = 'sefpos:table_grid_snap:v1:';
 const MAX_GRID_SNAP_CHARS = 3_800_000;
+/** localStorage TTL: 7 gün. Bu sürede internet kesintisinde / app restart sonrasi
+ *  masalar ve gruplar son bilinen halleriyle anında ekrana gelir. Sonrasinda
+ *  bayat veri kullanmamak icin kalici cache silinir. */
+const GRID_SNAP_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
-/** F5 / sekme yenilemede ızgara anında çizilir (RAM önbelleği boş olsa bile) */
-export function readPersistedTableGridSnapshot(
-  cacheKey: string
-): { tables: TableGridCachedRow[]; groups: TableGroupCached[] } | null {
+type SnapshotPayload = {
+  tables: TableGridCachedRow[];
+  groups: TableGroupCached[];
+};
+
+type StoredSnapshot = SnapshotPayload & { savedAt?: number };
+
+function readFromStore(
+  store: Storage | null,
+  key: string,
+  enforceTtl: boolean
+): SnapshotPayload | null {
+  if (!store) return null;
   try {
-    const raw = sessionStorage.getItem(GRID_SNAP_PREFIX + cacheKey);
+    const raw = store.getItem(key);
     if (!raw) return null;
-    const o = JSON.parse(raw) as { tables?: unknown; groups?: unknown };
+    const o = JSON.parse(raw) as StoredSnapshot | null;
     if (!o || !Array.isArray(o.tables) || !Array.isArray(o.groups)) return null;
-    return { tables: o.tables as TableGridCachedRow[], groups: o.groups as TableGroupCached[] };
+    if (enforceTtl && typeof o.savedAt === 'number') {
+      if (Date.now() - o.savedAt > GRID_SNAP_TTL_MS) {
+        store.removeItem(key);
+        return null;
+      }
+    }
+    return { tables: o.tables, groups: o.groups };
   } catch {
     return null;
   }
 }
 
+/** F5 / sekme yenilemede ve **offline / app restart sonrasinda** izgara aninda
+ *  cizilir. Once sessionStorage (en taze), sonra localStorage (TTL'li) kontrol
+ *  edilir. */
+export function readPersistedTableGridSnapshot(
+  cacheKey: string
+): SnapshotPayload | null {
+  const fromSession = readFromStore(
+    typeof sessionStorage !== 'undefined' ? sessionStorage : null,
+    GRID_SNAP_PREFIX + cacheKey,
+    false
+  );
+  if (fromSession) return fromSession;
+  return readFromStore(
+    typeof localStorage !== 'undefined' ? localStorage : null,
+    GRID_SNAP_PREFIX + cacheKey,
+    true
+  );
+}
+
 function persistTableGridSnapshot(
   cacheKey: string,
-  payload: { tables: TableGridCachedRow[]; groups: TableGroupCached[] }
+  payload: SnapshotPayload
 ): void {
+  const stored: StoredSnapshot = { ...payload, savedAt: Date.now() };
+  let s: string;
   try {
-    const s = JSON.stringify(payload);
-    if (s.length > MAX_GRID_SNAP_CHARS) return;
+    s = JSON.stringify(stored);
+  } catch {
+    return;
+  }
+  if (s.length > MAX_GRID_SNAP_CHARS) return;
+  try {
     sessionStorage.setItem(GRID_SNAP_PREFIX + cacheKey, s);
   } catch {
-    /* quota */
+    /* sessionStorage doluysa atla, localStorage'i dene */
+  }
+  try {
+    localStorage.setItem(GRID_SNAP_PREFIX + cacheKey, s);
+  } catch {
+    /* localStorage quota dolu */
   }
 }
 

@@ -2,10 +2,38 @@ import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { Database } from '../lib/supabase';
-import { Plus, Clock, Lock, ZoomIn, ZoomOut, ScanBarcode, Truck } from 'lucide-react';
+import { Plus, Clock, Lock, ZoomIn, ZoomOut, ScanBarcode, Truck, Eye, EyeOff, Receipt } from 'lucide-react';
+import { ReprintReceiptModal } from './ReprintReceiptModal';
 import { isLocalMode } from '../lib/sqlDb';
 import { warmOrderItemsForPanel, bulkWarmOrderItemsForOrders } from '../lib/orderPanelWarm';
 import { LiveDuration } from './LiveDuration';
+import { getTrialInfo, formatTrialRemaining } from '../lib/tenantTrial';
+import {
+  tableGridRuntimeCache,
+  readPersistedTableGridSnapshot,
+  type TableGridCachedRow,
+  type TableGroupCached,
+} from '../lib/tableGridData';
+
+const PLAN_LABELS: Record<string, string> = {
+  trial: 'Deneme',
+  free: 'Ücretsiz',
+  basic: 'Temel',
+  starter: 'Başlangıç',
+  standard: 'Standart',
+  pro: 'Profesyonel',
+  business: 'İş',
+  enterprise: 'Kurumsal',
+  premium: 'Premium',
+};
+
+function prettyPlan(plan: string | null | undefined): string {
+  if (!plan) return 'Lisans yok';
+  const k = plan.toLowerCase().trim();
+  return PLAN_LABELS[k] || (plan.charAt(0).toUpperCase() + plan.slice(1));
+}
+
+const FOOTER_AMOUNT_VISIBLE_KEY = 'sefpos.tableGrid.footerAmountVisible';
 
 type Table = Database['public']['Tables']['restaurant_tables']['Row'] & {
   branch_id?: string | null;
@@ -39,7 +67,34 @@ interface TableGridProps {
 const naturalSort = (a: TableWithOrder, b: TableWithOrder) =>
   String(a.table_number).localeCompare(String(b.table_number), undefined, { numeric: true, sensitivity: 'base' });
 
-const tableGridRuntimeCache = new Map<string, { tables: TableWithOrder[]; groups: TableGroup[] }>();
+/** Cache satirini TableGrid icin tipli hale getirir (sadece referans cast) */
+function cachedRowToTableWithOrder(row: TableGridCachedRow): TableWithOrder {
+  return row as unknown as TableWithOrder;
+}
+
+/** Cache snapshot'tan istemci icin gosterilebilir state cikartir */
+function readSnapshotForKey(cacheKey: string | null):
+  | { tables: TableWithOrder[]; groups: TableGroup[] }
+  | null {
+  if (!cacheKey) return null;
+  const ram = tableGridRuntimeCache.get(cacheKey);
+  if (ram) {
+    return {
+      tables: ram.tables.map(cachedRowToTableWithOrder),
+      groups: ram.groups as unknown as TableGroup[],
+    };
+  }
+  const persisted = readPersistedTableGridSnapshot(cacheKey);
+  if (persisted) {
+    // Persisted'i RAM'a da koy ki sonraki render'lar anlik olsun
+    tableGridRuntimeCache.set(cacheKey, persisted);
+    return {
+      tables: persisted.tables.map(cachedRowToTableWithOrder),
+      groups: persisted.groups as unknown as TableGroup[],
+    };
+  }
+  return null;
+}
 
 // Masa zoom tercihleri cihaz başına tek bir global anahtarda tutulur:
 // kullanıcı +/- ile değiştirdiğinde tenant/branch/kullanıcı değişse de aynı
@@ -69,16 +124,48 @@ function readPersistedCols(globalKey: string, legacyPrefix: string): number | nu
 }
 
 export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayButton = true }: TableGridProps) {
-  const { tenant, user, activeBranch, permissions } = useAuth();
+  const { tenant, user, profile, activeBranch, permissions } = useAuth();
   const mobileColsStorageKey = MOBILE_COLS_KEY;
   const desktopColsStorageKey = DESKTOP_COLS_KEY;
 
-  const [tables, setTables] = useState<TableWithOrder[]>([]);
-  const [tableGroups, setTableGroups] = useState<TableGroup[]>([]);
-  const [selectedGroup, setSelectedGroup] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  // Ilk render'da RAM ya da sessionStorage snapshot'i varsa masalari aninda goster.
+  // Bu sayede ilk login'de bos spinner yerine cached izgara gorunur ve hisli yuklenme yasanir.
+  const initialKey = tenant?.id && activeBranch?.id ? `${tenant.id}:${activeBranch.id}` : null;
+  const initialSnapshot = readSnapshotForKey(initialKey);
+  const [tables, setTables] = useState<TableWithOrder[]>(() => initialSnapshot?.tables ?? []);
+  const [tableGroups, setTableGroups] = useState<TableGroup[]>(() => initialSnapshot?.groups ?? []);
+  const [selectedGroup, setSelectedGroup] = useState<string | null>(() => {
+    const groups = initialSnapshot?.groups ?? [];
+    return groups.length > 0 ? groups[0].id : null;
+  });
+  // Snapshot varsa loading'i baslangictan false yap; aksi halde skeleton gosterelim.
+  const [loading, setLoading] = useState<boolean>(() => !initialSnapshot);
+
+  // Footer kuşağı state'i: kullanıcı sağ tıklayınca açık masa toplam tutarını
+  // gizleyebilsin (kişisel tercih, cihaza yazılır). Saat/tarih için 30 sn'lik
+  // tikleyici aşağıda useEffect ile besleniyor.
+  const [footerAmountVisible, setFooterAmountVisible] = useState<boolean>(() => {
+    try {
+      const v = localStorage.getItem(FOOTER_AMOUNT_VISIBLE_KEY);
+      return v === null ? true : v === '1';
+    } catch {
+      return true;
+    }
+  });
+  const [now, setNow] = useState<Date>(() => new Date());
+  useEffect(() => {
+    const t = window.setInterval(() => setNow(new Date()), 30000);
+    return () => window.clearInterval(t);
+  }, []);
+  useEffect(() => {
+    try {
+      localStorage.setItem(FOOTER_AMOUNT_VISIBLE_KEY, footerAmountVisible ? '1' : '0');
+    } catch {}
+  }, [footerAmountVisible]);
+
   const [mobileTableCols, setMobileTableCols] = useState<number>(3);
   const [mobileZoomOpen, setMobileZoomOpen] = useState(false);
+  const [showReprintModal, setShowReprintModal] = useState(false);
   const [desktopTableCols, setDesktopTableCols] = useState<number>(6);
   const [mobileColsTouched, setMobileColsTouched] = useState(false);
   const [desktopColsTouched, setDesktopColsTouched] = useState(false);
@@ -110,15 +197,21 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
   const loadAll = useCallback(async (resetGroup = false) => {
     if (!tenant || !activeBranch) return;
     const cacheKey = `${tenant.id}:${activeBranch.id}`;
-    const cached = tableGridRuntimeCache.get(cacheKey);
-    if (cached && !resetGroup) {
-      setTableGroups(cached.groups);
-      setTables(cached.tables);
+    // RAM yoksa sessionStorage'dan dene (ilk login + sekme yenilemesi icin kritik).
+    const snap = readSnapshotForKey(cacheKey);
+    if (snap) {
+      setTableGroups(snap.groups);
+      setTables(snap.tables);
       setLoading(false);
+      if (resetGroup) {
+        // Branch degisti: yeni subenin ilk grubunu sec.
+        setSelectedGroup(snap.groups.length > 0 ? snap.groups[0].id : null);
+      }
     } else {
+      // Snapshot yok; spinner yerine skeleton gosterilsin.
       setLoading(true);
+      if (resetGroup) setSelectedGroup(null);
     }
-    if (resetGroup) setSelectedGroup(null);
 
     if (isLocalMode()) {
       const api = (window as any).electronAPI;
@@ -156,7 +249,10 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
         }));
         mapped.sort(naturalSort);
         setTables(mapped);
-        tableGridRuntimeCache.set(cacheKey, { tables: mapped, groups });
+        tableGridRuntimeCache.set(cacheKey, {
+          tables: mapped as unknown as TableGridCachedRow[],
+          groups: groups as unknown as TableGroupCached[],
+        });
         bulkWarmOrderItemsForOrders(mapped.map((t) => t.current_order_id));
       } catch (e) {
         console.error('TableGrid local load error:', e);
@@ -164,6 +260,12 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
       }
       setLoading(false);
       return;
+    }
+
+    try {
+      await (supabase as any).rpc('unlock_stale_payment_locks');
+    } catch {
+      /* migration yok / yetki yoksay */
     }
 
     let tableQ = supabase
@@ -234,7 +336,10 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
       }
       mapped.sort(naturalSort);
       setTables(mapped);
-      tableGridRuntimeCache.set(cacheKey, { tables: mapped, groups: (groupsRes.data || []) as TableGroup[] });
+      tableGridRuntimeCache.set(cacheKey, {
+        tables: mapped as unknown as TableGridCachedRow[],
+        groups: (groupsRes.data || []) as unknown as TableGroupCached[],
+      });
       // Aktif siparişleri TEK sorguda warm cache'e al; masaya tıklandığında sepet anında boyanır.
       bulkWarmOrderItemsForOrders(mapped.map((t) => t.current_order_id));
     } else {
@@ -243,6 +348,29 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
 
     setLoading(false);
   }, [tenant, activeBranch]);
+
+  useEffect(() => {
+    if (!tenant?.id || !activeBranch?.id || isLocalMode()) return;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const onVis = () => {
+      if (document.visibilityState !== 'visible') return;
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(async () => {
+        timer = null;
+        try {
+          await (supabase as any).rpc('unlock_stale_payment_locks');
+        } catch {
+          /* yoksay */
+        }
+        void loadAll(false);
+      }, 600);
+    };
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      document.removeEventListener('visibilitychange', onVis);
+      if (timer) clearTimeout(timer);
+    };
+  }, [tenant?.id, activeBranch?.id, loadAll]);
 
   const flushPendingUpdates = useCallback(async () => {
     if (pendingUpdatesRef.current.size === 0) return;
@@ -466,7 +594,10 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
 
   useEffect(() => {
     if (!cacheKey) return;
-    tableGridRuntimeCache.set(cacheKey, { tables, groups: tableGroups });
+    tableGridRuntimeCache.set(cacheKey, {
+      tables: tables as unknown as TableGridCachedRow[],
+      groups: tableGroups as unknown as TableGroupCached[],
+    });
   }, [cacheKey, tables, tableGroups]);
 
   // tablesRef her render'da güncel olsun (subscription callback'leri için).
@@ -625,18 +756,42 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
   );
 
   if (loading) {
+    // Spinner yerine skeleton: kullanici bos ekran/spinner yerine ileride
+    // gelecek kutularin iskeletini gorur, algilanan yuklenme cok daha hizli olur.
+    const skeletonCount = 12;
     return (
-      <div className="flex flex-col items-center justify-center h-64 gap-3">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-orange-600"></div>
-        <p className="text-slate-500 font-medium">Yukleniyor...</p>
+      <div className="h-full flex flex-col">
+        <div className="bg-white rounded-lg md:rounded-2xl shadow-md p-2 md:p-4 mb-3 md:mb-6">
+          <div className="flex items-center gap-2 md:gap-3 overflow-hidden">
+            <div className="h-7 md:h-9 w-24 md:w-32 rounded-md bg-slate-200/80 animate-pulse" />
+            <div className="h-7 md:h-9 w-20 md:w-28 rounded-md bg-slate-200/60 animate-pulse" />
+            <div className="h-7 md:h-9 w-20 md:w-28 rounded-md bg-slate-200/60 animate-pulse" />
+            <div className="h-7 md:h-9 w-20 md:w-28 rounded-md bg-slate-200/60 animate-pulse" />
+          </div>
+        </div>
+        <div className="flex-1 min-h-0 overflow-hidden">
+          <div className="grid gap-2 md:gap-3 grid-cols-3 md:grid-cols-6 lg:grid-cols-8">
+            {Array.from({ length: skeletonCount }).map((_, i) => (
+              <div
+                key={i}
+                className="aspect-square rounded-lg md:rounded-xl bg-slate-200/70 animate-pulse"
+                style={{ animationDelay: `${(i % 6) * 60}ms` }}
+              />
+            ))}
+          </div>
+          <p className="text-center text-slate-400 text-xs md:text-sm mt-4">
+            Masalar yukleniyor...
+          </p>
+        </div>
       </div>
     );
   }
 
   if (!activeBranch) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <p className="text-gray-500 text-lg">Yukleniyor...</p>
+      <div className="flex flex-col items-center justify-center h-64 gap-3">
+        <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-orange-500"></div>
+        <p className="text-gray-500 text-sm">Sube hazirlaniyor...</p>
       </div>
     );
   }
@@ -721,6 +876,15 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
             </div>
 
 
+            <button
+              onClick={() => setShowReprintModal(true)}
+              className="hidden md:flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-white border border-orange-300 text-orange-600 hover:bg-orange-50 shrink-0 active:scale-95 text-xs font-bold shadow-sm"
+              title="Geçmiş siparişlerin adisyonunu yeniden bas"
+            >
+              <Receipt className="w-3.5 h-3.5" />
+              Adisyon Yazdır
+            </button>
+
             <div className="hidden md:flex items-center gap-1 bg-gray-100 rounded-lg p-1 shrink-0">
               <button
                 onClick={() => { setDesktopColsTouched(true); setDesktopTableCols(prev => Math.min(12, prev + 1)); }}
@@ -779,8 +943,20 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
         </div>
       </div>
 
-      <div className="md:hidden flex-1 overflow-y-auto bg-white p-3">
-        <div className="pb-6" style={{ display: 'grid', gridTemplateColumns: `repeat(${mobileTableCols}, minmax(0, 1fr))`, gap: 10 }}>
+      <div
+        className="md:hidden flex-1 min-h-0 overflow-y-auto bg-white p-3"
+        style={{ overscrollBehaviorY: 'contain' }}
+      >
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: `repeat(${mobileTableCols}, minmax(0, 1fr))`,
+            gap: 10,
+            // Alta yeterli boşluk: tarayıcının alt çubuğu, iOS home indicator
+            // (safe-area) ve sağdaki yüzen zoom paneli son masaları örtmesin.
+            paddingBottom: 'calc(96px + env(safe-area-inset-bottom, 0px))',
+          }}
+        >
           {filteredTables.map((table) => {
             const isLocked = !!(table as any).payment_locked;
             const isPartial = !isLocked && table.order?.payment_status === 'partial';
@@ -840,8 +1016,8 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
       </div>
 
       <div
-        className="hidden md:grid gap-3"
-        style={{ gridTemplateColumns: `repeat(${desktopTableCols}, minmax(0, 1fr))`, gridAutoRows: '1fr' }}
+        className="hidden md:grid gap-3 flex-1 min-h-0 overflow-y-auto pb-14"
+        style={{ gridTemplateColumns: `repeat(${desktopTableCols}, minmax(0, 1fr))`, gridAutoRows: '1fr', alignContent: 'start' }}
       >
         {filteredTables.map((table) => {
           const isLocked = !!(table as any).payment_locked;
@@ -907,6 +1083,105 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
           );
         })}
       </div>
+
+      {(() => {
+        // Açık masa istatistikleri (sadece occupied & order'ı olan masalar)
+        const occupiedTables = tables.filter((t) => t.status === 'occupied');
+        const occupiedCount = occupiedTables.length;
+        const occupiedTotal = occupiedTables.reduce((sum, t) => {
+          const remaining = t.order?.remaining_amount;
+          const total = t.order?.total_amount ?? 0;
+          return sum + (typeof remaining === 'number' ? remaining : total);
+        }, 0);
+        const tl = occupiedTotal.toLocaleString('tr-TR', {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        });
+        const dateStr = now.toLocaleDateString('tr-TR', {
+          day: '2-digit',
+          month: '2-digit',
+          year: 'numeric',
+        });
+        const timeStr = now.toLocaleTimeString('tr-TR', {
+          hour: '2-digit',
+          minute: '2-digit',
+        });
+        const userName =
+          (profile as any)?.full_name ||
+          profile?.email ||
+          user?.email ||
+          'Kullanıcı';
+        const trial = getTrialInfo(tenant as any);
+        const planLabel = trial.isTrial
+          ? `Deneme · ${trial.expired ? 'Süre doldu' : formatTrialRemaining(trial)}`
+          : prettyPlan((tenant as any)?.subscription_plan);
+        const branchName = (activeBranch as any)?.name || (tenant as any)?.name || '';
+
+        return (
+          <div
+            className="hidden md:block fixed bottom-0 left-0 right-0 z-40 text-white shadow-[0_-2px_6px_rgba(0,0,0,0.15)] border-t border-orange-700/50"
+            style={{
+              fontFamily: corporateFontFamily,
+              background: '#f97316',
+            }}
+          >
+            <div className="flex items-center justify-between gap-2 md:gap-4 px-3 md:px-5 py-1 md:py-1.5 text-[11px] md:text-xs whitespace-nowrap overflow-hidden">
+              <div className="flex items-center gap-2 min-w-0 truncate">
+                <span className="font-bold truncate">{userName}</span>
+                <span className="inline-block text-[9px] md:text-[10px] font-semibold bg-white/20 rounded px-1.5 py-0.5 leading-tight shrink-0">
+                  {planLabel}
+                </span>
+                {branchName && (
+                  <span className="hidden md:inline opacity-85 truncate">
+                    · {branchName}
+                  </span>
+                )}
+              </div>
+
+              <div className="flex items-center gap-3 md:gap-5 shrink-0">
+                <span className="font-semibold">
+                  Açık Masa Sayısı:{' '}
+                  <b className="font-black tabular-nums ml-0.5">{occupiedCount}</b>
+                </span>
+                <button
+                  type="button"
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    setFooterAmountVisible((v) => !v);
+                  }}
+                  onClick={(e) => {
+                    if ((e.target as HTMLElement).closest('[data-amount-toggle]')) {
+                      setFooterAmountVisible((v) => !v);
+                    }
+                  }}
+                  title="Sağ tık: açık masa toplam tutarını gizle/göster"
+                  className="font-semibold inline-flex items-center gap-1.5 px-1.5 py-0.5 rounded hover:bg-white/10 transition cursor-context-menu select-none"
+                >
+                  Açık Masa Toplamı:
+                  <b className="font-black tabular-nums">
+                    {footerAmountVisible ? `${tl} ₺` : '••••• ₺'}
+                  </b>
+                  <span data-amount-toggle className="opacity-70 hover:opacity-100">
+                    {footerAmountVisible ? (
+                      <Eye className="w-3 h-3" />
+                    ) : (
+                      <EyeOff className="w-3 h-3" />
+                    )}
+                  </span>
+                </button>
+              </div>
+
+              <div className="font-semibold tabular-nums shrink-0 whitespace-nowrap">
+                {dateStr} · {timeStr}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {showReprintModal && (
+        <ReprintReceiptModal onClose={() => setShowReprintModal(false)} />
+      )}
     </div>
   );
 }

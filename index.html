@@ -18,8 +18,76 @@
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:image" content="https://bolt.new/static/og_default.png" />
   </head>
-  <body style="margin:0;background-color:#0f172a;">
+  <body style="margin:0;background-color:#ffffff;">
+    <!-- Inline boot splash: React/Tailwind yuklenene kadar bos beyaz ekran yerine
+         SefPOS marka logosu + spinner gozukur. main.tsx mount edildiginde React
+         #root'u doldurur ve splash gizlenir (CSS: #root:not(:empty) ~ #boot-splash). -->
+    <style>
+      #boot-splash {
+        position: fixed;
+        inset: 0;
+        z-index: 2147483647;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: #ffffff;
+        color: #0f172a;
+        font-family: 'Inter', 'Segoe UI', Arial, sans-serif;
+        transition: opacity .35s ease;
+      }
+      #root:not(:empty) ~ #boot-splash {
+        opacity: 0;
+        pointer-events: none;
+      }
+      #boot-splash .wrap {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 16px;
+        text-align: center;
+      }
+      #boot-splash .logo {
+        width: 120px;
+        height: 120px;
+        border-radius: 50%;
+        object-fit: contain;
+        background: #ffffff;
+        box-shadow: 0 12px 32px rgba(15, 23, 42, .08);
+        padding: 6px;
+      }
+      #boot-splash .name {
+        font-size: 22px;
+        font-weight: 800;
+        letter-spacing: .3px;
+        color: #0f172a;
+      }
+      #boot-splash .tag {
+        font-size: 13px;
+        color: #64748b;
+        font-weight: 500;
+      }
+      #boot-splash .ring {
+        margin-top: 4px;
+        width: 26px;
+        height: 26px;
+        border-radius: 50%;
+        border: 3px solid rgba(15, 23, 42, .08);
+        border-top-color: #f97316;
+        animation: bs-spin .8s linear infinite;
+      }
+      @keyframes bs-spin {
+        to { transform: rotate(360deg); }
+      }
+    </style>
     <div id="root"></div>
+    <div id="boot-splash" aria-hidden="true">
+      <div class="wrap">
+        <img src="./logo.png?v=2" alt="SefPOS" class="logo" onerror="this.style.display='none'" />
+        <div class="name">SefPOS</div>
+        <div class="tag">Sistem hazirlaniyor...</div>
+        <div class="ring"></div>
+      </div>
+    </div>
     <script type="module" src="./src/main.tsx"></script>
   </body>
 </html>

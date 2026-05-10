@@ -32,6 +32,49 @@ function resolveDllPath(arch) {
   return candidate;
 }
 
+/**
+ * Koffi'nin tip kaydı SÜREÇ GLOBAL'idir — `koffi.proto('_CallerID', ...)` ikinci
+ * kez çağrıldığında "duplicate type name '_CallerID'" fırlatır. Ayrıca registered
+ * function prototype'i parametre tipi olarak string adıyla kullanırsanız (`lib.func('SetEvents(_CallerID ...)')`)
+ * "type _CallerID cannot be used as a parameter" hatası fırlatır — koffi 2.x
+ * function prototype'ı parametre olarak kullanmak için açık `koffi.pointer(proto)`
+ * sarmalamasını şart koşuyor.
+ *
+ * Çözüm:
+ *   1. Proto referansını `globalThis._sefposCidGlobals` içinde tut → modül HMR
+ *      veya require cache invalidation sonrası bile aynı obje kullanılır,
+ *      duplicate hatası oluşmaz.
+ *   2. `lib.func` çağrısını programmatik (array form) yap ve parametreleri
+ *      `koffi.pointer(proto)` ile geç → string parser tetiklenmez.
+ *   3. `koffi.register` zaten `koffi.pointer(proto)` ile çağrılıyor; orası OK.
+ */
+const G_KEY = '__sefpos_cid_globals__';
+const cidGlobals = (globalThis[G_KEY] = globalThis[G_KEY] || {});
+
+function getCallerIdProto() {
+  if (cidGlobals.callerIdProto) return cidGlobals.callerIdProto;
+  cidGlobals.callerIdProto = koffi.proto(
+    'void __cdecl _CallerID(str16 DeviceSerial, str16 Line, str16 PhoneNumber, str16 DateTime, str16 Other)'
+  );
+  return cidGlobals.callerIdProto;
+}
+
+function getSignalProto() {
+  if (cidGlobals.signalProto) return cidGlobals.signalProto;
+  cidGlobals.signalProto = koffi.proto(
+    'void __cdecl _Signal(str16 DeviceModel, str16 DeviceSerial, int Signal1, int Signal2, int Signal3, int Signal4)'
+  );
+  return cidGlobals.signalProto;
+}
+
+/** Aynı DLL'i tekrar tekrar yüklememek için yine global cache. */
+function loadLibCached(dllPath) {
+  if (cidGlobals.lib && cidGlobals.libPath === dllPath) return cidGlobals.lib;
+  cidGlobals.lib = koffi.load(dllPath);
+  cidGlobals.libPath = dllPath;
+  return cidGlobals.lib;
+}
+
 class CidListener {
   constructor() {
     this.lib = null;
@@ -85,7 +128,7 @@ class CidListener {
       }
     }
 
-    this.lib = koffi.load(this.dllPath);
+    this.lib = loadLibCached(this.dllPath);
 
     /**
      * Vendor SDK imzaları (Test.cpp):
@@ -97,17 +140,19 @@ class CidListener {
      *   void SetEvents(_CallerID, _Signal);
      *
      * LPWSTR = wchar_t* (Windows = UTF-16). Koffi'de "str16" otomatik decode eder.
+     * Tipler bir kez kaydedildikten sonra cache'den okunur.
      */
-    const callerIdProto = koffi.proto(
-      'void __cdecl _CallerID(str16 DeviceSerial, str16 Line, str16 PhoneNumber, str16 DateTime, str16 Other)'
-    );
-    const signalProto = koffi.proto(
-      'void __cdecl _Signal(str16 DeviceModel, str16 DeviceSerial, int Signal1, int Signal2, int Signal3, int Signal4)'
-    );
+    const callerIdProto = getCallerIdProto();
+    const signalProto = getSignalProto();
 
-    this.setEventsFn = this.lib.func(
-      'void __cdecl SetEvents(_CallerID CallerIDEvent, _Signal SignalEvent)'
-    );
+    // Array form: parametre tipleri programmatik geçilince koffi'nin string
+    // parser'ı devre dışı kalır → "type _CallerID cannot be used as a parameter"
+    // hatası ortadan kalkar. Function prototype'ı parametre olarak vermek için
+    // mutlaka koffi.pointer(...) ile sarmalanır.
+    this.setEventsFn = this.lib.func('SetEvents', 'void', [
+      koffi.pointer(callerIdProto),
+      koffi.pointer(signalProto),
+    ]);
 
     this.callerIDCb = koffi.register((deviceSerial, line, phoneNumber, dateTime, other) => {
       try {
