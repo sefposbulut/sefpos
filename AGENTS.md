@@ -31,7 +31,9 @@ Required GitHub secrets for automation:
 - `SUPABASE_PROJECT_REF` (must be `xdfnozfuuzctubijbnds`)
 - `SUPABASE_DB_PASSWORD`
 - `BACKUP_GPG_PASSPHRASE` — yedekleri AES-256 simetrik şifrelemek için kullanılan parola. Güçlü, en az 32 karakter, sadece `1Password` / `Bitwarden` gibi parola yöneticisinde sakla. **Kaybedersen yedekler açılamaz.**
-- `SUPABASE_DB_REGION` *(opsiyonel)* — Supabase Session Pooler bölgesi. Varsayılan `eu-central-1`. Project Studio → Settings → Database → "Connection Pooler" altındaki host adından (`aws-0-<region>.pooler.supabase.com`) okunur; farklıysa secret olarak set et.
+- `SUPABASE_DB_HOST` *(önerilen)* — Supabase Session Pooler tam host adı, örn. `aws-1-ap-southeast-2.pooler.supabase.com`. Studio → "Connect" → **Session pooler** sekmesindeki connection string'in `@` ile `:` arasındaki kısmıdır. Verilmezse `aws-0-<REGION>` formatıyla tahmin edilir (genelde yanlış olur, lütfen set et).
+- `SUPABASE_DB_PORT` *(opsiyonel)* — Pooler portu. Varsayılan `5432` (Session pooler). Transaction pooler kullanılıyorsa `6543`.
+- `SUPABASE_DB_REGION` *(opsiyonel — `SUPABASE_DB_HOST` set edildiyse gereksiz)* — Yalnızca tam host vermek istemiyorsan eski region-tahmin yolu. Varsayılan `eu-central-1`.
 
 ## Yedekleme stratejisi
 

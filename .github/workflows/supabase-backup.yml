@@ -39,6 +39,7 @@ jobs:
           [ -z "$SUPABASE_DB_PASSWORD" ]   && { echo "::error::Secret SUPABASE_DB_PASSWORD eksik"; missing=1; }
           [ -z "$SUPABASE_PROJECT_REF" ]   && { echo "::error::Secret SUPABASE_PROJECT_REF eksik"; missing=1; }
           [ -z "$BACKUP_GPG_PASSPHRASE" ]  && { echo "::error::Secret BACKUP_GPG_PASSPHRASE eksik (GPG simetrik şifre)"; missing=1; }
+          # SUPABASE_DB_HOST opsiyoneldir; verilmezse aws-0-${REGION} ile dene.
           exit "$missing"
 
       - name: Install PostgreSQL 17 client (matches Supabase)
@@ -65,25 +66,29 @@ jobs:
         env:
           PGPASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
           PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          DB_HOST:     ${{ secrets.SUPABASE_DB_HOST }}
           DB_REGION:   ${{ secrets.SUPABASE_DB_REGION }}
+          DB_PORT:     ${{ secrets.SUPABASE_DB_PORT }}
           GPG_PASSPHRASE: ${{ secrets.BACKUP_GPG_PASSPHRASE }}
         run: |
           set -euo pipefail
           OUT="${{ steps.meta.outputs.file }}"
 
           # Supabase Session Pooler (IPv4 uyumlu, pg_dump session-mode'da çalışır).
-          # Region varsayılanı eu-central-1; farklıysa SUPABASE_DB_REGION secret'ı ile geç.
+          # En esnek yol: SUPABASE_DB_HOST secret'ı ile tam pooler host'u ver.
+          # Verilmezse aws-0-<REGION> formatıyla tahmin et (REGION default eu-central-1).
           REGION="${DB_REGION:-eu-central-1}"
-          HOST="aws-0-${REGION}.pooler.supabase.com"
+          HOST="${DB_HOST:-aws-0-${REGION}.pooler.supabase.com}"
+          PORT="${DB_PORT:-5432}"
           DBUSER="postgres.${PROJECT_REF}"
 
           echo "Host:    $HOST"
+          echo "Port:    $PORT"
           echo "User:    $DBUSER"
-          echo "Region:  $REGION"
 
           pg_dump \
             --host="$HOST" \
-            --port=5432 \
+            --port="$PORT" \
             --username="$DBUSER" \
             --dbname=postgres \
             --schema=public \
