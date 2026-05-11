@@ -56,6 +56,16 @@ export interface PrintSettings {
    *   ödeme modal'ı açıldığında toggle açık gelir.
    */
   receiptPrintDefaultOn: boolean;
+  /**
+   * Sıkı kategori yönlendirmesi.
+   * - false (varsayılan): kategori için yazıcı seçilmediyse catch-all veya
+   *   `defaultKitchenPrinter` devreye girer; kategori atanmamış ürünler de
+   *   bir yerde basılır.
+   * - true: yalnızca **kategori → yazıcı eşlemesi açıkça yapılmış** ürünler
+   *   mutfağa gönderilir. Eşlemesi olmayan ürünler hiçbir yazıcıya
+   *   düşmez (mutfak fişine eklenmez).
+   */
+  strictCategoryPrinterRouting: boolean;
   restaurantName: string;
   restaurantPhone: string;
   restaurantAddress: string;
@@ -188,6 +198,10 @@ function normalizePrintSettings(raw: Partial<PrintSettings> & Record<string, unk
     autoPrintTakeaway: ps.autoPrintTakeaway !== false,
     // Yeni alan: eski kayıtlarda yok → varsayılan kapalı (kullanıcı isterse açar).
     receiptPrintDefaultOn: ps.receiptPrintDefaultOn === true,
+    // Yeni alan: kategori bazlı sıkı yönlendirme. Eski kayıtlarda yok → kapalı
+    // (mevcut davranışı bozmaz). Açıldığında yalnızca açıkça eşlenen kategoriler
+    // mutfak fişine girer.
+    strictCategoryPrinterRouting: ps.strictCategoryPrinterRouting === true,
     restaurantName: typeof ps.restaurantName === 'string' ? ps.restaurantName : '',
     restaurantPhone: typeof ps.restaurantPhone === 'string' ? ps.restaurantPhone : '',
     restaurantAddress: typeof ps.restaurantAddress === 'string' ? ps.restaurantAddress : '',
@@ -398,6 +412,9 @@ export function resolveCategoryPrinter(
     const matched = route.find((p) => p.categoryIds.length > 0 && p.categoryIds.includes(categoryId));
     if (matched) return { printerName: matched.printerName, source: 'category' };
   }
+  // Sıkı kategori yönlendirmesi: yalnızca açıkça eşlenenler basılsın;
+  // catch-all ve defaultKitchenPrinter fallback'lerine düşme.
+  if (settings.strictCategoryPrinterRouting) return null;
   const catchAll = route.find((p) => p.categoryIds.length === 0);
   if (catchAll) return { printerName: catchAll.printerName, source: 'catch-all' };
   if (settings.defaultKitchenPrinter?.trim()) {
@@ -1246,16 +1263,64 @@ export async function printKitchenReceipts(opts: {
   // MOBİL / WEB FAST PATH (Electron dışı)
   //
   // Sipariş alma cihazı kasa değil → cihazda yazıcı listesi yok, kategori
-  // eşlemesi olsa bile o yazıcılar buraya bağlı değil. Hiçbir şey çözümleme;
-  // tek bir mutfak fişi HTML'i build et ve print_jobs kuyruğuna BOŞ
-  // printer_name ile insert et. Karar kasadaki Electron Print Agent'a kalsın:
-  // job düştüğü an `pickDefaultKitchenPrinter`'la kayıtlı yazıcılardan
-  // mutfak/bar/kasa yazıcısı seçip anında basar (~1-3 sn).
+  // eşlemesi olsa bile o yazıcılar buraya bağlı değil. Karar kasadaki
+  // Electron Print Agent'a kalır. İki davranış:
   //
-  // Bu yol latency'yi düşürür (print_settings/printer listesi sorguları yok)
-  // ve hangi cihazda olursa olsun siparişin mutfağa gitmesini garanti eder.
+  //   - **Klasik mod** (`strictCategoryPrinterRouting = false`): tek bir
+  //     mutfak fişi HTML'i build et ve print_jobs kuyruğuna BOŞ printer_name
+  //     ile insert et. Electron yazıcı tahmin eder.
+  //   - **Sıkı mod** (`strictCategoryPrinterRouting = true`): her ürünü
+  //     kategori → yazıcı eşlemesine göre grupla. Açıkça eşlenmiş kategorilere
+  //     ait ürünler hedef yazıcı adıyla ayrı ayrı kuyruğa atılır.
+  //     Eşlenmeyen ürünler hiçbir yazıcıya gönderilmez.
   // ----------------------------------------------------------------------
   if (!isElectron()) {
+    if (settings.strictCategoryPrinterRouting) {
+      const groups: Record<string, KitchenPrintItem[]> = {};
+      const skipped: KitchenPrintItem[] = [];
+      for (const item of filtered) {
+        let target = '';
+        if (item.productPrinterName?.trim()) {
+          target = item.productPrinterName.trim();
+        } else {
+          const resolved = resolveCategoryPrinter(settings, item.categoryId);
+          if (resolved) target = resolved.printerName;
+        }
+        if (!target) {
+          skipped.push(item);
+          continue;
+        }
+        (groups[target] ||= []).push(item);
+      }
+      if (skipped.length > 0) {
+        console.warn(
+          `[ŞefPOS] Sıkı routing: ${skipped.length} ürün kategori-yazıcı eşlemesi olmadığı için BASILMADI:`,
+          skipped.map((u) => u.productName).join(', '),
+        );
+      }
+      const printerNames = Object.keys(groups);
+      if (printerNames.length === 0) {
+        console.info('[ŞefPOS] Sıkı routing: hiçbir ürün için yazıcı eşlemesi yok, mutfak fişi atlandı.');
+        return;
+      }
+      for (const printerName of printerNames) {
+        const html = buildKitchenHtml({
+          restaurantName: opts.restaurantName,
+          tableLabel: opts.tableLabel,
+          orderNumber: opts.orderNumber,
+          items: groups[printerName],
+          note: opts.note,
+          waiterName: opts.waiterName,
+          printStyle: st,
+        });
+        console.info(
+          `[ŞefPOS] Mutfak fişi: mobil/web kuyruğa eklendi → printer="${printerName}", ${groups[printerName].length} ürün.`,
+        );
+        await printHtml(html, printerName, { title: 'Mutfak fişi gönderildi' });
+      }
+      return;
+    }
+
     const html = buildKitchenHtml({
       restaurantName: opts.restaurantName,
       tableLabel: opts.tableLabel,
@@ -1300,19 +1365,26 @@ export async function printKitchenReceipts(opts: {
     printerItemsMap[target].push(item);
   }
 
-  // Hiçbir ürüne yazıcı çözülemediyse: SİPARİŞ MUTFAĞA MUHAKKAK GİTSİN diye
-  // fallback yap. Electron'daysak yazıcı isimlerinden mutfak benzeri bir tane
-  // tahmin et; bulamazsak ya da web/mobil isek print_jobs kuyruğuna boş
-  // printer_name ile insert et — Electron Print Agent kuyruktan alırken
-  // pickDefaultKitchenPrinter ile kayıtlı ilk mutfak yazıcısına basar.
+  // Hiçbir ürüne yazıcı çözülemediyse: davranış moda göre değişir.
+  //   - Sıkı routing: hiçbir şey basılmaz, atlanır.
+  //   - Klasik: SİPARİŞ MUTFAĞA MUHAKKAK GİTSİN diye fallback.
   if (Object.keys(printerItemsMap).length === 0) {
+    if (settings.strictCategoryPrinterRouting) {
+      if (unresolvedItems.length > 0) {
+        console.warn(
+          `[ŞefPOS] Sıkı routing: ${unresolvedItems.length} ürün kategori-yazıcı eşlemesi olmadığı için BASILMADI:`,
+          unresolvedItems.map((u) => u.productName).join(', '),
+        );
+      }
+      return;
+    }
     if (unresolvedItems.length > 0) {
       console.warn(
         `[ŞefPOS] Mutfak fişi: ${unresolvedItems.length} üründen hiçbirine yazıcı çözülemedi → fallback'e geçiliyor:`,
         unresolvedItems.map((u) => u.productName).join(', '),
       );
     }
-    const guessed = isElectron() ? pickKitchenPrinterFromDevices(devices) : '';
+    const guessed = pickKitchenPrinterFromDevices(devices);
     console.info(
       `[ŞefPOS] Mutfak fişi fallback: ${guessed ? `tahmini yazıcı="${guessed}"` : 'kuyruğa boş printer_name ile (Electron defaultuna basacak)'}`,
     );
@@ -1331,7 +1403,9 @@ export async function printKitchenReceipts(opts: {
 
   if (unresolvedItems.length > 0) {
     console.warn(
-      `[ŞefPOS] Mutfak fişi: ${unresolvedItems.length} ürün için yazıcı çözülemedi (kategori eşlemesi yok), atlandı:`,
+      settings.strictCategoryPrinterRouting
+        ? `[ŞefPOS] Sıkı routing: ${unresolvedItems.length} ürün kategori-yazıcı eşlemesi olmadığı için BASILMADI:`
+        : `[ŞefPOS] Mutfak fişi: ${unresolvedItems.length} ürün için yazıcı çözülemedi (kategori eşlemesi yok), atlandı:`,
       unresolvedItems.map((u) => u.productName).join(', '),
     );
   }

@@ -585,6 +585,27 @@ export function PrinterSettings() {
             </p>
           </div>
 
+          <label className="flex items-start gap-3 px-3 py-2.5 rounded-xl border border-slate-200 bg-amber-50/40 cursor-pointer hover:bg-amber-50">
+            <input
+              type="checkbox"
+              checked={settings.strictCategoryPrinterRouting}
+              onChange={(e) =>
+                setSettings((p) => ({ ...p, strictCategoryPrinterRouting: e.target.checked }))
+              }
+              className="mt-0.5 w-4 h-4 accent-orange-500"
+            />
+            <div className="flex-1">
+              <div className="text-sm font-semibold text-slate-800">
+                Sadece eşlenmiş kategoriler basılsın (Sıkı mod)
+              </div>
+              <p className="text-[11px] text-slate-500 leading-snug mt-0.5">
+                Açıkken: yalnızca aşağıda bir yazıcıya eşlenen kategorilerin ürünleri mutfak fişine düşer.
+                Eşlenmemiş kategorilerin ürünleri <strong>hiçbir yazıcıya gönderilmez</strong> (catch-all ve
+                varsayılan mutfak yazıcısı devre dışıdır).
+              </p>
+            </div>
+          </label>
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
             {categories.map((cat) => {
               const matchedIdx = settings.printers.findIndex(
