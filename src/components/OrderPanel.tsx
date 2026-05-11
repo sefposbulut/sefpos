@@ -2791,19 +2791,19 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
 
             {/* Categories - Top Tabs (hidden when searching) */}
             {!searchQuery && (
-              <div className="bg-white border-b-2 border-gray-200 shrink-0">
+              <div className="bg-white border-b border-gray-200 shrink-0">
                 <div
-                  className="flex gap-2 px-2 pt-2 pb-2"
+                  className="flex gap-1.5 px-1.5 pt-1.5 pb-1.5"
                   style={{ overflowX: 'scroll', WebkitOverflowScrolling: 'touch' as any, scrollbarWidth: 'none' }}
                 >
                   {categories.map((category) => (
                     <button
                       key={category.id}
                       onClick={() => setSelectedCategory(category.id)}
-                      className={`px-5 py-3 rounded-xl font-bold whitespace-nowrap text-base shadow-md min-h-[52px] shrink-0 ${
+                      className={`px-3 py-1.5 rounded-lg font-semibold whitespace-nowrap text-xs shadow-sm min-h-[36px] shrink-0 ${
                         selectedCategory === category.id
                           ? 'text-white'
-                          : 'bg-white text-gray-700 border-2 border-gray-300'
+                          : 'bg-white text-gray-700 border border-gray-300'
                       }`}
                       style={{
                         backgroundColor: selectedCategory === category.id ? category.color : undefined
