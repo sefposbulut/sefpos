@@ -1482,6 +1482,25 @@ function createWindow() {
     mainWindow.loadFile(indexPath);
   }
 
+  // Saha tanısı için DevTools kısayolları (production build'de de aktif):
+  //   F12              → Geliştirici Araçları'nı aç/kapat
+  //   Ctrl+Shift+I     → aynısı
+  //   Ctrl+Shift+R     → cache'i atla ve sayfayı yenile (hard reload)
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    try {
+      const k = String(input.key || '').toLowerCase();
+      if (k === 'f12' || (input.control && input.shift && k === 'i')) {
+        mainWindow.webContents.toggleDevTools();
+        event.preventDefault();
+        return;
+      }
+      if (input.control && input.shift && k === 'r') {
+        mainWindow.webContents.reloadIgnoringCache();
+        event.preventDefault();
+      }
+    } catch (_) { /* yoksay */ }
+  });
+
   mainWindow.webContents.on('did-fail-load', (_event, errorCode, _errorDescription) => {
     if (!isDev && errorCode !== -3 && !mainLoadRetried) {
       mainLoadRetried = true;
