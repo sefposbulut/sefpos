@@ -1145,8 +1145,29 @@ export async function printKitchenReceipts(opts: {
   }
 
   if (Object.keys(printerItemsMap).length === 0) {
+    // Mobile / web fallback: cihazda yazıcı listesi yok ya da kategori
+    // eşlemesi tanımlı değil. Yine de SİPARİŞ MUTFAĞA GİTSİN diye tek bir
+    // mutfak fişi build edip print_jobs kuyruğuna boş printer_name ile
+    // insert ediyoruz. Electron Print Agent kuyruktan alırken
+    // defaultKitchenPrinter / kayıtlı ilk mutfak yazıcısına basacak.
+    if (!isElectron()) {
+      console.info(
+        '[ŞefPOS] Mutfak fişi: cihazda yazıcı çözülemedi, kuyruğa boş printer_name ile gönderiliyor (Electron varsayılana basacak).'
+      );
+      const html = buildKitchenHtml({
+        restaurantName: opts.restaurantName,
+        tableLabel: opts.tableLabel,
+        orderNumber: opts.orderNumber,
+        items: filtered,
+        note: opts.note,
+        waiterName: opts.waiterName,
+        printStyle: st,
+      });
+      await printHtml(html, '', { title: 'Mutfak fişi gönderildi' });
+      return;
+    }
     console.warn(
-      '[ŞefPOS] Mutfak fişi yazdırılamadı: geçerli yazıcı yok. Mutfak/Bar yazıcısı ekleyin veya "Varsayılan mutfak yazıcısı" seçin.'
+      '[ŞefPOS] Mutfak fişi yazdırılamadı: geçerli yazıcı yok. Ayarlar → Yazıcılar: mutfak yazıcısı, kategori veya "varsayılan mutfak" seçin.'
     );
     return;
   }

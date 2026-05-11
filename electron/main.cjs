@@ -1069,7 +1069,14 @@ async function processPrintJob(job) {
       return;
     }
 
-    const result = await doPrint(job.html, job.printer_name || '', true);
+    let targetPrinter = job.printer_name || '';
+    if (!targetPrinter.trim()) {
+      targetPrinter = pickDefaultKitchenPrinter();
+      if (targetPrinter) {
+        console.log(`[print-agent] printer_name boş, varsayılan mutfak yazıcısı seçildi: ${targetPrinter}`);
+      }
+    }
+    const result = await doPrint(job.html, targetPrinter, true);
     if (result.success) {
       await updatePrintJobStatus(job.id, 'done', '');
       console.log(`Print job tamamlandı: ${job.id}`);
@@ -1124,6 +1131,26 @@ let currentTenantId = null;
 let currentUserJwt = null;
 let connectivityLastOnline = null;
 let pendingJobsPollTimer = null;
+// Son register-printers çağrısındaki kasa yazıcı listesi. processPrintJob
+// içinde printer_name boş geldiğinde (mobile/web fallback insertleri)
+// mutfak benzeri ilk yazıcıyı seçmek için kullanılır.
+let registeredKasaPrinters = [];
+
+/** Mobile/web'den printer_name boş geldiğinde mutfak yazıcısını tahmin et. */
+function pickDefaultKitchenPrinter() {
+  if (!Array.isArray(registeredKasaPrinters) || registeredKasaPrinters.length === 0) return '';
+  const kw = ['mutfak', 'kitchen', 'mutfa', 'kasa', 'bar', 'grill', 'thermal', 'fis', 'fiş'];
+  const named = registeredKasaPrinters
+    .map((p) => (typeof p === 'string' ? p : (p?.name || p?.deviceName || '')))
+    .filter(Boolean);
+  for (const k of kw) {
+    const hit = named.find((n) => n.toLowerCase().includes(k));
+    if (hit) return hit;
+  }
+  // Hiçbiri eşleşmediyse OS default'una bırakmak (boş string) yerine
+  // ilk fiziksel yazıcıyı seç — daha tahmin edilebilir.
+  return named[0] || '';
+}
 
 // Realtime mesajlarını kaçırma sigortası: kasa açık olduğu sürece her 3sn'de
 // bir Supabase'den `pending` joblara da bakar. Mobilden / webten gelen
@@ -1629,6 +1656,8 @@ ipcMain.handle('register-printers', async (_, { tenantId, branchId, userJwt }) =
     currentUserJwt = userJwt;
 
     const printers = await getSystemPrinters();
+    registeredKasaPrinters = printers || [];
+    console.log(`[print-agent] register-printers: tenant=${tenantId}, branch=${branchId || '-'}, ${(printers||[]).length} yazıcı bulundu.`);
 
     const checkRes = await supabaseFetch(
       `/rest/v1/printer_registrations?tenant_id=eq.${tenantId}&select=id`,
