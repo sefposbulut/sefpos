@@ -1125,16 +1125,21 @@ let currentUserJwt = null;
 let connectivityLastOnline = null;
 let pendingJobsPollTimer = null;
 
-// Realtime mesajlarını kaçırma sigortası: kasa açık olduğu sürece her 20sn'de
+// Realtime mesajlarını kaçırma sigortası: kasa açık olduğu sürece her 3sn'de
 // bir Supabase'den `pending` joblara da bakar. Mobilden / webten gelen
-// siparişler Realtime düşse bile en geç 20 sn içinde basılır.
+// siparişler Realtime düşse bile en geç ~3 sn içinde basılır. Realtime
+// çalışıyorsa zaten anlık (1 sn) basılır; polling sadece güvenlik ağı.
 function startPendingJobsPolling() {
   if (pendingJobsPollTimer) return;
   pendingJobsPollTimer = setInterval(() => {
     if (currentTenantId && currentUserJwt) {
       fetchPendingJobs().catch(() => {});
+      // Realtime düşmüşse otomatik reconnect tetikle.
+      if (!realtimeConnected && currentTenantId && currentUserJwt) {
+        try { connectRealtimePrintAgent(); } catch {}
+      }
     }
-  }, 20000);
+  }, 3000);
 }
 function stopPendingJobsPolling() {
   if (pendingJobsPollTimer) {
