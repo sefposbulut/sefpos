@@ -274,13 +274,16 @@ export async function fetchPrintSettingsFromCloud(): Promise<PrintSettings | nul
       // Tablo henüz migrate edilmemiş veya PostgREST schema cache eski olabilir;
       // ilk login'de / migration sonrasında gürültü olmasın diye sessiz dön.
       const code = (error as any).code as string | undefined;
+      const status = Number((error as any).status || (error as any).statusCode || 0);
       const msg = String(error.message || '').toLowerCase();
       const isMissingTable =
+        status === 404 ||
         code === 'PGRST116' ||
         code === '42P01' ||
         code === 'PGRST205' ||
         msg.includes('schema cache') ||
-        msg.includes('could not find the table');
+        msg.includes('could not find the table') ||
+        (msg.includes('relation') && msg.includes('print_settings'));
       if (!isMissingTable) {
         console.warn('[ŞefPOS] print_settings okuma hatası:', error.message);
       }
@@ -324,14 +327,17 @@ async function pushPrintSettingsToCloud(settings: PrintSettings): Promise<void> 
     );
     if (error) {
       const code = (error as any).code as string | undefined;
+      const status = Number((error as any).status || (error as any).statusCode || 0);
       const msg = String((error as any).message || '').toLowerCase();
       // Tablo yok / schema cache eski → migration uygulanmamış veya PostgREST
       // henüz cache'i yenilememiş. Sessizce geç; lokal cache yeter.
       if (
+        status === 404 ||
         code === '42P01' ||
         code === 'PGRST205' ||
         msg.includes('schema cache') ||
-        msg.includes('could not find the table')
+        msg.includes('could not find the table') ||
+        (msg.includes('relation') && msg.includes('print_settings'))
       ) return;
       // Unique conflict NULL branch_id'de PostgREST upsert fail edebilir; bu
       // durumda manuel update + insert dener.
@@ -471,8 +477,46 @@ export async function checkPrintAgent(): Promise<boolean> {
   return result.connected;
 }
 
+/** HTTPS üretim: tarayıcı `http://127.0.0.1:7878` isteğini mixed-content ile engeller; prob yapmaya gerek yok. */
+async function checkPrintAgentPathForHttpsApp(): Promise<
+  { connected: boolean; status: PrintAgentStatus; detail?: string } | null
+> {
+  if (window.location.protocol !== 'https:') return null;
+  if (!(_currentTenantId || _currentBranchId)) {
+    return {
+      connected: false,
+      status: 'blocked_mixed_content',
+      detail: 'HTTPS ortamında yerel yazıcı köprüsü yok; kasa (Electron) açık ve giriş yapılmış olmalı.',
+    };
+  }
+  try {
+    const since = new Date(Date.now() - 60000).toISOString();
+    let query = supabase
+      .from('print_jobs')
+      .select('id, status, updated_at')
+      .in('status', ['done', 'processing', 'failed'])
+      .gte('updated_at', since)
+      .limit(1);
+    if (_currentTenantId) {
+      query = query.eq('tenant_id', _currentTenantId);
+    } else if (_currentBranchId) {
+      query = query.eq('branch_id', _currentBranchId);
+    }
+    const { data: jobs } = await query;
+    if (jobs && jobs.length > 0) {
+      return { connected: true, status: 'connected', detail: 'Supabase Realtime üzerinden' };
+    }
+    return { connected: true, status: 'connected', detail: 'Supabase Realtime hazır (henüz test edilmedi)' };
+  } catch {
+    return { connected: false, status: 'blocked_mixed_content', detail: 'HTTPS: yazıcı kuyruğu doğrulanamadı' };
+  }
+}
+
 export async function checkPrintAgentDetailed(): Promise<{ connected: boolean; status: PrintAgentStatus; detail?: string }> {
   if (isElectron()) return { connected: false, status: 'unknown_error' };
+
+  const httpsResult = await checkPrintAgentPathForHttpsApp();
+  if (httpsResult) return httpsResult;
 
   try {
     const controller = new AbortController();
@@ -989,26 +1033,57 @@ export async function printHtml(
   }
 }
 
-/** Müşteri adisyonu — yalnızca Ayarlarda seçilen yazıcı; boşsa başarısız döner */
+/**
+ * Müşteri adisyonu. Öncelik: Ayarlardaki adisyon yazıcısı; yoksa mutfak varsayılanı,
+ * sonra receipt tipi eşleşmiş yazıcı. Web/mobilde hiçbiri yoksa bile `print_jobs`
+ * kuyruğuna boş isimle düşer (kasadaki Electron varsayılan / yazıcı listesi basar)
+ * — mutfak fişiyle aynı strateji.
+ */
 export async function printToAdisyonPrinter(
   settings: PrintSettings,
   html: string,
   toastOpts?: { title?: string; silent?: boolean }
 ): Promise<{ success: boolean; error?: string }> {
-  const raw = getAdisyonPrinterName(settings);
-  if (!raw) {
-    if (toastOpts?.silent !== true) {
-      dispatchPrintToast({
-        kind: 'error',
-        message: 'Adisyon yazıcısı seçilmedi',
-        detail: 'Ayarlar → Yazıcılar → "Adisyon / müşteri fişi yazıcısı" alanını doldurun.',
-      });
-    }
-    return { success: false, error: 'Adisyon yazıcısı seçilmedi (Ayarlar → Yazıcılar).' };
+  // Mobil / web fast path — yazıcı çözümlemesi yok, direkt kuyruğa.
+  // Electron Print Agent kuyruktan alır almaz kasanın varsayılan adisyon
+  // yazıcısına basar (printer_name boş → pickDefaultKitchenPrinter fallback).
+  if (!isElectron()) {
+    const title = toastOpts?.title || 'Adisyon kasaya gönderildi';
+    console.info('[ŞefPOS] Adisyon: mobil/web tarafından kuyruğa eklendi.');
+    return printHtml(html, '', { title, silent: toastOpts?.silent });
   }
+
   const devices = await getAvailablePrinters();
-  const name = await resolveThermalDeviceName(raw, devices);
-  return printHtml(html, name, { title: toastOpts?.title || 'Adisyon yazdırıldı', silent: toastOpts?.silent });
+  const tryNames: string[] = [];
+  const push = (s: string | null | undefined) => {
+    const t = (s || '').trim();
+    if (t && !tryNames.includes(t)) tryNames.push(t);
+  };
+  push(getAdisyonPrinterName(settings));
+  push(settings.defaultKitchenPrinter);
+  for (const p of settings.printers) {
+    if (p?.enabled && p.type === 'receipt' && p.printerName) push(p.printerName);
+  }
+
+  let resolved = '';
+  for (const c of tryNames) {
+    const n = await resolveThermalDeviceName(c, devices);
+    const use = ((n || '').trim() || c).trim();
+    if (use) {
+      resolved = use;
+      break;
+    }
+  }
+
+  if (!resolved) {
+    resolved = pickKitchenPrinterFromDevices(devices);
+  }
+
+  const title =
+    toastOpts?.title ||
+    (resolved ? 'Adisyon yazdırıldı' : 'Adisyon kasaya gönderildi');
+
+  return printHtml(html, resolved, { title, silent: toastOpts?.silent });
 }
 
 export function buildTakeawayHtml(opts: {
@@ -1107,13 +1182,6 @@ export async function printTakeawayReceipt(opts: {
   total: number;
 }): Promise<void> {
   const { settings } = opts;
-  const devices = await getAvailablePrinters();
-  const takeawayPrinters = settings.printers.filter((p) => p.enabled && p.type === 'takeaway');
-  let rawName =
-    takeawayPrinters.length > 0
-      ? takeawayPrinters[0].printerName
-      : settings.defaultTakeawayPrinter || settings.defaultReceiptPrinter || '';
-  const printerName = await resolveThermalDeviceName(rawName, devices);
 
   const html = buildTakeawayHtml({
     restaurantName: settings.restaurantName,
@@ -1133,6 +1201,21 @@ export async function printTakeawayReceipt(opts: {
     footer: settings.receiptFooter,
     printStyle: settings.printStyle,
   });
+
+  // Mobil / web fast path — yazıcı çözümlemesi yok, kuyruğa.
+  if (!isElectron()) {
+    console.info('[ŞefPOS] Paket fişi: mobil/web tarafından kuyruğa eklendi.');
+    await printHtml(html, '', { title: 'Paket fişi gönderildi' });
+    return;
+  }
+
+  const devices = await getAvailablePrinters();
+  const takeawayPrinters = settings.printers.filter((p) => p.enabled && p.type === 'takeaway');
+  let rawName =
+    takeawayPrinters.length > 0
+      ? takeawayPrinters[0].printerName
+      : settings.defaultTakeawayPrinter || settings.defaultReceiptPrinter || '';
+  const printerName = await resolveThermalDeviceName(rawName, devices);
 
   await printHtml(html, printerName, { title: 'Paket fişi gönderildi' });
 }
@@ -1158,6 +1241,36 @@ export async function printKitchenReceipts(opts: {
     return !disabled.has(i.categoryId);
   });
   if (filtered.length === 0) return;
+
+  // ----------------------------------------------------------------------
+  // MOBİL / WEB FAST PATH (Electron dışı)
+  //
+  // Sipariş alma cihazı kasa değil → cihazda yazıcı listesi yok, kategori
+  // eşlemesi olsa bile o yazıcılar buraya bağlı değil. Hiçbir şey çözümleme;
+  // tek bir mutfak fişi HTML'i build et ve print_jobs kuyruğuna BOŞ
+  // printer_name ile insert et. Karar kasadaki Electron Print Agent'a kalsın:
+  // job düştüğü an `pickDefaultKitchenPrinter`'la kayıtlı yazıcılardan
+  // mutfak/bar/kasa yazıcısı seçip anında basar (~1-3 sn).
+  //
+  // Bu yol latency'yi düşürür (print_settings/printer listesi sorguları yok)
+  // ve hangi cihazda olursa olsun siparişin mutfağa gitmesini garanti eder.
+  // ----------------------------------------------------------------------
+  if (!isElectron()) {
+    const html = buildKitchenHtml({
+      restaurantName: opts.restaurantName,
+      tableLabel: opts.tableLabel,
+      orderNumber: opts.orderNumber,
+      items: filtered,
+      note: opts.note,
+      waiterName: opts.waiterName,
+      printStyle: st,
+    });
+    console.info(
+      `[ŞefPOS] Mutfak fişi: mobil/web tarafından kuyruğa eklendi (${filtered.length} ürün). Electron Print Agent basacak.`,
+    );
+    await printHtml(html, '', { title: 'Mutfak fişi gönderildi' });
+    return;
+  }
 
   const devices = await getAvailablePrinters();
 

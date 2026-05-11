@@ -1175,10 +1175,10 @@ function pickDefaultKitchenPrinter() {
   return named[0] || '';
 }
 
-// Realtime mesajlarını kaçırma sigortası: kasa açık olduğu sürece her 3sn'de
+// Realtime mesajlarını kaçırma sigortası: kasa açık olduğu sürece her 1sn'de
 // bir Supabase'den `pending` joblara da bakar. Mobilden / webten gelen
-// siparişler Realtime düşse bile en geç ~3 sn içinde basılır. Realtime
-// çalışıyorsa zaten anlık (1 sn) basılır; polling sadece güvenlik ağı.
+// siparişler Realtime düşse bile en geç ~1 sn içinde basılır. Realtime
+// çalışıyorsa zaten anlık basılır; polling sadece güvenlik ağı.
 function startPendingJobsPolling() {
   if (pendingJobsPollTimer) return;
   pendingJobsPollTimer = setInterval(() => {
@@ -1189,7 +1189,7 @@ function startPendingJobsPolling() {
         try { connectRealtimePrintAgent(); } catch {}
       }
     }
-  }, 3000);
+  }, 1000);
 }
 function stopPendingJobsPolling() {
   if (pendingJobsPollTimer) {
