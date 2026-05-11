@@ -98,12 +98,15 @@ export function PrinterSettings() {
   }, [settings]);
 
   // Tenant veya şube değişirse (kullanıcı sağ üstten şube değiştirdi vb.)
-  // localStorage anahtarı dinamik olarak değişir; ayarları yeniden yükleyerek
-  // başka tenant/branch ile karışmasını önle.
+  // localStorage anahtarı dinamik olarak değişir; ayarları ve KATEGORİLERİ
+  // yeniden yükleyerek başka tenant/branch ile karışmasını önle.
   useEffect(() => {
     const refreshFromCache = () => {
       skipFirstAutoSave.current = true; // taze yüklemeyi auto-save tetiklemesin
       setSettings(loadPrintSettings());
+      // Kategoriler de tenant bazlı — başka tenant'ın kategorileri ekranda
+      // kalmasın diye onları da tazeliyoruz.
+      void loadCategories();
     };
     window.addEventListener(PRINT_SETTINGS_CONTEXT_EVENT, refreshFromCache);
     // Buluttan başka bir cihazda (Electron kasa, web vb.) yapılan ayar
@@ -113,7 +116,8 @@ export function PrinterSettings() {
       window.removeEventListener(PRINT_SETTINGS_CONTEXT_EVENT, refreshFromCache);
       window.removeEventListener(PRINT_SETTINGS_REMOTE_UPDATED_EVENT, refreshFromCache);
     };
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tenant?.id, activeBranch?.id]);
 
   const loadCategories = async () => {
     if (!tenant) return;

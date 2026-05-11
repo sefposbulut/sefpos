@@ -126,12 +126,16 @@ function emitContextChange() {
 export function setPrintAgentBranchId(branchId: string | null) {
   if (_currentBranchId === branchId) return;
   _currentBranchId = branchId;
+  // Tenant + branch artık bilindiği için eski tek-kullanıcılık legacy anahtarı
+  // kalmasın → başka bir tenant login olduğunda yanlışlıkla ona kopyalanmasın.
+  try { localStorage.removeItem(PRINT_SETTINGS_LEGACY_KEY); } catch {}
   emitContextChange();
 }
 
 export function setPrintAgentTenantId(tenantId: string | null) {
   if (_currentTenantId === tenantId) return;
   _currentTenantId = tenantId;
+  try { localStorage.removeItem(PRINT_SETTINGS_LEGACY_KEY); } catch {}
   emitContextChange();
 }
 
@@ -216,28 +220,16 @@ function normalizePrintSettings(raw: Partial<PrintSettings> & Record<string, unk
 }
 
 /**
- * Tenant + branch'a özel ayarları okur. Eğer bu bağlama ait kayıt yoksa
- * **bir kerelik** legacy anahtardan (`shefpos_print_settings`) migrasyon
- * yapar: legacy içeriği yeni anahtara taşır ve legacy kaydı siler. Böylece
- * ilk login olan tenant eski tek-kullanıcılık ayarlarını kaybetmez, sonra
- * tüm tenantlar tamamen izole olur.
+ * Tenant + branch'a özel ayarları okur. Eski global anahtar (`shefpos_print_settings`)
+ * varsa, **yalnızca aynı bilgisayarın geçmiş kullanıcısı bu tenant'a aitse**
+ * okumak gerekir; aksi halde başka tenant'ın ayarlarını yanlışlıkla yapıştırırız.
+ * Bu yüzden legacy migration kaldırıldı (cloud sync zaten devreye giriyor).
+ * Eski kayıt yalnızca tenant context HENÜZ set edilmemişken (preauth) okunur.
  */
 export function loadPrintSettings(): PrintSettings {
   try {
     const key = getPrintSettingsKey();
-    let raw = localStorage.getItem(key);
-
-    if (!raw && key !== PRINT_SETTINGS_LEGACY_KEY) {
-      const legacy = localStorage.getItem(PRINT_SETTINGS_LEGACY_KEY);
-      if (legacy) {
-        try {
-          localStorage.setItem(key, legacy);
-          localStorage.removeItem(PRINT_SETTINGS_LEGACY_KEY);
-        } catch (_) { /* quota vb. yoksay */ }
-        raw = legacy;
-      }
-    }
-
+    const raw = localStorage.getItem(key);
     if (raw) return normalizePrintSettings(JSON.parse(raw));
   } catch {}
   return normalizePrintSettings({});
@@ -276,12 +268,18 @@ let _lastCloudPullAt: number = 0;
 
 export async function fetchPrintSettingsFromCloud(): Promise<PrintSettings | null> {
   if (!_currentTenantId) return null;
+  // Snapshot: ağ çağrısı sırasında kullanıcı tenant/branch değiştirebilir.
+  // Aşağıda dönen yanıt yalnızca bu (tenant, branch) için cache'e yazılır;
+  // değişmişse yanıtı kullanmadan döneriz — başka tenant'ın anahtarına
+  // yanlışlıkla yazmayalım.
+  const fetchedTenantId = _currentTenantId;
+  const fetchedBranchId = _currentBranchId;
   try {
     let query = (supabase.from('print_settings' as any) as any)
       .select('settings, updated_at')
-      .eq('tenant_id', _currentTenantId);
-    query = _currentBranchId
-      ? query.eq('branch_id', _currentBranchId)
+      .eq('tenant_id', fetchedTenantId);
+    query = fetchedBranchId
+      ? query.eq('branch_id', fetchedBranchId)
       : query.is('branch_id', null);
     const { data, error } = await query.maybeSingle();
     if (error) {
@@ -304,6 +302,12 @@ export async function fetchPrintSettingsFromCloud(): Promise<PrintSettings | nul
       return null;
     }
     if (!data || !data.settings) return null;
+    // Context bu arada değiştiyse yanıtı uygulama — başka tenant'ın
+    // cache'ini bu kayıtla kirletmemek için.
+    if (fetchedTenantId !== _currentTenantId || fetchedBranchId !== _currentBranchId) {
+      console.warn('[ŞefPOS] print_settings: tenant/branch fetch sırasında değişti, yanıt uygulanmadı.');
+      return null;
+    }
     const normalized = normalizePrintSettings(data.settings as any);
     const key = getPrintSettingsKey();
     try {
@@ -314,7 +318,7 @@ export async function fetchPrintSettingsFromCloud(): Promise<PrintSettings | nul
       try {
         window.dispatchEvent(
           new CustomEvent(PRINT_SETTINGS_REMOTE_UPDATED_EVENT, {
-            detail: { tenantId: _currentTenantId, branchId: _currentBranchId },
+            detail: { tenantId: fetchedTenantId, branchId: fetchedBranchId },
           }),
         );
       } catch (_) { /* yoksay */ }
@@ -328,10 +332,14 @@ export async function fetchPrintSettingsFromCloud(): Promise<PrintSettings | nul
 
 async function pushPrintSettingsToCloud(settings: PrintSettings): Promise<void> {
   if (!_currentTenantId) return;
+  // Context'i snapshot al; ağ çağrısı sırasında değişirse yanlış (tenant, branch)'a
+  // yazmasın.
+  const tenantIdSnap = _currentTenantId;
+  const branchIdSnap = _currentBranchId;
   // upsert → aynı (tenant_id, branch_id) varsa update.
   const payload: any = {
-    tenant_id: _currentTenantId,
-    branch_id: _currentBranchId,
+    tenant_id: tenantIdSnap,
+    branch_id: branchIdSnap,
     settings,
   };
   try {
@@ -354,13 +362,14 @@ async function pushPrintSettingsToCloud(settings: PrintSettings): Promise<void> 
         (msg.includes('relation') && msg.includes('print_settings'))
       ) return;
       // Unique conflict NULL branch_id'de PostgREST upsert fail edebilir; bu
-      // durumda manuel update + insert dener.
+      // durumda manuel update + insert dener — snapshot kullan ki context
+      // değişikliği başka tenant'ı etkilemesin.
       if (code === '23505' || code === '21000') {
         let q = (supabase.from('print_settings' as any) as any)
           .update({ settings })
-          .eq('tenant_id', _currentTenantId);
-        q = _currentBranchId
-          ? q.eq('branch_id', _currentBranchId)
+          .eq('tenant_id', tenantIdSnap);
+        q = branchIdSnap
+          ? q.eq('branch_id', branchIdSnap)
           : q.is('branch_id', null);
         const { error: upErr, count } = await q.select('*', { count: 'exact', head: true });
         if (upErr) throw upErr;

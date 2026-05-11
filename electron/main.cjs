@@ -1148,9 +1148,12 @@ async function fetchPendingJobs() {
       paLog('warn', 'fetchPendingJobs: currentUserJwt YOK — RLS polling boş döner. Login sonrası register-printers JWT geçmiş olmalı.');
     }
     const tenantFilter = `&tenant_id=eq.${currentTenantId}`;
+    const branchFilter = currentBranchId
+      ? `&or=(branch_id.eq.${currentBranchId},branch_id.is.null)`
+      : '';
     const headers = currentUserJwt ? { 'Authorization': `Bearer ${currentUserJwt}` } : {};
     const result = await supabaseFetch(
-      `/rest/v1/print_jobs?status=eq.pending${tenantFilter}&order=created_at.asc&limit=8`,
+      `/rest/v1/print_jobs?status=eq.pending${tenantFilter}${branchFilter}&order=created_at.asc&limit=8`,
       { headers }
     );
     if (!result.ok) {
@@ -1174,6 +1177,7 @@ let realtimeWs = null;
 let realtimeReconnectTimer = null;
 let realtimeConnected = false;
 let currentTenantId = null;
+let currentBranchId = null;
 let currentUserJwt = null;
 let connectivityLastOnline = null;
 let pendingJobsPollTimer = null;
@@ -1331,9 +1335,18 @@ function connectRealtimePrintAgent() {
       if (msg.event === 'postgres_changes' && msg.payload?.data?.type === 'INSERT') {
         const record = msg.payload.data.record;
         if (record && record.status === 'pending') {
-          if (!currentTenantId || record.tenant_id === currentTenantId) {
-            await processPrintJob(record);
+          // Tenant izolasyonu zorunlu.
+          if (currentTenantId && record.tenant_id !== currentTenantId) {
+            return;
           }
+          // Branch izolasyonu: bu kasanın branch'i set edildiyse, sadece
+          // (kendi branch'i) VEYA (branch_id=null = tenant-wide fallback)
+          // joblara bak. Aksi halde aynı tenant'taki başka şubenin fişini
+          // bu kasada basarız.
+          if (currentBranchId && record.branch_id && record.branch_id !== currentBranchId) {
+            return;
+          }
+          await processPrintJob(record);
         }
       }
     } catch (err) {
@@ -1760,7 +1773,9 @@ ipcMain.handle('print-receipt', async (_, { html, printerName, silent }) => {
 ipcMain.handle('register-printers', async (_, { tenantId, branchId, userJwt }) => {
   try {
     const tenantChanged = currentTenantId !== tenantId;
+    const branchChanged = currentBranchId !== (branchId || null);
     currentTenantId = tenantId;
+    currentBranchId = branchId || null;
     currentUserJwt = userJwt;
 
     const printers = await getSystemPrinters();
@@ -1806,8 +1821,8 @@ ipcMain.handle('register-printers', async (_, { tenantId, branchId, userJwt }) =
 
     await expireStalePendingJobsForTenant(tenantId, userJwt);
 
-    if (tenantChanged || !realtimeConnected) {
-      console.log('Tenant değişti, Realtime yeniden bağlanıyor...');
+    if (tenantChanged || branchChanged || !realtimeConnected) {
+      console.log('Tenant/branch değişti, Realtime yeniden bağlanıyor...');
       processingJobIds.clear();
       connectRealtimePrintAgent();
     } else {
