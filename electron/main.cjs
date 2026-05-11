@@ -1088,6 +1088,13 @@ async function processPrintJob(job) {
   paLog('log', `Print job işleniyor: ${job.id}, yazıcı: ${job.printer_name || '(boş — fallback)'}`);
 
   try {
+    if (printJobIsExpired(job)) {
+      await updatePrintJobStatus(job.id, 'failed', 'Süresi doldu (otomatik iptal)');
+      paLog('warn', `Print job süresi dolmuş, yazdırılmadı: ${job.id}`);
+      processingJobIds.delete(job.id);
+      return;
+    }
+
     const claimed = await supabaseFetch(
       `/rest/v1/print_jobs?id=eq.${job.id}&status=eq.pending`,
       {
@@ -1110,7 +1117,12 @@ async function processPrintJob(job) {
         paLog('log', `printer_name boş, varsayılan mutfak yazıcısı seçildi: ${targetPrinter}`);
       }
     }
+    const waitMs = PRINT_MIN_INTERVAL_MS - (Date.now() - lastDoPrintAt);
+    if (waitMs > 0) {
+      await new Promise((r) => setTimeout(r, waitMs));
+    }
     const result = await doPrint(job.html, targetPrinter, true);
+    lastDoPrintAt = Date.now();
     if (result.success) {
       await updatePrintJobStatus(job.id, 'done', '');
       paLog('log', `Print job tamamlandı: ${job.id} (yazıcı=${targetPrinter || 'OS varsayılanı'})`);
@@ -1138,7 +1150,7 @@ async function fetchPendingJobs() {
     const tenantFilter = `&tenant_id=eq.${currentTenantId}`;
     const headers = currentUserJwt ? { 'Authorization': `Bearer ${currentUserJwt}` } : {};
     const result = await supabaseFetch(
-      `/rest/v1/print_jobs?status=eq.pending${tenantFilter}&order=created_at.asc&limit=20`,
+      `/rest/v1/print_jobs?status=eq.pending${tenantFilter}&order=created_at.asc&limit=8`,
       { headers }
     );
     if (!result.ok) {
@@ -1169,6 +1181,49 @@ let pendingJobsPollTimer = null;
 // içinde printer_name boş geldiğinde (mobile/web fallback insertleri)
 // mutfak benzeri ilk yazıcıyı seçmek için kullanılır.
 let registeredKasaPrinters = [];
+
+/** Bu süreden eski pending job yazdırılmaz (failed). Agent uzun süre kapalıyken biriken kuyruk tek seferde basılmasın. */
+const PRINT_JOB_MAX_AGE_MINUTES = 30;
+/** İki fiş arası minimum süre — Windows yazıcı kuyruğu/OS tıkanmasın. */
+const PRINT_MIN_INTERVAL_MS = 2000;
+let lastDoPrintAt = 0;
+
+/**
+ * tenant için `created_at` eski olan tüm pending jobları failed yapar (toplu).
+ * register-printers sonrası bir kez çağrılır.
+ */
+async function expireStalePendingJobsForTenant(tenantId, userJwt) {
+  if (!tenantId || !userJwt) return;
+  try {
+    const cutoff = new Date(Date.now() - PRINT_JOB_MAX_AGE_MINUTES * 60 * 1000).toISOString();
+    const q = `/rest/v1/print_jobs?tenant_id=eq.${tenantId}&status=eq.pending&created_at=lt.${encodeURIComponent(cutoff)}`;
+    const body = JSON.stringify({
+      status: 'failed',
+      error: 'Süresi doldu (otomatik iptal — kasa uzun süre kapalıydı veya yazıcı hatası)',
+      updated_at: new Date().toISOString(),
+    });
+    const res = await supabaseFetch(q, {
+      method: 'PATCH',
+      headers: { 'Authorization': `Bearer ${userJwt}`, 'Prefer': 'return=minimal' },
+      body,
+    });
+    if (res.ok) {
+      paLog('log', `Eski bekleyen print joblar iptal edildi (created_at < ${cutoff}).`);
+    } else {
+      paLog('warn', 'Eski print job toplu iptal isteği başarısız', res.data);
+    }
+  } catch (e) {
+    paLog('warn', 'expireStalePendingJobsForTenant: ' + (e?.message || e));
+  }
+}
+
+function printJobIsExpired(job) {
+  const raw = job?.created_at;
+  if (!raw) return false;
+  const t = new Date(raw).getTime();
+  if (Number.isNaN(t)) return false;
+  return Date.now() - t > PRINT_JOB_MAX_AGE_MINUTES * 60 * 1000;
+}
 
 /** Mobile/web'den printer_name boş geldiğinde mutfak yazıcısını tahmin et. */
 function pickDefaultKitchenPrinter() {
@@ -1748,6 +1803,8 @@ ipcMain.handle('register-printers', async (_, { tenantId, branchId, userJwt }) =
         }
       );
     }
+
+    await expireStalePendingJobsForTenant(tenantId, userJwt);
 
     if (tenantChanged || !realtimeConnected) {
       console.log('Tenant değişti, Realtime yeniden bağlanıyor...');
