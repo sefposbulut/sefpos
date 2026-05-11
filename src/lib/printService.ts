@@ -455,6 +455,34 @@ export function assignCategoryToKitchenPrinter(
   return { ...settings, printers };
 }
 
+/**
+ * Ayarlardaki metin — ürün kartı > kategori eşlemesi > catch-all > varsayılan.
+ * OS yazıcı adı çözümlemesi burada yapılmaz (web/mobil ile Electron aynı gruplama
+ * mantığını paylaşsın diye).
+ */
+export function getLogicalKitchenPrinterName(settings: PrintSettings, item: KitchenPrintItem): string {
+  if (item.productPrinterName?.trim()) return item.productPrinterName.trim();
+  const r = resolveCategoryPrinter(settings, item.categoryId);
+  return r?.printerName?.trim() ?? '';
+}
+
+function partitionKitchenItemsByLogicalPrinter(
+  settings: PrintSettings,
+  items: KitchenPrintItem[],
+): { groups: Record<string, KitchenPrintItem[]>; unresolved: KitchenPrintItem[] } {
+  const groups: Record<string, KitchenPrintItem[]> = {};
+  const unresolved: KitchenPrintItem[] = [];
+  for (const item of items) {
+    const logical = getLogicalKitchenPrinterName(settings, item);
+    if (!logical) {
+      unresolved.push(item);
+      continue;
+    }
+    (groups[logical] ||= []).push(item);
+  }
+  return { groups, unresolved };
+}
+
 /** Windows yazıcı listesi ile eşleştir (büyük/küçük harf, kısmi ad) */
 export async function resolveThermalDeviceName(
   requested: string | null | undefined,
@@ -467,10 +495,18 @@ export async function resolveThermalDeviceName(
   const tl = t.toLowerCase();
   const exactCi = names.find((n) => n.toLowerCase() === tl);
   if (exactCi) return exactCi;
-  const partial = names.find(
-    (n) => n.toLowerCase().includes(tl) || tl.includes(n.toLowerCase())
+  // Birden fazla kısmi eşleşme varsa en uzun cihaz adını seç (ör. "80mm"
+  // hem "80mm Mutfak" hem "80mm Bar"a uymasın diye daha spesifik olan kazanır).
+  const partialCandidates = names.filter(
+    (n) => {
+      const nl = n.toLowerCase();
+      return nl.includes(tl) || tl.includes(nl);
+    },
   );
-  if (partial) return partial;
+  if (partialCandidates.length > 0) {
+    partialCandidates.sort((a, b) => b.length - a.length);
+    return partialCandidates[0];
+  }
   return t;
 }
 
@@ -1271,168 +1307,98 @@ export async function printKitchenReceipts(opts: {
   });
   if (filtered.length === 0) return;
 
-  // ----------------------------------------------------------------------
-  // MOBİL / WEB FAST PATH (Electron dışı)
-  //
-  // Sipariş alma cihazı kasa değil → cihazda yazıcı listesi yok, kategori
-  // eşlemesi olsa bile o yazıcılar buraya bağlı değil. Karar kasadaki
-  // Electron Print Agent'a kalır. İki davranış:
-  //
-  //   - **Klasik mod** (`strictCategoryPrinterRouting = false`): tek bir
-  //     mutfak fişi HTML'i build et ve print_jobs kuyruğuna BOŞ printer_name
-  //     ile insert et. Electron yazıcı tahmin eder.
-  //   - **Sıkı mod** (`strictCategoryPrinterRouting = true`): her ürünü
-  //     kategori → yazıcı eşlemesine göre grupla. Açıkça eşlenmiş kategorilere
-  //     ait ürünler hedef yazıcı adıyla ayrı ayrı kuyruğa atılır.
-  //     Eşlenmeyen ürünler hiçbir yazıcıya gönderilmez.
-  // ----------------------------------------------------------------------
-  if (!isElectron()) {
-    if (settings.strictCategoryPrinterRouting) {
-      const groups: Record<string, KitchenPrintItem[]> = {};
-      const skipped: KitchenPrintItem[] = [];
-      for (const item of filtered) {
-        let target = '';
-        if (item.productPrinterName?.trim()) {
-          target = item.productPrinterName.trim();
-        } else {
-          const resolved = resolveCategoryPrinter(settings, item.categoryId);
-          if (resolved) target = resolved.printerName;
-        }
-        if (!target) {
-          skipped.push(item);
-          continue;
-        }
-        (groups[target] ||= []).push(item);
-      }
-      if (skipped.length > 0) {
-        console.warn(
-          `[ŞefPOS] Sıkı routing: ${skipped.length} ürün kategori-yazıcı eşlemesi olmadığı için BASILMADI:`,
-          skipped.map((u) => u.productName).join(', '),
-        );
-      }
-      const printerNames = Object.keys(groups);
-      if (printerNames.length === 0) {
-        console.info('[ŞefPOS] Sıkı routing: hiçbir ürün için yazıcı eşlemesi yok, mutfak fişi atlandı.');
-        return;
-      }
-      for (const printerName of printerNames) {
-        const html = buildKitchenHtml({
-          restaurantName: opts.restaurantName,
-          tableLabel: opts.tableLabel,
-          orderNumber: opts.orderNumber,
-          items: groups[printerName],
-          note: opts.note,
-          waiterName: opts.waiterName,
-          printStyle: st,
-        });
-        console.info(
-          `[ŞefPOS] Mutfak fişi: mobil/web kuyruğa eklendi → printer="${printerName}", ${groups[printerName].length} ürün.`,
-        );
-        await printHtml(html, printerName, { title: 'Mutfak fişi gönderildi' });
-      }
-      return;
-    }
+  const { groups: logicalGroups, unresolved } = partitionKitchenItemsByLogicalPrinter(
+    settings,
+    filtered,
+  );
 
+  const printOneKitchenBatch = async (printerName: string, batchItems: KitchenPrintItem[]) => {
+    if (batchItems.length === 0) return;
     const html = buildKitchenHtml({
       restaurantName: opts.restaurantName,
       tableLabel: opts.tableLabel,
       orderNumber: opts.orderNumber,
-      items: filtered,
+      items: batchItems,
       note: opts.note,
       waiterName: opts.waiterName,
       printStyle: st,
     });
-    console.info(
-      `[ŞefPOS] Mutfak fişi: mobil/web tarafından kuyruğa eklendi (${filtered.length} ürün). Electron Print Agent basacak.`,
-    );
-    await printHtml(html, '', { title: 'Mutfak fişi gönderildi' });
+    const label = printerName ? `printer="${printerName}"` : 'printer=(varsayılan)';
+    console.info(`[ŞefPOS] Mutfak fişi: ${batchItems.length} ürün → ${label}`);
+    await printHtml(html, printerName, { title: 'Mutfak fişi gönderildi' });
+  };
+
+  // Mobil / web: ayarlardaki mantıksal yazıcı adıyla **ayrı** print_jobs satırı.
+  // Eskiden tek satır + boş printer_name tüm siparişi tek yazıcıya gönderiyordu.
+  if (!isElectron()) {
+    for (const logical of Object.keys(logicalGroups).sort()) {
+      await printOneKitchenBatch(logical, logicalGroups[logical]);
+    }
+    if (unresolved.length > 0) {
+      if (settings.strictCategoryPrinterRouting) {
+        console.warn(
+          `[ŞefPOS] Sıkı routing: ${unresolved.length} ürün yazıcı eşlemesi yok, BASILMADI:`,
+          unresolved.map((u) => u.productName).join(', '),
+        );
+      } else {
+        console.warn(
+          `[ŞefPOS] Mutfak fişi: ${unresolved.length} ürün yazıcı eşlemesi yok → varsayılan kuyruğa:`,
+          unresolved.map((u) => u.productName).join(', '),
+        );
+        await printOneKitchenBatch('', unresolved);
+      }
+    }
     return;
   }
 
+  // Electron: önce mantıksal grupla, sonra OS yazıcı adına birleştir (aynı fiziksel
+  // yazıcıya giden mantıksal isimler tek fişte birleşir).
   const devices = await getAvailablePrinters();
-
-  async function resolveTargetForItem(item: KitchenPrintItem): Promise<string> {
-    // 1) Ürün kartında elle yazıcı verilmişse en yüksek öncelik onun.
-    if (item.productPrinterName?.trim()) {
-      return resolveThermalDeviceName(item.productPrinterName, devices);
-    }
-    // 2) Kategori → yazıcı eşleşmesi / catch-all / defaultKitchenPrinter.
-    const resolved = resolveCategoryPrinter(settings, item.categoryId);
-    if (resolved) {
-      return resolveThermalDeviceName(resolved.printerName, devices);
-    }
-    return '';
-  }
-
   const printerItemsMap: Record<string, KitchenPrintItem[]> = {};
-  const unresolvedItems: KitchenPrintItem[] = [];
-
-  for (const item of filtered) {
-    const target = await resolveTargetForItem(item);
-    if (!target) {
-      unresolvedItems.push(item);
-      continue;
-    }
-    if (!printerItemsMap[target]) printerItemsMap[target] = [];
-    printerItemsMap[target].push(item);
+  for (const [logical, batchItems] of Object.entries(logicalGroups)) {
+    const osName = (await resolveThermalDeviceName(logical, devices)).trim() || logical;
+    (printerItemsMap[osName] ||= []).push(...batchItems);
   }
 
-  // Hiçbir ürüne yazıcı çözülemediyse: davranış moda göre değişir.
-  //   - Sıkı routing: hiçbir şey basılmaz, atlanır.
-  //   - Klasik: SİPARİŞ MUTFAĞA MUHAKKAK GİTSİN diye fallback.
   if (Object.keys(printerItemsMap).length === 0) {
     if (settings.strictCategoryPrinterRouting) {
-      if (unresolvedItems.length > 0) {
+      if (unresolved.length > 0) {
         console.warn(
-          `[ŞefPOS] Sıkı routing: ${unresolvedItems.length} ürün kategori-yazıcı eşlemesi olmadığı için BASILMADI:`,
-          unresolvedItems.map((u) => u.productName).join(', '),
+          `[ŞefPOS] Sıkı routing: ${unresolved.length} ürün yazıcı eşlemesi yok, BASILMADI:`,
+          unresolved.map((u) => u.productName).join(', '),
         );
       }
       return;
     }
-    if (unresolvedItems.length > 0) {
+    if (unresolved.length > 0) {
       console.warn(
-        `[ŞefPOS] Mutfak fişi: ${unresolvedItems.length} üründen hiçbirine yazıcı çözülemedi → fallback'e geçiliyor:`,
-        unresolvedItems.map((u) => u.productName).join(', '),
+        `[ŞefPOS] Mutfak fişi: ${unresolved.length} üründen hiçbirine yazıcı çözülemedi → fallback:`,
+        unresolved.map((u) => u.productName).join(', '),
       );
     }
     const guessed = pickKitchenPrinterFromDevices(devices);
-    console.info(
-      `[ŞefPOS] Mutfak fişi fallback: ${guessed ? `tahmini yazıcı="${guessed}"` : 'kuyruğa boş printer_name ile (Electron defaultuna basacak)'}`,
-    );
-    const html = buildKitchenHtml({
-      restaurantName: opts.restaurantName,
-      tableLabel: opts.tableLabel,
-      orderNumber: opts.orderNumber,
-      items: filtered,
-      note: opts.note,
-      waiterName: opts.waiterName,
-      printStyle: st,
-    });
-    await printHtml(html, guessed, { title: 'Mutfak fişi gönderildi' });
+    const toPrint = unresolved.length > 0 ? unresolved : filtered;
+    await printOneKitchenBatch(guessed, toPrint);
     return;
   }
 
-  if (unresolvedItems.length > 0) {
-    console.warn(
-      settings.strictCategoryPrinterRouting
-        ? `[ŞefPOS] Sıkı routing: ${unresolvedItems.length} ürün kategori-yazıcı eşlemesi olmadığı için BASILMADI:`
-        : `[ŞefPOS] Mutfak fişi: ${unresolvedItems.length} ürün için yazıcı çözülemedi (kategori eşlemesi yok), atlandı:`,
-      unresolvedItems.map((u) => u.productName).join(', '),
-    );
+  for (const printerName of Object.keys(printerItemsMap).sort()) {
+    const printerItems = printerItemsMap[printerName];
+    if (!printerItems?.length) continue;
+    await printOneKitchenBatch(printerName, printerItems);
   }
 
-  for (const [printerName, printerItems] of Object.entries(printerItemsMap)) {
-    if (printerItems.length === 0) continue;
-    const html = buildKitchenHtml({
-      restaurantName: opts.restaurantName,
-      tableLabel: opts.tableLabel,
-      orderNumber: opts.orderNumber,
-      items: printerItems,
-      note: opts.note,
-      waiterName: opts.waiterName,
-      printStyle: st,
-    });
-    await printHtml(html, printerName, { title: 'Mutfak fişi gönderildi' });
+  if (unresolved.length > 0) {
+    if (settings.strictCategoryPrinterRouting) {
+      console.warn(
+        `[ŞefPOS] Sıkı routing: ${unresolved.length} ürün yazıcı eşlemesi yok, BASILMADI:`,
+        unresolved.map((u) => u.productName).join(', '),
+      );
+    } else {
+      console.warn(
+        `[ŞefPOS] Mutfak fişi: ${unresolved.length} ürün yazıcı çözülemedi (kategori eşlemesi yok), atlandı:`,
+        unresolved.map((u) => u.productName).join(', '),
+      );
+    }
   }
 }
