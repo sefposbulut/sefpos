@@ -671,23 +671,26 @@ export interface ReceiptPrintItem {
 
 function kitchenStyleBlock(st: PrintStyleSettings): string {
   const scope = '.sefpos-kitchen-scope';
-  const noteFs = Math.max(st.kitchenBodyPx, 11);
+  const noteFs = Math.max(st.kitchenBodyPx + 2, 14);
   const optFs = Math.max(st.kitchenBodyPx + 1, 12);
   const off = clampOffsetMm(st.paperOffsetMm);
+  // Termal yazıcılarda siyah dolgu (background:#000) sönük/silik basıyor.
+  // Bu yüzden notlar artık BEYAZ arka plan + KALIN SİYAH ÇERÇEVE + SİYAH YAZI
+  // olarak basılır. Hem net okunur hem termal şerit ekonomik kullanılır.
   return `<style>
-  ${scope} { font-size: ${st.kitchenBodyPx}px !important; line-height: 1.3; color:#000; margin-left: ${off}mm; margin-right: ${-off}mm; }
+  ${scope} { font-family: Arial, Helvetica, "Segoe UI", sans-serif; font-size: ${st.kitchenBodyPx}px !important; line-height: 1.3; color:#000; -webkit-print-color-adjust: exact; print-color-adjust: exact; margin-left: ${off}mm; margin-right: ${-off}mm; }
   ${scope} .xlarge { font-size: ${st.kitchenTitlePx}px !important; }
   ${scope} .large { font-size: ${Math.max(st.kitchenBodyPx + 1, 13)}px !important; }
   ${scope} .row.bold.xlarge { font-size: ${st.kitchenItemPx}px !important; }
   ${scope} .subtitle { font-size: ${Math.max(st.kitchenBodyPx - 1, 10)}px !important; text-align: center; margin: 2px 0; }
   ${scope} .header-meta { font-size: ${Math.max(st.kitchenBodyPx - 1, 10)}px !important; }
   ${scope} .item-block { padding: 4px 0 6px 0; }
-  ${scope} .item-row .name { width: 80% !important; font-size: ${st.kitchenItemPx}px !important; font-weight: 800 !important; }
-  ${scope} .item-row .qty  { width: 20% !important; text-align: right !important; font-size: ${st.kitchenItemPx}px !important; font-weight: 800 !important; }
-  ${scope} .opt-line { font-size: ${optFs}px !important; font-weight: 700; padding: 2px 0 2px 10px; border-left: 3px solid #000; margin: 3px 0 3px 6px; }
-  ${scope} .note-line { font-size: ${noteFs}px !important; padding: 2px 6px; margin: 3px 0 3px 6px; background: #000; color:#fff; border-radius: 3px; font-weight: 800; }
+  ${scope} .item-row .name { width: 80% !important; font-size: ${st.kitchenItemPx}px !important; font-weight: 900 !important; color:#000 !important; }
+  ${scope} .item-row .qty  { width: 20% !important; text-align: right !important; font-size: ${st.kitchenItemPx}px !important; font-weight: 900 !important; color:#000 !important; }
+  ${scope} .opt-line { font-size: ${optFs}px !important; font-weight: 800; color:#000; padding: 3px 0 3px 10px; border-left: 4px solid #000; margin: 4px 0 4px 6px; }
+  ${scope} .note-line { font-size: ${noteFs}px !important; font-weight: 900 !important; color:#000 !important; background:#fff; border: 2px solid #000; padding: 5px 7px; margin: 5px 0 5px 4px; border-radius: 2px; letter-spacing: 0.3px; }
   ${scope} .item-sep { border: 0; border-top: 1px dashed #000; margin: 4px 0 0 0; }
-  ${scope} .general-note { font-size: ${noteFs}px !important; font-weight: 800; padding: 4px 6px; margin: 4px 0; background:#000; color:#fff; border-radius: 3px; text-align: center; }
+  ${scope} .general-note { font-size: ${noteFs}px !important; font-weight: 900 !important; color:#000 !important; background:#fff; border: 3px solid #000; padding: 6px 8px; margin: 6px 0; border-radius: 2px; text-align: center; letter-spacing: 0.4px; }
   ${scope} .footer { font-size: ${Math.max(st.kitchenBodyPx - 2, 9)}px !important; }
   ${scope} .extra-line { font-size: ${Math.max(st.kitchenBodyPx - 1, 10)}px !important; text-align: center; margin: 4px 0; }
 </style>`;
@@ -697,11 +700,11 @@ function receiptStyleBlock(st: PrintStyleSettings): string {
   const scope = '.sefpos-receipt-scope';
   const off = clampOffsetMm(st.paperOffsetMm);
   return `<style>
-  ${scope} { font-size: ${st.receiptBodyPx}px !important; line-height: 1.3; margin-left: ${off}mm; margin-right: ${-off}mm; }
+  ${scope} { font-family: Arial, Helvetica, "Segoe UI", sans-serif; font-size: ${st.receiptBodyPx}px !important; line-height: 1.3; color:#000; margin-left: ${off}mm; margin-right: ${-off}mm; }
   ${scope} .xlarge { font-size: ${st.receiptTitlePx}px !important; }
   ${scope} .large { font-size: ${Math.max(st.receiptBodyPx + 2, 13)}px !important; }
   ${scope} .subtitle { font-size: ${Math.max(st.receiptBodyPx - 1, 10)}px !important; text-align: center; margin: 2px 0; }
-  ${scope} .note { font-size: ${Math.max(st.receiptBodyPx - 2, 9)}px !important; }
+  ${scope} .note { font-size: ${Math.max(st.receiptBodyPx, 11)}px !important; font-weight: 700; color:#000; }
   ${scope} .footer { font-size: ${Math.max(st.receiptBodyPx - 2, 9)}px !important; }
   ${scope} .extra-line { font-size: ${Math.max(st.receiptBodyPx - 1, 10)}px !important; text-align: center; margin: 4px 0; }
   ${scope} .total-row { font-size: ${Math.max(st.receiptBodyPx + 2, 14)}px !important; }
