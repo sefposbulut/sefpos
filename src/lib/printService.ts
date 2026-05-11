@@ -271,9 +271,17 @@ export async function fetchPrintSettingsFromCloud(): Promise<PrintSettings | nul
       : query.is('branch_id', null);
     const { data, error } = await query.maybeSingle();
     if (error) {
-      // Tablo henüz migrate edilmemiş olabilir; ilk login'de gürültü olmasın.
+      // Tablo henüz migrate edilmemiş veya PostgREST schema cache eski olabilir;
+      // ilk login'de / migration sonrasında gürültü olmasın diye sessiz dön.
       const code = (error as any).code as string | undefined;
-      if (code !== 'PGRST116' && code !== '42P01') {
+      const msg = String(error.message || '').toLowerCase();
+      const isMissingTable =
+        code === 'PGRST116' ||
+        code === '42P01' ||
+        code === 'PGRST205' ||
+        msg.includes('schema cache') ||
+        msg.includes('could not find the table');
+      if (!isMissingTable) {
         console.warn('[ŞefPOS] print_settings okuma hatası:', error.message);
       }
       return null;
@@ -316,8 +324,15 @@ async function pushPrintSettingsToCloud(settings: PrintSettings): Promise<void> 
     );
     if (error) {
       const code = (error as any).code as string | undefined;
-      // Tablo yok → migration uygulanmamış. Sessizce geç, lokal cache yeter.
-      if (code === '42P01') return;
+      const msg = String((error as any).message || '').toLowerCase();
+      // Tablo yok / schema cache eski → migration uygulanmamış veya PostgREST
+      // henüz cache'i yenilememiş. Sessizce geç; lokal cache yeter.
+      if (
+        code === '42P01' ||
+        code === 'PGRST205' ||
+        msg.includes('schema cache') ||
+        msg.includes('could not find the table')
+      ) return;
       // Unique conflict NULL branch_id'de PostgREST upsert fail edebilir; bu
       // durumda manuel update + insert dener.
       if (code === '23505' || code === '21000') {
@@ -524,10 +539,22 @@ export async function getAvailablePrinters(): Promise<PrinterDevice[]> {
 
 export async function registerElectronPrinters(tenantId: string, branchId: string | null, userJwt: string): Promise<void> {
   const w = window as any;
-  if (!w.electronAPI?.registerPrinters) return;
+  if (!w.electronAPI?.registerPrinters) {
+    console.warn('[ŞefPOS] registerElectronPrinters: electronAPI.registerPrinters YOK — preload yüklenmemiş olabilir.');
+    return;
+  }
   try {
-    await w.electronAPI.registerPrinters({ tenantId, branchId, userJwt });
-  } catch {}
+    console.log('[ŞefPOS] registerElectronPrinters çağrılıyor:', {
+      tenantId,
+      branchId,
+      hasJwt: !!userJwt,
+      jwtLen: userJwt?.length || 0,
+    });
+    const result = await w.electronAPI.registerPrinters({ tenantId, branchId, userJwt });
+    console.log('[ŞefPOS] registerElectronPrinters sonuç:', result);
+  } catch (err: any) {
+    console.error('[ŞefPOS] registerElectronPrinters HATA:', err?.message || err);
+  }
 }
 
 function fmt(n: number) {

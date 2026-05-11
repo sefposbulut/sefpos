@@ -85,4 +85,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('caller-id-error', listener);
   },
   isElectron: true,
+  onPrintAgentLog: (cb) => {
+    const listener = (_, payload) => cb(payload);
+    ipcRenderer.on('print-agent-log', listener);
+    return () => ipcRenderer.removeListener('print-agent-log', listener);
+  },
 });

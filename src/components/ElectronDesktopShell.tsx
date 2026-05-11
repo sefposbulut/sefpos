@@ -48,6 +48,26 @@ export function ElectronDesktopShell() {
     }
   }, [tenant, activeBranch, profile, user]);
 
+  // Print Agent (main process) loglarını DevTools Console'a yansıt.
+  // Saha tanısında kullanıcı, register-printers, fetchPendingJobs,
+  // processPrintJob gibi olayları doğrudan tarayıcı/Electron DevTools'unda
+  // görebilir; Electron'u CMD'den başlatmak gerekmez.
+  useEffect(() => {
+    const api = (window as any).electronAPI;
+    if (!api?.onPrintAgentLog) return;
+    const off = api.onPrintAgentLog((payload: any) => {
+      const ts = payload?.ts ? new Date(payload.ts).toLocaleTimeString() : '';
+      const tag = `[print-agent ${ts}]`;
+      const msg = payload?.message || '';
+      const extra = payload?.extra ?? null;
+      const args = extra !== null ? [tag, msg, extra] : [tag, msg];
+      if (payload?.level === 'error') console.error(...args);
+      else if (payload?.level === 'warn') console.warn(...args);
+      else console.log(...args);
+    });
+    return () => { try { typeof off === 'function' && off(); } catch {} };
+  }, []);
+
   // Auto-update event aboneliği (Electron'da).
   useEffect(() => {
     const api = (window as any).electronAPI;

@@ -568,6 +568,29 @@ let mainWindow;
 let printAgentServer = null;
 const PRINT_AGENT_PORT = 7878;
 
+/**
+ * Print Agent ile ilgili önemli olayları hem main process stdout'una hem de
+ * renderer DevTools Console'una yansıtır. Böylece kullanıcı saha tanısı
+ * yaparken Electron'u CMD'den başlatmadan da logları görebilir.
+ */
+function paLog(level, message, extra) {
+  const prefix = '[print-agent]';
+  const args = extra !== undefined ? [prefix, message, extra] : [prefix, message];
+  if (level === 'error') console.error(...args);
+  else if (level === 'warn') console.warn(...args);
+  else console.log(...args);
+  try {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('print-agent-log', {
+        level,
+        message: typeof message === 'string' ? message : JSON.stringify(message),
+        extra: extra === undefined ? null : (typeof extra === 'object' ? extra : String(extra)),
+        ts: Date.now(),
+      });
+    }
+  } catch {}
+}
+
 /** Vite ile aynı: önce ortam, sonra sefpos-dev-port.json, sonra birincil URL (AGENTS.md). Anon JWT projeye özel — repoda gömülü değil. */
 function readSefposDevSupabaseFromJson() {
   try {
@@ -1046,12 +1069,12 @@ const processingJobIds = new Set();
 
 async function processPrintJob(job) {
   if (processingJobIds.has(job.id)) {
-    console.log(`Print job zaten işleniyor, atlanıyor: ${job.id}`);
+    paLog('log', `Print job zaten işleniyor, atlanıyor: ${job.id}`);
     return;
   }
   processingJobIds.add(job.id);
 
-  console.log(`Print job işleniyor: ${job.id}, yazıcı: ${job.printer_name || 'varsayılan'}`);
+  paLog('log', `Print job işleniyor: ${job.id}, yazıcı: ${job.printer_name || '(boş — fallback)'}`);
 
   try {
     const claimed = await supabaseFetch(
@@ -1073,20 +1096,20 @@ async function processPrintJob(job) {
     if (!targetPrinter.trim()) {
       targetPrinter = pickDefaultKitchenPrinter();
       if (targetPrinter) {
-        console.log(`[print-agent] printer_name boş, varsayılan mutfak yazıcısı seçildi: ${targetPrinter}`);
+        paLog('log', `printer_name boş, varsayılan mutfak yazıcısı seçildi: ${targetPrinter}`);
       }
     }
     const result = await doPrint(job.html, targetPrinter, true);
     if (result.success) {
       await updatePrintJobStatus(job.id, 'done', '');
-      console.log(`Print job tamamlandı: ${job.id}`);
+      paLog('log', `Print job tamamlandı: ${job.id} (yazıcı=${targetPrinter || 'OS varsayılanı'})`);
     } else {
       await updatePrintJobStatus(job.id, 'failed', result.errorType || 'Bilinmeyen hata');
-      console.error(`Print job başarısız: ${job.id} - ${result.errorType}`);
+      paLog('error', `Print job başarısız: ${job.id} - ${result.errorType || 'Bilinmeyen hata'}`);
     }
   } catch (err) {
     await updatePrintJobStatus(job.id, 'failed', err.message);
-    console.error(`Print job hatası: ${job.id} - ${err.message}`);
+    paLog('error', `Print job hatası: ${job.id} - ${err.message}`);
   } finally {
     processingJobIds.delete(job.id);
   }
@@ -1095,11 +1118,11 @@ async function processPrintJob(job) {
 async function fetchPendingJobs() {
   try {
     if (!currentTenantId) {
-      console.warn('[print-agent] fetchPendingJobs: currentTenantId YOK — register-printers henüz çağrılmadı, polling skip.');
+      paLog('warn', 'fetchPendingJobs: currentTenantId YOK — register-printers henüz çağrılmadı, polling skip.');
       return;
     }
     if (!currentUserJwt) {
-      console.warn('[print-agent] fetchPendingJobs: currentUserJwt YOK — RLS polling boş döner. Login sonrası register-printers JWT geçmiş olmalı.');
+      paLog('warn', 'fetchPendingJobs: currentUserJwt YOK — RLS polling boş döner. Login sonrası register-printers JWT geçmiş olmalı.');
     }
     const tenantFilter = `&tenant_id=eq.${currentTenantId}`;
     const headers = currentUserJwt ? { 'Authorization': `Bearer ${currentUserJwt}` } : {};
@@ -1108,19 +1131,19 @@ async function fetchPendingJobs() {
       { headers }
     );
     if (!result.ok) {
-      console.warn('[print-agent] fetchPendingJobs HTTP sorunu:', result.status, result.data);
+      paLog('warn', `fetchPendingJobs HTTP sorunu: status=${result.status}`, result.data);
       return;
     }
     if (Array.isArray(result.data)) {
       if (result.data.length > 0) {
-        console.log(`[print-agent] fetchPendingJobs: ${result.data.length} bekleyen job çekildi (tenant=${currentTenantId}).`);
+        paLog('log', `fetchPendingJobs: ${result.data.length} bekleyen job çekildi (tenant=${currentTenantId}).`);
       }
       for (const job of result.data) {
         await processPrintJob(job);
       }
     }
   } catch (err) {
-    console.error('Bekleyen print job\'lar alınamadı:', err.message);
+    paLog('error', 'Bekleyen print joblar alınamadı: ' + (err?.message || err));
   }
 }
 
@@ -1657,7 +1680,12 @@ ipcMain.handle('register-printers', async (_, { tenantId, branchId, userJwt }) =
 
     const printers = await getSystemPrinters();
     registeredKasaPrinters = printers || [];
-    console.log(`[print-agent] register-printers: tenant=${tenantId}, branch=${branchId || '-'}, ${(printers||[]).length} yazıcı bulundu.`);
+    paLog('log', `register-printers: tenant=${tenantId}, branch=${branchId || '-'}, ${(printers||[]).length} yazıcı bulundu.`, {
+      tenantId,
+      branchId: branchId || null,
+      printerNames: (printers || []).map((p) => (typeof p === 'string' ? p : (p?.name || p?.deviceName || ''))).filter(Boolean),
+      hasJwt: !!userJwt,
+    });
 
     const checkRes = await supabaseFetch(
       `/rest/v1/printer_registrations?tenant_id=eq.${tenantId}&select=id`,
