@@ -1087,13 +1087,27 @@ async function processPrintJob(job) {
 
 async function fetchPendingJobs() {
   try {
-    const tenantFilter = currentTenantId ? `&tenant_id=eq.${currentTenantId}` : '';
+    if (!currentTenantId) {
+      console.warn('[print-agent] fetchPendingJobs: currentTenantId YOK — register-printers henüz çağrılmadı, polling skip.');
+      return;
+    }
+    if (!currentUserJwt) {
+      console.warn('[print-agent] fetchPendingJobs: currentUserJwt YOK — RLS polling boş döner. Login sonrası register-printers JWT geçmiş olmalı.');
+    }
+    const tenantFilter = `&tenant_id=eq.${currentTenantId}`;
     const headers = currentUserJwt ? { 'Authorization': `Bearer ${currentUserJwt}` } : {};
     const result = await supabaseFetch(
       `/rest/v1/print_jobs?status=eq.pending${tenantFilter}&order=created_at.asc&limit=20`,
       { headers }
     );
-    if (result.ok && Array.isArray(result.data)) {
+    if (!result.ok) {
+      console.warn('[print-agent] fetchPendingJobs HTTP sorunu:', result.status, result.data);
+      return;
+    }
+    if (Array.isArray(result.data)) {
+      if (result.data.length > 0) {
+        console.log(`[print-agent] fetchPendingJobs: ${result.data.length} bekleyen job çekildi (tenant=${currentTenantId}).`);
+      }
       for (const job of result.data) {
         await processPrintJob(job);
       }

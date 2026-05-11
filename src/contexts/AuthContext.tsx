@@ -312,10 +312,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         };
         setBranches([fakeBranch]);
         setActiveBranchState(fakeBranch);
-
-        if (isElectron()) {
-          registerElectronPrinters(profileData.tenant_id, fakeBranch.id).catch(() => {});
-        }
         return;
       }
 
@@ -383,10 +379,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         };
         setBranches([fakeBranch]);
         setActiveBranchState(fakeBranch);
-
-        if (isElectron()) {
-          registerElectronPrinters(profileData.tenant_id, fakeBranch.id).catch(() => {});
-        }
         return;
       }
 
@@ -648,6 +640,37 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     setPrintAgentTenantId(tenant?.id ?? null);
   }, [tenant]);
+
+  // Electron Print Agent kaydı — Cloud / SQL Server / Local moddan bağımsız.
+  // Kasadaki Electron uygulaması tenantId + branchId + JWT ile dinlemeye başlar.
+  // Olmazsa: mobil/web'den gelen `print_jobs` insert'leri RLS yüzünden
+  // Electron polling'inde görünmez ve mutfak fişi basılmaz. (Önceki sürümde
+  // sadece SQL Server / Local modda + JWT'siz çağrılıyordu → Cloud'da bug.)
+  useEffect(() => {
+    if (!isElectron()) return;
+    if (!tenant?.id) return;
+    let cancelled = false;
+    (async () => {
+      let jwt = '';
+      try {
+        const { data } = await supabase.auth.getSession();
+        jwt = data?.session?.access_token || '';
+      } catch {
+        /* SQL Server / Local mod: session yok, JWT boş kalır.
+           Print agent yine de tenant/branch ile çağrılır; tenant filter
+           service-role gerektirmediği sürece pending poll çalışır. */
+      }
+      if (cancelled) return;
+      try {
+        await registerElectronPrinters(tenant.id, activeBranch?.id ?? null, jwt);
+      } catch {
+        /* Electron yoksa veya IPC kanalı kapalıysa sessiz geç */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [tenant?.id, activeBranch?.id]);
 
   // Tenant veya aktif şube değiştiğinde bulut tarafındaki yazıcı ayarlarını
   // çek. Böylece Electron kasada yapılan kategori → yazıcı eşlemesi web ve
