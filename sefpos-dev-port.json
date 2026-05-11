@@ -2,5 +2,6 @@
   "port": 5180,
   "devPortJsonOverridesEnv": false,
   "supabaseDevUrl": "https://xdfnozfuuzctubijbnds.supabase.co",
-  "_not": "Birincil ref: xdfnozfuuzctubijbnds (AGENTS.md). VITE_SUPABASE_ANON_KEY .env içinde olmalı. devPortJsonOverridesEnv true ise supabaseDevAnonKey de ekleyin."
+  "supabaseDevAnonKey": "sb_publishable_wrSHY5Kzkw-bx0XzYM5VFA_FK3BFF_x",
+  "_not": "Birincil ref: xdfnozfuuzctubijbnds (AGENTS.md). Anon key public (RLS koruyor) — Electron main process'te VITE_* env değişkenleri görünmediğinden production build'de bu dosyadan okunur."
 }

@@ -614,6 +614,15 @@ const SUPABASE_URL =
 const SUPABASE_ANON_KEY =
   String(process.env.VITE_SUPABASE_ANON_KEY || '').trim() || _fromPort.anon || '';
 
+if (!SUPABASE_ANON_KEY) {
+  console.error('[print-agent] KRİTİK: SUPABASE_ANON_KEY bulunamadı! ' +
+    'Print Agent Supabase\'e bağlanamaz (401). ' +
+    '`sefpos-dev-port.json` içine `supabaseDevAnonKey` ekle veya ' +
+    'VITE_SUPABASE_ANON_KEY env değişkeni geç.');
+} else {
+  console.log(`[print-agent] Supabase yapılandırması: url=${SUPABASE_URL}, anonKey=***${SUPABASE_ANON_KEY.slice(-6)}`);
+}
+
 const isDev = process.env.NODE_ENV === 'development';
 const settingsPath = path.join(app.getPath('userData'), 'settings.json');
 const localDbPath = path.join(app.getPath('userData'), 'localdb.json');
