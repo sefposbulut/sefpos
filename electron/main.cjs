@@ -606,22 +606,24 @@ function readSefposDevSupabaseFromJson() {
 }
 
 const DEFAULT_PRIMARY_SUPABASE_URL = 'https://xdfnozfuuzctubijbnds.supabase.co';
+// Public anon key — RLS politikaları ile korunur (AGENTS.md: primary ref
+// xdfnozfuuzctubijbnds). Electron production build'de `process.env.VITE_*`
+// görünmediği ve `sefpos-dev-port.json` asar paketinin dışında kaldığı için
+// son çare olarak bu constant kullanılır. Anon key'i değiştirmek istersen
+// VITE_SUPABASE_ANON_KEY env veya sefpos-dev-port.json ile override edebilirsin.
+const FALLBACK_PRIMARY_SUPABASE_ANON_KEY = 'sb_publishable_wrSHY5Kzkw-bx0XzYM5VFA_FK3BFF_x';
+
 const _fromPort = readSefposDevSupabaseFromJson();
 const SUPABASE_URL =
   String(process.env.VITE_SUPABASE_URL || '')
     .trim()
     .replace(/\/$/, '') || _fromPort.url || DEFAULT_PRIMARY_SUPABASE_URL;
 const SUPABASE_ANON_KEY =
-  String(process.env.VITE_SUPABASE_ANON_KEY || '').trim() || _fromPort.anon || '';
+  String(process.env.VITE_SUPABASE_ANON_KEY || '').trim()
+  || _fromPort.anon
+  || FALLBACK_PRIMARY_SUPABASE_ANON_KEY;
 
-if (!SUPABASE_ANON_KEY) {
-  console.error('[print-agent] KRİTİK: SUPABASE_ANON_KEY bulunamadı! ' +
-    'Print Agent Supabase\'e bağlanamaz (401). ' +
-    '`sefpos-dev-port.json` içine `supabaseDevAnonKey` ekle veya ' +
-    'VITE_SUPABASE_ANON_KEY env değişkeni geç.');
-} else {
-  console.log(`[print-agent] Supabase yapılandırması: url=${SUPABASE_URL}, anonKey=***${SUPABASE_ANON_KEY.slice(-6)}`);
-}
+console.log(`[print-agent] Supabase yapılandırması: url=${SUPABASE_URL}, anonKey=***${SUPABASE_ANON_KEY.slice(-8)} (len=${SUPABASE_ANON_KEY.length})`);
 
 const isDev = process.env.NODE_ENV === 'development';
 const settingsPath = path.join(app.getPath('userData'), 'settings.json');
@@ -1713,12 +1715,19 @@ ipcMain.handle('register-printers', async (_, { tenantId, branchId, userJwt }) =
       branchId: branchId || null,
       printerNames: (printers || []).map((p) => (typeof p === 'string' ? p : (p?.name || p?.deviceName || ''))).filter(Boolean),
       hasJwt: !!userJwt,
+      anonKeyLen: SUPABASE_ANON_KEY?.length || 0,
     });
 
     const checkRes = await supabaseFetch(
       `/rest/v1/printer_registrations?tenant_id=eq.${tenantId}&select=id`,
       { headers: { 'Authorization': `Bearer ${userJwt}` } }
     );
+
+    if (!checkRes.ok) {
+      paLog('error', `register-printers: printer_registrations okuma HATA (${checkRes.status})`, checkRes.data);
+    } else {
+      paLog('log', `register-printers: printer_registrations okuma OK, mevcut kayıt sayısı=${Array.isArray(checkRes.data) ? checkRes.data.length : 0}`);
+    }
 
     if (checkRes.ok && Array.isArray(checkRes.data) && checkRes.data.length > 0) {
       await supabaseFetch(
