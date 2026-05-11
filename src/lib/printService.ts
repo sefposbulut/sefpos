@@ -446,6 +446,24 @@ export function isElectron(): boolean {
   return !!(window as any).electronAPI?.isElectron;
 }
 
+/**
+ * Renderer-side fallback: hiç kategori eşlemesi yokken, bağlı yazıcı listesinden
+ * isminde "mutfak/kitchen/bar/grill/thermal/fis" geçen ilkini seç. Bulunamazsa
+ * listedeki ilk yazıcıyı verir; o da yoksa boş string. (Electron tarafında
+ * `pickDefaultKitchenPrinter` ile aynı mantığa sahiptir; mobile/web isElectron
+ * false olduğunda bu çağrılmaz.)
+ */
+export function pickKitchenPrinterFromDevices(devices: PrinterDevice[]): string {
+  if (!Array.isArray(devices) || devices.length === 0) return '';
+  const names = devices.map((d) => (typeof d === 'string' ? d : d?.name || '')).filter(Boolean);
+  const kw = ['mutfak', 'kitchen', 'mutfa', 'bar', 'grill', 'thermal', 'fis', 'fiş'];
+  for (const k of kw) {
+    const hit = names.find((n) => n.toLowerCase().includes(k));
+    if (hit) return hit;
+  }
+  return names[0] || '';
+}
+
 export type PrintAgentStatus = 'connected' | 'not_running' | 'blocked_mixed_content' | 'unknown_error';
 
 export async function checkPrintAgent(): Promise<boolean> {
@@ -1157,46 +1175,52 @@ export async function printKitchenReceipts(opts: {
   }
 
   const printerItemsMap: Record<string, KitchenPrintItem[]> = {};
+  const unresolvedItems: KitchenPrintItem[] = [];
 
   for (const item of filtered) {
     const target = await resolveTargetForItem(item);
     if (!target) {
-      console.warn(
-        '[ŞefPOS] Mutfak fişi: yazıcı atanamadı. Ayarlar → Yazıcılar: mutfak yazıcısı, kategori veya "varsayılan mutfak" seçin.',
-        item.productName
-      );
+      unresolvedItems.push(item);
       continue;
     }
     if (!printerItemsMap[target]) printerItemsMap[target] = [];
     printerItemsMap[target].push(item);
   }
 
+  // Hiçbir ürüne yazıcı çözülemediyse: SİPARİŞ MUTFAĞA MUHAKKAK GİTSİN diye
+  // fallback yap. Electron'daysak yazıcı isimlerinden mutfak benzeri bir tane
+  // tahmin et; bulamazsak ya da web/mobil isek print_jobs kuyruğuna boş
+  // printer_name ile insert et — Electron Print Agent kuyruktan alırken
+  // pickDefaultKitchenPrinter ile kayıtlı ilk mutfak yazıcısına basar.
   if (Object.keys(printerItemsMap).length === 0) {
-    // Mobile / web fallback: cihazda yazıcı listesi yok ya da kategori
-    // eşlemesi tanımlı değil. Yine de SİPARİŞ MUTFAĞA GİTSİN diye tek bir
-    // mutfak fişi build edip print_jobs kuyruğuna boş printer_name ile
-    // insert ediyoruz. Electron Print Agent kuyruktan alırken
-    // defaultKitchenPrinter / kayıtlı ilk mutfak yazıcısına basacak.
-    if (!isElectron()) {
-      console.info(
-        '[ŞefPOS] Mutfak fişi: cihazda yazıcı çözülemedi, kuyruğa boş printer_name ile gönderiliyor (Electron varsayılana basacak).'
+    if (unresolvedItems.length > 0) {
+      console.warn(
+        `[ŞefPOS] Mutfak fişi: ${unresolvedItems.length} üründen hiçbirine yazıcı çözülemedi → fallback'e geçiliyor:`,
+        unresolvedItems.map((u) => u.productName).join(', '),
       );
-      const html = buildKitchenHtml({
-        restaurantName: opts.restaurantName,
-        tableLabel: opts.tableLabel,
-        orderNumber: opts.orderNumber,
-        items: filtered,
-        note: opts.note,
-        waiterName: opts.waiterName,
-        printStyle: st,
-      });
-      await printHtml(html, '', { title: 'Mutfak fişi gönderildi' });
-      return;
     }
-    console.warn(
-      '[ŞefPOS] Mutfak fişi yazdırılamadı: geçerli yazıcı yok. Ayarlar → Yazıcılar: mutfak yazıcısı, kategori veya "varsayılan mutfak" seçin.'
+    const guessed = isElectron() ? pickKitchenPrinterFromDevices(devices) : '';
+    console.info(
+      `[ŞefPOS] Mutfak fişi fallback: ${guessed ? `tahmini yazıcı="${guessed}"` : 'kuyruğa boş printer_name ile (Electron defaultuna basacak)'}`,
     );
+    const html = buildKitchenHtml({
+      restaurantName: opts.restaurantName,
+      tableLabel: opts.tableLabel,
+      orderNumber: opts.orderNumber,
+      items: filtered,
+      note: opts.note,
+      waiterName: opts.waiterName,
+      printStyle: st,
+    });
+    await printHtml(html, guessed, { title: 'Mutfak fişi gönderildi' });
     return;
+  }
+
+  if (unresolvedItems.length > 0) {
+    console.warn(
+      `[ŞefPOS] Mutfak fişi: ${unresolvedItems.length} ürün için yazıcı çözülemedi (kategori eşlemesi yok), atlandı:`,
+      unresolvedItems.map((u) => u.productName).join(', '),
+    );
   }
 
   for (const [printerName, printerItems] of Object.entries(printerItemsMap)) {
