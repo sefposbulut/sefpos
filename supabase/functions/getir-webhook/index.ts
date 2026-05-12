@@ -51,6 +51,20 @@ interface PlatformRow {
  *   900 → delivered     (teslim edildi)
  *   1500/1600 → cancelled
  */
+/** Multi-language string normalize: { tr, en } objelerini string'e cevirir */
+function extractLocalized(val: any): string {
+  if (val == null) return "";
+  if (typeof val === "string") return val;
+  if (typeof val === "number") return String(val);
+  if (typeof val === "object") {
+    return String(
+      val.tr ?? val.TR ?? val.text ?? val.value ?? val.default ??
+        Object.values(val).find((v) => typeof v === "string") ?? "",
+    );
+  }
+  return String(val);
+}
+
 function normalizeStatus(getirCode: number): string {
   switch (getirCode) {
     case 325: return "new";
@@ -81,16 +95,20 @@ async function queueKitchenReceipt(
   // Yapilacak: getir-spesifik HTML uret. Su anlik basit bir template ile baslayalim
   // — productions'da printService.ts icindeki buildGetirReceiptHtml'i clone ederiz.
   const lines = (order.products || []).map((p: any) => {
+    const pname = extractLocalized(p.name || p.productName || p.menuItem?.name) || "Urun";
     const opts = Array.isArray(p.options)
-      ? p.options.map((o: any) => o.name || o.text || "").filter(Boolean).join(", ")
+      ? p.options
+          .map((o: any) => extractLocalized(o.name ?? o.text ?? o.optionName))
+          .filter(Boolean)
+          .join(", ")
       : "";
-    const note = p.note ? ` (Not: ${p.note})` : "";
-    return `${p.count || p.quantity || 1}x ${p.name}${opts ? ` [${opts}]` : ""}${note}`;
+    const note = p.note ? ` (Not: ${extractLocalized(p.note)})` : "";
+    return `${p.count || p.quantity || 1}x ${pname}${opts ? ` [${opts}]` : ""}${note}`;
   }).join("<br/>");
 
   const code = order.confirmationId || order.verificationCode || "";
   const phone = order.client?.maskedPhoneNumber || order.customer?.maskedPhoneNumber || "";
-  const customer = order.client?.name || order.customer?.name || "Getir Musteri";
+  const customer = extractLocalized(order.client?.name || order.customer?.name) || "Getir Musteri";
   const total = Number(order.totalDiscountedPrice ?? order.totalPrice ?? 0);
   const discount = Number(order.totalPrice ?? 0) - total;
   const supSup = Number(order.supplierSupportRate ?? 0);
@@ -216,7 +234,7 @@ Deno.serve(async (req) => {
 
   // Yeni sipariş — upsert
   const customer = order.client || order.customer || {};
-  const customerName = String(customer.name || customer.firstName || "Getir Musteri");
+  const customerName = extractLocalized(customer.name || customer.firstName) || "Getir Musteri";
   const maskedPhone = String(customer.maskedPhoneNumber || customer.phoneNumber || "");
   const addressObj = order.address || customer.address || {};
   const address = [

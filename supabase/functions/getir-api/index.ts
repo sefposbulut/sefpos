@@ -216,6 +216,23 @@ async function callGetir(
  * idempotent sekilde upsert eder. Mevcut kayit varsa status guncellenir.
  */
 /**
+ * Multi-language string'leri normalize et. Getir API bazen sade string,
+ * bazen { tr: '...', en: '...' } sekilinde dondurur.
+ */
+function extractLocalized(val: any): string {
+  if (val == null) return "";
+  if (typeof val === "string") return val;
+  if (typeof val === "number") return String(val);
+  if (typeof val === "object") {
+    return String(
+      val.tr ?? val.TR ?? val.text ?? val.value ?? val.default ??
+        Object.values(val).find((v) => typeof v === "string") ?? ""
+    );
+  }
+  return String(val);
+}
+
+/**
  * Getir order payload icin mutfak fisini print_jobs kuyruguna at. Electron
  * Print Agent kuyrugu cekip mutfak yazicisina basacak. Yalnizca yeni eklenen
  * (idempotent) siparisler icin cagrilmali — yoksa her poll'da yeniden basar.
@@ -226,16 +243,20 @@ async function queueGetirKitchenReceipt(
   order: any,
 ): Promise<void> {
   const lines = (order.products || []).map((p: any) => {
+    const pname = extractLocalized(p.name || p.productName || p.menuItem?.name) || "Urun";
     const opts = Array.isArray(p.options)
-      ? p.options.map((o: any) => o.name || o.text || "").filter(Boolean).join(", ")
+      ? p.options
+          .map((o: any) => extractLocalized(o.name ?? o.text ?? o.optionName))
+          .filter(Boolean)
+          .join(", ")
       : "";
-    const note = p.note ? ` (Not: ${p.note})` : "";
-    return `${p.count || p.quantity || 1}x ${p.name}${opts ? ` [${opts}]` : ""}${note}`;
+    const note = p.note ? ` (Not: ${extractLocalized(p.note)})` : "";
+    return `${p.count || p.quantity || 1}x ${pname}${opts ? ` [${opts}]` : ""}${note}`;
   }).join("<br/>");
 
   const code = order.confirmationId || order.verificationCode || "";
   const phone = order.client?.maskedPhoneNumber || order.customer?.maskedPhoneNumber || "";
-  const customer = order.client?.name || order.customer?.name || "Getir Musteri";
+  const customer = extractLocalized(order.client?.name || order.customer?.name) || "Getir Musteri";
   const total = Number(order.totalDiscountedPrice ?? order.totalPrice ?? 0);
   const discount = Number(order.totalPrice ?? 0) - total;
   const supSup = Number(order.supplierSupportRate ?? 0);
@@ -304,9 +325,9 @@ async function upsertGetirOrder(
 
   const customer = order.client || order.customer || {};
   const products: any[] = Array.isArray(order.products) ? order.products : [];
-  const customerName = String(
-    customer.name || customer.firstName || customer.fullName || "Getir Musteri"
-  );
+  const customerName = extractLocalized(
+    customer.name || customer.firstName || customer.fullName,
+  ) || "Getir Musteri";
   // Gelen telefon zaten maskeli olabilir (0850...). Hem maskeli hem tam yedek hicbir zaman gelmez.
   const maskedPhone = String(customer.maskedPhoneNumber || customer.phoneNumber || customer.phone || "");
   const verificationCode = String(order.confirmationId || order.verificationCode || "");
@@ -411,12 +432,13 @@ async function upsertGetirOrder(
     const itemsRows = products.map((p: any) => ({
       tenant_id: platform.tenant_id,
       online_order_id: onlineOrderId,
-      platform_product_name: String(p.name || p.productName || "Urun"),
+      platform_product_name:
+        extractLocalized(p.name || p.productName || p.menuItem?.name) || "Urun",
       platform_product_code: String(p.id || p._id || ""),
       quantity: Number(p.count || p.quantity || 1),
       unit_price: Number(p.price || 0),
       total_amount: Number((p.price || 0) * (p.count || p.quantity || 1)),
-      notes: p.note || p.specialInstructions || null,
+      notes: extractLocalized(p.note || p.specialInstructions) || null,
       toppings: Array.isArray(p.options) ? p.options : [],
     }));
     await admin.from("online_order_items").insert(itemsRows);
@@ -593,6 +615,29 @@ Deno.serve(async (req) => {
           }
         }
         return jsonResponse({ ok: true, fetched: list.length, saved, newCount });
+      }
+
+      // ---- INQUIRY: tek sipariş için Getir'den güncel veri çek ----------
+      // Getir Food API'sinin sipariş sorgulama endpoint'i: GET /food-orders/{orderId}
+      // Aksiyon hatası (status invalid vb.) alındığında frontend bunu çağırarak
+      // DB'yi gerçek status ile senkron eder.
+      case "inquiry": {
+        if (!body.orderId) return badRequest("orderId zorunlu");
+        const path = `/food-orders/${encodeURIComponent(body.orderId)}`;
+        const res = await callGetir(admin, platform as PlatformRow, "GET", path);
+        if (!res.ok) {
+          return jsonResponse({ ok: false, status: res.status, data: res.data }, res.status);
+        }
+        const ord = res.data?.data || res.data;
+        if (!ord || typeof ord !== "object") {
+          return jsonResponse({ ok: false, error: "Getir'den boş yanıt geldi" }, 502);
+        }
+        const result = await upsertGetirOrder(admin, platform as PlatformRow, ord);
+        return jsonResponse({
+          ok: true,
+          synced: !!result,
+          getirStatusCode: ord?.status,
+        });
       }
 
       // ---- ORDER ACTIONS --------------------------------------------------

@@ -242,6 +242,23 @@ export function OnlineOrders() {
    * Getir'e ozel aksiyon gonder (verify/prepare/handover/deliver/cancel).
    * Local state hemen guncellenir, hata olursa rollback yapar.
    */
+  // Eski siparişlerde "[object Object]" olarak DB'ye yazılmış adlari da
+  // tolere et — Getir multi-language object dondurursa onu da string'e cevir.
+  const safeName = (v: any, fallback = 'Ürün'): string => {
+    if (v == null) return fallback;
+    if (typeof v === 'string') {
+      if (v === '[object Object]' || v.trim() === '') return fallback;
+      return v;
+    }
+    if (typeof v === 'number') return String(v);
+    if (typeof v === 'object') {
+      const cand = v.tr ?? v.TR ?? v.text ?? v.value ?? v.default ??
+        Object.values(v).find((x) => typeof x === 'string');
+      return cand ? String(cand) : fallback;
+    }
+    return String(v);
+  };
+
   // Getir'in resmi hata mesajlarini kullanici dostu Turkce metne cevirir
   const friendlyGetirError = (action: string, raw: string): string => {
     const t = (raw || '').toLowerCase();
@@ -279,6 +296,8 @@ export function OnlineOrders() {
         const raw = (res as any)?.data?.message || res.error || 'bilinmeyen hata';
         const lower = String(raw).toLowerCase();
         const isTimeLimit = lower.includes('time limit') || lower.includes('prepared time');
+        const isInvalidStatus =
+          lower.includes('status is invalid') || lower.includes('invalid status');
 
         // Time-limit hatalari icin otomatik retry (max 3, 12 sn ara ile)
         if (isTimeLimit && retryCount < 3) {
@@ -286,6 +305,26 @@ export function OnlineOrders() {
           console.log(`[Getir] ${action} time-limit → ${delaySec} sn sonra otomatik tekrar (${retryCount + 1}/3)`);
           await new Promise((r) => setTimeout(r, delaySec * 1000));
           await doGetirAction(order, action, extra, retryCount + 1);
+          return;
+        }
+
+        // "Invalid status" hatasi → sipariş bizim DB'de güncel değildir, Getir'den
+        // gerçek status'u çek, DB'yi güncelle, kullanıcıya açıklayıcı mesaj göster
+        if (isInvalidStatus && retryCount === 0) {
+          console.log(`[Getir] ${action} invalid status → inquiry ile DB resync yapilacak`);
+          try {
+            await callGetir({
+              platformId: order.platform_id,
+              action: 'inquiry',
+              orderId: order.platform_order_id,
+            });
+            await loadOrders();
+          } catch (e) {
+            console.warn('[Getir] inquiry hatasi:', e);
+          }
+          alert(
+            'Sipariş durumu Getir ile senkron edildi. Lütfen yeni butona göre tekrar deneyin.',
+          );
           return;
         }
 
@@ -714,10 +753,10 @@ export function OnlineOrders() {
                               <div className="flex-1 min-w-0">
                                 <p className="font-bold text-slate-800">
                                   <span className="text-slate-500 mr-1">{item.quantity}x</span>
-                                  {item.platform_product_name}
+                                  {safeName(item.platform_product_name)}
                                 </p>
                                 {item.notes && (
-                                  <p className="text-xs text-slate-500 italic mt-0.5">{item.notes}</p>
+                                  <p className="text-xs text-slate-500 italic mt-0.5">{safeName(item.notes, '')}</p>
                                 )}
                               </div>
                               <span className="font-bold text-slate-700 shrink-0">{item.total_amount.toFixed(0)} ₺</span>
