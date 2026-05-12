@@ -7,7 +7,8 @@ pnpm-debug.log*
 lerna-debug.log*
 
 node_modules
-dist
+# dist/ git'e dahildir - kullanici web sunucusuna manuel deploy ediyor.
+# Yeni release ciktiginda her commit'te `npm run build` ile yenilenmeli.
 dist-ssr
 *.local
 

@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="tr">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/png" sizes="256x256" href="./logo.png?v=2" />
+    <link rel="apple-touch-icon" sizes="256x256" href="./logo256.png?v=2" />
+    <link rel="shortcut icon" href="./SEFPOS.ico?v=2" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@500;600;700;800;900&display=swap" rel="stylesheet" />
+    <link rel="dns-prefetch" href="https://xdfnozfuuzctubijbnds.supabase.co" />
+    <link rel="preconnect" href="https://xdfnozfuuzctubijbnds.supabase.co" crossorigin />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="theme-color" content="#f97316" />
+    <link rel="manifest" href="./manifest.json" />
+    <title>Sefpos - Restoran Yonetim Sistemi</title>
+    <meta property="og:image" content="https://bolt.new/static/og_default.png" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:image" content="https://bolt.new/static/og_default.png" />
+    <script type="module" crossorigin src="./assets/index-ZdYxl0nY.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-BD8C9Y2n.css">
+  </head>
+  <body style="margin:0;background-color:#ffffff;">
+    <!-- Inline boot splash: React/Tailwind yuklenene kadar bos beyaz ekran yerine
+         SefPOS marka logosu + spinner gozukur. main.tsx mount edildiginde React
+         #root'u doldurur ve splash gizlenir (CSS: #root:not(:empty) ~ #boot-splash). -->
+    <style>
+      #boot-splash {
+        position: fixed;
+        inset: 0;
+        z-index: 2147483647;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: #ffffff;
+        color: #0f172a;
+        font-family: 'Inter', 'Segoe UI', Arial, sans-serif;
+        transition: opacity .35s ease;
+      }
+      #root:not(:empty) ~ #boot-splash {
+        opacity: 0;
+        pointer-events: none;
+      }
+      #boot-splash .wrap {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 16px;
+        text-align: center;
+      }
+      #boot-splash .logo {
+        width: 120px;
+        height: 120px;
+        border-radius: 50%;
+        -o-object-fit: contain;
+           object-fit: contain;
+        background: #ffffff;
+        box-shadow: 0 12px 32px rgba(15, 23, 42, .08);
+        padding: 6px;
+      }
+      #boot-splash .name {
+        font-size: 22px;
+        font-weight: 800;
+        letter-spacing: .3px;
+        color: #0f172a;
+      }
+      #boot-splash .tag {
+        font-size: 13px;
+        color: #64748b;
+        font-weight: 500;
+      }
+      #boot-splash .ring {
+        margin-top: 4px;
+        width: 26px;
+        height: 26px;
+        border-radius: 50%;
+        border: 3px solid rgba(15, 23, 42, .08);
+        border-top-color: #f97316;
+        animation: bs-spin .8s linear infinite;
+      }
+      @keyframes bs-spin {
+        to { transform: rotate(360deg); }
+      }
+    </style>
+    <div id="root"></div>
+    <div id="boot-splash" aria-hidden="true">
+      <div class="wrap">
+        <img src="./logo.png?v=2" alt="SefPOS" class="logo" onerror="this.style.display='none'" />
+        <div class="name">SefPOS</div>
+        <div class="tag">Sistem hazirlaniyor...</div>
+        <div class="ring"></div>
+      </div>
+    </div>
+  </body>
+</html>
