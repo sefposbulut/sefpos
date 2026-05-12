@@ -1,7 +1,7 @@
 {
   "name": "shefpos",
   "private": true,
-  "version": "1.0.5",
+  "version": "1.0.6",
   "packageManager": "traversal@1",
   "type": "module",
   "main": "electron/main.cjs",
@@ -67,7 +67,8 @@
         }
       ],
       "icon": "public/SEFPOS.ico",
-      "executableName": "Sefpos"
+      "executableName": "Sefpos",
+      "artifactName": "Sefpos-Setup-${version}.${ext}"
     },
     "nsis": {
       "oneClick": false,
@@ -76,7 +77,8 @@
       "createStartMenuShortcut": true,
       "shortcutName": "Sefpos",
       "installerIcon": "public/SEFPOS.ico",
-      "uninstallerIcon": "public/SEFPOS.ico"
+      "uninstallerIcon": "public/SEFPOS.ico",
+      "artifactName": "Sefpos-Setup-${version}.${ext}"
     },
     "mac": {
       "target": "dmg",
