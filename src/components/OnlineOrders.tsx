@@ -599,8 +599,11 @@ export function OnlineOrders() {
                             </div>
                           )}
 
-                          {(order.status === 'preparing' || order.status === 'new' /* verify sonrası backend preparing yaptı */) &&
-                            order.getir_status_code !== 500 && (
+                          {/* Verify sonrasi (Getir 400) henuz hazirlanmaya baslanmamis - prepare butonu */}
+                          {order.status === 'preparing' &&
+                            order.getir_status_code !== 500 &&
+                            order.getir_status_code !== 700 &&
+                            order.getir_status_code !== 800 && (
                               <button
                                 onClick={() => doGetirAction(order, 'prepare')}
                                 disabled={busyOrderId === order.id}
@@ -611,27 +614,44 @@ export function OnlineOrders() {
                               </button>
                             )}
 
-                          {(order.status === 'preparing' || order.getir_status_code === 500) && (
-                            <div className="grid grid-cols-1 gap-2 mt-2">
-                              {order.getir_delivery_type === 1 ? (
-                                <button
-                                  onClick={() => doGetirAction(order, 'handover')}
-                                  disabled={busyOrderId === order.id}
-                                  className="w-full bg-purple-600 hover:bg-purple-700 text-white font-black py-3 rounded-xl transition-all active:scale-95 disabled:opacity-50 flex items-center justify-center gap-2"
-                                >
-                                  <Bike className="w-5 h-5" />
-                                  GETIR KURYESİNE TESLİM ETTİM
-                                </button>
-                              ) : (
-                                <button
-                                  onClick={() => doGetirAction(order, 'deliver')}
-                                  disabled={busyOrderId === order.id}
-                                  className="w-full bg-green-600 hover:bg-green-700 text-white font-black py-3 rounded-xl transition-all active:scale-95 disabled:opacity-50 flex items-center justify-center gap-2"
-                                >
-                                  <Check className="w-5 h-5" />
-                                  TESLİM EDİLDİ
-                                </button>
-                              )}
+                          {/* Prepare sonrasi (Getir 500) - HER iki delivery_type icin handover gerekli */}
+                          {order.status === 'preparing' &&
+                            order.getir_status_code === 500 && (
+                              <button
+                                onClick={() => doGetirAction(order, 'handover')}
+                                disabled={busyOrderId === order.id}
+                                className="w-full bg-purple-600 hover:bg-purple-700 text-white font-black py-3 rounded-xl transition-all active:scale-95 disabled:opacity-50 flex items-center justify-center gap-2"
+                              >
+                                <Bike className="w-5 h-5" />
+                                {order.getir_delivery_type === 1
+                                  ? 'GETIR KURYESİNE TESLİM ETTİM'
+                                  : 'KURYE YOLA ÇIKTI'}
+                              </button>
+                            )}
+
+                          {/* Handover sonrasi (Getir 700) */}
+                          {order.status === 'handed_over' &&
+                            order.getir_delivery_type === 1 && (
+                              <div className="w-full bg-purple-100 text-purple-800 font-bold py-3 rounded-xl text-center text-sm">
+                                Getir kuryesinde — teslim bekleniyor
+                              </div>
+                            )}
+
+                          {order.status === 'handed_over' &&
+                            order.getir_delivery_type !== 1 && (
+                              <button
+                                onClick={() => doGetirAction(order, 'deliver')}
+                                disabled={busyOrderId === order.id}
+                                className="w-full bg-green-600 hover:bg-green-700 text-white font-black py-3 rounded-xl transition-all active:scale-95 disabled:opacity-50 flex items-center justify-center gap-2"
+                              >
+                                <Check className="w-5 h-5" />
+                                TESLİM EDİLDİ
+                              </button>
+                            )}
+
+                          {(order.status === 'arrived' || order.status === 'delivered') && (
+                            <div className="w-full bg-green-100 text-green-800 font-bold py-3 rounded-xl text-center text-sm">
+                              {order.status === 'delivered' ? 'Sipariş teslim edildi' : 'Müşteriye ulaştı'}
                             </div>
                           )}
                         </>
