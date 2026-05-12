@@ -229,11 +229,30 @@ export function OnlineOrders() {
    * Getir'e ozel aksiyon gonder (verify/prepare/handover/deliver/cancel).
    * Local state hemen guncellenir, hata olursa rollback yapar.
    */
+  // Getir'in resmi hata mesajlarini kullanici dostu Turkce metne cevirir
+  const friendlyGetirError = (action: string, raw: string): string => {
+    const t = (raw || '').toLowerCase();
+    if (t.includes('prepared time limit') || t.includes('time limit')) {
+      return 'Getir bu siparişin önceki adımı üzerinden yeterli süre geçmesini bekliyor. Birkaç saniye sonra tekrar denenecek…';
+    }
+    if (t.includes('status is invalid for given action') || t.includes('invalid status')) {
+      return 'Bu sipariş için bu aksiyon şu anda uygun değil (Getir akışı sırasını kontrol edin: Onayla → Hazırla → Kuryeye Ver → Teslim).';
+    }
+    if (t.includes('not found')) {
+      return 'Getir sipariş bulunamadı (silinmiş veya başka bir restoranın siparişi olabilir).';
+    }
+    if (t.includes('unauthorized') || t.includes('authentication')) {
+      return 'Getir oturumu reddedildi. Lütfen Ayarlar > Online Platformlar > Getir → bilgileri kontrol edin.';
+    }
+    return `Getir hata mesajı (${action}): ${raw}`;
+  };
+
   const doGetirAction = async (
     order: OrderWithDetails,
     action: 'verify' | 'verify-scheduled' | 'prepare' | 'handover' | 'deliver' | 'cancel',
     extra?: { cancelReasonId?: string; cancelNote?: string },
-  ) => {
+    retryCount: number = 0,
+  ): Promise<void> => {
     setBusyOrderId(order.id);
     try {
       const res = await callGetir({
@@ -244,12 +263,23 @@ export function OnlineOrders() {
         cancelNote: extra?.cancelNote,
       });
       if (!res.ok) {
-        const detail = (res as any)?.data?.message || res.error || 'Getir tarafı hata döndü';
-        alert(`Getir aksiyonu başarısız (${action}): ${detail}`);
+        const raw = (res as any)?.data?.message || res.error || 'bilinmeyen hata';
+        const lower = String(raw).toLowerCase();
+        const isTimeLimit = lower.includes('time limit') || lower.includes('prepared time');
+
+        // Time-limit hatalari icin otomatik retry (max 3, 12 sn ara ile)
+        if (isTimeLimit && retryCount < 3) {
+          const delaySec = 12;
+          console.log(`[Getir] ${action} time-limit → ${delaySec} sn sonra otomatik tekrar (${retryCount + 1}/3)`);
+          await new Promise((r) => setTimeout(r, delaySec * 1000));
+          await doGetirAction(order, action, extra, retryCount + 1);
+          return;
+        }
+
+        alert(friendlyGetirError(action, raw));
         await loadOrders();
         return;
       }
-      // Backend zaten online_orders'u guncelledi — local state'i de yenile
       await loadOrders();
     } catch (err: any) {
       alert(`Getir aksiyonu sırasında hata: ${err?.message || err}`);
