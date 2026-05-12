@@ -28,7 +28,7 @@ const PRINTER_TYPES = [
 ];
 
 export function PrinterSettings() {
-  const { tenant } = useAuth();
+  const { tenant, activeBranch } = useAuth();
   const [settings, setSettings] = useState<PrintSettings>(loadPrintSettings());
   const [availablePrinters, setAvailablePrinters] = useState<PrinterDevice[]>([]);
   const [loadingPrinters, setLoadingPrinters] = useState(false);
@@ -232,6 +232,11 @@ export function PrinterSettings() {
         <p className="text-orange-50 text-sm">
           Mutfak fişleri yalnızca <strong className="text-white">Mutfak / Bar / Özel</strong> tipindeki yazıcılara gider; ürün veya kategori seçiminize göre yönlendirilir.
           <strong className="text-white"> Adisyon</strong> ise aşağıda seçtiğiniz yazıcıdan çıkar (paket fişi ayrı).
+        </p>
+        <p className="text-orange-50/90 text-xs mt-3 border-t border-white/20 pt-3">
+          Bu ekrandaki yazıcı eşlemeleri, fiş metinleri ve otomatik yazdırma seçenekleri hesabınızdaki{' '}
+          <strong className="text-white">işletme + şube</strong> için bulutta saklanır; başka bilgisayardan veya telefondan giriş yaptığınızda aynı ayarlar gelir.
+          İnternet kesilirse ayarlar bu cihazda kalır; bağlantı gelince yeniden senkronize edilir.
         </p>
       </div>
 

@@ -43,10 +43,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onUpdateAvailable: (cb) => ipcRenderer.on('update-available', (_, info) => cb(info)),
   onUpdateDownloadProgress: (cb) => ipcRenderer.on('update-download-progress', (_, info) => cb(info)),
   onUpdateDownloaded: (cb) => ipcRenderer.on('update-downloaded', (_, info) => cb(info)),
+  onUpdateNotAvailable: (cb) => ipcRenderer.on('update-not-available', (_, info) => cb(info || {})),
+  onUpdateError: (cb) => ipcRenderer.on('update-error', (_, info) => cb(info || {})),
   removeUpdateListeners: () => {
     ipcRenderer.removeAllListeners('update-available');
     ipcRenderer.removeAllListeners('update-download-progress');
     ipcRenderer.removeAllListeners('update-downloaded');
+    ipcRenderer.removeAllListeners('update-not-available');
+    ipcRenderer.removeAllListeners('update-error');
   },
   getIpAddress: () => ipcRenderer.invoke('get-ip-address'),
   getDeviceFingerprint: () => ipcRenderer.invoke('get-device-fingerprint'),

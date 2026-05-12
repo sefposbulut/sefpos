@@ -182,6 +182,46 @@ export async function invokeEdgeFunction<T = unknown>(
   return data as T;
 }
 
+/**
+ * GoTrue `grant_type=refresh_token` 400 (invalid / missing refresh) durumunda
+ * istemci bozuk oturumu tekrar tekrar yenilemeye çalışır; PostgREST ve
+ * `print_jobs` RLS 401 ile düşer. Yerel oturumu temizleyip login ekranına
+ * dönmek için `signOut({ scope: 'local' })` (microtask ile, fetch içi
+ * yeniden girişi önlemek için).
+ */
+const sefposAuthClientBox: { client: SupabaseClient<Database> | null } = { client: null };
+
+async function clearInvalidRefreshSessionIfNeeded(href: string, res: Response): Promise<void> {
+  if (!href.includes('/auth/v1/token') || res.status !== 400) return;
+  let body = '';
+  try {
+    body = (await res.clone().text()).toLowerCase();
+  } catch {
+    return;
+  }
+  const invalid =
+    body.includes('invalid_refresh_token') ||
+    body.includes('invalid refresh token') ||
+    body.includes('refresh token not found') ||
+    body.includes('refresh_token_not_found');
+  if (!invalid) return;
+  const client = sefposAuthClientBox.client;
+  if (!client) return;
+  queueMicrotask(() => {
+    void (async () => {
+      try {
+        await client.auth.signOut({ scope: 'local' });
+      } catch {
+        try {
+          await client.auth.signOut();
+        } catch {
+          /* ignore */
+        }
+      }
+    })();
+  });
+}
+
 const realSupabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
     persistSession: true,
@@ -230,7 +270,12 @@ const realSupabase = createClient(supabaseUrl, supabaseAnonKey, {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 10000);
         fetchOptions.signal = controller.signal;
-        return nativeFetch(input as RequestInfo, fetchOptions).finally(() => clearTimeout(timer));
+        return nativeFetch(input as RequestInfo, fetchOptions)
+          .then(async (res) => {
+            await clearInvalidRefreshSessionIfNeeded(href, res);
+            return res;
+          })
+          .finally(() => clearTimeout(timer));
       }
 
       if (!isAuth && !isRealtime && typeof AbortController !== 'undefined' && !fetchOptions.signal) {
@@ -268,6 +313,7 @@ const realSupabase = createClient(supabaseUrl, supabaseAnonKey, {
           });
       }
       return nativeFetch(input as RequestInfo, init as RequestInit | undefined).then(async (res) => {
+        await clearInvalidRefreshSessionIfNeeded(href, res);
         if (import.meta.env.DEV && href.includes('/auth/v1/') && !res.ok) {
           try {
             const snippet = (await res.clone().text()).slice(0, 900);
@@ -289,6 +335,8 @@ const realSupabase = createClient(supabaseUrl, supabaseAnonKey, {
     },
   },
 });
+
+sefposAuthClientBox.client = realSupabase;
 
 export const supabase: SupabaseClient<Database> = new Proxy({} as SupabaseClient<Database>, {
   get(_target, prop) {

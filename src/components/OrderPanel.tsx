@@ -3578,11 +3578,6 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
                           onClick={async () => {
                             if (!currentOrder) return;
                             const printSettings = loadPrintSettings();
-                            const adisyon = (printSettings.defaultReceiptPrinter || '').trim();
-                            if (!adisyon) {
-                              alert('Adisyon fişi için Ayarlar → Yazıcılar bölümünden "Adisyon yazıcısı" seçin.');
-                              return;
-                            }
                             const tableLabel = table.table_number === 0 ? 'Paket' : `Masa ${table.table_number}`;
                             const { discountAmount, total } = calculateTotal();
                             const html = buildReceiptHtml({

@@ -23,6 +23,8 @@ dist-ssr
 .env
 release/
 release-new/
+release-build/
+release-eb-*/
 
 .cursor/
 .vs/

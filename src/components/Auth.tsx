@@ -224,6 +224,25 @@ export function Auth({ onBackToLanding }: AuthProps = {}) {
     }
   }, [isAykaPath]);
 
+  /**
+   * Electron masaüstüsünde **kayıtlı kullanıcı adı yoksa** Beni Hatırla
+   * checkbox'ını varsayılan olarak işaretli getir. Böylece ilk girişte
+   * personel şifresini yazıp Enter'a bastığında bir sonraki açılışta
+   * kullanıcı adı (ve şifre, kullanıcı tercihine göre) otomatik dolar ve
+   * tekrar uğraşılmaz. Web'de davranış aynı kalır.
+   */
+  useEffect(() => {
+    if (isAykaPath) return;
+    const isElectronApp = typeof window !== 'undefined' && !!(window as any).electronAPI;
+    if (!isElectronApp) return;
+    const savedLogin = (() => {
+      try { return localStorage.getItem(REMEMBER_KEY) || ''; } catch { return ''; }
+    })();
+    if (!savedLogin) {
+      setRemember(true);
+    }
+  }, [isAykaPath]);
+
   const handleSubmit = async (e?: React.FormEvent) => {
     e?.preventDefault();
     setError('');
@@ -360,12 +379,20 @@ export function Auth({ onBackToLanding }: AuthProps = {}) {
         // sınırlanır; UI yine yetkili olduğu sayfaları gösterir.
         // (Waiter PIN akışı için "Garson" butonu hâlâ ayrı çalışmaya devam eder.)
 
-        if (remember) {
-          localStorage.setItem(REMEMBER_KEY, loginValue);
-          localStorage.setItem(REMEMBER_PASSWORD_KEY, password);
+        // Electron'da: kullanici adi/eposta her zaman saklanir — restoran
+        // personeli her acilista yeniden yazmak zorunda kalmasin. Sifre yine
+        // sadece `remember` (Beni Hatirla) acikken kaydedilir; paylasili kasada
+        // duz metin sifre sizmasin.
+        const isElectronApp = typeof window !== 'undefined' && !!(window as any).electronAPI;
+        if (remember || isElectronApp) {
+          try { localStorage.setItem(REMEMBER_KEY, loginValue); } catch {}
         } else {
-          localStorage.removeItem(REMEMBER_KEY);
-          localStorage.removeItem(REMEMBER_PASSWORD_KEY);
+          try { localStorage.removeItem(REMEMBER_KEY); } catch {}
+        }
+        if (remember) {
+          try { localStorage.setItem(REMEMBER_PASSWORD_KEY, password); } catch {}
+        } else {
+          try { localStorage.removeItem(REMEMBER_PASSWORD_KEY); } catch {}
         }
       } else {
         setRegisterErrors({});

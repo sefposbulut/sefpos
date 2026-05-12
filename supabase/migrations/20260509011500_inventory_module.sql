@@ -319,8 +319,25 @@ CREATE POLICY "Tenant members manage ingredient_movements"
   WITH CHECK (tenant_id IN (SELECT p.tenant_id FROM public.profiles p WHERE p.id = auth.uid()));
 
 -- Realtime publication (opsiyonel — kritik stok rozeti gerçek zamanlı güncellensin)
-ALTER PUBLICATION supabase_realtime ADD TABLE public.ingredients;
-ALTER PUBLICATION supabase_realtime ADD TABLE public.suppliers;
+-- Aynı migration tekrar çalışırsa "already member of publication" hatasını önle.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_publication_tables
+    WHERE pubname = 'supabase_realtime' AND schemaname = 'public' AND tablename = 'ingredients'
+  ) THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.ingredients;
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_publication_tables
+    WHERE pubname = 'supabase_realtime' AND schemaname = 'public' AND tablename = 'suppliers'
+  ) THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.suppliers;
+  END IF;
+END $$;
 ALTER TABLE public.ingredients REPLICA IDENTITY FULL;
 ALTER TABLE public.suppliers   REPLICA IDENTITY FULL;
 

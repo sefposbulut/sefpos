@@ -1,7 +1,7 @@
 {
   "name": "shefpos",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.1",
   "packageManager": "traversal@1",
   "type": "module",
   "main": "electron/main.cjs",
@@ -13,7 +13,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.app.json",
     "electron:dev": "concurrently \"vite\" \"node ./scripts/electron-dev-wait.mjs\"",
     "electron:build": "vite build && electron-builder",
-    "electron:build:win": "vite build && electron-builder --win",
+    "electron:build:win": "node scripts/electron-build-win-release.mjs",
     "android:build": "vite build && npx cap sync android",
     "android:apk": "vite build && npx cap sync android && cd android && gradlew.bat assembleDebug",
     "android:open": "npx cap open android",
@@ -88,9 +88,10 @@
     },
     "publish": {
       "provider": "github",
-      "owner": "sefpos",
+      "owner": "sefposbulut",
       "repo": "sefpos-releases",
-      "releaseType": "release"
+      "releaseType": "release",
+      "vPrefixedTagName": true
     }
   },
   "dependencies": {

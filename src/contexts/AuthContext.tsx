@@ -10,6 +10,9 @@ import {
   registerElectronPrinters,
   isElectron,
   fetchPrintSettingsFromCloud,
+  flushPendingPrintSettingsToCloud,
+  loadPrintSettings,
+  savePrintSettings,
 } from '../lib/printService';
 
 type Profile = Database['public']['Tables']['profiles']['Row'];
@@ -641,34 +644,85 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setPrintAgentTenantId(tenant?.id ?? null);
   }, [tenant]);
 
-  // Electron Print Agent kaydı — Cloud / SQL Server / Local moddan bağımsız.
-  // Kasadaki Electron uygulaması tenantId + branchId + JWT ile dinlemeye başlar.
-  // Olmazsa: mobil/web'den gelen `print_jobs` insert'leri RLS yüzünden
-  // Electron polling'inde görünmez ve mutfak fişi basılmaz. (Önceki sürümde
-  // sadece SQL Server / Local modda + JWT'siz çağrılıyordu → Cloud'da bug.)
+  // Restoran adı / ünvan: kullanıcı Ayarlar → Yazıcılar → "Restoran Bilgileri"
+  // bölümünden henüz değer girmediyse paket / adisyon / kasa fişlerinde
+  // başlığa hardcoded "ŞefPOS" yazılıyordu. Müşteri kendi işletme adıyla bassın
+  // diye tenant adı geldiği anda boş alanları tek seferlik tenant.name ile
+  // doldurup kalıcı kaydederiz. Kullanıcı sonra istediğinde Ayarlar'dan
+  // ünvan / adres / telefon'u istediği gibi değiştirebilir.
+  useEffect(() => {
+    if (!tenant?.id) return;
+    try {
+      const current = loadPrintSettings();
+      const patch: Partial<typeof current> = {};
+      if (!current.restaurantName && tenant.name) {
+        (patch as any).restaurantName = tenant.name;
+      }
+      // Phone/address sadece henüz hiç değer yoksa otomatik doldurulur — kullanıcı
+      // ayarlardan sildiyse tekrar yazmayız (boş bırakmak istemiş olabilir).
+      const tenantPhone = (tenant as any).phone || '';
+      const tenantAddress = (tenant as any).address || '';
+      if (!current.restaurantPhone && tenantPhone) {
+        (patch as any).restaurantPhone = tenantPhone;
+      }
+      if (!current.restaurantAddress && tenantAddress) {
+        (patch as any).restaurantAddress = tenantAddress;
+      }
+      if (Object.keys(patch).length > 0) {
+        savePrintSettings({ ...current, ...patch });
+      }
+    } catch {
+      /* localStorage erişim hatasında sessiz */
+    }
+  }, [tenant?.id, tenant?.name]);
+
+  // Electron Print Agent: main süreç `currentUserJwt` olmadan print_jobs
+  // çekemez (RLS). İlk frame'de session henüz yoksa + token yenilenince
+  // mutlaka `register-printers` tekrarlanmalı — aksi halde kasada fiş düşmez.
   useEffect(() => {
     if (!isElectron()) return;
     if (!tenant?.id) return;
     let cancelled = false;
-    (async () => {
-      let jwt = '';
-      try {
-        const { data } = await supabase.auth.getSession();
-        jwt = data?.session?.access_token || '';
-      } catch {
-        /* SQL Server / Local mod: session yok, JWT boş kalır.
-           Print agent yine de tenant/branch ile çağrılır; tenant filter
-           service-role gerektirmediği sürece pending poll çalışır. */
-      }
+
+    const pushAgent = async (jwt: string) => {
       if (cancelled) return;
       try {
         await registerElectronPrinters(tenant.id, activeBranch?.id ?? null, jwt);
       } catch {
-        /* Electron yoksa veya IPC kanalı kapalıysa sessiz geç */
+        /* IPC yoksa sessiz */
       }
+    };
+
+    (async () => {
+      for (let attempt = 0; attempt < 5 && !cancelled; attempt++) {
+        let jwt = '';
+        try {
+          const { data } = await supabase.auth.getSession();
+          jwt = data?.session?.access_token || '';
+        } catch {
+          /* local/sql mod */
+        }
+        if (jwt) {
+          await pushAgent(jwt);
+          return;
+        }
+        await new Promise((r) => setTimeout(r, 600));
+      }
+      if (!cancelled) await pushAgent('');
     })();
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((event, session) => {
+      if (cancelled) return;
+      if (event === 'INITIAL_SESSION') return;
+      const jwt = session?.access_token || '';
+      if (jwt) void pushAgent(jwt);
+    });
+
     return () => {
       cancelled = true;
+      subscription.unsubscribe();
     };
   }, [tenant?.id, activeBranch?.id]);
 

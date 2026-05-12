@@ -35,8 +35,9 @@ COMMENT ON COLUMN public.tenants.business_day_start_hour IS
 COMMENT ON COLUMN public.branches.business_day_start_hour IS
 'Bu şubenin iş günü başlangıç saati (override). NULL ise tenant default kullanılır.';
 
--- 2) Yeni overload: branch_id ile
-CREATE OR REPLACE FUNCTION public.compute_business_date(
+-- 2) Yeni overload: branch_id ile (OR REPLACE + DEFAULT kısıtları için DROP+CREATE)
+DROP FUNCTION IF EXISTS public.compute_business_date(timestamptz, uuid);
+CREATE FUNCTION public.compute_business_date(
   p_at timestamptz,
   p_branch_id uuid
 ) RETURNS date
@@ -67,7 +68,9 @@ $$;
 
 -- 3) Eski overload (yalnız timestamptz) artık tenant'tan değil sabit 6 kullanır
 --    AMA mevcut kod yollarını bozmamak için aynı imzayla bırakıyoruz.
-CREATE OR REPLACE FUNCTION public.compute_business_date(p_at timestamptz DEFAULT now())
+--    CREATE OR REPLACE aynı imzada DEFAULT değiştirirken PG hata verebilir; önce DROP.
+DROP FUNCTION IF EXISTS public.compute_business_date(timestamptz);
+CREATE FUNCTION public.compute_business_date(p_at timestamptz DEFAULT now())
 RETURNS date
 LANGUAGE plpgsql
 IMMUTABLE
@@ -85,7 +88,9 @@ $$;
 
 -- 4) start_shift -> branch'lı overload'u kullan
 --    Mevcut imzayı koruyoruz, sadece compute_business_date çağrısını güncelliyoruz.
-CREATE OR REPLACE FUNCTION public.start_shift(
+DROP FUNCTION IF EXISTS public.start_shift(uuid, smallint, numeric, jsonb, text, text, text, uuid);
+DROP FUNCTION IF EXISTS public.start_shift(uuid, smallint, numeric, jsonb, text, text, text);
+CREATE FUNCTION public.start_shift(
   p_branch_id uuid,
   p_shift_no smallint,
   p_opening_cash numeric DEFAULT 0,
@@ -174,7 +179,8 @@ $$;
 GRANT EXECUTE ON FUNCTION public.start_shift(uuid, smallint, numeric, jsonb, text, text, text, uuid) TO authenticated;
 
 -- 5) close_business_day -> branch'lı overload'u kullan
-CREATE OR REPLACE FUNCTION public.close_business_day(
+DROP FUNCTION IF EXISTS public.close_business_day(uuid, date, text);
+CREATE FUNCTION public.close_business_day(
   p_branch_id uuid,
   p_business_date date DEFAULT NULL,
   p_notes text DEFAULT NULL

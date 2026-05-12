@@ -1,4 +1,4 @@
-import { loadPrintSettings, printHtml, printToAdisyonPrinter, getAdisyonPrinterName } from './printService';
+import { loadPrintSettings, printToAdisyonPrinter } from './printService';
 
 export type ShiftPrintFormat = '80mm' | 'a4';
 
@@ -219,10 +219,7 @@ export async function printShiftReport(shift: ShiftReportInput, opts: BuildOpts,
   }
   const ps = loadPrintSettings();
   const html = buildShift80mmHtml(shift, opts);
-  if (getAdisyonPrinterName(ps)) {
-    return printToAdisyonPrinter(ps, html);
-  }
-  return printHtml(html, '');
+  return printToAdisyonPrinter(ps, html);
 }
 
 const PREF_KEY = 'sefpos_shift_print_format';

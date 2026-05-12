@@ -3,7 +3,7 @@ import { supabase } from '../lib/supabase';
 import { createClient } from '@supabase/supabase-js';
 import { useAuth } from '../contexts/AuthContext';
 import { Database } from '../lib/supabase';
-import { X, Plus, Trash2, Settings as SettingsIcon, Building2, ToggleLeft, ToggleRight, Printer, AlertCircle, MapPin, Phone, Save, CreditCard as Edit2, User, Store, CheckCircle, Wifi, WifiOff, Globe, RefreshCw, Lock, ShieldCheck, Eye, EyeOff, Package, CheckSquare, Square, Database as DatabaseIcon, Receipt, Pencil, Scale, Loader, QrCode, PhoneIncoming, FlaskConical, Clock } from 'lucide-react';
+import { X, Plus, Trash2, Settings as SettingsIcon, Building2, ToggleLeft, ToggleRight, Printer, AlertCircle, MapPin, Phone, Save, CreditCard as Edit2, User, Store, CheckCircle, Wifi, WifiOff, Globe, RefreshCw, Lock, ShieldCheck, Eye, EyeOff, Package, CheckSquare, Square, Database as DatabaseIcon, Receipt, Pencil, Scale, Loader, QrCode, PhoneIncoming, FlaskConical, Clock, Download, Sparkles } from 'lucide-react';
 import {
   isCallerIdAvailable,
   startCallerId,
@@ -57,6 +57,54 @@ export function Settings({ onClose }: SettingsProps) {
   const [editBranchAddress, setEditBranchAddress] = useState('');
   const [editBranchPhone, setEditBranchPhone] = useState('');
   const [requireCancelReason, setRequireCancelReason] = useState(false);
+
+  /**
+   * Electron'da `app.getVersion()` ile gelen calisan surum (paket icindeki
+   * package.json) — Settings > Sistem ekraninda "Surum" kutusunda gosterilir.
+   * Web tarayicisinda Vite tarafindaki package.json sabit; bu yuzden static
+   * fallback "—" gosterilir.
+   */
+  const [appVersion, setAppVersion] = useState<string>('—');
+  const [updateCheckState, setUpdateCheckState] = useState<
+    | { kind: 'idle' }
+    | { kind: 'checking' }
+    | { kind: 'available'; version: string }
+    | { kind: 'not_available' }
+    | { kind: 'error'; message: string }
+  >({ kind: 'idle' });
+
+  useEffect(() => {
+    const api = (window as any).electronAPI;
+    if (!api?.getAppVersion) return;
+    let cancelled = false;
+    api.getAppVersion()
+      .then((v: string) => { if (!cancelled && v) setAppVersion(v); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  const handleCheckForUpdates = async () => {
+    const api = (window as any).electronAPI;
+    if (!api?.checkForUpdates) {
+      setUpdateCheckState({ kind: 'error', message: 'Bu sürüm güncelleme servisini desteklemiyor.' });
+      return;
+    }
+    setUpdateCheckState({ kind: 'checking' });
+    try {
+      const res = await api.checkForUpdates();
+      if (res?.error) {
+        setUpdateCheckState({ kind: 'error', message: String(res.error) });
+        return;
+      }
+      if (res?.version) {
+        setUpdateCheckState({ kind: 'available', version: String(res.version) });
+      } else {
+        setUpdateCheckState({ kind: 'not_available' });
+      }
+    } catch (err: any) {
+      setUpdateCheckState({ kind: 'error', message: err?.message || 'Bilinmeyen hata' });
+    }
+  };
   const [platforms, setPlatforms] = useState<any[]>([]);
   const [showPlatformForm, setShowPlatformForm] = useState(false);
   const [platformName, setPlatformName] = useState('');
@@ -2085,11 +2133,11 @@ export function Settings({ onClose }: SettingsProps) {
                 <div className="grid grid-cols-3 gap-2 text-center text-xs text-gray-500">
                   <div className="bg-gray-50 rounded-lg p-2">
                     <div className="font-bold text-gray-700 text-sm">Sürüm</div>
-                    <div>1.0.0</div>
+                    <div>{appVersion}</div>
                   </div>
                   <div className="bg-gray-50 rounded-lg p-2">
                     <div className="font-bold text-gray-700 text-sm">Platform</div>
-                    <div>{(window as any).electron ? 'Masaüstü' : 'Web'}</div>
+                    <div>{(window as any).electronAPI ? 'Masaüstü' : 'Web'}</div>
                   </div>
                   <div className="bg-gray-50 rounded-lg p-2">
                     <div className="font-bold text-gray-700 text-sm">Durum</div>
@@ -2097,6 +2145,57 @@ export function Settings({ onClose }: SettingsProps) {
                   </div>
                 </div>
               </div>
+
+              {/* Yalnizca Electron'da goster — web build'inde otomatik guncelleme yok */}
+              {(window as any).electronAPI && (
+                <div className="bg-white border-2 border-gray-200 rounded-xl p-5 space-y-3">
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="w-4 h-4 text-orange-500" />
+                    <h4 className="font-bold text-gray-800">Yazılım Güncellemeleri</h4>
+                  </div>
+                  <p className="text-sm text-gray-500">
+                    ŞefPOS, yeni bir sürüm bulduğunda kasaya otomatik indirir ve onayınızla kurar.
+                    Manuel kontrol etmek isterseniz aşağıdaki butonu kullanın.
+                  </p>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      onClick={handleCheckForUpdates}
+                      disabled={updateCheckState.kind === 'checking'}
+                      className="flex items-center gap-2 px-4 py-2 rounded-lg bg-gradient-to-r from-amber-500 to-orange-600 text-white text-sm font-bold hover:from-amber-600 hover:to-orange-700 active:scale-95 disabled:opacity-60"
+                    >
+                      {updateCheckState.kind === 'checking' ? (
+                        <>
+                          <Loader className="w-4 h-4 animate-spin" /> Kontrol ediliyor…
+                        </>
+                      ) : (
+                        <>
+                          <Download className="w-4 h-4" /> Güncellemeleri kontrol et
+                        </>
+                      )}
+                    </button>
+                    {updateCheckState.kind === 'available' && (
+                      <span className="text-xs text-emerald-700 font-semibold bg-emerald-50 border border-emerald-200 rounded-lg px-2.5 py-1.5">
+                        Yeni sürüm bulundu: {updateCheckState.version}. İndirilecek ve hazır olduğunda
+                        bildirim göreceksiniz.
+                      </span>
+                    )}
+                    {updateCheckState.kind === 'not_available' && (
+                      <span className="text-xs text-slate-700 font-semibold bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5">
+                        Uygulamanız güncel.
+                      </span>
+                    )}
+                    {updateCheckState.kind === 'error' && (
+                      <span className="text-xs text-rose-700 font-semibold bg-rose-50 border border-rose-200 rounded-lg px-2.5 py-1.5 break-all">
+                        Hata: {updateCheckState.message}
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-[11px] text-gray-400 pt-1 border-t border-gray-100">
+                    Şu anki sürüm: <code className="text-gray-600">{appVersion}</code> · Otomatik
+                    kontrol uygulama açıldıktan 8 saniye sonra ve her 4 saatte bir yapılır.
+                  </div>
+                </div>
+              )}
 
               <div className="bg-white border-2 border-gray-200 rounded-xl p-5 space-y-4">
                 <div className="flex items-center gap-2 mb-1">

@@ -157,14 +157,6 @@ export function ReprintReceiptModal({ onClose }: ReprintReceiptModalProps) {
     setPrintingId(order.id);
     try {
       const printSettings = loadPrintSettings();
-      if (!printSettings.defaultReceiptPrinter?.trim()) {
-        dispatchPrintToast({
-          kind: 'error',
-          message: 'Adisyon yazıcısı seçilmedi',
-          detail: 'Ayarlar → Yazıcılar bölümünden seçin.',
-        });
-        return;
-      }
 
       const { data: items, error: itemsErr } = await (supabase
         .from('order_items') as any)

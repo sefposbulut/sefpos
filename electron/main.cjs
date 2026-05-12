@@ -59,55 +59,114 @@ try {
   autoUpdater = require('electron-updater').autoUpdater;
 } catch {}
 
+/**
+ * Kullanıcının Settings → Sistem ekranından "Güncellemeleri kontrol et"
+ * butonuna basıp basmadığını ayırt etmek için flag. `update-error` event'i
+ * yalnızca bu flag true iken renderer'a iletilir; otomatik arka plan
+ * kontrolünde 404/network hatalarıyla kullanıcı rahatsız edilmez.
+ */
+let _manualUpdateCheckInFlight = false;
+
+/**
+ * `update-available/-downloaded` event'lerinde renderer'a release notes da
+ * göndermek için kullanılan yardımcı. electron-updater notları string veya
+ * `[{note: '...'}]` dizisi olarak verebilir; her ikisini tek metne dönüştürür.
+ */
+function normalizeReleaseNotes(raw) {
+  try {
+    if (!raw) return '';
+    if (typeof raw === 'string') return raw;
+    if (Array.isArray(raw)) {
+      return raw
+        .map((entry) => (entry && typeof entry === 'object' ? entry.note || '' : String(entry || '')))
+        .filter((t) => t && String(t).trim().length > 0)
+        .join('\n\n');
+    }
+    if (typeof raw === 'object' && raw.note) return String(raw.note);
+    return String(raw);
+  } catch (_) {
+    return '';
+  }
+}
+
 function setupAutoUpdater() {
   if (!autoUpdater) return;
   if (process.env.NODE_ENV === 'development') return;
 
+  // İndirme otomatik başlasın; "yükle" anı kullanıcıya bırakılsın.
+  // Kullanıcı oturum açıkken modal ile soracağız (renderer tarafında).
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
+  // electron-updater varsayılan olarak pre-release etiketli sürümleri çekmez;
+  // production ortamında stable kanalı kullanmak için açıkça false bırakılır.
+  autoUpdater.allowPrerelease = false;
 
   autoUpdater.on('checking-for-update', () => {
-    console.log('Güncelleme kontrol ediliyor...');
+    paLog('info', '[updater] Güncelleme kontrol ediliyor...');
   });
 
   autoUpdater.on('update-available', (info) => {
-    console.log('Güncelleme mevcut:', info.version);
-    if (mainWindow) {
-      mainWindow.webContents.send('update-available', { version: info.version });
+    paLog('info', '[updater] Güncelleme mevcut', { version: info?.version });
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('update-available', {
+        version: info?.version || '',
+        releaseDate: info?.releaseDate || null,
+        releaseName: info?.releaseName || '',
+        releaseNotes: normalizeReleaseNotes(info?.releaseNotes),
+      });
     }
   });
 
   autoUpdater.on('update-not-available', () => {
-    console.log('Uygulama güncel.');
+    paLog('info', '[updater] Uygulama güncel.');
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('update-not-available', {});
+    }
   });
 
   autoUpdater.on('download-progress', (progress) => {
-    if (mainWindow) {
+    if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('update-download-progress', {
         percent: Math.round(progress.percent),
         transferred: progress.transferred,
         total: progress.total,
+        bytesPerSecond: progress.bytesPerSecond,
       });
     }
   });
 
   autoUpdater.on('update-downloaded', (info) => {
-    console.log('Güncelleme indirildi:', info.version);
-    if (mainWindow) {
-      mainWindow.webContents.send('update-downloaded', { version: info.version });
+    paLog('info', '[updater] Güncelleme indirildi', { version: info?.version });
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('update-downloaded', {
+        version: info?.version || '',
+        releaseDate: info?.releaseDate || null,
+        releaseName: info?.releaseName || '',
+        releaseNotes: normalizeReleaseNotes(info?.releaseNotes),
+      });
     }
   });
 
   autoUpdater.on('error', (err) => {
-    console.error('Güncelleme hatası:', err.message);
+    paLog('error', '[updater] Güncelleme hatası', { message: err?.message });
+    // ÖNEMLİ: Renderer'a `update-error` event'i SADECE manuel kontrolde
+    // (`check-for-updates` IPC) gönderilir. Otomatik arka plan kontrolünde
+    // (saatlik / başlangıç) kullanıcı release repo'su henüz hazır değilse
+    // 404/network gibi sebeplerle rahatsız edilmesin diye sessiz tutarız.
+    if (!_manualUpdateCheckInFlight) return;
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('update-error', { message: err?.message || 'unknown' });
+    }
   });
 
+  // İlk kontrol 8 saniye sonra; üzerinden 4 saatte bir tekrar dene.
+  // (Restoranlar genelde gün boyu açık kalır; saatlik kontrol gereksiz trafik.)
   setTimeout(() => {
     autoUpdater.checkForUpdatesAndNotify().catch(() => {});
     setInterval(() => {
       autoUpdater.checkForUpdatesAndNotify().catch(() => {});
-    }, 2 * 60 * 60 * 1000);
-  }, 10000);
+    }, 4 * 60 * 60 * 1000);
+  }, 8000);
 }
 
 let bcryptjs = null;
@@ -2320,17 +2379,53 @@ ipcMain.handle('check-for-updates', async () => {
   if (!autoUpdater || process.env.NODE_ENV === 'development') {
     return { error: 'Güncelleme sadece production modunda çalışır' };
   }
+  _manualUpdateCheckInFlight = true;
   try {
     const result = await autoUpdater.checkForUpdates();
     return { version: result?.updateInfo?.version || null };
   } catch (err) {
-    return { error: err.message };
+    return { error: friendlyUpdateError(err) };
+  } finally {
+    // Olay sırasında error event'i de aksın diye küçük bir gecikme bırak.
+    setTimeout(() => { _manualUpdateCheckInFlight = false; }, 1500);
   }
 });
 
+/**
+ * autoUpdater hata mesajları çoğu zaman HTTP başlıklarını da içeren çok uzun
+ * stringler olur (örn. GitHub releases.atom 404). Kullanıcıya bunun tamamını
+ * göstermek yerine en yaygın senaryoları sadeleştirmiş Türkçe metne çeviririz.
+ */
+function friendlyUpdateError(err) {
+  const raw = String(err?.message || err || '');
+  const lower = raw.toLowerCase();
+  if (lower.includes('404')) {
+    return 'Güncelleme deposuna ulaşılamadı (404). sefposbulut/sefpos-releases reposu henüz oluşturulmamış ya da hiç release yayınlanmamış olabilir.';
+  }
+  if (lower.includes('enotfound') || lower.includes('econnrefused') || lower.includes('etimedout')) {
+    return 'İnternet bağlantısı kurulamadı. Ağ bağlantınızı kontrol edip tekrar deneyin.';
+  }
+  if (lower.includes('latest.yml') && lower.includes('not found')) {
+    return 'Release dosyaları eksik: latest.yml bulunamadı. Release sayfasında latest.yml ve .blockmap dosyalarının yüklü olduğundan emin olun.';
+  }
+  if (raw.length > 220) return raw.slice(0, 220) + '…';
+  return raw || 'Bilinmeyen hata';
+}
+
 ipcMain.handle('install-update', () => {
-  if (autoUpdater) {
+  if (!autoUpdater) return false;
+  try {
+    // quitAndInstall(isSilent=false, isForceRunAfter=true):
+    //   - isSilent=false → NSIS installer "sessizce" gizli çalışmaz; kısa progress UI
+    //     görünür (kullanıcı ekrana bakıyorsa kafa karışmasın).
+    //   - isForceRunAfter=true → kurulum sonrası Sefpos.exe yeniden başlatılır.
+    // Onay diyaloğu zaten renderer tarafında gösterildiği için ek pencere yok.
+    quitConfirmed = true;
     autoUpdater.quitAndInstall(false, true);
+    return true;
+  } catch (err) {
+    paLog('error', '[updater] quitAndInstall basarisiz', { message: err?.message });
+    return false;
   }
 });
 

@@ -65,4 +65,37 @@ const oiSel =
 const oi = await sb.from('order_items').select(oiSel).eq('tenant_id', TENANT).limit(1);
 console.log('order_items panel select:', oi.error ? oi.error.message : oi.data?.length);
 
+// Yazıcı bulutu: tablo PostgREST'te var mı + RLS (oturum açıkken)
+const psBranch = await sb
+  .from('print_settings')
+  .select('id, updated_at')
+  .eq('tenant_id', TENANT)
+  .eq('branch_id', BRANCH)
+  .maybeSingle();
+console.log(
+  'print_settings (branch):',
+  psBranch.error
+    ? { message: psBranch.error.message, code: psBranch.error.code, details: psBranch.error.details }
+    : psBranch.data ?? '(satır yok — tablo OK, kayıt sonra eklenebilir)',
+);
+
+const psTenant = await sb
+  .from('print_settings')
+  .select('id, updated_at')
+  .eq('tenant_id', TENANT)
+  .is('branch_id', null)
+  .maybeSingle();
+console.log(
+  'print_settings (tenant-wide branch null):',
+  psTenant.error
+    ? { message: psTenant.error.message, code: psTenant.error.code }
+    : psTenant.data ?? '(satır yok)',
+);
+
+const pj = await sb.from('print_jobs').select('id, status, created_at').eq('tenant_id', TENANT).limit(3);
+console.log(
+  'print_jobs (son 3):',
+  pj.error ? { message: pj.error.message, code: pj.error.code } : (pj.data?.length ?? 0) + ' satır',
+);
+
 await sb.auth.signOut();

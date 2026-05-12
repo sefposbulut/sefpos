@@ -93,7 +93,14 @@ import { dispatchPrintToast } from './printToasts';
  */
 const PRINT_SETTINGS_LEGACY_KEY = 'shefpos_print_settings';
 const PRINT_SETTINGS_PREFIX = 'shefpos_print_settings';
+/** Yerel düzenleme zamanı (ms); bulut `updated_at` ile karşılaştırılır — gecikmiş fetch yereli silmesin. */
+const PRINT_SETTINGS_LASTMOD_PREFIX = 'shefpos_print_settings_lastmod';
+/** Buluta yazılamadıysa JSON; çevrimiçi olunca veya sonraki fetch’te tekrar deneriz. */
+const PRINT_SETTINGS_PENDING_PUSH_KEY = 'shefpos_print_settings_pending_push';
 const PRINT_AGENT_URL = 'http://127.0.0.1:7878';
+
+/** `savePrintSettings` her çağrıda artar; uçuşta kalan eski `fetch` sonucu yoksayılır. */
+let __printSettingsSaveGen = 0;
 
 /** Tenant / branch değiştiğinde dinleyenlerin kendi state'ini tazelemesi için emit edilir. */
 export const PRINT_SETTINGS_CONTEXT_EVENT = 'sefpos:print-settings-context';
@@ -219,6 +226,72 @@ function normalizePrintSettings(raw: Partial<PrintSettings> & Record<string, unk
   };
 }
 
+function getPrintSettingsLastmodKey(tenantId: string, branchId: string | null): string {
+  return `${PRINT_SETTINGS_LASTMOD_PREFIX}:${tenantId}:${branchId ?? 'null'}`;
+}
+
+function readPrintSettingsLastmodMs(tenantId: string, branchId: string | null): number {
+  try {
+    const v = localStorage.getItem(getPrintSettingsLastmodKey(tenantId, branchId));
+    if (!v) return 0;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function writePrintSettingsLastmodMs(tenantId: string, branchId: string | null, ms: number) {
+  try {
+    localStorage.setItem(getPrintSettingsLastmodKey(tenantId, branchId), String(ms));
+  } catch {
+    /* quota */
+  }
+}
+
+/**
+ * Buluttan gelen satır "boş şablon" mu — yerel makinedeki dolu yazıcı listesinin
+ * üzerine yazılıp silinmesin diye kullanılır.
+ */
+function isPrintSettingsEffectivelyWithoutPrinters(s: PrintSettings): boolean {
+  const c = normalizePrintSettings(s);
+  return (
+    c.printers.length === 0 &&
+    !String(c.defaultReceiptPrinter || '').trim() &&
+    !String(c.defaultKitchenPrinter || '').trim() &&
+    !String(c.defaultTakeawayPrinter || '').trim()
+  );
+}
+
+/**
+ * İnternet geldikten veya oturum açıldıktan sonra bekleyen bulut yazımını dener.
+ */
+export async function flushPendingPrintSettingsToCloud(): Promise<void> {
+  if (!_currentTenantId) return;
+  try {
+    const raw = localStorage.getItem(PRINT_SETTINGS_PENDING_PUSH_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw) as {
+      tenantId?: string;
+      branchId?: string | null;
+      settings?: unknown;
+    };
+    if (parsed.tenantId !== _currentTenantId) return;
+    const wantBranch = _currentBranchId ?? null;
+    if ((parsed.branchId ?? null) !== wantBranch) return;
+    const settings = normalizePrintSettings((parsed.settings || {}) as any);
+    await pushPrintSettingsToCloud(settings);
+    try {
+      localStorage.removeItem(PRINT_SETTINGS_PENDING_PUSH_KEY);
+    } catch {
+      /* */
+    }
+    writePrintSettingsLastmodMs(_currentTenantId, _currentBranchId, Date.now());
+  } catch (err: any) {
+    console.warn('[ŞefPOS] print_settings bekleyen bulut senkronu başarısız:', err?.message || err);
+  }
+}
+
 /**
  * Tenant + branch'a özel ayarları okur. Eski global anahtar (`shefpos_print_settings`)
  * varsa, **yalnızca aynı bilgisayarın geçmiş kullanıcısı bu tenant'a aitse**
@@ -238,13 +311,40 @@ export function loadPrintSettings(): PrintSettings {
 export function savePrintSettings(settings: PrintSettings) {
   const normalized = normalizePrintSettings(settings);
   const key = getPrintSettingsKey();
-  localStorage.setItem(key, JSON.stringify(normalized));
-  // Bulut tarafına da arka planda yaz; başarısız olursa lokal sürüm yine
-  // canlı kalır. Tenant veya branch henüz set edilmediyse (preauth) yazma.
+  __printSettingsSaveGen++;
+  try {
+    localStorage.setItem(key, JSON.stringify(normalized));
+  } catch {}
   if (_currentTenantId) {
-    void pushPrintSettingsToCloud(normalized).catch((err) => {
-      console.warn('[ŞefPOS] print_settings cloud upsert başarısız:', err?.message || err);
-    });
+    try {
+      writePrintSettingsLastmodMs(_currentTenantId, _currentBranchId, Date.now());
+    } catch {
+      /* */
+    }
+    void pushPrintSettingsToCloud(normalized)
+      .then(() => {
+        try {
+          localStorage.removeItem(PRINT_SETTINGS_PENDING_PUSH_KEY);
+        } catch {
+          /* */
+        }
+      })
+      .catch((err) => {
+        console.warn('[ŞefPOS] print_settings cloud upsert başarısız:', err?.message || err);
+        try {
+          localStorage.setItem(
+            PRINT_SETTINGS_PENDING_PUSH_KEY,
+            JSON.stringify({
+              tenantId: _currentTenantId,
+              branchId: _currentBranchId,
+              settings: normalized,
+              savedAt: Date.now(),
+            }),
+          );
+        } catch {
+          /* */
+        }
+      });
   }
 }
 
@@ -274,7 +374,9 @@ export async function fetchPrintSettingsFromCloud(): Promise<PrintSettings | nul
   // yanlışlıkla yazmayalım.
   const fetchedTenantId = _currentTenantId;
   const fetchedBranchId = _currentBranchId;
+  const genAtStart = __printSettingsSaveGen;
   try {
+    await flushPendingPrintSettingsToCloud();
     let query = (supabase.from('print_settings' as any) as any)
       .select('settings, updated_at')
       .eq('tenant_id', fetchedTenantId);
@@ -282,6 +384,9 @@ export async function fetchPrintSettingsFromCloud(): Promise<PrintSettings | nul
       ? query.eq('branch_id', fetchedBranchId)
       : query.is('branch_id', null);
     const { data, error } = await query.maybeSingle();
+    if (genAtStart !== __printSettingsSaveGen) {
+      return null;
+    }
     if (error) {
       // Tablo henüz migrate edilmemiş veya PostgREST schema cache eski olabilir;
       // ilk login'de / migration sonrasında gürültü olmasın diye sessiz dön.
@@ -308,8 +413,45 @@ export async function fetchPrintSettingsFromCloud(): Promise<PrintSettings | nul
       console.warn('[ŞefPOS] print_settings: tenant/branch fetch sırasında değişti, yanıt uygulanmadı.');
       return null;
     }
-    const normalized = normalizePrintSettings(data.settings as any);
+    if (genAtStart !== __printSettingsSaveGen) {
+      return null;
+    }
+
+    const serverMs = new Date((data as any).updated_at || 0).getTime();
+    const localLast = readPrintSettingsLastmodMs(fetchedTenantId, fetchedBranchId);
+    if (localLast > serverMs + 2000) {
+      console.info(
+        '[ŞefPOS] print_settings: yerel yapılandırma buluttan daha yeni; gecikmiş yanıt uygulanmadı, yerel ayarlar sunucuya itiliyor.',
+      );
+      void pushPrintSettingsToCloud(loadPrintSettings()).catch(() => {});
+      return null;
+    }
+
     const key = getPrintSettingsKey();
+    let localBefore: PrintSettings;
+    try {
+      const raw = localStorage.getItem(key);
+      localBefore = raw ? normalizePrintSettings(JSON.parse(raw)) : normalizePrintSettings({});
+    } catch {
+      localBefore = normalizePrintSettings({});
+    }
+
+    let normalized = normalizePrintSettings(data.settings as any);
+    let lastModToWrite = serverMs;
+    if (isPrintSettingsEffectivelyWithoutPrinters(normalized) && !isPrintSettingsEffectivelyWithoutPrinters(localBefore)) {
+      console.info(
+        '[ŞefPOS] print_settings: sunucuda yazıcı eşlemesi yok; bu bilgisayardaki yerel ayarlar korunuyor ve tam yapılandırma sunucuya yazılıyor.',
+      );
+      normalized = localBefore;
+      lastModToWrite = Date.now();
+      void pushPrintSettingsToCloud(normalized).catch(() => {});
+    }
+
+    if (genAtStart !== __printSettingsSaveGen) {
+      return null;
+    }
+
+    writePrintSettingsLastmodMs(fetchedTenantId, fetchedBranchId, lastModToWrite);
     try {
       localStorage.setItem(key, JSON.stringify(normalized));
     } catch (_) { /* quota vb. yoksay */ }
@@ -1176,57 +1318,99 @@ export function buildTakeawayHtml(opts: {
   const isDelivery = opts.orderType === 'delivery';
   const fs = Math.max(st.receiptBodyPx - 1, 10);
 
-  let html = receiptStyleBlock(st);
-  html += `<div class="sefpos-receipt-scope">`;
-  html += `
-    <div class="center bold xlarge">${opts.restaurantName || 'ŞefPOS'}</div>
-    ${st.receiptSubtitle ? `<div class="subtitle">${st.receiptSubtitle}</div>` : ''}
-    ${opts.restaurantAddress ? `<div class="center" style="font-size:${fs}px">${opts.restaurantAddress}</div>` : ''}
-    ${opts.restaurantPhone ? `<div class="center" style="font-size:${fs}px">Tel: ${opts.restaurantPhone}</div>` : ''}
-    <div class="line"></div>
-    <div class="center bold large">${isDelivery ? '🚴 KURYE SİPARİŞİ' : '📦 PAKET SERVİS'}</div>
-    <div class="line"></div>
-    <div class="row"><span>Tarih:</span><span>${date} ${time}</span></div>
-    ${opts.orderNumber ? `<div class="row"><span>Sipariş No:</span><span>${opts.orderNumber}</span></div>` : ''}
-    ${opts.customerName ? `<div class="row"><span>Müşteri:</span><span>${opts.customerName}</span></div>` : ''}
-    ${opts.customerPhone ? `<div class="row"><span>Telefon:</span><span>${opts.customerPhone}</span></div>` : ''}
-  `;
+  // Başlık: kullanıcı ayarlardan girdiği restoran/ünvan adı her zaman önceliklidir;
+  // boşsa hardcoded "ŞefPOS" yerine sessizce boş bırakırız (AuthContext bu durumda
+  // tenant adıyla otomatik doldurur — bkz. printService.setupRestaurantHeaderFromTenant).
+  const headerName = (opts.restaurantName || '').trim();
 
-  if (isDelivery && opts.deliveryAddress) {
-    html += `
-    <div class="line"></div>
-    <div class="note bold">TESLİMAT ADRESİ:</div>
-    <div class="note">${opts.deliveryAddress}</div>
-    ${opts.deliveryNote ? `<div class="note">Not: ${opts.deliveryNote}</div>` : ''}
-    ${opts.courierName ? `<div class="row"><span>Kurye:</span><span>${opts.courierName}</span></div>` : ''}
-    ${opts.estimatedMinutes ? `<div class="row"><span>Tahmini Süre:</span><span>${opts.estimatedMinutes} dk</span></div>` : ''}
-    `;
+  let html = receiptStyleBlock(st);
+  html += `<style>
+    .sefpos-receipt-scope .takeaway-line { border-top: 1px dashed #000; margin: 5px 0; width: 100%; }
+    .sefpos-receipt-scope .item-divider { border-top: 1px dashed #000; margin: 3px 0; width: 100%; opacity: 0.8; }
+    .sefpos-receipt-scope .customer-block { border: 1.5px solid #000; padding: 6px 8px; margin: 6px 0; border-radius: 2px; }
+    .sefpos-receipt-scope .customer-block .label { font-weight: 800; }
+    .sefpos-receipt-scope .customer-block .value { font-weight: 700; }
+    .sefpos-receipt-scope .addr-block { border: 2px solid #000; padding: 7px 9px; margin: 8px 0; border-radius: 2px; }
+    .sefpos-receipt-scope .addr-title { font-weight: 900; letter-spacing: 0.4px; text-align: center; margin-bottom: 4px; }
+    .sefpos-receipt-scope .addr-text { font-weight: 800; line-height: 1.35; }
+  </style>`;
+  html += `<div class="sefpos-receipt-scope">`;
+  if (headerName) {
+    html += `<div class="center bold xlarge">${escHtml(headerName)}</div>`;
+  }
+  if (st.receiptSubtitle) {
+    html += `<div class="subtitle">${escHtml(st.receiptSubtitle)}</div>`;
+  }
+  if (opts.restaurantAddress) {
+    html += `<div class="center" style="font-size:${fs}px">${escHtml(opts.restaurantAddress)}</div>`;
+  }
+  if (opts.restaurantPhone) {
+    html += `<div class="center" style="font-size:${fs}px">Tel: ${escHtml(opts.restaurantPhone)}</div>`;
+  }
+  html += `<div class="line"></div>`;
+  html += `<div class="center bold large">${isDelivery ? 'KURYE SIPARISI' : 'PAKET SERVIS'}</div>`;
+  html += `<div class="line"></div>`;
+  html += `<div class="row"><span>Tarih:</span><span>${date} ${time}</span></div>`;
+  if (opts.orderNumber) {
+    html += `<div class="row"><span>Siparis No:</span><span>${escHtml(opts.orderNumber)}</span></div>`;
   }
 
-  html += `
-    <div class="line"></div>
-    <div class="row bold">
-      <span class="name">ÜRÜN</span><span class="qty">ADT</span><span class="price">TUTAR</span>
-    </div>
-    <div class="line"></div>
-  `;
-
-  opts.items.forEach(item => {
-    const label = item.variantName ? `${item.productName} (${item.variantName})` : item.productName;
-    html += row(label, `${item.quantity}x`, `${fmt(item.unitPrice)}₺`);
-    if (item.quantity > 1) {
-      html += `<div class="row"><span class="name"></span><span class="qty"></span><span class="price bold">${fmt(item.totalAmount)}₺</span></div>`;
+  // Müşteri kutusu — ad / telefon / adres (varsa her zaman, paket veya kurye fark etmez)
+  const hasCustomerInfo = !!(opts.customerName || opts.customerPhone || opts.deliveryAddress);
+  if (hasCustomerInfo) {
+    html += `<div class="customer-block">`;
+    if (opts.customerName) {
+      html += `<div class="row"><span class="label">Musteri:</span><span class="value" style="text-align:right">${escHtml(opts.customerName)}</span></div>`;
     }
-    if (item.notes) html += `<div class="note">Not: ${item.notes}</div>`;
+    if (opts.customerPhone) {
+      html += `<div class="row"><span class="label">Telefon:</span><span class="value" style="text-align:right">${escHtml(opts.customerPhone)}</span></div>`;
+    }
+    html += `</div>`;
+  }
+
+  // Adres — paket için de göster (müşteri girdiyse); kurye için zorunlu görünüm
+  if (opts.deliveryAddress) {
+    html += `<div class="addr-block">`;
+    html += `<div class="addr-title">${isDelivery ? 'TESLIMAT ADRESI' : 'MUSTERI ADRESI'}</div>`;
+    html += `<div class="addr-text">${escHtml(opts.deliveryAddress)}</div>`;
+    if (opts.deliveryNote) {
+      html += `<div class="addr-text" style="margin-top:4px">Not: ${escHtml(opts.deliveryNote)}</div>`;
+    }
+    html += `</div>`;
+    if (opts.courierName) {
+      html += `<div class="row"><span>Kurye:</span><span>${escHtml(opts.courierName)}</span></div>`;
+    }
+    if (opts.estimatedMinutes) {
+      html += `<div class="row"><span>Tahmini Sure:</span><span>${opts.estimatedMinutes} dk</span></div>`;
+    }
+  }
+
+  html += `<div class="line"></div>`;
+  html += `<div class="row bold"><span class="name">URUN</span><span class="qty">ADT</span><span class="price">TUTAR</span></div>`;
+  html += `<div class="line"></div>`;
+
+  opts.items.forEach((item, idx) => {
+    const label = item.variantName ? `${item.productName} (${item.variantName})` : item.productName;
+    html += row(escHtml(label), `${item.quantity}x`, `${fmt(item.unitPrice)}TL`);
+    if (item.quantity > 1) {
+      html += `<div class="row"><span class="name"></span><span class="qty"></span><span class="price bold">${fmt(item.totalAmount)}TL</span></div>`;
+    }
+    if (item.notes) {
+      html += `<div class="note">Not: ${escHtml(item.notes)}</div>`;
+    }
+    // Ürünler arasına ince kesik çizgi (son üründen sonra koymayız — toplam line zaten geliyor)
+    if (idx < opts.items.length - 1) {
+      html += `<div class="item-divider"></div>`;
+    }
   });
 
   html += `<div class="line"></div>`;
-  html += `<div class="total-row" style="font-size:${Math.max(st.receiptBodyPx + 2, 14)}px"><span>TOPLAM</span><span>${fmt(opts.total)}₺</span></div>`;
+  html += `<div class="total-row" style="font-size:${Math.max(st.receiptBodyPx + 2, 14)}px"><span>TOPLAM</span><span>${fmt(opts.total)}TL</span></div>`;
   html += `<div class="line"></div>`;
   if (st.receiptFooterExtra) {
-    html += `<div class="extra-line">${st.receiptFooterExtra}</div>`;
+    html += `<div class="extra-line">${escHtml(st.receiptFooterExtra)}</div>`;
   }
-  html += `<div class="footer">${opts.footer || 'Teşekkür ederiz!'}</div>`;
+  html += `<div class="footer">${escHtml(opts.footer || 'Tesekkur ederiz!')}</div>`;
   html += `<br><br><br>`;
   html += `</div>`;
   return html;
