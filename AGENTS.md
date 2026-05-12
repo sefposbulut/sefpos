@@ -23,7 +23,53 @@ This file is the permanent project memory for this repository.
 - CI workflow: `.github/workflows/ci.yml`
 - Supabase migration workflow: `.github/workflows/supabase-migrations.yml`
 - Supabase weekly backup workflow: `.github/workflows/supabase-backup.yml`
+- Electron auto-release workflow: `.github/workflows/electron-release.yml`
 - Dependency automation: `.github/dependabot.yml`
+
+## Otomatik sürüm yayınlama (ZORUNLU akış)
+
+**Her değişiklikten sonra** — düzeltme, yeni özellik, UI/UX iyileştirme,
+performans, hata gidermesi farketmez — yapılan iş kullanıcının masaüstündeki
+ŞefPOS'a otomatik güncelleme olarak ulaşmalı. Bu yüzden agent **her
+commit'ten sonra** şu adımları **otomatik** uygular (kullanıcı tek tek
+istemese bile):
+
+1. `package.json` → `version` alanını **patch level** yükselt (ör. `1.0.7 → 1.0.8`).
+   Major/minor bump'ı kullanıcı açıkça istemedikçe yapma.
+2. Değişiklikleri commit et (HEREDOC veya temp dosya ile multi-line mesaj).
+3. Master'a push: `git push origin master`.
+4. Yeni tag oluştur: `git tag -a v<version> -m "<kisa-aciklama>"`.
+5. Tag'i push et: `git push origin v<version>`.
+
+GitHub Actions (`electron-release.yml`) tag push'unu görür görmez Windows
+installer build alır, **softprops/action-gh-release@v2** ile
+**`sefposbulut/sefpos-releases`** repo'sundaki Release'e
+`Sefpos-Setup-<version>.exe`, `latest.yml`, `.blockmap` dosyalarını yükler.
+Müşterinin masaüstündeki `electron-updater` bu repo'yu poll eder → kasada
+otomatik indirir + onayla yükler.
+
+### Önemli notlar
+
+- **Tag formatı:** her zaman `v<MAJOR>.<MINOR>.<PATCH>` (lider `v` zorunlu;
+  `vPrefixedTagName: true` zaten `package.json#build.publish`'te ayarlı).
+- **artifactName sabit:** `package.json#build.win.artifactName` ve
+  `build.nsis.artifactName` mutlaka `"Sefpos-Setup-${version}.${ext}"` olmalı.
+  Boşluklu adlar softprops tarafından `Sefpos.Setup.X.Y.Z.exe`'ye çevrilir
+  ve `latest.yml` ile uyumsuz olunca electron-updater 404 verir.
+- **Anon key fallback:** `src/lib/supabase.ts` içindeki
+  `DEFAULT_SUPABASE_ANON_KEY` Electron `main.cjs#FALLBACK_PRIMARY_SUPABASE_ANON_KEY`
+  ile **birebir aynı** olmalı. GitHub Actions runner'da `.env` yoktur, fallback
+  olmadan production build "supabaseKey is required" diye crash eder ve
+  "Sistem hazırlanıyor" splash'ında takılır.
+- **GitHub'a manuel kurulum yok:** Build/publish her zaman Actions üzerinden.
+  Yerel `electron-builder` yalnızca tanı amaçlı çalıştırılır, asla manuel
+  release oluşturulmaz.
+- **Required secret:** `RELEASE_REPO_TOKEN` → `sefposbulut/sefpos-releases`
+  reposuna **Contents: Read and write** yetkisi olan fine-grained PAT.
+  Sadece bu repoyu kapsamalı (sefpos'u değil).
+- **Sürüm bump'ı atlama:** Eğer kullanıcı sadece doc/CI değişikliği yapıyorsa
+  ve onun otomatik güncellemeye gitmesini istemiyorsa, `[skip release]`
+  commit mesajı kullanıp tag açma. Varsayılan: **her zaman tag aç**.
 
 Required GitHub secrets for automation:
 
