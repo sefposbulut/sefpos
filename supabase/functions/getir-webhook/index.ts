@@ -38,13 +38,28 @@ interface PlatformRow {
   is_active: boolean | null;
 }
 
+/**
+ * Getir resmi status kodlari → ŞefPOS normalize edilmis durum.
+ *   325 → new           (yeni, verify bekleniyor)
+ *   350 → scheduled_new (yeni ileri tarihli)
+ *   400 → verified      (verify yapildi, prepare bekleniyor)
+ *   410 → preparing     (prepare yapildi, hazirlaniyor)
+ *   500 → ready         (hazir, handover bekleniyor)
+ *   550 → handed_over   (kurye aldi)
+ *   600/700 → on_the_way (yolda)
+ *   800 → arrived       (teslim noktasinda)
+ *   900 → delivered     (teslim edildi)
+ *   1500/1600 → cancelled
+ */
 function normalizeStatus(getirCode: number): string {
   switch (getirCode) {
-    case 325: case 400: return "new";
-    case 350: return "scheduled_accepted";
-    case 500: return "preparing";
-    case 550: return "ready";
-    case 600: case 700: return "handed_over";
+    case 325: return "new";
+    case 350: return "scheduled_new";
+    case 400: return "verified";
+    case 410: return "preparing";
+    case 500: return "ready";
+    case 550: return "handed_over";
+    case 600: case 700: return "on_the_way";
     case 800: return "arrived";
     case 900: return "delivered";
     case 1500: case 1600: return "cancelled";

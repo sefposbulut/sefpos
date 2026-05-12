@@ -325,14 +325,27 @@ async function upsertGetirOrder(
   const deliveryFee = Number(order.deliveryFee ?? 0);
   const supplierSupportRate = Number(order.supplierSupportRate ?? 0);
 
+  // Getir resmi status kodlari (Food API doc):
+  //   325 = New order (verify bekleniyor)
+  //   350 = New scheduled order
+  //   400 = Verified (prepare bekleniyor)
+  //   410 = Preparing (prepare yapildi, hazirlaniyor)
+  //   500 = Ready (handover bekleniyor)
+  //   550 = Handed to courier (kurye aldi)
+  //   600/700 = On the way (yolda)
+  //   800 = Arrived (teslim noktasinda)
+  //   900 = Delivered (teslim edildi)
+  //   1500/1600 = Cancelled
   const statusCode = Number(order.status ?? 0);
   let normalizedStatus: string = "new";
   switch (statusCode) {
-    case 325: case 400: normalizedStatus = "new"; break;
-    case 350: normalizedStatus = "scheduled_accepted"; break;
-    case 500: normalizedStatus = "preparing"; break;
-    case 550: normalizedStatus = "ready"; break;
-    case 600: case 700: normalizedStatus = "handed_over"; break;
+    case 325: normalizedStatus = "new"; break;
+    case 350: normalizedStatus = "scheduled_new"; break;
+    case 400: normalizedStatus = "verified"; break;
+    case 410: normalizedStatus = "preparing"; break;
+    case 500: normalizedStatus = "ready"; break;
+    case 550: normalizedStatus = "handed_over"; break;
+    case 600: case 700: normalizedStatus = "on_the_way"; break;
     case 800: normalizedStatus = "arrived"; break;
     case 900: normalizedStatus = "delivered"; break;
     case 1500: case 1600: normalizedStatus = "cancelled"; break;
@@ -592,15 +605,24 @@ Deno.serve(async (req) => {
         const path = `/food-orders/${encodeURIComponent(body.orderId)}/${body.action}`;
         const res = await callGetir(admin, platform as PlatformRow, "POST", path, body.payload || {});
         if (res.ok) {
-          const nextStatus: Record<string, { status: string; col: string | null }> = {
-            verify: { status: "preparing", col: "accepted_at" },
-            "verify-scheduled": { status: "scheduled_accepted", col: "accepted_at" },
-            prepare: { status: "preparing", col: null },
-            handover: { status: "handed_over", col: "ready_at" },
-            deliver: { status: "delivered", col: "delivered_at" },
+          // Her aksiyonun ardindan DB'deki status + getir_status_code'u
+          // resmi doc'a gore guncelle. Boylece UI yeniden senkronize bekleyene
+          // kadar dogru buton gosterir.
+          const nextStatus: Record<
+            string,
+            { status: string; statusCode: number; col: string | null }
+          > = {
+            verify: { status: "verified", statusCode: 400, col: "accepted_at" },
+            "verify-scheduled": { status: "scheduled_accepted", statusCode: 350, col: "accepted_at" },
+            prepare: { status: "preparing", statusCode: 410, col: null },
+            handover: { status: "on_the_way", statusCode: 700, col: "ready_at" },
+            deliver: { status: "delivered", statusCode: 900, col: "delivered_at" },
           };
           const upd = nextStatus[body.action];
-          const patch: Record<string, any> = { status: upd.status };
+          const patch: Record<string, any> = {
+            status: upd.status,
+            getir_status_code: upd.statusCode,
+          };
           if (upd.col) patch[upd.col] = new Date().toISOString();
           await admin
             .from("online_orders")
