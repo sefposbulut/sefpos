@@ -23,6 +23,7 @@ import { DeviceManagement } from './DeviceManagement';
 import { WaiterManagement } from './WaiterManagement';
 import { ScaleCalibration } from './ScaleCalibration';
 import { QrMenuManager } from './QrMenuManager';
+import { callGetir, generateGetirApiKey } from '../lib/getirApi';
 
 type TableGroup = Database['public']['Tables']['table_groups']['Row'];
 
@@ -863,6 +864,23 @@ export function Settings({ onClose }: SettingsProps) {
         (isGetirPlatform ? platformRestaurantSecretKey : '')
       ) || null,
     };
+
+    if (isGetirPlatform) {
+      // Getir entegrasyonu icin top-level kolonlari da senkronize tut.
+      // x-api-key yoksa otomatik 32 hex karakterli secret uret — kullanici
+      // bunu Getir'e (cc: getiryemekapi@getir.com) gondermesi gerekecek.
+      const existingXApiKey = (editingPlatformId
+        ? platforms.find((p) => p.id === editingPlatformId)?.getir_x_api_key
+        : null) as string | null | undefined;
+      const existingEnv = (editingPlatformId
+        ? platforms.find((p) => p.id === editingPlatformId)?.getir_environment
+        : null) as string | null | undefined;
+      platformData.getir_environment = existingEnv || 'development';
+      platformData.getir_app_secret_key = platformAppSecretKey || null;
+      platformData.getir_restaurant_secret_key = platformRestaurantSecretKey || null;
+      platformData.getir_restaurant_id = platformRestaurantId || null;
+      platformData.getir_x_api_key = existingXApiKey || generateGetirApiKey();
+    }
 
     let error;
     if (editingPlatformId) {
@@ -1902,10 +1920,16 @@ export function Settings({ onClose }: SettingsProps) {
                               </div>
                             )}
                             {platform.platform_code === 'getir' && (
-                              <div>
+                              <div className="col-span-2">
                                 <span className="text-gray-400 text-xs">Getir Kimlik Bilgileri</span>
                                 <p className="text-gray-700 font-medium">
-                                  appSecret: {platform.settings?.app_secret_key ? 'Kayitli' : 'Yok'} / restaurantSecret: {platform.settings?.restaurant_secret_key ? 'Kayitli' : 'Yok'}
+                                  appSecret: {platform.getir_app_secret_key || platform.settings?.app_secret_key ? 'Kayıtlı' : 'Yok'} / restaurantSecret: {platform.getir_restaurant_secret_key || platform.settings?.restaurant_secret_key ? 'Kayıtlı' : 'Yok'} / restaurantId: {platform.getir_restaurant_id ? platform.getir_restaurant_id.slice(0, 8) + '…' : 'Yok'}
+                                </p>
+                                <p className="text-xs text-gray-500 mt-1">
+                                  Ortam: <strong>{platform.getir_environment || 'development'}</strong> · POS Durumu:{' '}
+                                  <strong className={platform.getir_pos_status === 100 ? 'text-green-700' : 'text-red-700'}>
+                                    {platform.getir_pos_status === 100 ? 'AÇIK' : 'KAPALI'}
+                                  </strong>
                                 </p>
                               </div>
                             )}
@@ -1968,6 +1992,10 @@ export function Settings({ onClose }: SettingsProps) {
                           </div>
                         </div>
                       </div>
+
+                      {platform.platform_code === 'getir' && (
+                        <GetirPlatformControls platform={platform} onChanged={loadPlatforms} />
+                      )}
                     </div>
                   ))}
                   {platforms.length === 0 && (
@@ -3679,6 +3707,246 @@ function ShiftDefinitionEditor({
           {saving ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
           {isNew ? 'Ekle' : 'Kaydet'}
         </button>
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================ */
+/*  Getir entegrasyonu — POS Aç/Kapat + webhook URL paneli      */
+/* ============================================================ */
+
+interface GetirPlatformControlsProps {
+  platform: any;
+  onChanged: () => void;
+}
+
+function GetirPlatformControls({ platform, onChanged }: GetirPlatformControlsProps) {
+  const [busy, setBusy] = useState<string | null>(null);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+
+  const baseUrl = (import.meta.env.VITE_SUPABASE_URL || 'https://xdfnozfuuzctubijbnds.supabase.co')
+    .replace(/\/$/, '');
+  const newOrderUrl = `${baseUrl}/functions/v1/getir-webhook?type=new`;
+  const cancelUrl = `${baseUrl}/functions/v1/getir-webhook?type=cancel`;
+  const xApiKey: string = platform.getir_x_api_key || '';
+
+  const copy = async (label: string, text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedKey(label);
+      setTimeout(() => setCopiedKey(null), 1500);
+    } catch {
+      window.prompt('Kopyalanacak değer:', text);
+    }
+  };
+
+  const setPosStatus = async (target: 100 | 200) => {
+    setBusy(`pos-${target}`);
+    try {
+      const res = await callGetir({ platformId: platform.id, action: 'pos-status-set', status: target });
+      if (!res.ok) {
+        const msg = (res as any)?.data?.message || res.error || 'Getir tarafı hata döndü';
+        alert(`POS durumu güncellenemedi: ${msg}`);
+      } else {
+        alert(target === 100 ? 'Getir POS durumu AÇIK olarak ayarlandı.' : 'Getir POS durumu KAPALI olarak ayarlandı.');
+        onChanged();
+      }
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const refreshStatus = async () => {
+    setBusy('get');
+    try {
+      const res = await callGetir({ platformId: platform.id, action: 'pos-status-get' });
+      if (!res.ok) {
+        const msg = (res as any)?.data?.message || res.error || 'Getir tarafı hata döndü';
+        alert(`POS durumu sorgulanamadı: ${msg}`);
+      } else {
+        onChanged();
+      }
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const setEnvironment = async (env: 'development' | 'production') => {
+    if (env === 'production' && !confirm('CANLI ortama geçmek istediğinize emin misiniz? Bu işlem gerçek Getir siparişlerini etkiler.')) {
+      return;
+    }
+    setBusy(`env-${env}`);
+    try {
+      const { error } = await supabase
+        .from('online_order_platforms')
+        .update({ getir_environment: env, getir_token: null, getir_token_expires_at: null })
+        .eq('id', platform.id);
+      if (error) {
+        alert('Ortam güncellenemedi: ' + error.message);
+      } else {
+        onChanged();
+      }
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const pollActive = async () => {
+    setBusy('poll');
+    try {
+      const res = await callGetir({ platformId: platform.id, action: 'poll-active' });
+      if (!res.ok) {
+        alert(`Siparişler çekilemedi: ${(res as any)?.data?.message || res.error}`);
+      } else {
+        alert(`${res.saved ?? 0} sipariş güncellendi (toplam ${res.fetched ?? 0} adet).`);
+      }
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <div className="mt-4 border-t-2 border-purple-100 pt-4 bg-purple-50/50 -mx-4 -mb-4 px-4 pb-4 rounded-b-lg">
+      <div className="flex items-center gap-2 mb-3">
+        <span className="bg-purple-600 text-white px-2 py-0.5 rounded text-xs font-black">GETIR</span>
+        <h5 className="font-bold text-purple-900">Entegrasyon Kontrol Paneli</h5>
+      </div>
+
+      {/* Ortam seçici */}
+      <div className="mb-3">
+        <label className="text-xs text-purple-900 font-bold block mb-1">Çalışma Ortamı</label>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => setEnvironment('development')}
+            disabled={busy !== null}
+            className={`flex-1 py-2 px-3 rounded-lg text-sm font-bold transition ${
+              (platform.getir_environment || 'development') === 'development'
+                ? 'bg-amber-500 text-white shadow'
+                : 'bg-white text-amber-700 border-2 border-amber-300 hover:bg-amber-50'
+            }`}
+          >
+            TEST ORTAMI
+          </button>
+          <button
+            type="button"
+            onClick={() => setEnvironment('production')}
+            disabled={busy !== null}
+            className={`flex-1 py-2 px-3 rounded-lg text-sm font-bold transition ${
+              platform.getir_environment === 'production'
+                ? 'bg-green-600 text-white shadow'
+                : 'bg-white text-green-700 border-2 border-green-300 hover:bg-green-50'
+            }`}
+          >
+            CANLI ORTAM
+          </button>
+        </div>
+      </div>
+
+      {/* POS Aç/Kapat */}
+      <div className="mb-3 grid grid-cols-1 sm:grid-cols-3 gap-2">
+        <button
+          type="button"
+          onClick={() => setPosStatus(100)}
+          disabled={busy !== null}
+          className="bg-green-600 hover:bg-green-700 text-white font-black py-2.5 rounded-lg shadow disabled:opacity-50"
+        >
+          {busy === 'pos-100' ? '...' : 'POS\'U AÇ (Aktif)'}
+        </button>
+        <button
+          type="button"
+          onClick={() => setPosStatus(200)}
+          disabled={busy !== null}
+          className="bg-red-600 hover:bg-red-700 text-white font-black py-2.5 rounded-lg shadow disabled:opacity-50"
+        >
+          {busy === 'pos-200' ? '...' : 'POS\'U KAPAT'}
+        </button>
+        <button
+          type="button"
+          onClick={refreshStatus}
+          disabled={busy !== null}
+          className="bg-slate-700 hover:bg-slate-800 text-white font-bold py-2.5 rounded-lg shadow disabled:opacity-50"
+        >
+          {busy === 'get' ? '...' : 'Durumu Sorgula'}
+        </button>
+      </div>
+
+      <button
+        type="button"
+        onClick={pollActive}
+        disabled={busy !== null}
+        className="w-full mb-3 bg-purple-700 hover:bg-purple-800 text-white font-bold py-2 rounded-lg disabled:opacity-50"
+      >
+        {busy === 'poll' ? 'Sipariş alınıyor…' : 'Aktif Siparişleri Senkronize Et'}
+      </button>
+
+      {/* Webhook URL'leri — Getir'e gönderilecek bilgiler */}
+      <div className="bg-white border-2 border-purple-200 rounded-lg p-3 space-y-2">
+        <p className="text-xs text-purple-900 font-bold mb-1">
+          📨 Getir'e gönderilmesi gereken bilgiler (cc: getiryemekapi@getir.com)
+        </p>
+
+        <div>
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-[10px] uppercase font-bold text-slate-500">Yeni Sipariş Webhook</span>
+            <button
+              type="button"
+              onClick={() => copy('new', newOrderUrl)}
+              className="text-[10px] font-bold text-purple-700 hover:text-purple-900"
+            >
+              {copiedKey === 'new' ? '✓ Kopyalandı' : 'Kopyala'}
+            </button>
+          </div>
+          <code className="block bg-slate-50 border border-slate-200 rounded p-2 text-[11px] font-mono break-all">
+            {newOrderUrl}
+          </code>
+        </div>
+
+        <div>
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-[10px] uppercase font-bold text-slate-500">İptal Webhook</span>
+            <button
+              type="button"
+              onClick={() => copy('cancel', cancelUrl)}
+              className="text-[10px] font-bold text-purple-700 hover:text-purple-900"
+            >
+              {copiedKey === 'cancel' ? '✓ Kopyalandı' : 'Kopyala'}
+            </button>
+          </div>
+          <code className="block bg-slate-50 border border-slate-200 rounded p-2 text-[11px] font-mono break-all">
+            {cancelUrl}
+          </code>
+        </div>
+
+        <div>
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-[10px] uppercase font-bold text-slate-500">x-api-key</span>
+            <button
+              type="button"
+              onClick={() => xApiKey && copy('key', xApiKey)}
+              disabled={!xApiKey}
+              className="text-[10px] font-bold text-purple-700 hover:text-purple-900 disabled:opacity-50"
+            >
+              {copiedKey === 'key' ? '✓ Kopyalandı' : 'Kopyala'}
+            </button>
+          </div>
+          {xApiKey ? (
+            <code className="block bg-slate-50 border border-slate-200 rounded p-2 text-[11px] font-mono break-all">
+              {xApiKey}
+            </code>
+          ) : (
+            <div className="text-[11px] text-red-600 font-bold bg-red-50 border border-red-200 rounded p-2">
+              Henüz oluşturulmadı. Platformu güncelleyip kaydedin — otomatik üretilir.
+            </div>
+          )}
+        </div>
+
+        <p className="text-[11px] text-slate-600 mt-2 leading-tight">
+          Bu 3 değeri (2 URL + x-api-key) Getir Entegrasyon ekibine ileterek
+          webhook tanımı yaptırın. ŞefPOS, Getir'den gelen istekleri x-api-key
+          ile doğrular; eşleşmeyen istekler reddedilir.
+        </p>
       </div>
     </div>
   );

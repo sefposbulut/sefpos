@@ -424,3 +424,14 @@ verify_jwt = false
 # JWT'yi fonksiyon içinde admin.auth.getUser ile manuel doğruluyoruz.
 [functions.create-waiter-auth]
 verify_jwt = false
+
+# Getir webhook — public endpoint, x-api-key header ile dogrulanir.
+# JWT gateway-level kapali; fonksiyon kendi icinde x-api-key kontrolu yapar.
+[functions.getir-webhook]
+verify_jwt = false
+
+# Getir API koprusu — sefpos UI'sinden cagrilan endpoint. JWT gerekir.
+# verify_jwt = true varsayilan oldugu icin burada tanim sart degil; sade kalsin.
+[functions.getir-api]
+verify_jwt = false
+

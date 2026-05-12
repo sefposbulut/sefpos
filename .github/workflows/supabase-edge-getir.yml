@@ -1,0 +1,48 @@
+name: Supabase Edge (Getir)
+
+on:
+  push:
+    branches: ["main", "master"]
+    paths:
+      - "supabase/functions/getir-api/**"
+      - "supabase/functions/getir-webhook/**"
+      - "supabase/config.toml"
+  workflow_dispatch:
+
+jobs:
+  deploy-getir-functions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Verify secrets
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          missing=0
+          [ -z "$SUPABASE_ACCESS_TOKEN" ] && { echo "::error::SUPABASE_ACCESS_TOKEN eksik"; missing=1; }
+          [ -z "$SUPABASE_PROJECT_REF" ] && { echo "::error::SUPABASE_PROJECT_REF eksik"; missing=1; }
+          exit "$missing"
+
+      - name: Link project
+        run: supabase link --project-ref "${{ secrets.SUPABASE_PROJECT_REF }}"
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+
+      - name: Deploy Getir Edge functions
+        # getir-webhook public (verify_jwt=false), config.toml zaten gateway-level kapatiyor.
+        # getir-api kendi icinde JWT dogrulamasini Supabase auth ile yapiyor; biz manuel control
+        # icin --no-verify-jwt vermiyoruz, supabase config.toml'daki ayar gecerli.
+        run: |
+          supabase functions deploy getir-api getir-webhook
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}

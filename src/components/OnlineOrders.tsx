@@ -2,8 +2,9 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { Database } from '../lib/supabase';
-import { ShoppingBag, Clock, Phone, MapPin, Check, X, ChevronDown, ChevronUp, Bike, Package, RefreshCw, Volume2, VolumeX, AlertTriangle } from 'lucide-react';
+import { ShoppingBag, Clock, Phone, MapPin, Check, X, ChevronDown, ChevronUp, Bike, Package, RefreshCw, Volume2, VolumeX, AlertTriangle, Hash, Tag } from 'lucide-react';
 import { playNotificationSound } from '../lib/notification';
+import { callGetir, eligibleCancelReasons, getirStatusLabel } from '../lib/getirApi';
 
 type OnlineOrder = Database['public']['Tables']['online_orders']['Row'];
 type OnlineOrderItem = Database['public']['Tables']['online_order_items']['Row'];
@@ -35,6 +36,10 @@ export function OnlineOrders() {
   const [expandedOrder, setExpandedOrder] = useState<string | null>(null);
   const [rejectingOrderId, setRejectingOrderId] = useState<string | null>(null);
   const [selectedRejectReason, setSelectedRejectReason] = useState('TOO_BUSY');
+  // Getir icin: secilen iptal sebebinin ObjectId'si + serbest not
+  const [getirCancelReasonId, setGetirCancelReasonId] = useState<string>('');
+  const [getirCancelNote, setGetirCancelNote] = useState<string>('');
+  const [busyOrderId, setBusyOrderId] = useState<string | null>(null);
   const [filter, setFilter] = useState<'all' | 'new' | 'accepted' | 'preparing' | 'ready'>('new');
   const [soundEnabled, setSoundEnabled] = useState(() => {
     const saved = localStorage.getItem('notification_sound_enabled');
@@ -159,6 +164,40 @@ export function OnlineOrders() {
         alert('Sipariş güncellenirken hata: ' + error.message);
         loadOrders();
       }
+    }
+  };
+
+  /**
+   * Getir'e ozel aksiyon gonder (verify/prepare/handover/deliver/cancel).
+   * Local state hemen guncellenir, hata olursa rollback yapar.
+   */
+  const doGetirAction = async (
+    order: OrderWithDetails,
+    action: 'verify' | 'verify-scheduled' | 'prepare' | 'handover' | 'deliver' | 'cancel',
+    extra?: { cancelReasonId?: string; cancelNote?: string },
+  ) => {
+    setBusyOrderId(order.id);
+    try {
+      const res = await callGetir({
+        platformId: order.platform_id,
+        action,
+        orderId: order.platform_order_id,
+        cancelReasonId: extra?.cancelReasonId,
+        cancelNote: extra?.cancelNote,
+      });
+      if (!res.ok) {
+        const detail = (res as any)?.data?.message || res.error || 'Getir tarafı hata döndü';
+        alert(`Getir aksiyonu başarısız (${action}): ${detail}`);
+        await loadOrders();
+        return;
+      }
+      // Backend zaten online_orders'u guncelledi — local state'i de yenile
+      await loadOrders();
+    } catch (err: any) {
+      alert(`Getir aksiyonu sırasında hata: ${err?.message || err}`);
+      await loadOrders();
+    } finally {
+      setBusyOrderId(null);
     }
   };
 
@@ -404,44 +443,219 @@ export function OnlineOrders() {
                         </span>
                       </div>
 
-                      {order.status === 'new' && rejectingOrderId === order.id && (
-                        <div className="bg-red-50 border-2 border-red-200 rounded-xl p-3 space-y-3">
-                          <div className="flex items-center gap-2 text-red-700 font-bold text-sm">
-                            <AlertTriangle className="w-4 h-4" />
-                            Reddetme Sebebi
-                          </div>
-                          <select
-                            value={selectedRejectReason}
-                            onChange={e => setSelectedRejectReason(e.target.value)}
-                            className="w-full border border-red-300 rounded-lg px-3 py-2 text-sm font-medium text-slate-800 bg-white focus:outline-none focus:ring-2 focus:ring-red-400"
-                          >
-                            {REJECT_REASONS.map(r => (
-                              <option key={r.value} value={r.value}>{r.label}</option>
-                            ))}
-                          </select>
-                          <div className="flex gap-2">
-                            <button
-                              onClick={() => setRejectingOrderId(null)}
-                              className="flex-1 border-2 border-slate-300 text-slate-700 font-bold py-2.5 rounded-xl transition-all hover:bg-slate-50 text-sm"
-                            >
-                              Vazgec
-                            </button>
-                            <button
-                              onClick={() => {
-                                setRejectingOrderId(null);
-                                updateOrderStatus(order.id, 'cancelled', 'reject', selectedRejectReason);
-                              }}
-                              disabled={loading}
-                              className="flex-1 bg-red-600 hover:bg-red-700 text-white font-black py-2.5 rounded-xl transition-all active:scale-95 disabled:opacity-50 text-sm flex items-center justify-center gap-1.5"
-                            >
-                              <X className="w-4 h-4" />
-                              REDDET
-                            </button>
-                          </div>
+                      {/* Getir-spesifik bilgi rozeti: doğrulama kodu + statu */}
+                      {order.online_order_platforms.platform_code === 'getir' && (
+                        <div className="flex flex-wrap items-center gap-2 mb-3 text-xs">
+                          {order.getir_verification_code && (
+                            <span className="bg-purple-100 text-purple-800 font-black px-2.5 py-1 rounded-lg flex items-center gap-1">
+                              <Hash className="w-3 h-3" />
+                              {order.getir_verification_code.toUpperCase()}
+                            </span>
+                          )}
+                          {typeof order.getir_status_code === 'number' && (
+                            <span className="bg-slate-100 text-slate-700 font-bold px-2.5 py-1 rounded-lg">
+                              {getirStatusLabel(order.getir_status_code)}
+                            </span>
+                          )}
+                          {order.getir_delivery_type === 1 && (
+                            <span className="bg-purple-600 text-white font-bold px-2.5 py-1 rounded-lg">Getir Kurye</span>
+                          )}
+                          {order.getir_delivery_type === 2 && (
+                            <span className="bg-amber-600 text-white font-bold px-2.5 py-1 rounded-lg">Restoran Kurye</span>
+                          )}
+                          {order.getir_is_scheduled && (
+                            <span className="bg-amber-100 text-amber-800 font-bold px-2.5 py-1 rounded-lg">İleri Tarih</span>
+                          )}
+                          {Number(order.getir_total_discount || 0) > 0 && (
+                            <span className="bg-rose-100 text-rose-800 font-bold px-2.5 py-1 rounded-lg flex items-center gap-1">
+                              <Tag className="w-3 h-3" />
+                              Ortak Kampanya
+                            </span>
+                          )}
                         </div>
                       )}
 
-                      {order.status === 'new' && rejectingOrderId !== order.id && (
+                      {/* GETIR akış: yeni siparişte iptal sebepleri Getir resmi listesinden */}
+                      {order.online_order_platforms.platform_code === 'getir' &&
+                        order.status === 'new' &&
+                        rejectingOrderId === order.id && (
+                          <div className="bg-red-50 border-2 border-red-200 rounded-xl p-3 space-y-3">
+                            <div className="flex items-center gap-2 text-red-700 font-bold text-sm">
+                              <AlertTriangle className="w-4 h-4" />
+                              Getir İptal Sebebi
+                            </div>
+                            <select
+                              value={getirCancelReasonId}
+                              onChange={(e) => setGetirCancelReasonId(e.target.value)}
+                              className="w-full border border-red-300 rounded-lg px-3 py-2 text-sm font-medium text-slate-800 bg-white focus:outline-none focus:ring-2 focus:ring-red-400"
+                            >
+                              <option value="">— Sebep seçin —</option>
+                              {eligibleCancelReasons(
+                                order.getir_status_code ?? 400,
+                                order.getir_delivery_type ?? 2,
+                              ).map((r) => (
+                                <option key={r.id} value={r.id}>
+                                  {r.text}
+                                </option>
+                              ))}
+                            </select>
+                            <textarea
+                              placeholder="Not (opsiyonel)"
+                              value={getirCancelNote}
+                              onChange={(e) => setGetirCancelNote(e.target.value)}
+                              rows={2}
+                              className="w-full border border-red-300 rounded-lg px-3 py-2 text-sm font-medium text-slate-800 bg-white focus:outline-none focus:ring-2 focus:ring-red-400"
+                            />
+                            <div className="flex gap-2">
+                              <button
+                                onClick={() => {
+                                  setRejectingOrderId(null);
+                                  setGetirCancelReasonId('');
+                                  setGetirCancelNote('');
+                                }}
+                                className="flex-1 border-2 border-slate-300 text-slate-700 font-bold py-2.5 rounded-xl transition-all hover:bg-slate-50 text-sm"
+                              >
+                                Vazgeç
+                              </button>
+                              <button
+                                onClick={async () => {
+                                  if (!getirCancelReasonId) {
+                                    alert('Lütfen iptal sebebi seçin.');
+                                    return;
+                                  }
+                                  const reasonId = getirCancelReasonId;
+                                  const note = getirCancelNote;
+                                  setRejectingOrderId(null);
+                                  setGetirCancelReasonId('');
+                                  setGetirCancelNote('');
+                                  await doGetirAction(order, 'cancel', { cancelReasonId: reasonId, cancelNote: note });
+                                }}
+                                disabled={busyOrderId === order.id}
+                                className="flex-1 bg-red-600 hover:bg-red-700 text-white font-black py-2.5 rounded-xl transition-all active:scale-95 disabled:opacity-50 text-sm flex items-center justify-center gap-1.5"
+                              >
+                                <X className="w-4 h-4" />
+                                REDDET
+                              </button>
+                            </div>
+                          </div>
+                        )}
+
+                      {/* GETIR butonları */}
+                      {order.online_order_platforms.platform_code === 'getir' && (
+                        <>
+                          {order.status === 'new' && rejectingOrderId !== order.id && (
+                            <div className="flex gap-2">
+                              <button
+                                onClick={() => {
+                                  setGetirCancelReasonId('');
+                                  setGetirCancelNote('');
+                                  setRejectingOrderId(order.id);
+                                }}
+                                disabled={busyOrderId === order.id}
+                                className="flex-1 bg-red-600 hover:bg-red-700 text-white font-black py-3 rounded-xl transition-all active:scale-95 disabled:opacity-50 flex items-center justify-center gap-2"
+                              >
+                                <X className="w-5 h-5" />
+                                REDDET
+                              </button>
+                              <button
+                                onClick={() =>
+                                  doGetirAction(order, order.getir_is_scheduled ? 'verify-scheduled' : 'verify')
+                                }
+                                disabled={busyOrderId === order.id}
+                                className="flex-1 bg-green-600 hover:bg-green-700 text-white font-black py-3 rounded-xl transition-all active:scale-95 disabled:opacity-50 flex items-center justify-center gap-2"
+                              >
+                                <Check className="w-5 h-5" />
+                                ONAYLA
+                              </button>
+                            </div>
+                          )}
+
+                          {order.status === 'scheduled_accepted' && (
+                            <div className="w-full bg-amber-100 text-amber-800 font-bold py-3 rounded-xl text-center text-sm">
+                              İleri tarihli — Getir teslimat saatinden 1 saat önce hazırlanma akışını başlatacak.
+                            </div>
+                          )}
+
+                          {(order.status === 'preparing' || order.status === 'new' /* verify sonrası backend preparing yaptı */) &&
+                            order.getir_status_code !== 500 && (
+                              <button
+                                onClick={() => doGetirAction(order, 'prepare')}
+                                disabled={busyOrderId === order.id}
+                                className="w-full bg-yellow-600 hover:bg-yellow-700 text-white font-black py-3 rounded-xl transition-all active:scale-95 disabled:opacity-50 flex items-center justify-center gap-2"
+                              >
+                                <Package className="w-5 h-5" />
+                                HAZIRLANMAYA BAŞLA
+                              </button>
+                            )}
+
+                          {(order.status === 'preparing' || order.getir_status_code === 500) && (
+                            <div className="grid grid-cols-1 gap-2 mt-2">
+                              {order.getir_delivery_type === 1 ? (
+                                <button
+                                  onClick={() => doGetirAction(order, 'handover')}
+                                  disabled={busyOrderId === order.id}
+                                  className="w-full bg-purple-600 hover:bg-purple-700 text-white font-black py-3 rounded-xl transition-all active:scale-95 disabled:opacity-50 flex items-center justify-center gap-2"
+                                >
+                                  <Bike className="w-5 h-5" />
+                                  GETIR KURYESİNE TESLİM ETTİM
+                                </button>
+                              ) : (
+                                <button
+                                  onClick={() => doGetirAction(order, 'deliver')}
+                                  disabled={busyOrderId === order.id}
+                                  className="w-full bg-green-600 hover:bg-green-700 text-white font-black py-3 rounded-xl transition-all active:scale-95 disabled:opacity-50 flex items-center justify-center gap-2"
+                                >
+                                  <Check className="w-5 h-5" />
+                                  TESLİM EDİLDİ
+                                </button>
+                              )}
+                            </div>
+                          )}
+                        </>
+                      )}
+
+                      {/* Diğer platformlar (Yemeksepeti vb.) — eski akış değişmedi */}
+                      {order.online_order_platforms.platform_code !== 'getir' && order.status === 'new' &&
+                        rejectingOrderId === order.id && (
+                          <div className="bg-red-50 border-2 border-red-200 rounded-xl p-3 space-y-3">
+                            <div className="flex items-center gap-2 text-red-700 font-bold text-sm">
+                              <AlertTriangle className="w-4 h-4" />
+                              Reddetme Sebebi
+                            </div>
+                            <select
+                              value={selectedRejectReason}
+                              onChange={(e) => setSelectedRejectReason(e.target.value)}
+                              className="w-full border border-red-300 rounded-lg px-3 py-2 text-sm font-medium text-slate-800 bg-white focus:outline-none focus:ring-2 focus:ring-red-400"
+                            >
+                              {REJECT_REASONS.map((r) => (
+                                <option key={r.value} value={r.value}>
+                                  {r.label}
+                                </option>
+                              ))}
+                            </select>
+                            <div className="flex gap-2">
+                              <button
+                                onClick={() => setRejectingOrderId(null)}
+                                className="flex-1 border-2 border-slate-300 text-slate-700 font-bold py-2.5 rounded-xl transition-all hover:bg-slate-50 text-sm"
+                              >
+                                Vazgec
+                              </button>
+                              <button
+                                onClick={() => {
+                                  setRejectingOrderId(null);
+                                  updateOrderStatus(order.id, 'cancelled', 'reject', selectedRejectReason);
+                                }}
+                                disabled={loading}
+                                className="flex-1 bg-red-600 hover:bg-red-700 text-white font-black py-2.5 rounded-xl transition-all active:scale-95 disabled:opacity-50 text-sm flex items-center justify-center gap-1.5"
+                              >
+                                <X className="w-4 h-4" />
+                                REDDET
+                              </button>
+                            </div>
+                          </div>
+                        )}
+
+                      {order.online_order_platforms.platform_code !== 'getir' && order.status === 'new' && rejectingOrderId !== order.id && (
                         <div className="flex gap-2">
                           <button
                             onClick={() => {
@@ -465,7 +679,7 @@ export function OnlineOrders() {
                         </div>
                       )}
 
-                      {order.status === 'accepted' && (
+                      {order.online_order_platforms.platform_code !== 'getir' && order.status === 'accepted' && (
                         <button
                           onClick={() => updateOrderStatus(order.id, 'preparing')}
                           disabled={loading}
@@ -476,7 +690,7 @@ export function OnlineOrders() {
                         </button>
                       )}
 
-                      {order.status === 'preparing' && (
+                      {order.online_order_platforms.platform_code !== 'getir' && order.status === 'preparing' && (
                         <button
                           onClick={() => updateOrderStatus(order.id, 'ready', 'prepared')}
                           disabled={loading}
