@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, Fragment } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { Database } from '../lib/supabase';
@@ -480,85 +480,139 @@ export function OnlineOrders() {
             </p>
           </div>
         ) : (
-          <div className="space-y-2">
-            {filteredOrders.map((order) => {
-              const isExpanded = expandedOrder === order.id;
-              const platformCode = order.online_order_platforms.platform_code;
-              const platformColor = getPlatformColor(platformCode);
-              const platformLabel = (order.online_order_platforms.platform_name || platformCode || '').toUpperCase();
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-slate-50 border-b-2 border-slate-200">
+                  <tr>
+                    <th className="px-3 py-3 text-left text-[10px] font-black text-slate-500 uppercase tracking-wider">Platform</th>
+                    <th className="px-3 py-3 text-left text-[10px] font-black text-slate-500 uppercase tracking-wider">Müşteri</th>
+                    <th className="px-3 py-3 text-left text-[10px] font-black text-slate-500 uppercase tracking-wider">Adres</th>
+                    <th className="px-3 py-3 text-left text-[10px] font-black text-slate-500 uppercase tracking-wider">Sipariş No</th>
+                    <th className="px-3 py-3 text-left text-[10px] font-black text-slate-500 uppercase tracking-wider">Ürün</th>
+                    <th className="px-3 py-3 text-right text-[10px] font-black text-slate-500 uppercase tracking-wider">Tutar</th>
+                    <th className="px-3 py-3 text-left text-[10px] font-black text-slate-500 uppercase tracking-wider">Ödeme</th>
+                    <th className="px-3 py-3 text-left text-[10px] font-black text-slate-500 uppercase tracking-wider">Tarihi</th>
+                    <th className="px-3 py-3 text-left text-[10px] font-black text-slate-500 uppercase tracking-wider">Durum</th>
+                    <th className="px-3 py-3 text-right text-[10px] font-black text-slate-500 uppercase tracking-wider">İşlemler</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {filteredOrders.map((order) => {
+                    const isExpanded = expandedOrder === order.id;
+                    const platformCode = order.online_order_platforms.platform_code;
+                    const platformColor = getPlatformColor(platformCode);
+                    const platformLabel = (order.online_order_platforms.platform_name || platformCode || '').toUpperCase();
+                    const orderDate = new Date(order.created_at);
 
-              return (
-                <div
-                  key={order.id}
-                  className={`bg-white rounded-xl shadow-sm hover:shadow-md transition-all overflow-hidden border ${
-                    isExpanded ? 'border-slate-300' : 'border-slate-200'
-                  }`}
-                  style={{ borderLeftWidth: 6, borderLeftColor: platformColor }}
-                >
-                  {/* ─── KOMPAKT SATIR (her zaman görünür) ─── */}
-                  <button
-                    type="button"
-                    onClick={() => setExpandedOrder(isExpanded ? null : order.id)}
-                    className="w-full px-3 md:px-4 py-2.5 flex items-center gap-2 md:gap-3 text-left hover:bg-slate-50 transition"
-                  >
-                    {/* Platform badge */}
-                    <span
-                      className="text-white px-2 md:px-2.5 py-1 rounded-md text-[10px] md:text-[11px] font-black tracking-wider shrink-0 w-20 md:w-24 text-center"
-                      style={{ background: platformColor }}
-                    >
-                      {platformLabel.slice(0, 12)}
-                    </span>
+                    return (
+                      <Fragment key={order.id}>
+                        {/* ─── ANA SATIR ─── */}
+                        <tr
+                          onClick={() => setExpandedOrder(isExpanded ? null : order.id)}
+                          className={`${isExpanded ? 'bg-purple-50/40' : 'hover:bg-slate-50'} transition cursor-pointer`}
+                        >
+                          {/* PLATFORM */}
+                          <td className="px-3 py-3 whitespace-nowrap" style={{ borderLeftWidth: 4, borderLeftColor: platformColor, borderLeftStyle: 'solid' }}>
+                            <span
+                              className="inline-block text-white px-2.5 py-1 rounded-md text-[10px] font-black tracking-wider"
+                              style={{ background: platformColor }}
+                            >
+                              {platformLabel.slice(0, 14)}
+                            </span>
+                          </td>
 
-                    {/* Sipariş no */}
-                    <span className="font-mono font-bold text-slate-800 text-xs md:text-sm shrink-0 hidden sm:inline">
-                      #{order.platform_order_number || order.platform_order_id.slice(0, 6)}
-                    </span>
+                          {/* MÜŞTERI */}
+                          <td className="px-3 py-3 whitespace-nowrap font-bold text-slate-800">
+                            {order.customer_name}
+                          </td>
 
-                    {/* Saat */}
-                    <span className="text-[11px] md:text-xs text-slate-500 shrink-0 flex items-center gap-1">
-                      <Clock className="w-3 h-3" />
-                      {new Date(order.created_at).toLocaleTimeString('tr-TR', {
-                        hour: '2-digit',
-                        minute: '2-digit',
-                      })}
-                    </span>
+                          {/* ADRES */}
+                          <td className="px-3 py-3">
+                            <span
+                              className="text-xs text-slate-600 line-clamp-1 inline-block max-w-[220px]"
+                              title={order.customer_address || ''}
+                            >
+                              {order.customer_address || '—'}
+                            </span>
+                          </td>
 
-                    {/* Getir doğrulama kodu (eğer varsa) */}
-                    {platformCode === 'getir' && order.getir_verification_code && (
-                      <span className="bg-purple-100 text-purple-800 font-mono font-black px-1.5 py-0.5 rounded text-[10px] md:text-xs shrink-0 hidden md:inline">
-                        {order.getir_verification_code.toUpperCase()}
-                      </span>
-                    )}
+                          {/* SIPARIS NO */}
+                          <td className="px-3 py-3 whitespace-nowrap">
+                            <div className="font-mono font-bold text-slate-700 text-xs">
+                              #{order.platform_order_number || order.platform_order_id.slice(0, 6)}
+                            </div>
+                            {platformCode === 'getir' && order.getir_verification_code && (
+                              <div className="text-[10px] font-bold text-purple-700 font-mono">
+                                Kod: {order.getir_verification_code.toUpperCase()}
+                              </div>
+                            )}
+                          </td>
 
-                    {/* Müşteri (esnek alan) */}
-                    <span className="flex-1 min-w-0 text-slate-700 font-semibold truncate text-xs md:text-sm">
-                      {order.customer_name}
-                    </span>
+                          {/* ÜRÜN */}
+                          <td className="px-3 py-3 whitespace-nowrap text-slate-600 text-xs">
+                            {order.items.length} ürün
+                          </td>
 
-                    {/* Ürün sayısı */}
-                    <span className="text-[11px] md:text-xs text-slate-500 shrink-0 hidden sm:inline">
-                      {order.items.length} ürün
-                    </span>
+                          {/* TUTAR */}
+                          <td className="px-3 py-3 whitespace-nowrap text-right">
+                            <span className="font-black text-base" style={{ color: platformColor }}>
+                              {order.total_amount.toFixed(0)} ₺
+                            </span>
+                          </td>
 
-                    {/* Tutar */}
-                    <span className="font-black text-base md:text-lg shrink-0" style={{ color: platformColor }}>
-                      {order.total_amount.toFixed(0)}₺
-                    </span>
+                          {/* ÖDEME */}
+                          <td className="px-3 py-3 whitespace-nowrap text-xs text-slate-600">
+                            <div className="font-semibold">Online</div>
+                            <div className="text-[10px] text-slate-400">
+                              {order.payment_status === 'paid' ? 'Ödeme alındı' : 'Bekliyor'}
+                            </div>
+                          </td>
 
-                    {/* Status badge */}
-                    <div className="shrink-0 hidden md:block">{getStatusBadge(order.status)}</div>
+                          {/* TARİH */}
+                          <td className="px-3 py-3 whitespace-nowrap text-xs text-slate-600">
+                            <div>{orderDate.toLocaleDateString('tr-TR')}</div>
+                            <div className="text-[10px] text-slate-400">
+                              {orderDate.toLocaleTimeString('tr-TR', {
+                                hour: '2-digit',
+                                minute: '2-digit',
+                              })}
+                            </div>
+                          </td>
 
-                    {/* Chevron */}
-                    {isExpanded ? (
-                      <ChevronUp className="w-5 h-5 text-slate-400 shrink-0" />
-                    ) : (
-                      <ChevronDown className="w-5 h-5 text-slate-400 shrink-0" />
-                    )}
-                  </button>
+                          {/* DURUM */}
+                          <td className="px-3 py-3 whitespace-nowrap">
+                            {getStatusBadge(order.status)}
+                          </td>
 
-                  {/* ─── DETAY (sadece expand'lı) ─── */}
-                  {isExpanded && (
-                    <div className="border-t border-slate-200 bg-slate-50/50 px-3 md:px-4 py-3 space-y-3">
+                          {/* İŞLEMLER */}
+                          <td className="px-3 py-3 whitespace-nowrap text-right">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setExpandedOrder(isExpanded ? null : order.id);
+                              }}
+                              className="bg-purple-600 hover:bg-purple-700 text-white font-bold px-3 py-1.5 rounded-md text-xs inline-flex items-center gap-1 ml-auto"
+                            >
+                              {isExpanded ? (
+                                <>
+                                  <ChevronUp className="w-3.5 h-3.5" /> Kapat
+                                </>
+                              ) : (
+                                <>
+                                  <ChevronDown className="w-3.5 h-3.5" /> Detay
+                                </>
+                              )}
+                            </button>
+                          </td>
+                        </tr>
+
+                        {/* ─── DETAY SATIRI ─── */}
+                        {isExpanded && (
+                          <tr>
+                            <td colSpan={10} className="bg-slate-50/80 px-4 py-4 border-l-4" style={{ borderLeftColor: platformColor }}>
+                              <div className="space-y-3">
                       {/* Status badge (mobilde header'da yok) + telefon + adres */}
                       <div className="flex flex-wrap items-start gap-3 text-sm">
                         <div className="md:hidden">{getStatusBadge(order.status)}</div>
@@ -904,11 +958,16 @@ export function OnlineOrders() {
                           HAZIR
                         </button>
                       )}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           </div>
         )}
       </div>
