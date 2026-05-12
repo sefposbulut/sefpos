@@ -16,8 +16,15 @@ const devUrl = typeof __SEFPOS_DEV_SUPABASE_URL__ === 'string' ? __SEFPOS_DEV_SU
 const devAnon = typeof __SEFPOS_DEV_SUPABASE_ANON_KEY__ === 'string' ? __SEFPOS_DEV_SUPABASE_ANON_KEY__.trim() : '';
 
 const DEFAULT_SUPABASE_URL = 'https://xdfnozfuuzctubijbnds.supabase.co';
-/** Gömülü anon yok: JWT `ref` alanı her projeye özel. Dashboard → Settings → API → `anon` public key → `.env` veya `sefpos-dev-port.json` → `supabaseDevAnonKey`. */
-const DEFAULT_SUPABASE_ANON_KEY = '';
+/**
+ * Publishable anon key — RLS sayesinde "public" sayilir, herhangi bir gizlilik
+ * hassasiyeti yok. Production build'de `.env` yoksa (orn. GitHub Actions
+ * runner) fallback olarak kullanilir, boylece `supabaseKey is required`
+ * crash'i yasanmaz. Electron main.cjs icindeki FALLBACK_PRIMARY_SUPABASE_ANON_KEY
+ * ile ayni. Geliştirme/lokal build'lerde .env veya sefpos-dev-port.json
+ * onceliklidir; bu sadece son fallback.
+ */
+const DEFAULT_SUPABASE_ANON_KEY = 'sb_publishable_wrSHY5Kzkw-bx0XzYM5VFA_FK3BFF_x';
 
 const supabaseUrl = portOverrideUrl || envUrl || devUrl || runtimeDbUrl || DEFAULT_SUPABASE_URL;
 const supabaseAnonKey = portOverrideAnon || envAnon || devAnon || runtimeDbAnonKey || DEFAULT_SUPABASE_ANON_KEY;
