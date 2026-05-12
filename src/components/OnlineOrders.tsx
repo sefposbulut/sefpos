@@ -365,6 +365,68 @@ export function OnlineOrders() {
     }
   };
 
+  /**
+   * Platform logosu — gerçek SVG asset'i yok, her platform için kurumsal
+   * renkli badge component'i. Resmi renk paletleriyle uyumlu.
+   */
+  const PlatformLogo = ({ code, name }: { code: string; name: string }) => {
+    const c = (code || '').toLowerCase();
+    const display = (name || code || '').toLowerCase();
+
+    if (c.includes('getir')) {
+      return (
+        <div className="inline-flex flex-col items-center justify-center bg-purple-700 text-white px-2.5 py-1.5 rounded-md leading-none shadow-sm" style={{ minWidth: 78 }}>
+          <span className="text-[11px] font-black tracking-wide">getir</span>
+          <span className="text-[8px] font-bold opacity-90 -mt-0.5">YEMEK</span>
+        </div>
+      );
+    }
+    if (c.includes('yemeksepeti')) {
+      return (
+        <div className="inline-flex items-center justify-center bg-red-600 text-white px-2.5 py-1.5 rounded-md leading-none shadow-sm italic" style={{ minWidth: 78 }}>
+          <span className="text-[10px] font-black">yemek</span>
+          <span className="text-[11px] font-extrabold ml-0.5">sepeti</span>
+        </div>
+      );
+    }
+    if (c.includes('trendyol')) {
+      return (
+        <div className="inline-flex flex-col items-center justify-center bg-orange-500 text-white px-2.5 py-1.5 rounded-md leading-none shadow-sm" style={{ minWidth: 78 }}>
+          <span className="text-[11px] font-black tracking-tight">trendyol</span>
+          <span className="text-[8px] font-bold opacity-90 -mt-0.5">YEMEK</span>
+        </div>
+      );
+    }
+    if (c.includes('migros')) {
+      return (
+        <div className="inline-flex flex-col items-center justify-center bg-amber-400 text-orange-900 px-2.5 py-1.5 rounded-md leading-none shadow-sm" style={{ minWidth: 78 }}>
+          <span className="text-[11px] font-black tracking-tight">migros</span>
+          <span className="text-[8px] font-bold opacity-90 -mt-0.5">YEMEK</span>
+        </div>
+      );
+    }
+    if (c.includes('fody')) {
+      return (
+        <div className="inline-flex items-center justify-center bg-teal-500 text-white px-2.5 py-1.5 rounded-md leading-none shadow-sm italic" style={{ minWidth: 78 }}>
+          <span className="text-[12px] font-black tracking-wide">Fody</span>
+        </div>
+      );
+    }
+    if (c.includes('fuudy')) {
+      return (
+        <div className="inline-flex items-center justify-center bg-cyan-600 text-white px-2.5 py-1.5 rounded-md leading-none shadow-sm" style={{ minWidth: 78 }}>
+          <span className="text-[12px] font-black tracking-wide">Fuudy</span>
+        </div>
+      );
+    }
+    // Default — bilinmeyen platform
+    return (
+      <div className="inline-flex items-center justify-center bg-slate-700 text-white px-2.5 py-1.5 rounded-md leading-none shadow-sm" style={{ minWidth: 78 }}>
+        <span className="text-[11px] font-black tracking-wide">{display.slice(0, 10).toUpperCase()}</span>
+      </div>
+    );
+  };
+
   const getPlatformColor = (platformCode: string) => {
     const colors: Record<string, string> = {
       yemeksepeti: '#D01012',
@@ -407,32 +469,31 @@ export function OnlineOrders() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-orange-50 to-red-50 pb-20">
-      <div className="bg-gradient-to-r from-orange-500 to-red-600 text-white p-3 md:p-6 lg:p-8 shadow-lg">
-        <div className="flex items-center justify-between mb-3 md:mb-6">
-          <div>
-            <h1 className="text-xl md:text-3xl lg:text-4xl font-black flex items-center gap-2 md:gap-3">
-              <ShoppingBag className="w-6 h-6 md:w-8 md:h-8 lg:w-10 lg:h-10" />
-              <span className="hidden sm:inline">ONLİNE SİPARİŞLER</span>
-              <span className="sm:hidden">SİPARİŞLER</span>
+      <div className="bg-gradient-to-r from-orange-500 to-red-600 text-white px-3 md:px-5 lg:px-6 py-3 md:py-4 shadow-md">
+        <div className="flex items-center justify-between mb-3 gap-3">
+          <div className="min-w-0">
+            <h1 className="text-lg md:text-2xl font-black flex items-center gap-2 truncate">
+              <ShoppingBag className="w-5 h-5 md:w-6 md:h-6" />
+              <span>ONLİNE SİPARİŞLER</span>
             </h1>
-            <p className="text-xs md:text-sm lg:text-base opacity-90 mt-1 md:mt-2 hidden md:block">
-              Yemeksepeti, Getir Yemek ve diğer platformlardan gelen siparişler
+            <p className="text-[11px] md:text-xs opacity-90 mt-0.5 hidden md:block">
+              Yemeksepeti, Getir Yemek, Trendyol, Migros ve diğer platformlar
             </p>
           </div>
-          <div className="flex gap-1.5 md:gap-3">
+          <div className="flex gap-1.5 md:gap-2 shrink-0">
             <button
               onClick={toggleSound}
-              className="bg-white/20 hover:bg-white/30 text-white px-2 py-2 md:px-4 md:py-3 rounded-lg md:rounded-xl font-bold flex items-center gap-1 md:gap-2 transition-all active:scale-95"
+              className="bg-white/20 hover:bg-white/30 text-white px-2.5 py-1.5 md:px-3 md:py-2 rounded-lg font-bold flex items-center gap-1.5 transition-all active:scale-95"
               title={soundEnabled ? 'Sesi Kapat' : 'Sesi Aç'}
             >
-              {soundEnabled ? <Volume2 className="w-4 h-4 md:w-5 md:h-5" /> : <VolumeX className="w-4 h-4 md:w-5 md:h-5" />}
+              {soundEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
             </button>
             <button
               onClick={syncOrders}
               disabled={syncing}
-              className="bg-white/20 hover:bg-white/30 text-white px-3 py-2 md:px-6 md:py-3 rounded-lg md:rounded-xl font-bold flex items-center gap-1 md:gap-2 transition-all active:scale-95 disabled:opacity-50 text-xs md:text-base"
+              className="bg-white/20 hover:bg-white/30 text-white px-3 py-1.5 md:px-4 md:py-2 rounded-lg font-bold flex items-center gap-1.5 transition-all active:scale-95 disabled:opacity-50 text-xs md:text-sm"
             >
-              <RefreshCw className={`w-4 h-4 md:w-5 md:h-5 ${syncing ? 'animate-spin' : ''}`} />
+              <RefreshCw className={`w-4 h-4 ${syncing ? 'animate-spin' : ''}`} />
               <span className="hidden md:inline">{syncing ? 'Senkronize ediliyor...' : 'Siparişleri Çek'}</span>
             </button>
           </div>
@@ -465,7 +526,7 @@ export function OnlineOrders() {
         </div>
       </div>
 
-      <div className="p-3 md:p-4 lg:p-5 w-full">
+      <div className="px-3 md:px-5 lg:px-6 py-3 md:py-4 w-full">
         {loading && orders.length === 0 ? (
           <div className="text-center py-12">
             <div className="animate-spin rounded-full h-16 w-16 border-b-4 border-orange-600 mx-auto"></div>
@@ -482,18 +543,18 @@ export function OnlineOrders() {
         ) : (
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden w-full">
             <div className="overflow-x-auto">
-              <table className="w-full text-sm" style={{ tableLayout: 'fixed' }}>
+              <table className="w-full text-sm table-fixed">
                 <colgroup>
-                  <col className="w-[110px]" />{/* Platform */}
-                  <col className="w-[15%]" />{/* Müşteri */}
-                  <col className="w-[30%]" />{/* Adres - en geniş */}
-                  <col className="w-[110px]" />{/* Sipariş No */}
-                  <col className="w-[80px]" />{/* Ürün */}
-                  <col className="w-[100px]" />{/* Tutar */}
-                  <col className="w-[100px]" />{/* Ödeme */}
-                  <col className="w-[100px]" />{/* Tarih */}
-                  <col className="w-[140px]" />{/* Durum */}
-                  <col className="w-[120px]" />{/* İşlemler */}
+                  <col style={{ width: 110 }} />{/* Platform */}
+                  <col style={{ width: '15%' }} />{/* Müşteri */}
+                  <col style={{ width: 'auto' }} />{/* Adres - geri kalan tüm alan */}
+                  <col style={{ width: 110 }} />{/* Sipariş No */}
+                  <col style={{ width: 80 }} />{/* Ürün */}
+                  <col style={{ width: 100 }} />{/* Tutar */}
+                  <col style={{ width: 110 }} />{/* Ödeme */}
+                  <col style={{ width: 110 }} />{/* Tarih */}
+                  <col style={{ width: 140 }} />{/* Durum */}
+                  <col style={{ width: 120 }} />{/* İşlemler */}
                 </colgroup>
                 <thead className="bg-slate-50 border-b-2 border-slate-200">
                   <tr>
@@ -524,14 +585,9 @@ export function OnlineOrders() {
                           onClick={() => setExpandedOrder(isExpanded ? null : order.id)}
                           className={`${isExpanded ? 'bg-purple-50/40' : 'hover:bg-slate-50'} transition cursor-pointer`}
                         >
-                          {/* PLATFORM */}
+                          {/* PLATFORM — kurumsal logo */}
                           <td className="px-3 py-3 whitespace-nowrap" style={{ borderLeftWidth: 4, borderLeftColor: platformColor, borderLeftStyle: 'solid' }}>
-                            <span
-                              className="inline-block text-white px-2.5 py-1 rounded-md text-[10px] font-black tracking-wider"
-                              style={{ background: platformColor }}
-                            >
-                              {platformLabel.slice(0, 14)}
-                            </span>
+                            <PlatformLogo code={platformCode} name={order.online_order_platforms.platform_name || platformCode} />
                           </td>
 
                           {/* MÜŞTERI */}
