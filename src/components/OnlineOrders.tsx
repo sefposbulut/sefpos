@@ -2,8 +2,13 @@ import { useState, useEffect, useRef, useCallback, Fragment } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { Database } from '../lib/supabase';
-import { ShoppingBag, Clock, Phone, MapPin, Check, X, ChevronDown, ChevronUp, Bike, Package, RefreshCw, Volume2, VolumeX, AlertTriangle, Hash, Tag } from 'lucide-react';
-import { playOnlineOrderAlert } from '../lib/notification';
+import { ShoppingBag, Clock, Phone, MapPin, Check, X, ChevronDown, ChevronUp, Bike, Package, RefreshCw, Volume2, VolumeX, AlertTriangle, Hash, Tag, BellRing } from 'lucide-react';
+import {
+  startContinuousAlert,
+  stopContinuousAlert,
+  stopAllAlerts,
+  getActiveAlertOrderIds,
+} from '../lib/notification';
 import { callGetir, eligibleCancelReasons, getirStatusLabel } from '../lib/getirApi';
 
 type OnlineOrder = Database['public']['Tables']['online_orders']['Row'];
@@ -88,27 +93,50 @@ export function OnlineOrders() {
       if (error) throw error;
 
       const newOrders = (data as any[]) || [];
-      // İlk yüklemede mevcut siparişleri "görüldü" olarak işaretle; sonraki yüklemelerde yeni gelenler tespit edilsin
+
+      // ────────────────────────────────────────────────────────────────
+      // SURESLI ALARM MANTIGI
+      // 1) İlk yüklemede: "new"/"scheduled_new" durumundaki sipariş varsa
+      //    onlar zaten onaylanmamış demektir → her biri için alarm baslat.
+      // 2) Sonraki yüklemelerde: yeni gelen ve "new" status'unda olanlar
+      //    için alarm başlat; artık "new" olmayanlar için alarm durdur.
+      // ────────────────────────────────────────────────────────────────
+      const newishStatuses = new Set(['new', 'scheduled_new']);
+      const currentNewOrderIds = new Set(
+        newOrders.filter((o) => newishStatuses.has(o.status)).map((o) => o.id),
+      );
+
       if (!firstLoadDone.current) {
         for (const o of newOrders) seenOrderIds.current.add(o.id);
         firstLoadDone.current = true;
+        // İlk açılışta zaten new sipariş varsa onlar için alarm başlat
+        if (soundEnabledRef.current) {
+          for (const o of newOrders) {
+            if (newishStatuses.has(o.status)) {
+              const label = o.online_order_platforms?.platform_name || 'Online';
+              startContinuousAlert(o.id, label);
+            }
+          }
+        }
       } else if (soundEnabledRef.current) {
-        // Yeni gelen siparişleri platforma göre grupla ve sesli uyar
-        const freshByPlatform: Record<string, number> = {};
+        // Yeni eklenen siparişler için alarm başlat
         for (const o of newOrders) {
           if (!seenOrderIds.current.has(o.id)) {
             seenOrderIds.current.add(o.id);
-            const label = o.online_order_platforms?.platform_name || 'Online';
-            freshByPlatform[label] = (freshByPlatform[label] || 0) + 1;
+            if (newishStatuses.has(o.status)) {
+              const label = o.online_order_platforms?.platform_name || 'Online';
+              startContinuousAlert(o.id, label);
+            }
           }
         }
-        // Her platform için ayrı uyarı (sırayla)
-        (async () => {
-          for (const [label, count] of Object.entries(freshByPlatform)) {
-            await playOnlineOrderAlert(label, count);
-          }
-        })();
       }
+
+      // Artık "new" durumunda olmayan veya listeden kaybolan siparişlerin
+      // alarmlarını durdur — onaylanmış demektir, ses kesilmeli.
+      for (const id of getActiveAlertOrderIds()) {
+        if (!currentNewOrderIds.has(id)) stopContinuousAlert(id);
+      }
+
       previousOrderCount.current = newOrders.length;
       setOrders(newOrders);
     } catch (error: any) {
@@ -141,6 +169,13 @@ export function OnlineOrders() {
 
     return () => { supabase.removeChannel(channel); };
   }, [tenant, loadOrders]);
+
+  // Sayfa kapatildiginda / kullanici baska ekrana gectiğinde tum alarmlari durdur
+  useEffect(() => {
+    return () => {
+      stopAllAlerts();
+    };
+  }, []);
 
   // Otomatik polling: webhook tanimi yapilmamis olsa bile, ekran acikken
   // her 25 sn'de aktif Getir platformlarini sorgular. Yeni siparis varsa
@@ -187,9 +222,16 @@ export function OnlineOrders() {
     const newValue = !soundEnabled;
     setSoundEnabled(newValue);
     localStorage.setItem('notification_sound_enabled', newValue.toString());
-    if (newValue) {
-      playNotificationSound();
+    if (!newValue) {
+      // Ses kapatildi → tum aktif alarmlari durdur
+      stopAllAlerts();
     }
+  };
+
+  // Manuel "sustur" — yeni siparis sesi devam ediyorsa kullanici tek tuşla sussun.
+  // Sound enable/disable'ı değiştirmez, sadece o anki çalan alarmları susturur.
+  const silenceNow = () => {
+    stopAllAlerts();
   };
 
   const updateOrderStatus = async (
@@ -481,24 +523,27 @@ export function OnlineOrders() {
   };
 
   const getStatusBadge = (status: string) => {
+    // Slate-toned, kurumsal palet: app temasıyla uyumlu, dikkat çekici sadece "yeni"
     const badges: Record<string, { label: string; color: string }> = {
-      new: { label: 'YENİ', color: 'bg-red-600 animate-pulse' },
-      scheduled_new: { label: 'İLERİ TARİH', color: 'bg-amber-500' },
-      accepted: { label: 'ONAYLANDI', color: 'bg-blue-600' },
-      verified: { label: 'ONAYLANDI', color: 'bg-blue-600' },
-      scheduled_accepted: { label: 'İLERİ • ONAYLI', color: 'bg-amber-600' },
-      preparing: { label: 'HAZIRLANIYOR', color: 'bg-yellow-600' },
-      ready: { label: 'HAZIR', color: 'bg-green-500' },
-      handed_over: { label: 'KURYEDE', color: 'bg-purple-600' },
-      on_the_way: { label: 'YOLDA', color: 'bg-purple-700' },
-      arrived: { label: 'ULAŞTI', color: 'bg-teal-600' },
-      delivered: { label: 'TESLİM EDİLDİ', color: 'bg-gray-600' },
-      cancelled: { label: 'İPTAL', color: 'bg-gray-800' },
+      new: { label: 'YENİ', color: 'bg-red-100 text-red-700 ring-1 ring-red-200 animate-pulse' },
+      scheduled_new: { label: 'İLERİ TARİH', color: 'bg-amber-100 text-amber-700 ring-1 ring-amber-200' },
+      accepted: { label: 'ONAYLANDI', color: 'bg-blue-100 text-blue-700 ring-1 ring-blue-200' },
+      verified: { label: 'ONAYLANDI', color: 'bg-blue-100 text-blue-700 ring-1 ring-blue-200' },
+      scheduled_accepted: { label: 'İLERİ • ONAYLI', color: 'bg-amber-100 text-amber-700 ring-1 ring-amber-200' },
+      preparing: { label: 'HAZIRLANIYOR', color: 'bg-orange-100 text-orange-700 ring-1 ring-orange-200' },
+      ready: { label: 'HAZIR', color: 'bg-emerald-100 text-emerald-700 ring-1 ring-emerald-200' },
+      handed_over: { label: 'KURYEDE', color: 'bg-purple-100 text-purple-700 ring-1 ring-purple-200' },
+      on_the_way: { label: 'YOLDA', color: 'bg-purple-100 text-purple-700 ring-1 ring-purple-200' },
+      arrived: { label: 'ULAŞTI', color: 'bg-teal-100 text-teal-700 ring-1 ring-teal-200' },
+      delivered: { label: 'TESLİM EDİLDİ', color: 'bg-slate-100 text-slate-600 ring-1 ring-slate-200' },
+      cancelled: { label: 'İPTAL', color: 'bg-rose-100 text-rose-700 ring-1 ring-rose-200' },
     };
 
     const badge = badges[status] || badges.new;
     return (
-      <span className={`${badge.color} text-white text-xs font-black px-3 py-1.5 rounded-full`}>
+      <span
+        className={`${badge.color} text-[10px] font-bold px-2 py-1 rounded-md uppercase tracking-wide inline-flex items-center`}
+      >
         {badge.label}
       </span>
     );
@@ -506,39 +551,73 @@ export function OnlineOrders() {
 
   const filteredOrders = orders;
 
+  const activeAlertCount = orders.filter(
+    (o) => o.status === 'new' || o.status === 'scheduled_new',
+  ).length;
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-orange-50 to-red-50 pb-20">
-      <div className="bg-gradient-to-r from-orange-500 to-red-600 text-white px-3 md:px-5 lg:px-6 py-3 md:py-4 shadow-md">
-        <div className="flex items-center justify-between mb-3 gap-3">
-          <div className="min-w-0">
-            <h1 className="text-lg md:text-2xl font-black flex items-center gap-2 truncate">
-              <ShoppingBag className="w-5 h-5 md:w-6 md:h-6" />
-              <span>ONLİNE SİPARİŞLER</span>
-            </h1>
-            <p className="text-[11px] md:text-xs opacity-90 mt-0.5 hidden md:block">
-              Yemeksepeti, Getir Yemek, Trendyol, Migros ve diğer platformlar
-            </p>
+    <div className="h-full flex flex-col bg-slate-50">
+      {/* ─────────── HEADER (kurumsal, TakeawayOrders dili) ─────────── */}
+      <div className="bg-white border-b border-slate-200 px-4 md:px-6 py-3 shrink-0">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="p-2 bg-gradient-to-br from-orange-500 to-red-600 rounded-xl shrink-0">
+              <ShoppingBag className="w-5 h-5 text-white" />
+            </div>
+            <div className="min-w-0">
+              <h1 className="text-lg md:text-xl font-black text-slate-800 truncate">
+                ONLİNE SİPARİŞLER
+              </h1>
+              <p className="text-xs text-slate-500 truncate">
+                {orders.length} sipariş · {activeAlertCount} yeni · Yemeksepeti, Getir, Trendyol, Migros
+              </p>
+            </div>
           </div>
-          <div className="flex gap-1.5 md:gap-2 shrink-0">
+          <div className="flex items-center gap-2 shrink-0">
+            {activeAlertCount > 0 && (
+              <button
+                onClick={silenceNow}
+                title="Çalan zili sustur"
+                className="flex items-center gap-1.5 px-3 py-2 bg-red-50 hover:bg-red-100 text-red-700 rounded-xl font-bold text-xs ring-1 ring-red-200 transition active:scale-95 animate-pulse"
+              >
+                <BellRing className="w-4 h-4" />
+                <span className="hidden sm:inline">Sustur</span>
+              </button>
+            )}
             <button
               onClick={toggleSound}
-              className="bg-white/20 hover:bg-white/30 text-white px-2.5 py-1.5 md:px-3 md:py-2 rounded-lg font-bold flex items-center gap-1.5 transition-all active:scale-95"
               title={soundEnabled ? 'Sesi Kapat' : 'Sesi Aç'}
+              className={`p-2 rounded-xl transition active:scale-95 ${
+                soundEnabled
+                  ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
+                  : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+              }`}
             >
               {soundEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
             </button>
             <button
               onClick={syncOrders}
               disabled={syncing}
-              className="bg-white/20 hover:bg-white/30 text-white px-3 py-1.5 md:px-4 md:py-2 rounded-lg font-bold flex items-center gap-1.5 transition-all active:scale-95 disabled:opacity-50 text-xs md:text-sm"
+              title="Siparişleri Çek"
+              className="p-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl transition active:scale-95 disabled:opacity-50"
             >
               <RefreshCw className={`w-4 h-4 ${syncing ? 'animate-spin' : ''}`} />
-              <span className="hidden md:inline">{syncing ? 'Senkronize ediliyor...' : 'Siparişleri Çek'}</span>
+            </button>
+            <button
+              onClick={syncOrders}
+              disabled={syncing}
+              className="hidden md:flex items-center gap-1.5 px-3 py-2 bg-gradient-to-r from-orange-500 to-red-600 text-white rounded-xl font-bold text-sm shadow hover:shadow-md transition active:scale-95 disabled:opacity-50"
+            >
+              <RefreshCw className={`w-4 h-4 ${syncing ? 'animate-spin' : ''}`} />
+              <span>{syncing ? 'Senkronize ediliyor…' : 'Siparişleri Çek'}</span>
             </button>
           </div>
         </div>
+      </div>
 
-        <div className="flex gap-1.5 md:gap-2 overflow-x-auto pb-2 scrollbar-hide">
+      {/* ─────────── FİLTRE BAR ─────────── */}
+      <div className="bg-white border-b border-slate-200 px-4 md:px-6 py-2 shrink-0">
+        <div className="flex gap-1.5 overflow-x-auto scrollbar-hide">
           {[
             { id: 'new', label: 'Yeni', icon: ShoppingBag },
             { id: 'active', label: 'Mutfakta', icon: Package },
@@ -547,17 +626,18 @@ export function OnlineOrders() {
             { id: 'all', label: 'Tümü', icon: Clock },
           ].map((tab) => {
             const Icon = tab.icon;
+            const active = filter === tab.id;
             return (
               <button
                 key={tab.id}
                 onClick={() => setFilter(tab.id as any)}
-                className={`flex items-center gap-1.5 md:gap-2 px-3 py-2 md:px-5 md:py-2.5 rounded-lg md:rounded-xl font-bold whitespace-nowrap transition-all text-xs md:text-base ${
-                  filter === tab.id
-                    ? 'bg-white text-orange-600 shadow-lg'
-                    : 'bg-white/20 text-white hover:bg-white/30'
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-bold whitespace-nowrap transition text-xs ${
+                  active
+                    ? 'bg-orange-600 text-white shadow-sm'
+                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                 }`}
               >
-                <Icon className="w-3.5 h-3.5 md:w-4 md:h-4" />
+                <Icon className="w-3.5 h-3.5" />
                 {tab.label}
               </button>
             );
@@ -565,48 +645,49 @@ export function OnlineOrders() {
         </div>
       </div>
 
-      <div className="px-3 md:px-5 lg:px-6 py-3 md:py-4 w-full">
+      {/* ─────────── İÇERİK ─────────── */}
+      <div className="flex-1 overflow-auto px-4 md:px-6 py-4">
         {loading && orders.length === 0 ? (
           <div className="text-center py-12">
-            <div className="animate-spin rounded-full h-16 w-16 border-b-4 border-orange-600 mx-auto"></div>
-            <p className="text-slate-600 mt-4 font-medium">Siparişler yükleniyor...</p>
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-orange-500 mx-auto"></div>
+            <p className="text-slate-500 mt-4 text-sm">Siparişler yükleniyor…</p>
           </div>
         ) : filteredOrders.length === 0 ? (
-          <div className="text-center py-16">
-            <ShoppingBag className="w-20 h-20 text-slate-300 mx-auto mb-4" />
-            <h3 className="text-2xl font-bold text-slate-400 mb-2">Sipariş Yok</h3>
-            <p className="text-slate-500">
-              {filter === 'new' ? 'Yeni sipariş bekleniyor...' : 'Bu kategoride sipariş bulunmuyor.'}
+          <div className="text-center py-16 bg-white rounded-xl border border-slate-200">
+            <ShoppingBag className="w-16 h-16 text-slate-300 mx-auto mb-3" />
+            <h3 className="text-lg font-bold text-slate-500 mb-1">Sipariş Yok</h3>
+            <p className="text-slate-400 text-sm">
+              {filter === 'new' ? 'Yeni sipariş bekleniyor…' : 'Bu kategoride sipariş bulunmuyor.'}
             </p>
           </div>
         ) : (
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden w-full">
+          <div className="bg-white rounded-xl border border-slate-200 overflow-hidden w-full">
             <div className="overflow-x-auto">
               <table className="w-full text-sm table-fixed">
                 <colgroup>
-                  <col style={{ width: 110 }} />{/* Platform */}
-                  <col style={{ width: '15%' }} />{/* Müşteri */}
-                  <col style={{ width: 'auto' }} />{/* Adres - geri kalan tüm alan */}
-                  <col style={{ width: 110 }} />{/* Sipariş No */}
-                  <col style={{ width: 80 }} />{/* Ürün */}
-                  <col style={{ width: 100 }} />{/* Tutar */}
-                  <col style={{ width: 110 }} />{/* Ödeme */}
-                  <col style={{ width: 110 }} />{/* Tarih */}
-                  <col style={{ width: 140 }} />{/* Durum */}
-                  <col style={{ width: 120 }} />{/* İşlemler */}
+                  <col style={{ width: 104 }} />{/* Platform */}
+                  <col style={{ width: '14%' }} />{/* Müşteri */}
+                  <col style={{ width: 'auto' }} />{/* Adres */}
+                  <col style={{ width: 104 }} />{/* Sipariş No */}
+                  <col style={{ width: 70 }} />{/* Ürün */}
+                  <col style={{ width: 96 }} />{/* Tutar */}
+                  <col style={{ width: 100 }} />{/* Ödeme */}
+                  <col style={{ width: 96 }} />{/* Tarih */}
+                  <col style={{ width: 128 }} />{/* Durum */}
+                  <col style={{ width: 96 }} />{/* İşlemler */}
                 </colgroup>
-                <thead className="bg-slate-50 border-b-2 border-slate-200">
+                <thead className="bg-slate-50 border-b border-slate-200">
                   <tr>
-                    <th className="px-3 py-3 text-left text-[10px] font-black text-slate-500 uppercase tracking-wider">Platform</th>
-                    <th className="px-3 py-3 text-left text-[10px] font-black text-slate-500 uppercase tracking-wider">Müşteri</th>
-                    <th className="px-3 py-3 text-left text-[10px] font-black text-slate-500 uppercase tracking-wider">Adres</th>
-                    <th className="px-3 py-3 text-left text-[10px] font-black text-slate-500 uppercase tracking-wider">Sipariş No</th>
-                    <th className="px-3 py-3 text-left text-[10px] font-black text-slate-500 uppercase tracking-wider">Ürün</th>
-                    <th className="px-3 py-3 text-right text-[10px] font-black text-slate-500 uppercase tracking-wider">Tutar</th>
-                    <th className="px-3 py-3 text-left text-[10px] font-black text-slate-500 uppercase tracking-wider">Ödeme</th>
-                    <th className="px-3 py-3 text-left text-[10px] font-black text-slate-500 uppercase tracking-wider">Tarihi</th>
-                    <th className="px-3 py-3 text-left text-[10px] font-black text-slate-500 uppercase tracking-wider">Durum</th>
-                    <th className="px-3 py-3 text-right text-[10px] font-black text-slate-500 uppercase tracking-wider">İşlemler</th>
+                    <th className="px-3 py-2.5 text-left text-[10px] font-bold text-slate-500 uppercase tracking-wider">Platform</th>
+                    <th className="px-3 py-2.5 text-left text-[10px] font-bold text-slate-500 uppercase tracking-wider">Müşteri</th>
+                    <th className="px-3 py-2.5 text-left text-[10px] font-bold text-slate-500 uppercase tracking-wider">Adres</th>
+                    <th className="px-3 py-2.5 text-left text-[10px] font-bold text-slate-500 uppercase tracking-wider">Sipariş No</th>
+                    <th className="px-3 py-2.5 text-left text-[10px] font-bold text-slate-500 uppercase tracking-wider">Ürün</th>
+                    <th className="px-3 py-2.5 text-right text-[10px] font-bold text-slate-500 uppercase tracking-wider">Tutar</th>
+                    <th className="px-3 py-2.5 text-left text-[10px] font-bold text-slate-500 uppercase tracking-wider">Ödeme</th>
+                    <th className="px-3 py-2.5 text-left text-[10px] font-bold text-slate-500 uppercase tracking-wider">Tarih</th>
+                    <th className="px-3 py-2.5 text-left text-[10px] font-bold text-slate-500 uppercase tracking-wider">Durum</th>
+                    <th className="px-3 py-2.5 text-right text-[10px] font-bold text-slate-500 uppercase tracking-wider">İşlem</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -622,20 +703,25 @@ export function OnlineOrders() {
                         {/* ─── ANA SATIR ─── */}
                         <tr
                           onClick={() => setExpandedOrder(isExpanded ? null : order.id)}
-                          className={`${isExpanded ? 'bg-purple-50/40' : 'hover:bg-slate-50'} transition cursor-pointer`}
+                          className={`${isExpanded ? 'bg-slate-50' : 'hover:bg-slate-50/60'} transition cursor-pointer relative`}
                         >
-                          {/* PLATFORM — kurumsal logo */}
-                          <td className="px-3 py-3 whitespace-nowrap" style={{ borderLeftWidth: 4, borderLeftColor: platformColor, borderLeftStyle: 'solid' }}>
+                          {/* PLATFORM — kurumsal logo + ince renk şeridi */}
+                          <td className="px-3 py-2.5 whitespace-nowrap relative">
+                            <span
+                              className="absolute left-0 top-1.5 bottom-1.5 w-1 rounded-r"
+                              style={{ background: platformColor }}
+                              aria-hidden
+                            />
                             <PlatformLogo code={platformCode} name={order.online_order_platforms.platform_name || platformCode} />
                           </td>
 
                           {/* MÜŞTERI */}
-                          <td className="px-3 py-3 font-bold text-slate-800 truncate" title={order.customer_name}>
+                          <td className="px-3 py-2.5 font-semibold text-slate-800 truncate text-sm" title={order.customer_name}>
                             {order.customer_name}
                           </td>
 
                           {/* ADRES */}
-                          <td className="px-3 py-3">
+                          <td className="px-3 py-2.5">
                             <span
                               className="text-xs text-slate-600 line-clamp-1 block"
                               title={order.customer_address || ''}
@@ -645,39 +731,39 @@ export function OnlineOrders() {
                           </td>
 
                           {/* SIPARIS NO */}
-                          <td className="px-3 py-3 whitespace-nowrap">
-                            <div className="font-mono font-bold text-slate-700 text-xs">
+                          <td className="px-3 py-2.5 whitespace-nowrap">
+                            <div className="font-mono font-semibold text-slate-700 text-xs">
                               #{order.platform_order_number || order.platform_order_id.slice(0, 6)}
                             </div>
                             {platformCode === 'getir' && order.getir_verification_code && (
                               <div className="text-[10px] font-bold text-purple-700 font-mono">
-                                Kod: {order.getir_verification_code.toUpperCase()}
+                                {order.getir_verification_code.toUpperCase()}
                               </div>
                             )}
                           </td>
 
                           {/* ÜRÜN */}
-                          <td className="px-3 py-3 whitespace-nowrap text-slate-600 text-xs">
+                          <td className="px-3 py-2.5 whitespace-nowrap text-slate-600 text-xs">
                             {order.items.length} ürün
                           </td>
 
                           {/* TUTAR */}
-                          <td className="px-3 py-3 whitespace-nowrap text-right">
-                            <span className="font-black text-base" style={{ color: platformColor }}>
+                          <td className="px-3 py-2.5 whitespace-nowrap text-right">
+                            <span className="font-bold text-sm text-slate-800">
                               {order.total_amount.toFixed(0)} ₺
                             </span>
                           </td>
 
                           {/* ÖDEME */}
-                          <td className="px-3 py-3 whitespace-nowrap text-xs text-slate-600">
-                            <div className="font-semibold">Online</div>
+                          <td className="px-3 py-2.5 whitespace-nowrap text-xs">
+                            <div className="font-medium text-slate-700">Online</div>
                             <div className="text-[10px] text-slate-400">
-                              {order.payment_status === 'paid' ? 'Ödeme alındı' : 'Bekliyor'}
+                              {order.payment_status === 'paid' ? 'Ödendi' : 'Bekliyor'}
                             </div>
                           </td>
 
                           {/* TARİH */}
-                          <td className="px-3 py-3 whitespace-nowrap text-xs text-slate-600">
+                          <td className="px-3 py-2.5 whitespace-nowrap text-xs text-slate-600">
                             <div>{orderDate.toLocaleDateString('tr-TR')}</div>
                             <div className="text-[10px] text-slate-400">
                               {orderDate.toLocaleTimeString('tr-TR', {
@@ -688,19 +774,23 @@ export function OnlineOrders() {
                           </td>
 
                           {/* DURUM */}
-                          <td className="px-3 py-3 whitespace-nowrap">
+                          <td className="px-3 py-2.5 whitespace-nowrap">
                             {getStatusBadge(order.status)}
                           </td>
 
                           {/* İŞLEMLER */}
-                          <td className="px-3 py-3 whitespace-nowrap text-right">
+                          <td className="px-3 py-2.5 whitespace-nowrap text-right">
                             <button
                               type="button"
                               onClick={(e) => {
                                 e.stopPropagation();
                                 setExpandedOrder(isExpanded ? null : order.id);
                               }}
-                              className="bg-purple-600 hover:bg-purple-700 text-white font-bold px-3 py-1.5 rounded-md text-xs inline-flex items-center gap-1 ml-auto"
+                              className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs font-semibold transition ${
+                                isExpanded
+                                  ? 'bg-slate-200 text-slate-700 hover:bg-slate-300'
+                                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                              }`}
                             >
                               {isExpanded ? (
                                 <>
@@ -718,7 +808,7 @@ export function OnlineOrders() {
                         {/* ─── DETAY SATIRI ─── */}
                         {isExpanded && (
                           <tr>
-                            <td colSpan={10} className="bg-slate-50/80 px-4 py-4 border-l-4" style={{ borderLeftColor: platformColor }}>
+                            <td colSpan={10} className="bg-slate-50 px-4 py-4 border-t border-slate-200">
                               <div className="space-y-3">
                       {/* Status badge (mobilde header'da yok) + telefon + adres */}
                       <div className="flex flex-wrap items-start gap-3 text-sm">

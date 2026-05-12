@@ -150,3 +150,121 @@ export async function playOnlineOrderAlert(
 export function playNotificationSound() {
   void playAlarmTone();
 }
+
+// ============================================================================
+// SUREKLI ALARM (Yemeksepeti / Getir tarzi) — Yeni siparis onaylanana kadar
+// ringtone tekrar tekrar calar. Onaylaninca veya kullanici susturunca durur.
+// ============================================================================
+
+/** Yemeksepeti benzeri kisa ring melodisi (3 nota, yukselen patern). */
+function playRingTone(): Promise<void> {
+  return new Promise((resolve) => {
+    try {
+      const AudioCtx =
+        (window as any).AudioContext || (window as any).webkitAudioContext;
+      if (!AudioCtx) return resolve();
+      const ctx = new AudioCtx();
+      const now = ctx.currentTime;
+      // 3'lu ascending bell: G5 -> C6 -> E6 — dikkat cekici, kibar
+      const tones = [
+        { freq: 784.0, start: 0.0, dur: 0.18 },
+        { freq: 1046.5, start: 0.18, dur: 0.18 },
+        { freq: 1318.5, start: 0.36, dur: 0.32 },
+      ];
+      for (const t of tones) {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'triangle';
+        osc.frequency.value = t.freq;
+        gain.gain.setValueAtTime(0, now + t.start);
+        gain.gain.linearRampToValueAtTime(0.5, now + t.start + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + t.start + t.dur);
+        osc.connect(gain).connect(ctx.destination);
+        osc.start(now + t.start);
+        osc.stop(now + t.start + t.dur + 0.05);
+      }
+      const closeAt = 0.7;
+      setTimeout(() => {
+        try {
+          ctx.close();
+        } catch {
+          /* ignore */
+        }
+        resolve();
+      }, closeAt * 1000);
+    } catch {
+      resolve();
+    }
+  });
+}
+
+interface ActiveAlarm {
+  orderId: string;
+  platformLabel: string;
+  timer: number;
+}
+
+const activeAlarms = new Map<string, ActiveAlarm>();
+
+/**
+ * Sipariş için sürekli alarm başlat. Aynı orderId ile tekrar çağrılırsa
+ * mevcut alarm korunur. localStorage'da sound disabled ise hiç başlamaz.
+ *
+ * - intervalMs: her ringtone arasında bekleme. Varsayilan 3500ms.
+ * - speakEvery: her N. ringtone'da bir TTS söyler. Varsayilan 2.
+ */
+export function startContinuousAlert(
+  orderId: string,
+  platformLabel: string = 'Online',
+  intervalMs: number = 3500,
+): void {
+  const enabled = localStorage.getItem('notification_sound_enabled');
+  if (enabled === 'false') return;
+  if (activeAlarms.has(orderId)) return;
+
+  let tick = 0;
+  const ring = async () => {
+    if (!activeAlarms.has(orderId)) return;
+    await playRingTone();
+    tick++;
+    // İlk ring'de speech, sonra her 2. ring'de tekrar
+    if (tick === 1 || tick % 2 === 0) {
+      void speakTr(`Yeni ${platformLabel} siparişi var!`);
+    }
+  };
+
+  void ring();
+  const timer = window.setInterval(ring, intervalMs);
+  activeAlarms.set(orderId, { orderId, platformLabel, timer });
+}
+
+/** Belirli bir sipariş için alarmı durdurur. */
+export function stopContinuousAlert(orderId: string): void {
+  const a = activeAlarms.get(orderId);
+  if (!a) return;
+  clearInterval(a.timer);
+  activeAlarms.delete(orderId);
+  try {
+    window.speechSynthesis?.cancel();
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Tüm aktif alarmları durdurur (kullanıcı "sustur" butonuna basınca). */
+export function stopAllAlerts(): void {
+  for (const a of activeAlarms.values()) {
+    clearInterval(a.timer);
+  }
+  activeAlarms.clear();
+  try {
+    window.speechSynthesis?.cancel();
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Aktif alarmı olan sipariş ID'lerini döndürür. */
+export function getActiveAlertOrderIds(): string[] {
+  return Array.from(activeAlarms.keys());
+}
