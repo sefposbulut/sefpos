@@ -2393,23 +2393,20 @@ ipcMain.handle('check-for-updates', async () => {
 
 /**
  * autoUpdater hata mesajları çoğu zaman HTTP başlıklarını da içeren çok uzun
- * stringler olur (örn. GitHub releases.atom 404). Kullanıcıya bunun tamamını
- * göstermek yerine en yaygın senaryoları sadeleştirmiş Türkçe metne çeviririz.
+ * teknik stringler olur. Kullanıcıya bunların hiçbirini olduğu gibi göstermeyiz;
+ * GitHub / repo / latest.yml gibi teknik kavramlar UI'a sızmamalı. En yaygın
+ * senaryoları kısa ve müşteri dostu Türkçe ile çeviririz.
  */
 function friendlyUpdateError(err) {
   const raw = String(err?.message || err || '');
   const lower = raw.toLowerCase();
-  if (lower.includes('404')) {
-    return 'Güncelleme deposuna ulaşılamadı (404). sefposbulut/sefpos-releases reposu henüz oluşturulmamış ya da hiç release yayınlanmamış olabilir.';
+  if (lower.includes('enotfound') || lower.includes('econnrefused') || lower.includes('etimedout') || lower.includes('network')) {
+    return 'İnternet bağlantısı kurulamadı. Bağlantınızı kontrol edip tekrar deneyin.';
   }
-  if (lower.includes('enotfound') || lower.includes('econnrefused') || lower.includes('etimedout')) {
-    return 'İnternet bağlantısı kurulamadı. Ağ bağlantınızı kontrol edip tekrar deneyin.';
+  if (lower.includes('404') || (lower.includes('latest.yml') && lower.includes('not found'))) {
+    return 'Güncelleme şu anda hazırlanıyor. Lütfen daha sonra tekrar deneyin.';
   }
-  if (lower.includes('latest.yml') && lower.includes('not found')) {
-    return 'Release dosyaları eksik: latest.yml bulunamadı. Release sayfasında latest.yml ve .blockmap dosyalarının yüklü olduğundan emin olun.';
-  }
-  if (raw.length > 220) return raw.slice(0, 220) + '…';
-  return raw || 'Bilinmeyen hata';
+  return 'Güncelleme şu anda yapılamadı. İnternet bağlantınızı kontrol edip tekrar deneyin.';
 }
 
 ipcMain.handle('install-update', () => {

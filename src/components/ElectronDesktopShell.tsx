@@ -253,22 +253,11 @@ export function ElectronDesktopShell() {
               </div>
             </div>
             <div className="p-5 space-y-3">
-              {confirmReady.releaseNotes ? (
-                <div>
-                  <div className="text-sm font-bold text-slate-800 mb-1">Bu sürümdeki değişiklikler</div>
-                  <pre
-                    className="text-xs text-slate-700 bg-slate-50 border border-slate-200 rounded-lg p-3 max-h-44 overflow-auto whitespace-pre-wrap"
-                  >
-{confirmReady.releaseNotes}
-                  </pre>
-                </div>
-              ) : (
-                <div className="text-sm text-slate-600">
-                  Yeni özellikler, performans iyileştirmeleri ve hata düzeltmeleri içerir. Şimdi kurulum yapılırsa Sefpos.exe kısaca kapanıp yeniden açılır.
-                </div>
-              )}
+              <div className="text-sm text-slate-700 leading-relaxed">
+                Yeni özellikler, performans iyileştirmeleri ve hata düzeltmeleri eklendi. Şimdi kurulum yapılırsa ŞefPOS kısaca kapanıp yeniden açılır.
+              </div>
               <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-900">
-                <strong>Not:</strong> Kurulum 10–20 saniye sürer. Açık adisyon ve siparişleriniz buluttadır,
+                <strong>Not:</strong> Kurulum 10–20 saniye sürer. Açık adisyon ve siparişleriniz güvende,
                 kayba uğramaz.
               </div>
             </div>
@@ -313,17 +302,14 @@ export function ElectronDesktopShell() {
               </div>
             </div>
             <div className="p-5 space-y-3">
-              <div className="text-sm font-bold text-slate-800">Bu sürümdeki yenilikler</div>
-              {whatsNew.notes ? (
-                <pre className="text-xs text-slate-700 bg-slate-50 border border-slate-200 rounded-lg p-3 max-h-60 overflow-auto whitespace-pre-wrap">
-{whatsNew.notes}
-                </pre>
-              ) : (
-                <div className="text-sm text-slate-600">
-                  Bu sürümde küçük hata düzeltmeleri ve iyileştirmeler var. Detayları
-                  GitHub Releases sayfasından inceleyebilirsiniz.
-                </div>
-              )}
+              <div className="text-sm text-slate-700 leading-relaxed">
+                Sisteminize en son iyileştirmeler ve hata düzeltmeleri uygulandı. Çalışmaya kaldığınız yerden devam edebilirsiniz.
+              </div>
+              <ul className="text-xs text-slate-600 space-y-1 list-disc pl-4">
+                <li>Performans iyileştirmeleri</li>
+                <li>Yazıcı ve fiş düzeninde küçük düzeltmeler</li>
+                <li>Genel stabilite ve hata gidermeleri</li>
+              </ul>
             </div>
             <div className="flex items-center justify-end gap-2 px-5 pb-5">
               <button
@@ -412,10 +398,10 @@ export function ElectronDesktopShell() {
               {updateState.kind === 'error' && (
                 <>
                   <div className="text-sm font-bold text-slate-800">
-                    Güncelleme başarısız
+                    Güncelleme şu anda yapılamadı
                   </div>
                   <div className="text-xs text-slate-500 mt-0.5 break-words">
-                    {updateState.message || 'Bağlantı veya GitHub erişiminizi kontrol edip tekrar deneyin.'}
+                    İnternet bağlantınızı kontrol edip biraz sonra tekrar deneyin.
                   </div>
                   <div className="mt-2 flex items-center gap-2">
                     <button
