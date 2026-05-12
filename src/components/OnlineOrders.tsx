@@ -129,6 +129,43 @@ export function OnlineOrders() {
     return () => { supabase.removeChannel(channel); };
   }, [tenant, loadOrders]);
 
+  // Otomatik polling: webhook tanimi yapilmamis olsa bile, ekran acikken
+  // her 25 sn'de aktif Getir platformlarini sorgular. Yeni siparis varsa
+  // backend online_orders'a insert eder; realtime channel onu yakalar ve
+  // sayfa kendiliginden yenilenir (sesli uyari + otomatik mutfak fisi).
+  useEffect(() => {
+    if (!tenant) return;
+    let stopped = false;
+
+    const tick = async () => {
+      if (stopped || document.visibilityState !== 'visible') return;
+      try {
+        const { data: platforms } = await supabase
+          .from('online_order_platforms')
+          .select('id, platform_code, is_active')
+          .eq('tenant_id', tenant.id)
+          .eq('is_active', true)
+          .eq('platform_code', 'getir');
+        for (const p of platforms || []) {
+          if (stopped) break;
+          await callGetir({ platformId: p.id, action: 'poll-active' });
+        }
+      } catch (e) {
+        console.warn('[OnlineOrders] auto-poll uyari:', e);
+      }
+    };
+
+    // Ilk tick'i 5 sn sonra at (sayfa acilir acilmaz aniden cagri olmasin),
+    // sonra her 25 sn'de bir tekrarla.
+    const firstId = window.setTimeout(tick, 5000);
+    const intervalId = window.setInterval(tick, 25000);
+    return () => {
+      stopped = true;
+      window.clearTimeout(firstId);
+      window.clearInterval(intervalId);
+    };
+  }, [tenant]);
+
   useEffect(() => {
     loadOrders();
   }, [filter]);
