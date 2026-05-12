@@ -341,23 +341,24 @@ Deno.serve(async (req) => {
   const admin = createClient(supabaseUrl, supabaseService);
 
   // 2) JWT'yi manuel dogrula (verify_jwt=false oldugu icin gateway yapmiyor).
-  //    Boylece RLS'e takilmadan admin client ile okuyabiliriz, ama tenant
-  //    izolasyonu yine kullanicinin profile.tenant_id'sinden geliyor.
   const { data: userInfo, error: userErr } = await admin.auth.getUser(accessToken);
   if (userErr || !userInfo?.user) {
     return jsonResponse({ ok: false, error: "Gecersiz oturum" }, 401);
   }
   const userId = userInfo.user.id;
 
+  // is_super_admin destegi var: superadmin'ler herhangi bir tenant'in
+  // platformunu yonetebilir. Aksi halde profile.tenant_id ile eslesmeli.
   const { data: profile, error: profErr } = await admin
     .from("profiles")
-    .select("tenant_id")
+    .select("tenant_id, is_super_admin, role")
     .eq("id", userId)
     .maybeSingle();
-  if (profErr || !profile?.tenant_id) {
-    return jsonResponse({ ok: false, error: "Tenant bulunamadi" }, 403);
+  if (profErr || !profile) {
+    return jsonResponse({ ok: false, error: "Profil bulunamadi" }, 403);
   }
-  const callerTenantId: string = profile.tenant_id;
+  const callerTenantId: string | null = profile.tenant_id ?? null;
+  const isSuperAdmin: boolean = !!(profile as any).is_super_admin || profile.role === 'super_admin' || profile.role === 'superadmin';
 
   // 3) Body parse
   let body: ActionRequest;
@@ -370,17 +371,24 @@ Deno.serve(async (req) => {
     return badRequest("platformId ve action zorunlu");
   }
 
-  // 4) Platform row — admin client ile oku, tenant filter ile guvenli
+  // 4) Platform row — once tenant filter yapmadan getir, sonra yetkilendir
   const { data: platform, error: pErr } = await admin
     .from("online_order_platforms")
     .select(
       "id,tenant_id,getir_environment,getir_app_secret_key,getir_restaurant_secret_key,getir_restaurant_id,getir_token,getir_token_expires_at,getir_pos_status,settings,username,password,api_key",
     )
     .eq("id", body.platformId)
-    .eq("tenant_id", callerTenantId)
     .maybeSingle();
   if (pErr || !platform) {
-    return jsonResponse({ ok: false, error: "Platform bulunamadi (tenant uyusmazligi veya id hatali)" }, 404);
+    return jsonResponse({ ok: false, error: "Platform bulunamadi (id hatali)" }, 404);
+  }
+
+  // 5) Yetkilendirme: superadmin -> her tenant; degilse profile.tenant_id == platform.tenant_id
+  if (!isSuperAdmin && platform.tenant_id !== callerTenantId) {
+    return jsonResponse({
+      ok: false,
+      error: `Bu platform sizin tenantiniza ait degil (caller=${callerTenantId || 'null'} platform=${platform.tenant_id})`,
+    }, 403);
   }
 
   const creds = normalizeCredentials(platform as PlatformRow);
