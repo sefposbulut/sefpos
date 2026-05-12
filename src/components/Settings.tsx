@@ -3,7 +3,7 @@ import { supabase } from '../lib/supabase';
 import { createClient } from '@supabase/supabase-js';
 import { useAuth } from '../contexts/AuthContext';
 import { Database } from '../lib/supabase';
-import { X, Plus, Trash2, Settings as SettingsIcon, Building2, ToggleLeft, ToggleRight, Printer, AlertCircle, MapPin, Phone, Save, CreditCard as Edit2, User, Store, CheckCircle, Wifi, WifiOff, Globe, RefreshCw, Lock, ShieldCheck, Eye, EyeOff, Package, CheckSquare, Square, Database as DatabaseIcon, Receipt, Pencil, Scale, Loader, QrCode, PhoneIncoming, FlaskConical, Clock, Download, Sparkles } from 'lucide-react';
+import { X, Plus, Trash2, Settings as SettingsIcon, Building2, ToggleLeft, ToggleRight, Printer, AlertCircle, MapPin, Phone, Save, CreditCard as Edit2, User, Store, CheckCircle, Wifi, WifiOff, Globe, RefreshCw, Lock, ShieldCheck, Eye, EyeOff, Package, CheckSquare, Square, Database as DatabaseIcon, Receipt, Pencil, Scale, Loader, QrCode, PhoneIncoming, FlaskConical, Clock, Download, Sparkles, ChevronDown, ChevronUp, HelpCircle, Info } from 'lucide-react';
 import {
   isCallerIdAvailable,
   startCallerId,
@@ -108,6 +108,7 @@ export function Settings({ onClose }: SettingsProps) {
   };
   const [platforms, setPlatforms] = useState<any[]>([]);
   const [showPlatformForm, setShowPlatformForm] = useState(false);
+  const [expandedPlatformId, setExpandedPlatformId] = useState<string | null>(null);
   const [platformName, setPlatformName] = useState('');
   const [platformCode, setPlatformCode] = useState('');
   const [platformUsername, setPlatformUsername] = useState('');
@@ -1883,121 +1884,170 @@ export function Settings({ onClose }: SettingsProps) {
                   </form>
                 )}
 
-                <div className="space-y-3">
-                  {platforms.map((platform) => (
-                    <div
-                      key={platform.id}
-                      className="bg-white rounded-lg p-4 border-2 border-gray-200"
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="flex-1 min-w-0">
-                          <h4 className="font-bold text-gray-800 text-lg">{platform.platform_name}</h4>
-                          <div className="mt-2 grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-1 text-sm">
-                            <div>
-                              <span className="text-gray-400 text-xs">Platform Kodu</span>
-                              <p className="text-gray-700 font-medium">{platform.platform_code}</p>
+                <div className="space-y-2">
+                  {platforms.map((platform) => {
+                    const isExpanded = expandedPlatformId === platform.id;
+                    const isGetir = platform.platform_code === 'getir';
+                    const platformBadgeColor = isGetir
+                      ? 'bg-purple-600'
+                      : platform.platform_code === 'yemeksepeti'
+                      ? 'bg-pink-600'
+                      : platform.platform_code === 'trendyol'
+                      ? 'bg-orange-500'
+                      : 'bg-slate-600';
+                    return (
+                      <div
+                        key={platform.id}
+                        className={`bg-white rounded-lg border-2 transition-all ${
+                          isExpanded ? 'border-purple-300 shadow-sm' : 'border-gray-200 hover:border-gray-300'
+                        }`}
+                      >
+                        {/* KOMPAKT BAŞLIK — her zaman görünür */}
+                        <button
+                          type="button"
+                          onClick={() => setExpandedPlatformId(isExpanded ? null : platform.id)}
+                          className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-gray-50 rounded-lg"
+                        >
+                          <span className={`${platformBadgeColor} text-white px-2.5 py-1 rounded-md text-xs font-black tracking-wide`}>
+                            {platform.platform_code.toUpperCase()}
+                          </span>
+                          <div className="flex-1 min-w-0">
+                            <h4 className="font-bold text-gray-800 truncate">{platform.platform_name}</h4>
+                            <div className="flex items-center gap-2 mt-0.5 text-xs text-gray-500">
+                              <span>%{platform.commission_rate} komisyon</span>
+                              {isGetir && (
+                                <>
+                                  <span className="text-gray-300">·</span>
+                                  <span>
+                                    Ortam:{' '}
+                                    <strong className={platform.getir_environment === 'production' ? 'text-green-700' : 'text-amber-700'}>
+                                      {platform.getir_environment === 'production' ? 'CANLI' : 'TEST'}
+                                    </strong>
+                                  </span>
+                                  <span className="text-gray-300">·</span>
+                                  <span>
+                                    POS:{' '}
+                                    <strong className={platform.getir_pos_status === 100 ? 'text-green-700' : 'text-red-700'}>
+                                      {platform.getir_pos_status === 100 ? 'AÇIK' : 'KAPALI'}
+                                    </strong>
+                                  </span>
+                                </>
+                              )}
                             </div>
-                            <div>
-                              <span className="text-gray-400 text-xs">Komisyon</span>
-                              <p className="text-gray-700 font-medium">%{platform.commission_rate}</p>
-                            </div>
-                            {platform.middleware_chain_code && (
-                              <div>
-                                <span className="text-gray-400 text-xs">Chain Code</span>
-                                <p className="text-gray-700 font-mono font-medium">{platform.middleware_chain_code}</p>
-                              </div>
-                            )}
-                            {platform.middleware_vendor_code && (
-                              <div>
-                                <span className="text-gray-400 text-xs">Remote Code</span>
-                                <p className="text-gray-700 font-mono font-medium">{platform.middleware_vendor_code}</p>
-                              </div>
-                            )}
-                            {platform.remote_id && (
-                              <div>
-                                <span className="text-gray-400 text-xs">Platform Restaurant ID</span>
-                                <p className="text-gray-700 font-mono font-medium truncate">{platform.remote_id}</p>
-                              </div>
-                            )}
-                            {platform.platform_code === 'getir' && (
-                              <div className="col-span-2">
-                                <span className="text-gray-400 text-xs">Getir Kimlik Bilgileri</span>
-                                <p className="text-gray-700 font-medium">
-                                  appSecret: {platform.getir_app_secret_key || platform.settings?.app_secret_key ? 'Kayıtlı' : 'Yok'} / restaurantSecret: {platform.getir_restaurant_secret_key || platform.settings?.restaurant_secret_key ? 'Kayıtlı' : 'Yok'} / restaurantId: {platform.getir_restaurant_id ? platform.getir_restaurant_id.slice(0, 8) + '…' : 'Yok'}
-                                </p>
-                                <p className="text-xs text-gray-500 mt-1">
-                                  Ortam: <strong>{platform.getir_environment || 'development'}</strong> · POS Durumu:{' '}
-                                  <strong className={platform.getir_pos_status === 100 ? 'text-green-700' : 'text-red-700'}>
-                                    {platform.getir_pos_status === 100 ? 'AÇIK' : 'KAPALI'}
-                                  </strong>
-                                </p>
-                              </div>
-                            )}
-                            {platform.webhook_secret && (
-                              <div>
-                                <span className="text-gray-400 text-xs">Webhook Secret</span>
-                                <p className="text-gray-700 font-medium">Kayitli</p>
-                              </div>
-                            )}
-                            {platform.middleware_url && (
-                              <div className="col-span-2">
-                                <span className="text-gray-400 text-xs">Middleware URL</span>
-                                <p className="text-gray-700 font-mono text-xs truncate">{platform.middleware_url}</p>
-                              </div>
-                            )}
                           </div>
-                        </div>
-                        <div className="flex flex-col items-end gap-2 shrink-0">
-                          <button
-                            onClick={() => handleTogglePlatform(platform.id, platform.is_active)}
-                            className={`px-4 py-1.5 rounded-lg font-bold transition text-sm ${
+                          <span
+                            className={`px-3 py-1 rounded-full font-bold text-xs ${
                               platform.is_active
-                                ? 'bg-green-600 hover:bg-green-700 text-white'
-                                : 'bg-gray-300 hover:bg-gray-400 text-gray-700'
+                                ? 'bg-green-100 text-green-700 border border-green-300'
+                                : 'bg-gray-100 text-gray-500 border border-gray-300'
                             }`}
                           >
-                            {platform.is_active ? 'AKTİF' : 'PASİF'}
-                          </button>
-                          <div className="flex gap-1">
-                            <button
-                              onClick={() => {
-                                setEditingPlatformId(platform.id);
-                                setPlatformName(platform.platform_name);
-                                setPlatformCode(platform.platform_code);
-                                setPlatformUsername(platform.middleware_username || platform.settings?.username || '');
-                                setPlatformPassword(platform.middleware_password || platform.settings?.password || '');
-                                setPlatformApiKey(platform.api_key || '');
-                                setPlatformAppSecretKey(platform.settings?.app_secret_key || '');
-                                setPlatformRestaurantSecretKey(platform.settings?.restaurant_secret_key || '');
-                                setPlatformWebhookSecret(platform.webhook_secret || platform.settings?.webhook_secret || '');
-                                setPlatformCommission(String(platform.commission_rate));
-                                setPlatformChainCode(platform.middleware_chain_code || '');
-                                setPlatformRemoteCode(platform.middleware_vendor_code || '');
-                                setPlatformRestaurantId(platform.remote_id || '');
-                                setPlatformMiddlewareUrl(platform.middleware_url || '');
-                                setShowPlatformForm(true);
-                              }}
-                              className="text-blue-500 hover:text-blue-700 p-2 rounded-lg hover:bg-blue-50 transition"
-                              title="Düzenle"
-                            >
-                              <Pencil className="w-4 h-4" />
-                            </button>
-                            <button
-                              onClick={() => handleDeletePlatform(platform.id)}
-                              className="text-red-500 hover:text-red-700 p-2 rounded-lg hover:bg-red-50 transition"
-                              title="Sil"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          </div>
-                        </div>
-                      </div>
+                            {platform.is_active ? '● AKTİF' : '○ PASİF'}
+                          </span>
+                          {isExpanded ? (
+                            <ChevronUp className="w-5 h-5 text-gray-400 shrink-0" />
+                          ) : (
+                            <ChevronDown className="w-5 h-5 text-gray-400 shrink-0" />
+                          )}
+                        </button>
 
-                      {platform.platform_code === 'getir' && (
-                        <GetirPlatformControls platform={platform} onChanged={loadPlatforms} />
-                      )}
-                    </div>
-                  ))}
+                        {/* DETAY — sadece expanded olduğunda */}
+                        {isExpanded && (
+                          <div className="border-t border-gray-200 px-4 py-3">
+                            <div className="flex flex-wrap items-center justify-end gap-2 mb-3">
+                              <button
+                                onClick={() => handleTogglePlatform(platform.id, platform.is_active)}
+                                className={`px-3 py-1.5 rounded-lg font-bold transition text-xs ${
+                                  platform.is_active
+                                    ? 'bg-green-600 hover:bg-green-700 text-white'
+                                    : 'bg-gray-300 hover:bg-gray-400 text-gray-700'
+                                }`}
+                              >
+                                {platform.is_active ? 'AKTİFİ KAPAT' : 'AKTİFLEŞTİR'}
+                              </button>
+                              <button
+                                onClick={() => {
+                                  setEditingPlatformId(platform.id);
+                                  setPlatformName(platform.platform_name);
+                                  setPlatformCode(platform.platform_code);
+                                  setPlatformUsername(platform.middleware_username || platform.settings?.username || '');
+                                  setPlatformPassword(platform.middleware_password || platform.settings?.password || '');
+                                  setPlatformApiKey(platform.api_key || '');
+                                  setPlatformAppSecretKey(platform.settings?.app_secret_key || '');
+                                  setPlatformRestaurantSecretKey(platform.settings?.restaurant_secret_key || '');
+                                  setPlatformWebhookSecret(platform.webhook_secret || platform.settings?.webhook_secret || '');
+                                  setPlatformCommission(String(platform.commission_rate));
+                                  setPlatformChainCode(platform.middleware_chain_code || '');
+                                  setPlatformRemoteCode(platform.middleware_vendor_code || '');
+                                  setPlatformRestaurantId(platform.remote_id || '');
+                                  setPlatformMiddlewareUrl(platform.middleware_url || '');
+                                  setShowPlatformForm(true);
+                                }}
+                                className="flex items-center gap-1 text-blue-600 hover:text-blue-800 px-2.5 py-1.5 rounded-lg hover:bg-blue-50 transition text-xs font-bold"
+                                title="Düzenle"
+                              >
+                                <Pencil className="w-3.5 h-3.5" />
+                                Düzenle
+                              </button>
+                              <button
+                                onClick={() => handleDeletePlatform(platform.id)}
+                                className="flex items-center gap-1 text-red-600 hover:text-red-800 px-2.5 py-1.5 rounded-lg hover:bg-red-50 transition text-xs font-bold"
+                                title="Sil"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                                Sil
+                              </button>
+                            </div>
+
+                            <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-2 text-sm bg-gray-50 rounded-lg p-3">
+                              {platform.middleware_chain_code && (
+                                <div>
+                                  <span className="text-gray-400 text-xs">Chain Code</span>
+                                  <p className="text-gray-700 font-mono font-medium">{platform.middleware_chain_code}</p>
+                                </div>
+                              )}
+                              {platform.middleware_vendor_code && (
+                                <div>
+                                  <span className="text-gray-400 text-xs">Remote Code</span>
+                                  <p className="text-gray-700 font-mono font-medium">{platform.middleware_vendor_code}</p>
+                                </div>
+                              )}
+                              {platform.remote_id && (
+                                <div>
+                                  <span className="text-gray-400 text-xs">Restaurant ID</span>
+                                  <p className="text-gray-700 font-mono font-medium truncate text-xs">{platform.remote_id}</p>
+                                </div>
+                              )}
+                              {isGetir && (
+                                <div className="col-span-2 sm:col-span-3">
+                                  <span className="text-gray-400 text-xs">Getir Kimlik Bilgileri</span>
+                                  <p className="text-gray-700 font-medium text-xs">
+                                    appSecret: {platform.getir_app_secret_key || platform.settings?.app_secret_key ? '✓ Kayıtlı' : '✗ Yok'} ·{' '}
+                                    restaurantSecret: {platform.getir_restaurant_secret_key || platform.settings?.restaurant_secret_key ? '✓ Kayıtlı' : '✗ Yok'} ·{' '}
+                                    restaurantId: {platform.getir_restaurant_id ? platform.getir_restaurant_id.slice(0, 8) + '…' : '✗ Yok'}
+                                  </p>
+                                </div>
+                              )}
+                              {platform.webhook_secret && (
+                                <div>
+                                  <span className="text-gray-400 text-xs">Webhook Secret</span>
+                                  <p className="text-gray-700 font-medium">✓ Kayıtlı</p>
+                                </div>
+                              )}
+                              {platform.middleware_url && (
+                                <div className="col-span-2 sm:col-span-3">
+                                  <span className="text-gray-400 text-xs">Middleware URL</span>
+                                  <p className="text-gray-700 font-mono text-xs truncate">{platform.middleware_url}</p>
+                                </div>
+                              )}
+                            </div>
+
+                            {isGetir && <GetirPlatformControls platform={platform} onChanged={loadPlatforms} />}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                   {platforms.length === 0 && (
                     <p className="text-gray-500 text-center py-8">Henüz platform eklenmemiş</p>
                   )}
@@ -3724,12 +3774,17 @@ interface GetirPlatformControlsProps {
 function GetirPlatformControls({ platform, onChanged }: GetirPlatformControlsProps) {
   const [busy, setBusy] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [section, setSection] = useState<'controls' | 'webhooks' | 'help' | null>('controls');
 
   const baseUrl = (import.meta.env.VITE_SUPABASE_URL || 'https://xdfnozfuuzctubijbnds.supabase.co')
     .replace(/\/$/, '');
   const newOrderUrl = `${baseUrl}/functions/v1/getir-webhook?type=new`;
   const cancelUrl = `${baseUrl}/functions/v1/getir-webhook?type=cancel`;
   const xApiKey: string = platform.getir_x_api_key || '';
+
+  const toggleSection = (s: 'controls' | 'webhooks' | 'help') => {
+    setSection(section === s ? null : s);
+  };
 
   const copy = async (label: string, text: string) => {
     try {
@@ -3806,147 +3861,251 @@ function GetirPlatformControls({ platform, onChanged }: GetirPlatformControlsPro
     }
   };
 
-  return (
-    <div className="mt-4 border-t-2 border-purple-100 pt-4 bg-purple-50/50 -mx-4 -mb-4 px-4 pb-4 rounded-b-lg">
-      <div className="flex items-center gap-2 mb-3">
-        <span className="bg-purple-600 text-white px-2 py-0.5 rounded text-xs font-black">GETIR</span>
-        <h5 className="font-bold text-purple-900">Entegrasyon Kontrol Paneli</h5>
-      </div>
-
-      {/* Ortam seçici */}
-      <div className="mb-3">
-        <label className="text-xs text-purple-900 font-bold block mb-1">Çalışma Ortamı</label>
-        <div className="flex gap-2">
-          <button
-            type="button"
-            onClick={() => setEnvironment('development')}
-            disabled={busy !== null}
-            className={`flex-1 py-2 px-3 rounded-lg text-sm font-bold transition ${
-              (platform.getir_environment || 'development') === 'development'
-                ? 'bg-amber-500 text-white shadow'
-                : 'bg-white text-amber-700 border-2 border-amber-300 hover:bg-amber-50'
-            }`}
-          >
-            TEST ORTAMI
-          </button>
-          <button
-            type="button"
-            onClick={() => setEnvironment('production')}
-            disabled={busy !== null}
-            className={`flex-1 py-2 px-3 rounded-lg text-sm font-bold transition ${
-              platform.getir_environment === 'production'
-                ? 'bg-green-600 text-white shadow'
-                : 'bg-white text-green-700 border-2 border-green-300 hover:bg-green-50'
-            }`}
-          >
-            CANLI ORTAM
-          </button>
-        </div>
-      </div>
-
-      {/* POS Aç/Kapat */}
-      <div className="mb-3 grid grid-cols-1 sm:grid-cols-3 gap-2">
-        <button
-          type="button"
-          onClick={() => setPosStatus(100)}
-          disabled={busy !== null}
-          className="bg-green-600 hover:bg-green-700 text-white font-black py-2.5 rounded-lg shadow disabled:opacity-50"
-        >
-          {busy === 'pos-100' ? '...' : 'POS\'U AÇ (Aktif)'}
-        </button>
-        <button
-          type="button"
-          onClick={() => setPosStatus(200)}
-          disabled={busy !== null}
-          className="bg-red-600 hover:bg-red-700 text-white font-black py-2.5 rounded-lg shadow disabled:opacity-50"
-        >
-          {busy === 'pos-200' ? '...' : 'POS\'U KAPAT'}
-        </button>
-        <button
-          type="button"
-          onClick={refreshStatus}
-          disabled={busy !== null}
-          className="bg-slate-700 hover:bg-slate-800 text-white font-bold py-2.5 rounded-lg shadow disabled:opacity-50"
-        >
-          {busy === 'get' ? '...' : 'Durumu Sorgula'}
-        </button>
-      </div>
-
+  const SectionHeader = ({
+    id,
+    icon: Icon,
+    title,
+    subtitle,
+  }: {
+    id: 'controls' | 'webhooks' | 'help';
+    icon: any;
+    title: string;
+    subtitle: string;
+  }) => {
+    const open = section === id;
+    return (
       <button
         type="button"
-        onClick={pollActive}
-        disabled={busy !== null}
-        className="w-full mb-3 bg-purple-700 hover:bg-purple-800 text-white font-bold py-2 rounded-lg disabled:opacity-50"
+        onClick={() => toggleSection(id)}
+        className={`w-full flex items-center gap-3 px-3 py-2.5 text-left rounded-md transition ${
+          open ? 'bg-purple-100' : 'bg-white hover:bg-purple-50'
+        }`}
       >
-        {busy === 'poll' ? 'Sipariş alınıyor…' : 'Aktif Siparişleri Senkronize Et'}
+        <Icon className={`w-4 h-4 ${open ? 'text-purple-700' : 'text-purple-500'}`} />
+        <div className="flex-1 min-w-0">
+          <p className={`text-sm font-bold ${open ? 'text-purple-900' : 'text-slate-800'}`}>{title}</p>
+          <p className="text-[11px] text-slate-500 truncate">{subtitle}</p>
+        </div>
+        {open ? (
+          <ChevronUp className="w-4 h-4 text-purple-500 shrink-0" />
+        ) : (
+          <ChevronDown className="w-4 h-4 text-slate-400 shrink-0" />
+        )}
       </button>
+    );
+  };
 
-      {/* Webhook URL'leri — Getir'e gönderilecek bilgiler */}
-      <div className="bg-white border-2 border-purple-200 rounded-lg p-3 space-y-2">
-        <p className="text-xs text-purple-900 font-bold mb-1">
-          📨 Getir'e gönderilmesi gereken bilgiler (cc: getiryemekapi@getir.com)
-        </p>
+  return (
+    <div className="mt-4 border-t-2 border-purple-100 pt-3 -mx-4 -mb-3 px-4 pb-3 bg-gradient-to-b from-purple-50/40 to-white rounded-b-lg">
+      <div className="flex items-center gap-2 mb-3">
+        <span className="bg-purple-600 text-white px-2 py-0.5 rounded text-[10px] font-black tracking-wide">GETIR</span>
+        <h5 className="text-sm font-bold text-purple-900">Entegrasyon Kontrol Paneli</h5>
+      </div>
 
-        <div>
-          <div className="flex items-center justify-between mb-1">
-            <span className="text-[10px] uppercase font-bold text-slate-500">Yeni Sipariş Webhook</span>
-            <button
-              type="button"
-              onClick={() => copy('new', newOrderUrl)}
-              className="text-[10px] font-bold text-purple-700 hover:text-purple-900"
-            >
-              {copiedKey === 'new' ? '✓ Kopyalandı' : 'Kopyala'}
-            </button>
-          </div>
-          <code className="block bg-slate-50 border border-slate-200 rounded p-2 text-[11px] font-mono break-all">
-            {newOrderUrl}
-          </code>
-        </div>
-
-        <div>
-          <div className="flex items-center justify-between mb-1">
-            <span className="text-[10px] uppercase font-bold text-slate-500">İptal Webhook</span>
-            <button
-              type="button"
-              onClick={() => copy('cancel', cancelUrl)}
-              className="text-[10px] font-bold text-purple-700 hover:text-purple-900"
-            >
-              {copiedKey === 'cancel' ? '✓ Kopyalandı' : 'Kopyala'}
-            </button>
-          </div>
-          <code className="block bg-slate-50 border border-slate-200 rounded p-2 text-[11px] font-mono break-all">
-            {cancelUrl}
-          </code>
-        </div>
-
-        <div>
-          <div className="flex items-center justify-between mb-1">
-            <span className="text-[10px] uppercase font-bold text-slate-500">x-api-key</span>
-            <button
-              type="button"
-              onClick={() => xApiKey && copy('key', xApiKey)}
-              disabled={!xApiKey}
-              className="text-[10px] font-bold text-purple-700 hover:text-purple-900 disabled:opacity-50"
-            >
-              {copiedKey === 'key' ? '✓ Kopyalandı' : 'Kopyala'}
-            </button>
-          </div>
-          {xApiKey ? (
-            <code className="block bg-slate-50 border border-slate-200 rounded p-2 text-[11px] font-mono break-all">
-              {xApiKey}
-            </code>
-          ) : (
-            <div className="text-[11px] text-red-600 font-bold bg-red-50 border border-red-200 rounded p-2">
-              Henüz oluşturulmadı. Platformu güncelleyip kaydedin — otomatik üretilir.
+      <div className="space-y-1.5 border-2 border-purple-100 rounded-lg p-1.5 bg-white">
+        {/* ─── BÖLÜM 1: KONTROLLER ─── */}
+        <SectionHeader
+          id="controls"
+          icon={SettingsIcon}
+          title="Çalışma Modu & POS Durumu"
+          subtitle={`Ortam: ${platform.getir_environment === 'production' ? 'CANLI' : 'TEST'} · POS: ${platform.getir_pos_status === 100 ? 'AÇIK' : 'KAPALI'}`}
+        />
+        {section === 'controls' && (
+          <div className="px-3 pb-3 pt-1 space-y-3">
+            <div>
+              <label className="text-[11px] text-purple-900 font-bold block mb-1.5">Çalışma Ortamı</label>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setEnvironment('development')}
+                  disabled={busy !== null}
+                  className={`py-2 px-3 rounded-lg text-xs font-bold transition ${
+                    (platform.getir_environment || 'development') === 'development'
+                      ? 'bg-amber-500 text-white shadow'
+                      : 'bg-white text-amber-700 border-2 border-amber-300 hover:bg-amber-50'
+                  }`}
+                >
+                  TEST ORTAMI
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setEnvironment('production')}
+                  disabled={busy !== null}
+                  className={`py-2 px-3 rounded-lg text-xs font-bold transition ${
+                    platform.getir_environment === 'production'
+                      ? 'bg-green-600 text-white shadow'
+                      : 'bg-white text-green-700 border-2 border-green-300 hover:bg-green-50'
+                  }`}
+                >
+                  CANLI ORTAM
+                </button>
+              </div>
             </div>
-          )}
-        </div>
 
-        <p className="text-[11px] text-slate-600 mt-2 leading-tight">
-          Bu 3 değeri (2 URL + x-api-key) Getir Entegrasyon ekibine ileterek
-          webhook tanımı yaptırın. ŞefPOS, Getir'den gelen istekleri x-api-key
-          ile doğrular; eşleşmeyen istekler reddedilir.
-        </p>
+            <div>
+              <label className="text-[11px] text-purple-900 font-bold block mb-1.5">Getir POS Durumu</label>
+              <div className="grid grid-cols-3 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setPosStatus(100)}
+                  disabled={busy !== null}
+                  className="bg-green-600 hover:bg-green-700 text-white font-black py-2 px-2 rounded-lg shadow disabled:opacity-50 text-xs"
+                >
+                  {busy === 'pos-100' ? '...' : 'AÇ'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPosStatus(200)}
+                  disabled={busy !== null}
+                  className="bg-red-600 hover:bg-red-700 text-white font-black py-2 px-2 rounded-lg shadow disabled:opacity-50 text-xs"
+                >
+                  {busy === 'pos-200' ? '...' : 'KAPAT'}
+                </button>
+                <button
+                  type="button"
+                  onClick={refreshStatus}
+                  disabled={busy !== null}
+                  className="bg-slate-700 hover:bg-slate-800 text-white font-bold py-2 px-2 rounded-lg shadow disabled:opacity-50 text-xs"
+                >
+                  {busy === 'get' ? '...' : 'SORGULA'}
+                </button>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={pollActive}
+              disabled={busy !== null}
+              className="w-full bg-purple-700 hover:bg-purple-800 text-white font-bold py-2 rounded-lg disabled:opacity-50 text-sm flex items-center justify-center gap-2"
+            >
+              <RefreshCw className={`w-4 h-4 ${busy === 'poll' ? 'animate-spin' : ''}`} />
+              {busy === 'poll' ? 'Sipariş alınıyor…' : 'Aktif Siparişleri Senkronize Et'}
+            </button>
+          </div>
+        )}
+
+        {/* ─── BÖLÜM 2: WEBHOOK BİLGİLERİ ─── */}
+        <SectionHeader
+          id="webhooks"
+          icon={Globe}
+          title="Webhook URL & x-api-key"
+          subtitle={xApiKey ? 'Getir\'e iletilecek 3 değer hazır' : 'x-api-key henüz üretilmedi'}
+        />
+        {section === 'webhooks' && (
+          <div className="px-3 pb-3 pt-1 space-y-2">
+            <p className="text-[11px] text-purple-900 bg-purple-50 border border-purple-200 rounded p-2 leading-tight">
+              <strong>📨 Bu 3 değeri Getir Entegrasyon ekibine mail at:</strong>{' '}
+              getiryemekapi@getir.com — webhook tanımı yapacaklar. ŞefPOS gelen istekleri x-api-key ile doğrular.
+            </p>
+
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-[10px] uppercase font-bold text-slate-500">Yeni Sipariş Webhook</span>
+                <button
+                  type="button"
+                  onClick={() => copy('new', newOrderUrl)}
+                  className="text-[10px] font-bold text-purple-700 hover:text-purple-900"
+                >
+                  {copiedKey === 'new' ? '✓ Kopyalandı' : 'Kopyala'}
+                </button>
+              </div>
+              <code className="block bg-slate-50 border border-slate-200 rounded p-2 text-[11px] font-mono break-all">
+                {newOrderUrl}
+              </code>
+            </div>
+
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-[10px] uppercase font-bold text-slate-500">İptal Webhook</span>
+                <button
+                  type="button"
+                  onClick={() => copy('cancel', cancelUrl)}
+                  className="text-[10px] font-bold text-purple-700 hover:text-purple-900"
+                >
+                  {copiedKey === 'cancel' ? '✓ Kopyalandı' : 'Kopyala'}
+                </button>
+              </div>
+              <code className="block bg-slate-50 border border-slate-200 rounded p-2 text-[11px] font-mono break-all">
+                {cancelUrl}
+              </code>
+            </div>
+
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-[10px] uppercase font-bold text-slate-500">x-api-key</span>
+                <button
+                  type="button"
+                  onClick={() => xApiKey && copy('key', xApiKey)}
+                  disabled={!xApiKey}
+                  className="text-[10px] font-bold text-purple-700 hover:text-purple-900 disabled:opacity-50"
+                >
+                  {copiedKey === 'key' ? '✓ Kopyalandı' : 'Kopyala'}
+                </button>
+              </div>
+              {xApiKey ? (
+                <code className="block bg-slate-50 border border-slate-200 rounded p-2 text-[11px] font-mono break-all">
+                  {xApiKey}
+                </code>
+              ) : (
+                <div className="text-[11px] text-red-600 font-bold bg-red-50 border border-red-200 rounded p-2">
+                  Henüz oluşturulmadı. Platformu güncelleyip kaydedin — otomatik üretilir.
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ─── BÖLÜM 3: YARDIM ─── */}
+        <SectionHeader
+          id="help"
+          icon={HelpCircle}
+          title="Bilgileri nereden alırım?"
+          subtitle="Getir API kayıt süreci ve test akışı"
+        />
+        {section === 'help' && (
+          <div className="px-3 pb-3 pt-1 space-y-2.5 text-[12px] text-slate-700 leading-relaxed">
+            <div className="bg-blue-50 border border-blue-200 rounded p-3">
+              <p className="font-bold text-blue-900 mb-1.5 flex items-center gap-1.5">
+                <Info className="w-3.5 h-3.5" /> Mail/Şifre değil — 3 teknik anahtar gerekir
+              </p>
+              <p className="text-[11px] text-blue-800">
+                Entegrasyon, Getir Yemek panel login bilgilerinizle değil; Getir API ekibinin verdiği 3 teknik anahtarla çalışır:
+                <strong> appSecretKey</strong>, <strong>restaurantSecretKey</strong>, <strong>restaurantId</strong>.
+              </p>
+            </div>
+
+            <div>
+              <p className="font-bold text-slate-900 mb-1">Adım adım:</p>
+              <ol className="list-decimal pl-5 space-y-1 text-[11px]">
+                <li>Restoran Getir Yemek satıcısı olmalı (değilse Getir'e restoran başvurusu yapın).</li>
+                <li>
+                  Getir API ekibine mail atın:{' '}
+                  <a
+                    href="mailto:getiryemekapi@getir.com"
+                    className="text-blue-600 underline font-mono"
+                  >
+                    getiryemekapi@getir.com
+                  </a>
+                  {' '} → "POS entegrasyonu için API anahtarı istiyoruz" deyin.
+                </li>
+                <li>Getir, mail ile <strong>appSecretKey + restaurantSecretKey + restaurantId</strong> gönderir.</li>
+                <li>Yukarıdaki <strong>Düzenle</strong> butonu ile platform bilgilerini açın, 3 değeri yapıştırın → kaydedin.</li>
+                <li>"Webhook URL & x-api-key" bölümündeki 3 değeri Getir'e mail atın (webhook tanımı için).</li>
+                <li>"Çalışma Modu" bölümünden POS'u <strong>AÇ</strong>'a basın.</li>
+                <li>Test ortamında sipariş gönderip akışı doğrulayın, sonra "CANLI ORTAM" geçişini yapın.</li>
+              </ol>
+            </div>
+
+            <div className="bg-amber-50 border border-amber-200 rounded p-3">
+              <p className="font-bold text-amber-900 mb-1 text-[11px]">⚠️ Önemli</p>
+              <ul className="list-disc pl-4 space-y-0.5 text-[11px] text-amber-800">
+                <li>Mail Getir tarafından <strong>info@aykasoft.com.tr</strong> gibi şirket domaininizden gelmeli.</li>
+                <li>CANLI ortama geçmeden önce mutlaka test ortamında verify→prepare→handover→deliver akışını tamamlayın.</li>
+                <li>Getir, canlıya geçiş için "Sipariş Fişi" çıktınızı görmek isteyecek (mutfak fişi otomatik basılır).</li>
+              </ul>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
