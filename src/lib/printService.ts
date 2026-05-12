@@ -1326,7 +1326,9 @@ export function buildTakeawayHtml(opts: {
   let html = receiptStyleBlock(st);
   // Termal yazicilarda kalin cerceveler ezilmis gozukur; cerceve yerine ust ve
   // alta kesik cizgi koyup label/value'leri kalin yaparak hem daha sade hem
-  // okunakli bir gorunum elde ederiz.
+  // okunakli bir gorunum elde ederiz. Ayrica urun isimleri ve tutarlari
+  // belirgin siyah + kalin yapariz, tutar kolonunu sag kenardan biraz iceri
+  // alip ortayla kenar arasinda dengeleriz.
   html += `<style>
     .sefpos-receipt-scope .item-divider { border-top: 1px dashed #000; margin: 3px 0; width: 100%; opacity: 0.85; }
     .sefpos-receipt-scope .cust-section { margin: 6px 0; padding: 4px 0; border-top: 1px dashed #000; border-bottom: 1px dashed #000; }
@@ -1335,6 +1337,17 @@ export function buildTakeawayHtml(opts: {
     .sefpos-receipt-scope .cust-row .value { font-weight: 800; text-align: right; flex: 1; }
     .sefpos-receipt-scope .addr-title { font-weight: 900; letter-spacing: 0.4px; text-align: center; margin: 4px 0 2px; }
     .sefpos-receipt-scope .addr-text { font-weight: 800; line-height: 1.35; text-align: center; margin: 0 2mm; }
+
+    /* Urun satiri: ad belirgin koyu, miktar sade, tutar saga - ama kenarda degil */
+    .sefpos-receipt-scope .row .name  { width: 60% !important; font-weight: 800 !important; color: #000 !important; padding-right: 1mm; }
+    .sefpos-receipt-scope .row .qty   { width: 14% !important; font-weight: 700 !important; color: #000 !important; text-align: center; }
+    .sefpos-receipt-scope .row .price { width: 26% !important; font-weight: 800 !important; color: #000 !important; text-align: right; padding-right: 2mm; }
+    /* Iki sutunlu info satirlari (Tarih, Siparis No, Ara Toplam, Toplam vb.):
+       son span saga hizali olsun ki tutar/deger tarafa kaymis gozukmesin. */
+    .sefpos-receipt-scope .row > span:first-child:not(.name) { text-align: left; font-weight: 700; color: #000; }
+    .sefpos-receipt-scope .row > span:last-child:not(.price):not(.qty) { text-align: right; font-weight: 800; color: #000; padding-right: 2mm; }
+    .sefpos-receipt-scope .total-row span:first-child { text-align: left; }
+    .sefpos-receipt-scope .total-row span:last-child  { text-align: right; padding-right: 2mm; }
   </style>`;
   html += `<div class="sefpos-receipt-scope">`;
   if (headerName) {
