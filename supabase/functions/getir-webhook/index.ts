@@ -1,6 +1,6 @@
 // supabase/functions/getir-webhook/index.ts
 //
-// Getir → ŞefPOS webhook gateway. Getir bu URL'e iki tip POST gonderir:
+// Getir → ŞefPOS webhook gateway. (v1.0.10) Getir bu URL'e iki tip POST gonderir:
 //
 //   ?type=new      → Yeni sipariş geldi
 //   ?type=cancel   → Sipariş iptal edildi (Getir veya musteri tarafindan)

@@ -1,6 +1,6 @@
 // supabase/functions/getir-api/index.ts
 //
-// ŞefPOS ↔ GetirYemek Restaurant API koprusu.
+// ŞefPOS ↔ GetirYemek Restaurant API koprusu. (v1.0.10)
 //
 // Tum Getir API cagrilari ŞefPOS UI'sindan / cron job'undan bu Edge Function
 // uzerinden gecer. Boylece:
