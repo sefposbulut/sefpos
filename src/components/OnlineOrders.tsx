@@ -465,7 +465,7 @@ export function OnlineOrders() {
         </div>
       </div>
 
-      <div className="p-3 md:p-4 lg:p-6 max-w-7xl mx-auto">
+      <div className="p-3 md:p-4 lg:p-5 w-full">
         {loading && orders.length === 0 ? (
           <div className="text-center py-12">
             <div className="animate-spin rounded-full h-16 w-16 border-b-4 border-orange-600 mx-auto"></div>
@@ -480,9 +480,21 @@ export function OnlineOrders() {
             </p>
           </div>
         ) : (
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden w-full">
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <table className="w-full text-sm" style={{ tableLayout: 'fixed' }}>
+                <colgroup>
+                  <col className="w-[110px]" />{/* Platform */}
+                  <col className="w-[15%]" />{/* Müşteri */}
+                  <col className="w-[30%]" />{/* Adres - en geniş */}
+                  <col className="w-[110px]" />{/* Sipariş No */}
+                  <col className="w-[80px]" />{/* Ürün */}
+                  <col className="w-[100px]" />{/* Tutar */}
+                  <col className="w-[100px]" />{/* Ödeme */}
+                  <col className="w-[100px]" />{/* Tarih */}
+                  <col className="w-[140px]" />{/* Durum */}
+                  <col className="w-[120px]" />{/* İşlemler */}
+                </colgroup>
                 <thead className="bg-slate-50 border-b-2 border-slate-200">
                   <tr>
                     <th className="px-3 py-3 text-left text-[10px] font-black text-slate-500 uppercase tracking-wider">Platform</th>
@@ -523,14 +535,14 @@ export function OnlineOrders() {
                           </td>
 
                           {/* MÜŞTERI */}
-                          <td className="px-3 py-3 whitespace-nowrap font-bold text-slate-800">
+                          <td className="px-3 py-3 font-bold text-slate-800 truncate" title={order.customer_name}>
                             {order.customer_name}
                           </td>
 
                           {/* ADRES */}
                           <td className="px-3 py-3">
                             <span
-                              className="text-xs text-slate-600 line-clamp-1 inline-block max-w-[220px]"
+                              className="text-xs text-slate-600 line-clamp-1 block"
                               title={order.customer_address || ''}
                             >
                               {order.customer_address || '—'}
