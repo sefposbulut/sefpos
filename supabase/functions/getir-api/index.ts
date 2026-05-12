@@ -51,10 +51,7 @@ interface PlatformRow {
   getir_token: string | null;
   getir_token_expires_at: string | null;
   getir_pos_status: number | null;
-  // Legacy / fallback fields (kept for backwards compat with old settings JSON)
   settings: Record<string, any> | null;
-  username: string | null;
-  password: string | null;
   api_key: string | null;
 }
 
@@ -371,16 +368,28 @@ Deno.serve(async (req) => {
     return badRequest("platformId ve action zorunlu");
   }
 
+  console.log("[getir-api] request", {
+    userId,
+    callerTenantId,
+    isSuperAdmin,
+    platformId: body.platformId,
+    action: body.action,
+  });
+
   // 4) Platform row — once tenant filter yapmadan getir, sonra yetkilendir
   const { data: platform, error: pErr } = await admin
     .from("online_order_platforms")
     .select(
-      "id,tenant_id,getir_environment,getir_app_secret_key,getir_restaurant_secret_key,getir_restaurant_id,getir_token,getir_token_expires_at,getir_pos_status,settings,username,password,api_key",
+      "id,tenant_id,getir_environment,getir_app_secret_key,getir_restaurant_secret_key,getir_restaurant_id,getir_token,getir_token_expires_at,getir_pos_status,settings,api_key",
     )
     .eq("id", body.platformId)
     .maybeSingle();
   if (pErr || !platform) {
-    return jsonResponse({ ok: false, error: "Platform bulunamadi (id hatali)" }, 404);
+    console.error("[getir-api] platform query result", { pErr, platform, askedId: body.platformId });
+    return jsonResponse({
+      ok: false,
+      error: `Platform bulunamadi (id=${body.platformId}, dbErr=${pErr?.message || 'null'})`,
+    }, 404);
   }
 
   // 5) Yetkilendirme: superadmin -> her tenant; degilse profile.tenant_id == platform.tenant_id
