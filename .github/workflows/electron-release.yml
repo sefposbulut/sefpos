@@ -3,29 +3,18 @@ name: Electron Release (Windows)
 # ŞefPOS masaüstü release otomasyonu.
 #
 # Tetikleme:
-#   1) `v*` etiketli (tag) push — örn. `git tag v1.0.2 && git push origin v1.0.2`
-#      (En sık kullanılan akış.)
-#   2) Actions UI’den manuel: "Run workflow" → version input (örn. 1.0.2)
-#      (Workflow `package.json` versionunu set edip commit etmez; sadece
-#      o tagi kullanarak build alır.)
+#   1) `v*` etiketli (tag) push — örn. `git tag v1.0.5 && git push origin v1.0.5`
+#   2) Actions UI'den manuel: "Run workflow"
 #
-# Yapılan iş:
-#   - Windows runner üzerinde `npm ci` + `vite build` + `electron-builder --win`
-#   - electron-builder, `package.json#build.publish` kuralına göre kaynak
-#     kod repository’si yerine **sefposbulut/sefpos-releases** repo’sundaki
-#     GitHub Release’e binary, `latest.yml`, `*.blockmap` dosyalarını upload eder.
-#   - Mevcut release “draft” olarak oluşturulur; içerikler kontrol edildikten
-#     sonra Releases sayfasından **Publish release** denmelidir; o aşamada
-#     son kullanıcıların kasalarındaki autoUpdater güncellemeyi görür.
+# Yapilan is:
+#   - Windows runner: `npm ci` + `vite build` + `electron-builder --win --publish never`
+#   - softprops/action-gh-release ile `sefposbulut/sefpos-releases` repo'sundaki
+#     Release'e installer + `latest.yml` + `.blockmap` dosyalari yuklenir.
+#   - electron-updater bu repo'yu poll ettigi icin kasalarda guncelleme algilanir.
 #
 # Gerekli GitHub Secret:
-#   - `RELEASE_REPO_TOKEN` → `sefposbulut/sefpos-releases` reposuna **Contents:
-#     write** yetkisi olan bir GitHub fine-grained PAT veya classic PAT
-#     (`public_repo` veya `repo` scope).
-#
-# Diğer mantık (ör. release notes oluşturma) henüz repo otomasyonunda yok;
-# Releases sayfasından elle "Release notes" girip Publish'leyince autoUpdater
-# o metni kasalarda gösterecek (renderer tarafında ElectronDesktopShell modal).
+#   - `RELEASE_REPO_TOKEN` → `sefposbulut/sefpos-releases` repo'suna
+#     **Contents: Read and write** yetkisi olan fine-grained PAT.
 
 on:
   push:
@@ -34,7 +23,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Release version (without leading v), e.g. 1.0.2"
+        description: "Release version (without leading v), e.g. 1.0.5"
         required: false
         type: string
 
@@ -56,18 +45,20 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # Vite build sonrası electron-builder Windows installer üretir; build.publish
-      # kuralı sayesinde sonuç dosyaları otomatik olarak `sefpos-releases` repo'suna
-      # yüklenir (Release draft modunda; manuel Publish gerekir).
+      # Build asamasi: electron-builder publish ETMEZ — sadece release/ klasorune
+      # installer + latest.yml + blockmap yazar. Bu sayede build hatalari ile
+      # publish hatalari birbirine karismaz, logda hangisi fail oldu netlesir.
       - name: Build Electron Windows installer
-        env:
-          GH_TOKEN: ${{ secrets.RELEASE_REPO_TOKEN }}
         run: |
           npm run build
-          npx electron-builder --win --publish always
+          npx electron-builder --win --publish never
 
-      # Bilgi amaçlı: çıktıyı job artifact olarak da bırakırız ki release
-      # tetiklenmemesi durumunda elle de indirilebilsin.
+      - name: List release artifacts
+        run: |
+          echo "=== release/ icerigi ==="
+          dir release
+        shell: cmd
+
       - name: Upload installer as workflow artifact
         if: always()
         uses: actions/upload-artifact@v4
@@ -78,3 +69,22 @@ jobs:
             release/*.exe.blockmap
             release/latest.yml
           if-no-files-found: warn
+
+      # Publish — softprops/action-gh-release sektor standardidir, hata
+      # mesajlari net (403/404/422 ayrintilari logda gozukur). electron-builder
+      # publish'inin aksine yutmaz. Sadece tag push'larda calisir.
+      - name: Publish to sefpos-releases
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          repository: sefposbulut/sefpos-releases
+          token: ${{ secrets.RELEASE_REPO_TOKEN }}
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          fail_on_unmatched_files: true
+          files: |
+            release/*.exe
+            release/*.exe.blockmap
+            release/latest.yml
