@@ -7,6 +7,7 @@ on:
       - "supabase/functions/getir-api/**"
       - "supabase/functions/getir-webhook/**"
       - "supabase/config.toml"
+      - ".github/workflows/supabase-edge-getir.yml"
   workflow_dispatch:
 
 jobs:
@@ -38,11 +39,26 @@ jobs:
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
 
-      - name: Deploy Getir Edge functions
-        # getir-webhook public (verify_jwt=false), config.toml zaten gateway-level kapatiyor.
-        # getir-api kendi icinde JWT dogrulamasini Supabase auth ile yapiyor; biz manuel control
-        # icin --no-verify-jwt vermiyoruz, supabase config.toml'daki ayar gecerli.
+      - name: Deploy getir-api
+        # Auth header'i fonksiyon icinde Supabase JWT ile manuel dogruluyoruz.
+        # Gateway-level verify_jwt = false (config.toml) → tag bagimsiz deploy.
         run: |
-          supabase functions deploy getir-api getir-webhook
+          supabase functions deploy getir-api --no-verify-jwt
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+
+      - name: Deploy getir-webhook
+        # Public endpoint — x-api-key header ile kendi auth'umuzu yapiyoruz.
+        run: |
+          supabase functions deploy getir-webhook --no-verify-jwt
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+
+      - name: Verify deployment
+        run: |
+          echo "Checking deployed functions..."
+          curl -s -o /dev/null -w "getir-api: %{http_code}\n" \
+            https://${{ secrets.SUPABASE_PROJECT_REF }}.supabase.co/functions/v1/getir-api
+          curl -s -o /dev/null -w "getir-webhook: %{http_code}\n" \
+            https://${{ secrets.SUPABASE_PROJECT_REF }}.supabase.co/functions/v1/getir-webhook
+          echo "(404 = deploy basarisiz, 401/400 = deploy ok)"
