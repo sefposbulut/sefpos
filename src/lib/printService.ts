@@ -1324,15 +1324,17 @@ export function buildTakeawayHtml(opts: {
   const headerName = (opts.restaurantName || '').trim();
 
   let html = receiptStyleBlock(st);
+  // Termal yazicilarda kalin cerceveler ezilmis gozukur; cerceve yerine ust ve
+  // alta kesik cizgi koyup label/value'leri kalin yaparak hem daha sade hem
+  // okunakli bir gorunum elde ederiz.
   html += `<style>
-    .sefpos-receipt-scope .takeaway-line { border-top: 1px dashed #000; margin: 5px 0; width: 100%; }
-    .sefpos-receipt-scope .item-divider { border-top: 1px dashed #000; margin: 3px 0; width: 100%; opacity: 0.8; }
-    .sefpos-receipt-scope .customer-block { border: 1.5px solid #000; padding: 6px 8px; margin: 6px 0; border-radius: 2px; }
-    .sefpos-receipt-scope .customer-block .label { font-weight: 800; }
-    .sefpos-receipt-scope .customer-block .value { font-weight: 700; }
-    .sefpos-receipt-scope .addr-block { border: 2px solid #000; padding: 7px 9px; margin: 8px 0; border-radius: 2px; }
-    .sefpos-receipt-scope .addr-title { font-weight: 900; letter-spacing: 0.4px; text-align: center; margin-bottom: 4px; }
-    .sefpos-receipt-scope .addr-text { font-weight: 800; line-height: 1.35; }
+    .sefpos-receipt-scope .item-divider { border-top: 1px dashed #000; margin: 3px 0; width: 100%; opacity: 0.85; }
+    .sefpos-receipt-scope .cust-section { margin: 6px 0; padding: 4px 0; border-top: 1px dashed #000; border-bottom: 1px dashed #000; }
+    .sefpos-receipt-scope .cust-row { display: flex; justify-content: space-between; gap: 8px; margin: 2px 0; }
+    .sefpos-receipt-scope .cust-row .label { font-weight: 900; }
+    .sefpos-receipt-scope .cust-row .value { font-weight: 800; text-align: right; flex: 1; }
+    .sefpos-receipt-scope .addr-title { font-weight: 900; letter-spacing: 0.4px; text-align: center; margin: 4px 0 2px; }
+    .sefpos-receipt-scope .addr-text { font-weight: 800; line-height: 1.35; text-align: center; margin: 0 2mm; }
   </style>`;
   html += `<div class="sefpos-receipt-scope">`;
   if (headerName) {
@@ -1355,34 +1357,38 @@ export function buildTakeawayHtml(opts: {
     html += `<div class="row"><span>Siparis No:</span><span>${escHtml(opts.orderNumber)}</span></div>`;
   }
 
-  // Müşteri kutusu — ad / telefon / adres (varsa her zaman, paket veya kurye fark etmez)
-  const hasCustomerInfo = !!(opts.customerName || opts.customerPhone || opts.deliveryAddress);
+  // Musteri bilgileri — sade tek bolme. Cerceve yok; ust/alt kesik cizgi ile
+  // ayrilir. Sirasiyla: Musteri (ad), Telefon, ADRES baslik + adres metni,
+  // varsa Not / Kurye / Tahmini sure.
+  const hasCustomerInfo = !!(
+    opts.customerName ||
+    opts.customerPhone ||
+    opts.deliveryAddress ||
+    opts.courierName ||
+    opts.estimatedMinutes
+  );
   if (hasCustomerInfo) {
-    html += `<div class="customer-block">`;
+    html += `<div class="cust-section">`;
     if (opts.customerName) {
-      html += `<div class="row"><span class="label">Musteri:</span><span class="value" style="text-align:right">${escHtml(opts.customerName)}</span></div>`;
+      html += `<div class="cust-row"><span class="label">Musteri:</span><span class="value">${escHtml(opts.customerName)}</span></div>`;
     }
     if (opts.customerPhone) {
-      html += `<div class="row"><span class="label">Telefon:</span><span class="value" style="text-align:right">${escHtml(opts.customerPhone)}</span></div>`;
+      html += `<div class="cust-row"><span class="label">Telefon:</span><span class="value">${escHtml(opts.customerPhone)}</span></div>`;
     }
-    html += `</div>`;
-  }
-
-  // Adres — paket için de göster (müşteri girdiyse); kurye için zorunlu görünüm
-  if (opts.deliveryAddress) {
-    html += `<div class="addr-block">`;
-    html += `<div class="addr-title">${isDelivery ? 'TESLIMAT ADRESI' : 'MUSTERI ADRESI'}</div>`;
-    html += `<div class="addr-text">${escHtml(opts.deliveryAddress)}</div>`;
-    if (opts.deliveryNote) {
-      html += `<div class="addr-text" style="margin-top:4px">Not: ${escHtml(opts.deliveryNote)}</div>`;
+    if (opts.deliveryAddress) {
+      html += `<div class="addr-title">${isDelivery ? 'TESLIMAT ADRESI' : 'MUSTERI ADRESI'}</div>`;
+      html += `<div class="addr-text">${escHtml(opts.deliveryAddress)}</div>`;
+      if (opts.deliveryNote) {
+        html += `<div class="addr-text" style="margin-top:3px">Not: ${escHtml(opts.deliveryNote)}</div>`;
+      }
     }
-    html += `</div>`;
     if (opts.courierName) {
-      html += `<div class="row"><span>Kurye:</span><span>${escHtml(opts.courierName)}</span></div>`;
+      html += `<div class="cust-row"><span class="label">Kurye:</span><span class="value">${escHtml(opts.courierName)}</span></div>`;
     }
     if (opts.estimatedMinutes) {
-      html += `<div class="row"><span>Tahmini Sure:</span><span>${opts.estimatedMinutes} dk</span></div>`;
+      html += `<div class="cust-row"><span class="label">Tahmini Sure:</span><span class="value">${opts.estimatedMinutes} dk</span></div>`;
     }
+    html += `</div>`;
   }
 
   html += `<div class="line"></div>`;

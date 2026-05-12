@@ -416,7 +416,9 @@ export function DeliveryOrderForm({ couriers, editOrder, prefillCustomer, onClos
           orderNumber: '',
           customerName: customerName.trim(),
           customerPhone: customerPhone.trim(),
-          deliveryAddress: isDelivery ? deliveryAddress.trim() : '',
+          // Adres her durumda fişe basılır — paket / gel-al / kurye fark etmez.
+          // Müşteri adres yazdıysa termal fişte "MUSTERI ADRESI" kutusunda görünür.
+          deliveryAddress: deliveryAddress.trim(),
           deliveryNote: deliveryNote.trim(),
           courierName: courier?.full_name,
           estimatedMinutes: isDelivery ? parseInt(estimatedMinutes) || 30 : 0,
