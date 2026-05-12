@@ -202,36 +202,59 @@ export function OnlineOrders() {
   };
 
   const syncOrders = async () => {
-    if (!user) return;
+    if (!user || !tenant) return;
 
     setSyncing(true);
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error('No session');
+      // Tenant'in aktif platformlarini al; Getir platformu varsa callGetir
+      // ile dogrudan poll-active calistir. Diger platformlar (Yemeksepeti vb.)
+      // icin eski sync-online-orders edge function'ina dus.
+      const { data: platforms } = await supabase
+        .from('online_order_platforms')
+        .select('id, platform_code, is_active')
+        .eq('tenant_id', tenant.id)
+        .eq('is_active', true);
 
-      const response = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/sync-online-orders`,
-        {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${session.access_token}`,
-            'Content-Type': 'application/json',
-          },
+      let totalSaved = 0;
+      let messages: string[] = [];
+
+      const getirPlatforms = (platforms || []).filter((p: any) => p.platform_code === 'getir');
+      for (const gp of getirPlatforms) {
+        const res = await callGetir({ platformId: gp.id, action: 'poll-active' });
+        if (res.ok) {
+          totalSaved += res.saved || 0;
+          messages.push(`Getir: ${res.saved ?? 0}/${res.fetched ?? 0}`);
+        } else {
+          messages.push(`Getir hata: ${res.error || 'bilinmeyen'}`);
         }
-      );
-
-      const result = await response.json();
-
-      if (!response.ok) {
-        throw new Error(result.error || 'Sync failed');
       }
 
-      if (result.newOrders > 0) {
-        alert(`${result.newOrders} yeni sipariş eklendi!`);
-      } else {
-        alert('Yeni sipariş yok.');
+      // Eski sync-online-orders (Yemeksepeti vb.) — sadece Getir DISI platform varsa
+      const nonGetir = (platforms || []).filter((p: any) => p.platform_code !== 'getir');
+      if (nonGetir.length > 0) {
+        const baseUrl = (import.meta.env.VITE_SUPABASE_URL || 'https://xdfnozfuuzctubijbnds.supabase.co').replace(/\/$/, '');
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session) {
+          try {
+            const response = await fetch(`${baseUrl}/functions/v1/sync-online-orders`, {
+              method: 'POST',
+              headers: {
+                Authorization: `Bearer ${session.access_token}`,
+                'Content-Type': 'application/json',
+              },
+            });
+            const result = await response.json().catch(() => ({}));
+            if (response.ok && typeof result?.newOrders === 'number') {
+              totalSaved += result.newOrders;
+              messages.push(`Diğer: ${result.newOrders}`);
+            }
+          } catch {
+            // Yemeksepeti/sync-online-orders deploy edilmemis olabilir, sessizce yut
+          }
+        }
       }
 
+      alert(messages.length ? messages.join(' · ') : 'Aktif platform bulunamadı.');
       await loadOrders();
     } catch (error: any) {
       console.error('Sync error:', error);
