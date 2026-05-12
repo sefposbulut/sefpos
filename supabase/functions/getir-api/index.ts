@@ -215,7 +215,90 @@ async function callGetir(
  * Gelen Getir order payload'ini online_orders + online_order_items tablosuna
  * idempotent sekilde upsert eder. Mevcut kayit varsa status guncellenir.
  */
-async function upsertGetirOrder(admin: any, platform: PlatformRow, order: any): Promise<string | null> {
+/**
+ * Getir order payload icin mutfak fisini print_jobs kuyruguna at. Electron
+ * Print Agent kuyrugu cekip mutfak yazicisina basacak. Yalnizca yeni eklenen
+ * (idempotent) siparisler icin cagrilmali — yoksa her poll'da yeniden basar.
+ */
+async function queueGetirKitchenReceipt(
+  admin: any,
+  tenantId: string,
+  order: any,
+): Promise<void> {
+  const lines = (order.products || []).map((p: any) => {
+    const opts = Array.isArray(p.options)
+      ? p.options.map((o: any) => o.name || o.text || "").filter(Boolean).join(", ")
+      : "";
+    const note = p.note ? ` (Not: ${p.note})` : "";
+    return `${p.count || p.quantity || 1}x ${p.name}${opts ? ` [${opts}]` : ""}${note}`;
+  }).join("<br/>");
+
+  const code = order.confirmationId || order.verificationCode || "";
+  const phone = order.client?.maskedPhoneNumber || order.customer?.maskedPhoneNumber || "";
+  const customer = order.client?.name || order.customer?.name || "Getir Musteri";
+  const total = Number(order.totalDiscountedPrice ?? order.totalPrice ?? 0);
+  const discount = Number(order.totalPrice ?? 0) - total;
+  const supSup = Number(order.supplierSupportRate ?? 0);
+  const isScheduled = !!order.isScheduled;
+  const deliveryType = Number(order.deliveryType ?? 0);
+  const addr = order.address?.address || "";
+
+  const html = `
+<style>
+  .gtr { font-family: Arial, sans-serif; width: 72mm; padding: 2mm; color: #000; }
+  .gtr .h { text-align: center; font-weight: 900; font-size: 18px; letter-spacing: 2px; padding: 4px 0; border: 2px solid #000; margin-bottom: 4px; }
+  .gtr .row { display: flex; justify-content: space-between; gap: 6px; font-size: 12px; margin: 1px 0; }
+  .gtr .label { font-weight: 800; }
+  .gtr .box { border: 1px solid #000; padding: 4px 6px; margin: 4px 0; font-size: 12px; }
+  .gtr .vcode { font-size: 26px; font-weight: 900; text-align: center; letter-spacing: 4px; padding: 4px 0; border: 2px solid #000; margin: 4px 0; }
+  .gtr .items { font-size: 13px; line-height: 1.4; margin: 6px 0; padding: 4px 0; border-top: 1px dashed #000; border-bottom: 1px dashed #000; font-weight: 700; }
+  .gtr .total { font-size: 15px; font-weight: 900; text-align: right; margin-top: 4px; }
+  .gtr .note { background: #ffe66b; padding: 4px 6px; font-weight: 800; font-size: 12px; margin: 4px 0; border: 1px solid #000; }
+  .gtr .small { font-size: 11px; }
+</style>
+<div class="gtr">
+  <div class="h">GETIR YEMEK</div>
+  <div class="row"><span class="label">Sipariş:</span><span>${order.orderNumber || order.confirmationId || ""}</span></div>
+  <div class="row"><span class="label">Tarih:</span><span>${order.createdAt ? new Date(order.createdAt).toLocaleString("tr-TR") : new Date().toLocaleString("tr-TR")}</span></div>
+  <div class="row"><span class="label">Teslimat:</span><span>${deliveryType === 1 ? "Getir Kurye" : deliveryType === 2 ? "Restoran Kurye" : "—"}</span></div>
+  ${isScheduled ? `<div class="row"><span class="label">İleri Tarih:</span><span>${order.scheduledDate ? new Date(order.scheduledDate).toLocaleString("tr-TR") : ""}</span></div>` : ""}
+
+  ${code ? `<div class="vcode">${code}</div>` : ""}
+
+  <div class="box">
+    <div><span class="label">Müşteri:</span> ${customer}</div>
+    ${phone ? `<div><span class="label">Telefon:</span> ${phone}</div>` : ""}
+    ${addr ? `<div><span class="label">Adres:</span> ${addr}</div>` : ""}
+  </div>
+
+  <div class="items">${lines || "(urun yok)"}</div>
+
+  ${order.note ? `<div class="note">SİPARİŞ NOTU: ${order.note}</div>` : ""}
+
+  ${discount > 0 ? `<div class="row small"><span>Ara Toplam:</span><span>${(order.totalPrice ?? 0).toFixed(2)} TL</span></div>` : ""}
+  ${discount > 0 ? `<div class="row small"><span>${supSup ? "Ortak Kampanya" : "İndirim"} (-):</span><span>${discount.toFixed(2)} TL</span></div>` : ""}
+  <div class="total">TOPLAM: ${total.toFixed(2)} TL</div>
+
+  <div class="small" style="text-align:center;margin-top:6px">GetirYemek tarafından gönderildi</div>
+</div>
+`;
+  try {
+    await admin.from("print_jobs").insert({
+      tenant_id: tenantId,
+      html,
+      printer_name: "",
+      status: "pending",
+    });
+  } catch (e: any) {
+    console.warn("[getir-api] print_jobs queue uyarisi:", e?.message);
+  }
+}
+
+async function upsertGetirOrder(
+  admin: any,
+  platform: PlatformRow,
+  order: any,
+): Promise<{ id: string; isNew: boolean } | null> {
   const platformOrderId = String(order.id || order._id || order.orderId || "");
   if (!platformOrderId) return null;
 
@@ -285,6 +368,16 @@ async function upsertGetirOrder(admin: any, platform: PlatformRow, order: any): 
     getir_raw_payload: order,
   };
 
+  // Once mevcut var mi tespit et — yeni mi gelecek karari icin
+  const { data: existing } = await admin
+    .from("online_orders")
+    .select("id")
+    .eq("tenant_id", platform.tenant_id)
+    .eq("platform_id", platform.id)
+    .eq("platform_order_id", platformOrderId)
+    .maybeSingle();
+  const isNew = !existing;
+
   const { data: upserted, error: upErr } = await admin
     .from("online_orders")
     .upsert(baseRow, { onConflict: "tenant_id,platform_id,platform_order_id" })
@@ -316,7 +409,12 @@ async function upsertGetirOrder(admin: any, platform: PlatformRow, order: any): 
     await admin.from("online_order_items").insert(itemsRows);
   }
 
-  return onlineOrderId;
+  // YENI sipariş ise mutfak fişini kuyruga at — Print Agent basacak
+  if (isNew) {
+    await queueGetirKitchenReceipt(admin, platform.tenant_id, order);
+  }
+
+  return { id: onlineOrderId, isNew };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -473,11 +571,15 @@ Deno.serve(async (req) => {
         if (!res.ok) return jsonResponse({ ok: false, status: res.status, data: res.data }, res.status);
         const list: any[] = Array.isArray(res.data) ? res.data : (res.data?.data || res.data?.orders || []);
         let saved = 0;
+        let newCount = 0;
         for (const ord of list) {
-          const id = await upsertGetirOrder(admin, platform as PlatformRow, ord);
-          if (id) saved++;
+          const result = await upsertGetirOrder(admin, platform as PlatformRow, ord);
+          if (result) {
+            saved++;
+            if (result.isNew) newCount++;
+          }
         }
-        return jsonResponse({ ok: true, fetched: list.length, saved });
+        return jsonResponse({ ok: true, fetched: list.length, saved, newCount });
       }
 
       // ---- ORDER ACTIONS --------------------------------------------------

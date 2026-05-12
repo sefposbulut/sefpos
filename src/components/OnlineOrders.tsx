@@ -3,7 +3,7 @@ import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { Database } from '../lib/supabase';
 import { ShoppingBag, Clock, Phone, MapPin, Check, X, ChevronDown, ChevronUp, Bike, Package, RefreshCw, Volume2, VolumeX, AlertTriangle, Hash, Tag } from 'lucide-react';
-import { playNotificationSound } from '../lib/notification';
+import { playOnlineOrderAlert } from '../lib/notification';
 import { callGetir, eligibleCancelReasons, getirStatusLabel } from '../lib/getirApi';
 
 type OnlineOrder = Database['public']['Tables']['online_orders']['Row'];
@@ -46,6 +46,9 @@ export function OnlineOrders() {
     return saved === null ? true : saved === 'true';
   });
   const previousOrderCount = useRef<number>(0);
+  // Daha onceden goruldumu listesi — yeni gelenleri platforma gore uyarmak icin
+  const seenOrderIds = useRef<Set<string>>(new Set());
+  const firstLoadDone = useRef<boolean>(false);
 
   const filterRef = useRef(filter);
   filterRef.current = filter;
@@ -71,9 +74,27 @@ export function OnlineOrders() {
       const { data, error } = await query;
       if (error) throw error;
 
-      const newOrders = (data as any) || [];
-      if (previousOrderCount.current > 0 && newOrders.length > previousOrderCount.current && soundEnabledRef.current) {
-        playNotificationSound();
+      const newOrders = (data as any[]) || [];
+      // İlk yüklemede mevcut siparişleri "görüldü" olarak işaretle; sonraki yüklemelerde yeni gelenler tespit edilsin
+      if (!firstLoadDone.current) {
+        for (const o of newOrders) seenOrderIds.current.add(o.id);
+        firstLoadDone.current = true;
+      } else if (soundEnabledRef.current) {
+        // Yeni gelen siparişleri platforma göre grupla ve sesli uyar
+        const freshByPlatform: Record<string, number> = {};
+        for (const o of newOrders) {
+          if (!seenOrderIds.current.has(o.id)) {
+            seenOrderIds.current.add(o.id);
+            const label = o.online_order_platforms?.platform_name || 'Online';
+            freshByPlatform[label] = (freshByPlatform[label] || 0) + 1;
+          }
+        }
+        // Her platform için ayrı uyarı (sırayla)
+        (async () => {
+          for (const [label, count] of Object.entries(freshByPlatform)) {
+            await playOnlineOrderAlert(label, count);
+          }
+        })();
       }
       previousOrderCount.current = newOrders.length;
       setOrders(newOrders);
@@ -268,10 +289,14 @@ export function OnlineOrders() {
     const colors: Record<string, string> = {
       yemeksepeti: '#D01012',
       getir: '#5D3EBC',
+      getiryemek: '#5D3EBC',
       trendyol: '#F27A1A',
-      migros: '#FF6600',
+      trendyolyemek: '#F27A1A',
+      migros: '#F8B500',
+      migrosyemek: '#F8B500',
+      fuudy: '#23B0B0',
     };
-    return colors[platformCode.toLowerCase()] || '#F97316';
+    return colors[platformCode.toLowerCase()] || '#475569';
   };
 
   const getStatusBadge = (status: string) => {
@@ -369,128 +394,155 @@ export function OnlineOrders() {
             </p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 gap-3 md:gap-4">
+          <div className="space-y-2">
             {filteredOrders.map((order) => {
               const isExpanded = expandedOrder === order.id;
-              const platformColor = getPlatformColor(order.online_order_platforms.platform_code);
+              const platformCode = order.online_order_platforms.platform_code;
+              const platformColor = getPlatformColor(platformCode);
+              const platformLabel = (order.online_order_platforms.platform_name || platformCode || '').toUpperCase();
 
               return (
                 <div
                   key={order.id}
-                  className="bg-white rounded-xl md:rounded-2xl shadow-lg hover:shadow-xl transition-all overflow-hidden border-2"
-                  style={{ borderColor: platformColor }}
+                  className={`bg-white rounded-xl shadow-sm hover:shadow-md transition-all overflow-hidden border ${
+                    isExpanded ? 'border-slate-300' : 'border-slate-200'
+                  }`}
+                  style={{ borderLeftWidth: 6, borderLeftColor: platformColor }}
                 >
-                  <div
-                    className="p-3 md:p-4 text-white relative"
-                    style={{ background: `linear-gradient(135deg, ${platformColor} 0%, ${platformColor}dd 100%)` }}
+                  {/* ─── KOMPAKT SATIR (her zaman görünür) ─── */}
+                  <button
+                    type="button"
+                    onClick={() => setExpandedOrder(isExpanded ? null : order.id)}
+                    className="w-full px-3 md:px-4 py-2.5 flex items-center gap-2 md:gap-3 text-left hover:bg-slate-50 transition"
                   >
-                    <div className="flex items-start justify-between mb-2 md:mb-3">
-                      <div className="flex-1 min-w-0 pr-2">
-                        <h3 className="text-base md:text-xl font-black uppercase truncate">
-                          {order.online_order_platforms.platform_name}
-                        </h3>
-                        <p className="text-xs md:text-sm opacity-90 font-bold truncate">
-                          #{order.platform_order_number || order.platform_order_id.slice(0, 8)}
-                        </p>
-                      </div>
-                      {getStatusBadge(order.status)}
-                    </div>
+                    {/* Platform badge */}
+                    <span
+                      className="text-white px-2 md:px-2.5 py-1 rounded-md text-[10px] md:text-[11px] font-black tracking-wider shrink-0 w-20 md:w-24 text-center"
+                      style={{ background: platformColor }}
+                    >
+                      {platformLabel.slice(0, 12)}
+                    </span>
 
-                    <div className="flex items-center gap-1.5 md:gap-2 text-xs md:text-sm opacity-95">
-                      <Clock className="w-3.5 h-3.5 md:w-4 md:h-4" />
-                      <span className="font-semibold">
-                        {new Date(order.created_at).toLocaleTimeString('tr-TR', {
-                          hour: '2-digit',
-                          minute: '2-digit',
-                        })}
+                    {/* Sipariş no */}
+                    <span className="font-mono font-bold text-slate-800 text-xs md:text-sm shrink-0 hidden sm:inline">
+                      #{order.platform_order_number || order.platform_order_id.slice(0, 6)}
+                    </span>
+
+                    {/* Saat */}
+                    <span className="text-[11px] md:text-xs text-slate-500 shrink-0 flex items-center gap-1">
+                      <Clock className="w-3 h-3" />
+                      {new Date(order.created_at).toLocaleTimeString('tr-TR', {
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}
+                    </span>
+
+                    {/* Getir doğrulama kodu (eğer varsa) */}
+                    {platformCode === 'getir' && order.getir_verification_code && (
+                      <span className="bg-purple-100 text-purple-800 font-mono font-black px-1.5 py-0.5 rounded text-[10px] md:text-xs shrink-0 hidden md:inline">
+                        {order.getir_verification_code.toUpperCase()}
                       </span>
-                    </div>
-                  </div>
+                    )}
 
-                  <div className="p-3 md:p-4 space-y-2 md:space-y-3">
-                    <div className="flex items-start gap-2">
-                      <Phone className="w-4 h-4 text-orange-600 mt-0.5 shrink-0" />
-                      <div className="flex-1 min-w-0">
-                        <p className="font-bold text-slate-800 truncate">{order.customer_name}</p>
+                    {/* Müşteri (esnek alan) */}
+                    <span className="flex-1 min-w-0 text-slate-700 font-semibold truncate text-xs md:text-sm">
+                      {order.customer_name}
+                    </span>
+
+                    {/* Ürün sayısı */}
+                    <span className="text-[11px] md:text-xs text-slate-500 shrink-0 hidden sm:inline">
+                      {order.items.length} ürün
+                    </span>
+
+                    {/* Tutar */}
+                    <span className="font-black text-base md:text-lg shrink-0" style={{ color: platformColor }}>
+                      {order.total_amount.toFixed(0)}₺
+                    </span>
+
+                    {/* Status badge */}
+                    <div className="shrink-0 hidden md:block">{getStatusBadge(order.status)}</div>
+
+                    {/* Chevron */}
+                    {isExpanded ? (
+                      <ChevronUp className="w-5 h-5 text-slate-400 shrink-0" />
+                    ) : (
+                      <ChevronDown className="w-5 h-5 text-slate-400 shrink-0" />
+                    )}
+                  </button>
+
+                  {/* ─── DETAY (sadece expand'lı) ─── */}
+                  {isExpanded && (
+                    <div className="border-t border-slate-200 bg-slate-50/50 px-3 md:px-4 py-3 space-y-3">
+                      {/* Status badge (mobilde header'da yok) + telefon + adres */}
+                      <div className="flex flex-wrap items-start gap-3 text-sm">
+                        <div className="md:hidden">{getStatusBadge(order.status)}</div>
                         {order.customer_phone && (
-                          <p className="text-sm text-slate-600">{order.customer_phone}</p>
+                          <div className="flex items-center gap-1.5 text-slate-700">
+                            <Phone className="w-4 h-4 text-slate-500" />
+                            <span className="font-medium">{order.customer_phone}</span>
+                          </div>
+                        )}
+                        {order.customer_address && (
+                          <div className="flex items-start gap-1.5 text-slate-700 flex-1 min-w-[200px]">
+                            <MapPin className="w-4 h-4 text-slate-500 mt-0.5 shrink-0" />
+                            <span className="line-clamp-2">{order.customer_address}</span>
+                          </div>
                         )}
                       </div>
-                    </div>
 
-                    {order.customer_address && (
-                      <div className="flex items-start gap-2">
-                        <MapPin className="w-4 h-4 text-orange-600 mt-0.5 shrink-0" />
-                        <p className="text-sm text-slate-600 line-clamp-2">{order.customer_address}</p>
-                      </div>
-                    )}
-
-                    <button
-                      onClick={() => setExpandedOrder(isExpanded ? null : order.id)}
-                      className="w-full flex items-center justify-between bg-slate-50 hover:bg-slate-100 p-3 rounded-xl transition-all"
-                    >
-                      <span className="font-bold text-slate-700">
-                        {order.items.length} Ürün
-                      </span>
-                      {isExpanded ? (
-                        <ChevronUp className="w-5 h-5 text-slate-600" />
-                      ) : (
-                        <ChevronDown className="w-5 h-5 text-slate-600" />
+                      {/* Sipariş notu */}
+                      {order.customer_notes && (
+                        <div className="bg-amber-50 border-l-4 border-amber-400 rounded p-2.5 text-sm font-semibold text-amber-900">
+                          📝 {order.customer_notes}
+                        </div>
                       )}
-                    </button>
 
-                    {isExpanded && (
-                      <div className="space-y-2 bg-slate-50 p-3 rounded-xl">
-                        {order.items.map((item, idx) => (
-                          <div key={idx} className="flex justify-between items-start text-sm">
-                            <div className="flex-1">
-                              <p className="font-bold text-slate-800">{item.platform_product_name}</p>
-                              {item.notes && (
-                                <p className="text-xs text-slate-500 italic">{item.notes}</p>
-                              )}
+                      {/* Ürün listesi */}
+                      <div className="bg-white border border-slate-200 rounded-lg p-2.5">
+                        <p className="text-[10px] uppercase font-bold text-slate-400 mb-1.5">Ürünler</p>
+                        <div className="space-y-1">
+                          {order.items.map((item, idx) => (
+                            <div key={idx} className="flex justify-between items-start gap-2 text-sm">
+                              <div className="flex-1 min-w-0">
+                                <p className="font-bold text-slate-800">
+                                  <span className="text-slate-500 mr-1">{item.quantity}x</span>
+                                  {item.platform_product_name}
+                                </p>
+                                {item.notes && (
+                                  <p className="text-xs text-slate-500 italic mt-0.5">{item.notes}</p>
+                                )}
+                              </div>
+                              <span className="font-bold text-slate-700 shrink-0">{item.total_amount.toFixed(0)} ₺</span>
                             </div>
-                            <div className="text-right ml-2">
-                              <p className="font-bold text-slate-700">x{item.quantity}</p>
-                              <p className="text-xs text-slate-600">{item.total_amount.toFixed(0)} ₺</p>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-
-                    <div className="border-t-2 pt-3 mt-3">
-                      <div className="flex justify-between items-center mb-3">
-                        <span className="text-slate-600 font-bold">TOPLAM</span>
-                        <span className="text-2xl font-black" style={{ color: platformColor }}>
-                          {order.total_amount.toFixed(0)} ₺
-                        </span>
+                          ))}
+                        </div>
                       </div>
 
-                      {/* Getir-spesifik bilgi rozeti: doğrulama kodu + statu */}
-                      {order.online_order_platforms.platform_code === 'getir' && (
-                        <div className="flex flex-wrap items-center gap-2 mb-3 text-xs">
+                      {/* Getir özel rozetler */}
+                      {platformCode === 'getir' && (
+                        <div className="flex flex-wrap items-center gap-1.5 text-xs">
                           {order.getir_verification_code && (
-                            <span className="bg-purple-100 text-purple-800 font-black px-2.5 py-1 rounded-lg flex items-center gap-1">
+                            <span className="bg-purple-100 text-purple-800 font-black px-2 py-0.5 rounded flex items-center gap-1 md:hidden">
                               <Hash className="w-3 h-3" />
                               {order.getir_verification_code.toUpperCase()}
                             </span>
                           )}
                           {typeof order.getir_status_code === 'number' && (
-                            <span className="bg-slate-100 text-slate-700 font-bold px-2.5 py-1 rounded-lg">
+                            <span className="bg-slate-200 text-slate-700 font-bold px-2 py-0.5 rounded">
                               {getirStatusLabel(order.getir_status_code)}
                             </span>
                           )}
                           {order.getir_delivery_type === 1 && (
-                            <span className="bg-purple-600 text-white font-bold px-2.5 py-1 rounded-lg">Getir Kurye</span>
+                            <span className="bg-purple-600 text-white font-bold px-2 py-0.5 rounded">Getir Kurye</span>
                           )}
                           {order.getir_delivery_type === 2 && (
-                            <span className="bg-amber-600 text-white font-bold px-2.5 py-1 rounded-lg">Restoran Kurye</span>
+                            <span className="bg-amber-600 text-white font-bold px-2 py-0.5 rounded">Restoran Kurye</span>
                           )}
                           {order.getir_is_scheduled && (
-                            <span className="bg-amber-100 text-amber-800 font-bold px-2.5 py-1 rounded-lg">İleri Tarih</span>
+                            <span className="bg-amber-100 text-amber-800 font-bold px-2 py-0.5 rounded">İleri Tarih</span>
                           )}
                           {Number(order.getir_total_discount || 0) > 0 && (
-                            <span className="bg-rose-100 text-rose-800 font-bold px-2.5 py-1 rounded-lg flex items-center gap-1">
+                            <span className="bg-rose-100 text-rose-800 font-bold px-2 py-0.5 rounded flex items-center gap-1">
                               <Tag className="w-3 h-3" />
                               Ortak Kampanya
                             </span>
@@ -744,7 +796,7 @@ export function OnlineOrders() {
                         </button>
                       )}
                     </div>
-                  </div>
+                  )}
                 </div>
               );
             })}
