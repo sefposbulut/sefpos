@@ -56,15 +56,41 @@ export interface GetirActionResult {
 
 /**
  * Genel Getir Edge Function caller'i. Supabase JWT'yi otomatik ekler.
- * Bag agnostic: hata olursa { ok: false, error } doner — caller swallow eder.
+ * Hata durumunda functions.invoke body'yi okumaz; biz fetch ile manuel cagirip
+ * gercek error mesajini UI'a tasiyoruz.
  */
 export async function callGetir(payload: GetirActionPayload): Promise<GetirActionResult> {
   try {
-    const { data, error } = await supabase.functions.invoke('getir-api', { body: payload });
-    if (error) {
-      return { ok: false, error: error.message || 'getir-api hatasi' };
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) return { ok: false, error: 'Oturum bulunamadi' };
+
+    const baseUrl = (import.meta.env.VITE_SUPABASE_URL || 'https://xdfnozfuuzctubijbnds.supabase.co').replace(/\/$/, '');
+    const resp = await fetch(`${baseUrl}/functions/v1/getir-api`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${session.access_token}`,
+        'Content-Type': 'application/json',
+        'apikey': (import.meta.env.VITE_SUPABASE_ANON_KEY as string) || '',
+      },
+      body: JSON.stringify(payload),
+    });
+
+    let raw = '';
+    let data: any = {};
+    try {
+      raw = await resp.text();
+      data = raw ? JSON.parse(raw) : {};
+    } catch {
+      // raw JSON degilse oldugu gibi error'a koy
+      return { ok: false, error: raw || `HTTP ${resp.status}` };
     }
-    return (data || { ok: false, error: 'bos yanit' }) as GetirActionResult;
+
+    // Backend her zaman { ok, error?, ... } dondurur
+    if (typeof data === 'object' && data !== null && 'ok' in data) {
+      return data as GetirActionResult;
+    }
+    // Backend baska bir sema dondurduyse durumu kullaniciya ilet
+    return { ok: resp.ok, status: resp.status, data, error: resp.ok ? undefined : `HTTP ${resp.status}` };
   } catch (err: any) {
     return { ok: false, error: err?.message || 'getir-api beklenmedik hata' };
   }

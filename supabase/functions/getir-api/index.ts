@@ -329,22 +329,37 @@ Deno.serve(async (req) => {
     return new Response("ok", { headers: corsHeaders });
   }
 
-  // 1) Auth: caller'in JWT'sini al, tenant_id'yi profile'dan oku
+  // 1) Auth: caller'in JWT'sini al
   const authHeader = req.headers.get("Authorization") || "";
   if (!authHeader.toLowerCase().startsWith("bearer ")) {
     return jsonResponse({ ok: false, error: "Authorization gerekli" }, 401);
   }
+  const accessToken = authHeader.slice("bearer ".length).trim();
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-  const supabaseAnon = Deno.env.get("SUPABASE_ANON_KEY")!;
   const supabaseService = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-
-  const userClient = createClient(supabaseUrl, supabaseAnon, {
-    global: { headers: { Authorization: authHeader } },
-  });
   const admin = createClient(supabaseUrl, supabaseService);
 
-  // 2) Body parse
+  // 2) JWT'yi manuel dogrula (verify_jwt=false oldugu icin gateway yapmiyor).
+  //    Boylece RLS'e takilmadan admin client ile okuyabiliriz, ama tenant
+  //    izolasyonu yine kullanicinin profile.tenant_id'sinden geliyor.
+  const { data: userInfo, error: userErr } = await admin.auth.getUser(accessToken);
+  if (userErr || !userInfo?.user) {
+    return jsonResponse({ ok: false, error: "Gecersiz oturum" }, 401);
+  }
+  const userId = userInfo.user.id;
+
+  const { data: profile, error: profErr } = await admin
+    .from("profiles")
+    .select("tenant_id")
+    .eq("id", userId)
+    .maybeSingle();
+  if (profErr || !profile?.tenant_id) {
+    return jsonResponse({ ok: false, error: "Tenant bulunamadi" }, 403);
+  }
+  const callerTenantId: string = profile.tenant_id;
+
+  // 3) Body parse
   let body: ActionRequest;
   try {
     body = await req.json();
@@ -355,16 +370,17 @@ Deno.serve(async (req) => {
     return badRequest("platformId ve action zorunlu");
   }
 
-  // 3) Platform row (RLS sayesinde tenant izolasyonu otomatik)
-  const { data: platform, error: pErr } = await userClient
+  // 4) Platform row — admin client ile oku, tenant filter ile guvenli
+  const { data: platform, error: pErr } = await admin
     .from("online_order_platforms")
     .select(
       "id,tenant_id,getir_environment,getir_app_secret_key,getir_restaurant_secret_key,getir_restaurant_id,getir_token,getir_token_expires_at,getir_pos_status,settings,username,password,api_key",
     )
     .eq("id", body.platformId)
+    .eq("tenant_id", callerTenantId)
     .maybeSingle();
   if (pErr || !platform) {
-    return jsonResponse({ ok: false, error: "Platform bulunamadi (RLS / id)" }, 404);
+    return jsonResponse({ ok: false, error: "Platform bulunamadi (tenant uyusmazligi veya id hatali)" }, 404);
   }
 
   const creds = normalizeCredentials(platform as PlatformRow);
