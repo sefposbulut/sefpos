@@ -1,12 +1,25 @@
+// src/lib/notification.ts
+//
+// Online sipariş için sürekli alarm sistemi. Yemeksepeti / Getir tarzi:
+// yeni siparişten sonra zil sürekli çalar, kullanici siparişi onaylayana
+// veya manuel olarak susturana kadar durmaz.
+//
+// Browser autoplay policy: AudioContext yalnizca kullanici etkilesimi
+// sonrasi resume edilebilir. Bu yuzden `unlockAudio()` ilk kullanici
+// tiklamasinda otomatik cagrilir (App.tsx / OnlineOrders.tsx).
+
 export class NotificationSound {
   private audio: HTMLAudioElement | null = null;
   private isEnabled: boolean = true;
 
   constructor() {
     if (typeof window !== 'undefined') {
-      this.audio = new Audio('/notification.mp3');
-      this.audio.volume = 0.7;
-
+      try {
+        this.audio = new Audio('./notification.mp3');
+        this.audio.volume = 0.7;
+      } catch {
+        this.audio = null;
+      }
       const savedPreference = localStorage.getItem('notification_sound_enabled');
       if (savedPreference !== null) {
         this.isEnabled = savedPreference === 'true';
@@ -16,7 +29,6 @@ export class NotificationSound {
 
   async play() {
     if (!this.isEnabled || !this.audio) return;
-
     try {
       this.audio.currentTime = 0;
       await this.audio.play();
@@ -37,45 +49,105 @@ export class NotificationSound {
 
 export const notificationSound = new NotificationSound();
 
-/**
- * Kisa, dikkat cekici alarm tonu (Web Audio API). ~1.1 sn. Tarayicinin
- * autoplay politikasi gerektirdigi icin bir kullanici etkilesimi
- * sonrasi calistirilmali (ilk acilista sessiz olabilir).
- */
-function playAlarmTone(): Promise<void> {
-  return new Promise((resolve) => {
+// ============================================================================
+// GLOBAL AUDIO CONTEXT — tek instance, hicbir zaman kapatilmaz
+// ============================================================================
+
+let globalAudioCtx: AudioContext | null = null;
+let audioUnlocked = false;
+
+function getCtx(): AudioContext | null {
+  if (typeof window === 'undefined') return null;
+  if (!globalAudioCtx) {
+    const AC = (window as any).AudioContext || (window as any).webkitAudioContext;
+    if (!AC) return null;
     try {
-      const AudioCtx =
-        (window as any).AudioContext || (window as any).webkitAudioContext;
-      if (!AudioCtx) return resolve();
-      const ctx = new AudioCtx();
+      globalAudioCtx = new AC();
+    } catch {
+      return null;
+    }
+  }
+  if (globalAudioCtx.state === 'suspended') {
+    void globalAudioCtx.resume().catch(() => {});
+  }
+  return globalAudioCtx;
+}
+
+/**
+ * Tarayicinin autoplay politikasini asmak icin AudioContext'i "unlock"
+ * eder. Ilk kullanici tiklamasinda otomatik cagrilmali. Sessiz 1 frame
+ * calar — kullanici fark etmez ama tarayici izin verir.
+ */
+export function unlockAudio(): void {
+  if (audioUnlocked) return;
+  const ctx = getCtx();
+  if (!ctx) return;
+  try {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    gain.gain.value = 0.0001;
+    osc.connect(gain).connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.01);
+    audioUnlocked = true;
+  } catch {
+    /* ignore */
+  }
+}
+
+/**
+ * Sayfa bir kere yuklendiginde ilk kullanici etkilesiminde
+ * (click/keydown/touch) audio'yu unlock et. App.tsx'te bir kere
+ * cagrilmali.
+ */
+export function installAudioUnlockOnInteraction(): void {
+  if (typeof window === 'undefined') return;
+  const handler = () => {
+    unlockAudio();
+    window.removeEventListener('click', handler, true);
+    window.removeEventListener('keydown', handler, true);
+    window.removeEventListener('touchstart', handler, true);
+  };
+  window.addEventListener('click', handler, true);
+  window.addEventListener('keydown', handler, true);
+  window.addEventListener('touchstart', handler, true);
+}
+
+// ============================================================================
+// GUCLU ALARM TONU — siren benzeri, alternating frekans
+// ============================================================================
+
+/**
+ * Polis sireni benzeri, dikkat cekici alarm. ~1.8 saniye surer.
+ * 2 alternating frekans (yukse-alcak), square dalga karisik → uyandirici.
+ */
+function playSiren(): Promise<void> {
+  return new Promise((resolve) => {
+    const ctx = getCtx();
+    if (!ctx) return resolve();
+    try {
       const now = ctx.currentTime;
+      // 4 alternating tone (high-low-high-low), her biri 0.4sn
       const tones = [
-        { freq: 880, start: 0.0, dur: 0.22 },
-        { freq: 660, start: 0.25, dur: 0.22 },
-        { freq: 880, start: 0.55, dur: 0.22 },
-        { freq: 660, start: 0.8, dur: 0.22 },
+        { freq: 1200, start: 0.0, dur: 0.4, type: 'square' as OscillatorType },
+        { freq: 800, start: 0.4, dur: 0.4, type: 'square' as OscillatorType },
+        { freq: 1200, start: 0.8, dur: 0.4, type: 'square' as OscillatorType },
+        { freq: 800, start: 1.2, dur: 0.4, type: 'square' as OscillatorType },
       ];
       for (const t of tones) {
         const osc = ctx.createOscillator();
         const gain = ctx.createGain();
-        osc.type = 'sine';
+        osc.type = t.type;
         osc.frequency.value = t.freq;
         gain.gain.setValueAtTime(0, now + t.start);
-        gain.gain.linearRampToValueAtTime(0.45, now + t.start + 0.02);
+        gain.gain.linearRampToValueAtTime(0.35, now + t.start + 0.02);
+        gain.gain.setValueAtTime(0.35, now + t.start + t.dur - 0.03);
         gain.gain.linearRampToValueAtTime(0, now + t.start + t.dur);
         osc.connect(gain).connect(ctx.destination);
         osc.start(now + t.start);
-        osc.stop(now + t.start + t.dur + 0.05);
+        osc.stop(now + t.start + t.dur + 0.02);
       }
-      setTimeout(() => {
-        try {
-          ctx.close();
-        } catch {
-          /* ignore */
-        }
-        resolve();
-      }, 1200);
+      setTimeout(() => resolve(), 1700);
     } catch {
       resolve();
     }
@@ -83,9 +155,42 @@ function playAlarmTone(): Promise<void> {
 }
 
 /**
- * Turkce konusma sentezi (SpeechSynthesisUtterance). Windows 10/11'de
- * Microsoft Tolga (tr-TR) voice'u varsayilan olarak yuklu gelir; bulamazsa
- * default voice ile okur.
+ * Yumusak 3-nota ring (sirin, ofiste rahatsiz etmez). Yedek olarak
+ * tutuluyor — su an siren kullaniyoruz cunku gercek mutfak/restoran
+ * gurultusunde duyulmasi gerekiyor.
+ */
+function playRingTone(): Promise<void> {
+  return new Promise((resolve) => {
+    const ctx = getCtx();
+    if (!ctx) return resolve();
+    try {
+      const now = ctx.currentTime;
+      const tones = [
+        { freq: 784.0, start: 0.0, dur: 0.18 },
+        { freq: 1046.5, start: 0.18, dur: 0.18 },
+        { freq: 1318.5, start: 0.36, dur: 0.32 },
+      ];
+      for (const t of tones) {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'triangle';
+        osc.frequency.value = t.freq;
+        gain.gain.setValueAtTime(0, now + t.start);
+        gain.gain.linearRampToValueAtTime(0.5, now + t.start + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + t.start + t.dur);
+        osc.connect(gain).connect(ctx.destination);
+        osc.start(now + t.start);
+        osc.stop(now + t.start + t.dur + 0.05);
+      }
+      setTimeout(() => resolve(), 700);
+    } catch {
+      resolve();
+    }
+  });
+}
+
+/**
+ * Turkce konusma sentezi. Windows'ta Microsoft Tolga (tr-TR) varsayilan.
  */
 function speakTr(text: string): Promise<void> {
   return new Promise((resolve) => {
@@ -123,11 +228,7 @@ function speakTr(text: string): Promise<void> {
 }
 
 /**
- * Beep + Turkce sesli uyari. Online sipariş geldiğinde çağrılır.
- *  - platformLabel: "Getir", "Yemeksepeti", "Trendyol", "Migros Yemek" vb.
- *  - count: birden fazla sipariş geldiyse "3 yeni Getir siparişi" der.
- *
- * localStorage.notification_sound_enabled = "false" ise sessizdir.
+ * Tek seferlik beep + TTS. Geriye uyumluluk icin.
  */
 export async function playOnlineOrderAlert(
   platformLabel: string = 'Online',
@@ -135,7 +236,8 @@ export async function playOnlineOrderAlert(
 ): Promise<void> {
   const enabled = localStorage.getItem('notification_sound_enabled');
   if (enabled === 'false') return;
-  await playAlarmTone();
+  unlockAudio();
+  await playSiren();
   const phrase =
     count > 1
       ? `${count} yeni ${platformLabel} siparişi var!`
@@ -143,60 +245,15 @@ export async function playOnlineOrderAlert(
   await speakTr(phrase);
 }
 
-/**
- * Geriye uyumluluk: eski playNotificationSound cagrilari artik
- * yeni alarm tonunu calar.
- */
+/** Geriye uyumluluk. */
 export function playNotificationSound() {
-  void playAlarmTone();
+  unlockAudio();
+  void playSiren();
 }
 
 // ============================================================================
-// SUREKLI ALARM (Yemeksepeti / Getir tarzi) — Yeni siparis onaylanana kadar
-// ringtone tekrar tekrar calar. Onaylaninca veya kullanici susturunca durur.
+// SUREKLI ALARM — siparis onaylanana kadar siren tekrar tekrar calar
 // ============================================================================
-
-/** Yemeksepeti benzeri kisa ring melodisi (3 nota, yukselen patern). */
-function playRingTone(): Promise<void> {
-  return new Promise((resolve) => {
-    try {
-      const AudioCtx =
-        (window as any).AudioContext || (window as any).webkitAudioContext;
-      if (!AudioCtx) return resolve();
-      const ctx = new AudioCtx();
-      const now = ctx.currentTime;
-      // 3'lu ascending bell: G5 -> C6 -> E6 — dikkat cekici, kibar
-      const tones = [
-        { freq: 784.0, start: 0.0, dur: 0.18 },
-        { freq: 1046.5, start: 0.18, dur: 0.18 },
-        { freq: 1318.5, start: 0.36, dur: 0.32 },
-      ];
-      for (const t of tones) {
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.type = 'triangle';
-        osc.frequency.value = t.freq;
-        gain.gain.setValueAtTime(0, now + t.start);
-        gain.gain.linearRampToValueAtTime(0.5, now + t.start + 0.02);
-        gain.gain.exponentialRampToValueAtTime(0.001, now + t.start + t.dur);
-        osc.connect(gain).connect(ctx.destination);
-        osc.start(now + t.start);
-        osc.stop(now + t.start + t.dur + 0.05);
-      }
-      const closeAt = 0.7;
-      setTimeout(() => {
-        try {
-          ctx.close();
-        } catch {
-          /* ignore */
-        }
-        resolve();
-      }, closeAt * 1000);
-    } catch {
-      resolve();
-    }
-  });
-}
 
 interface ActiveAlarm {
   orderId: string;
@@ -207,38 +264,45 @@ interface ActiveAlarm {
 const activeAlarms = new Map<string, ActiveAlarm>();
 
 /**
- * Sipariş için sürekli alarm başlat. Aynı orderId ile tekrar çağrılırsa
- * mevcut alarm korunur. localStorage'da sound disabled ise hiç başlamaz.
+ * Yeni siparis icin surekli alarm baslat. Aynı orderId ile tekrar
+ * cagrilirsa mevcut alarm korunur. localStorage'da sound disabled ise
+ * hic baslamaz.
  *
- * - intervalMs: her ringtone arasında bekleme. Varsayilan 3500ms.
- * - speakEvery: her N. ringtone'da bir TTS söyler. Varsayilan 2.
+ * Loop: ~2 saniye siren + 1 saniye sessizlik + tekrar.
+ * Her 4. siren'de bir TTS soyler ("Yeni Getir siparisi var!").
  */
 export function startContinuousAlert(
   orderId: string,
   platformLabel: string = 'Online',
-  intervalMs: number = 3500,
+  intervalMs: number = 3000,
 ): void {
   const enabled = localStorage.getItem('notification_sound_enabled');
   if (enabled === 'false') return;
   if (activeAlarms.has(orderId)) return;
 
+  unlockAudio();
+
   let tick = 0;
   const ring = async () => {
     if (!activeAlarms.has(orderId)) return;
-    await playRingTone();
+    await playSiren();
     tick++;
-    // İlk ring'de speech, sonra her 2. ring'de tekrar
-    if (tick === 1 || tick % 2 === 0) {
-      void speakTr(`Yeni ${platformLabel} siparişi var!`);
+    // Ilk seferde + her 4. seferde TTS — fazla tekrarlanip rahatsiz etmesin
+    if (tick === 1 || tick % 4 === 0) {
+      void speakTr(`Yeni ${platformLabel} siparişi var. Lütfen onaylayın.`);
     }
   };
 
   void ring();
   const timer = window.setInterval(ring, intervalMs);
   activeAlarms.set(orderId, { orderId, platformLabel, timer });
+
+  console.log(
+    `[notification] Surekli alarm baslatildi: ${platformLabel} #${orderId} (interval ${intervalMs}ms)`,
+  );
 }
 
-/** Belirli bir sipariş için alarmı durdurur. */
+/** Belirli bir siparis icin alarmi durdurur. */
 export function stopContinuousAlert(orderId: string): void {
   const a = activeAlarms.get(orderId);
   if (!a) return;
@@ -249,9 +313,10 @@ export function stopContinuousAlert(orderId: string): void {
   } catch {
     /* ignore */
   }
+  console.log(`[notification] Alarm durduruldu: #${orderId}`);
 }
 
-/** Tüm aktif alarmları durdurur (kullanıcı "sustur" butonuna basınca). */
+/** Tum aktif alarmlari durdurur (kullanici "sustur" butonuna basinca). */
 export function stopAllAlerts(): void {
   for (const a of activeAlarms.values()) {
     clearInterval(a.timer);
@@ -264,7 +329,20 @@ export function stopAllAlerts(): void {
   }
 }
 
-/** Aktif alarmı olan sipariş ID'lerini döndürür. */
+/** Aktif alarmi olan siparis ID'lerini dondurur. */
 export function getActiveAlertOrderIds(): string[] {
   return Array.from(activeAlarms.keys());
+}
+
+/** Audio context durumunu disaridan kontrol etmek icin. */
+export function getAudioState(): {
+  hasContext: boolean;
+  state: AudioContextState | 'no-context';
+  unlocked: boolean;
+} {
+  return {
+    hasContext: !!globalAudioCtx,
+    state: globalAudioCtx?.state ?? 'no-context',
+    unlocked: audioUnlocked,
+  };
 }

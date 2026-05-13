@@ -8,6 +8,9 @@ import {
   stopContinuousAlert,
   stopAllAlerts,
   getActiveAlertOrderIds,
+  unlockAudio,
+  playOnlineOrderAlert,
+  getAudioState,
 } from '../lib/notification';
 import { callGetir, eligibleCancelReasons, getirStatusLabel } from '../lib/getirApi';
 
@@ -617,6 +620,25 @@ export function OnlineOrders() {
       o.status === 'accepted',
   ).length;
 
+  const [audioBlocked, setAudioBlocked] = useState(false);
+  // Sayfa acildiginda audio context'i unlock dene; engellendiyse banner goster.
+  useEffect(() => {
+    unlockAudio();
+    const check = () => {
+      const s = getAudioState();
+      setAudioBlocked(s.state === 'suspended' || (!s.unlocked && s.state !== 'running'));
+    };
+    check();
+    const id = window.setInterval(check, 2000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  const testSound = async () => {
+    unlockAudio();
+    await playOnlineOrderAlert('Test', 1);
+    setAudioBlocked(false);
+  };
+
   return (
     <div className="h-full flex flex-col bg-slate-50">
       {/* ─────────── HEADER (kurumsal, TakeawayOrders dili) ─────────── */}
@@ -647,6 +669,14 @@ export function OnlineOrders() {
               </button>
             )}
             <button
+              onClick={testSound}
+              title="Bildirim sesini test et"
+              className="flex items-center gap-1.5 px-3 py-2 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-xl font-bold text-xs ring-1 ring-blue-200 transition active:scale-95"
+            >
+              <BellRing className="w-4 h-4" />
+              <span className="hidden sm:inline">Sesi Test Et</span>
+            </button>
+            <button
               onClick={toggleSound}
               title={soundEnabled ? 'Sesi Kapat' : 'Sesi Aç'}
               className={`p-2 rounded-xl transition active:scale-95 ${
@@ -676,6 +706,24 @@ export function OnlineOrders() {
           </div>
         </div>
       </div>
+
+      {/* ─────────── AUDIO KILITLI UYARI ─────────── */}
+      {audioBlocked && soundEnabled && (
+        <div className="bg-amber-50 border-b border-amber-200 px-4 md:px-6 py-2.5 shrink-0">
+          <div className="flex items-center gap-3 text-amber-900">
+            <BellRing className="w-5 h-5 shrink-0 animate-pulse" />
+            <div className="flex-1 text-xs md:text-sm font-bold">
+              Tarayıcı bildirim seslerini engelliyor. Yeni sipariş zilini etkinleştirmek için aşağıdaki butona basın:
+            </div>
+            <button
+              onClick={testSound}
+              className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg font-bold text-xs shrink-0 transition active:scale-95"
+            >
+              ZİLİ ETKİNLEŞTİR
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* ─────────── FİLTRE BAR ─────────── */}
       <div className="bg-white border-b border-slate-200 px-4 md:px-6 py-2 shrink-0">

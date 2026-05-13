@@ -125,6 +125,18 @@ function App() {
     mq.addListener(handler);
     return () => mq.removeListener(handler);
   }, []);
+
+  // Browser autoplay policy: AudioContext yalnizca kullanici etkilesimi
+  // sonrasi ses calabilir. Ilk tiklamasinda audio'yu unlock et ki online
+  // sipariş alarmi sessiz kalmasin.
+  useEffect(() => {
+    let cancelled = false;
+    void import('./lib/notification').then((m) => {
+      if (cancelled) return;
+      m.installAudioUnlockOnInteraction();
+    });
+    return () => { cancelled = true; };
+  }, []);
   const { user, profile, tenant, loading, refreshProfile, activeBranch, signOut, profileLoadFailed } = useAuth();
   const [selectedTable, setSelectedTable] = useState<Table | null>(null);
   const [currentPage, setCurrentPage] = useState('tables');
