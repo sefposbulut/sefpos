@@ -963,9 +963,7 @@ Deno.serve(async (req) => {
 
         if (result.ok) {
           // Başarı (orijinal veya kurtarılmış) — DB'yi güncelle ve lifecycle
-          // timestamp'leri ekle. Eğer recovery oldysa Getir cevabı `recovered:true`
-          // formatında olabilir, embedded order çıkaramayabiliriz; o zaman direkt
-          // sabit status patch'ine düş.
+          // timestamp'leri ekle.
           const embedded = extractOrderFromGetirActionResponse(result.data);
           if (embedded) {
             await upsertGetirOrder(admin, platform as PlatformRow, embedded, { skipAckClamp: true });
@@ -997,6 +995,38 @@ Deno.serve(async (req) => {
               .eq("platform_id", platform.id)
               .eq("platform_order_id", body.orderId)
               .is("delivered_at", null);
+          }
+
+          // ---- Action status CAP --------------------------------------------------
+          // Sorun: Getir test ortamı bazen verify/prepare sonrası embedded order'da
+          // ileri bir status döndürüyor (örn. verify yapıldı, embedded.status=500/READY).
+          // upsertGetirOrder bunu olduğu gibi DB'ye yazınca ŞefPOS "HAZIR" badge'i
+          // gösteriyor, oysa Getir paneli hâlâ "Hazırlanıyor" (410). Kullanıcı kafası
+          // karışıyor + olmayan "KURYE YOLA ÇIKTI" butonuna basıp 400 alıyor.
+          //
+          // Çözüm: Aksiyonun mantıksal hedefinin üzerine çıkmasını engelle. Getir'in
+          // gerçek durumu zaten 15s polling'de yansıtılır; o zamana kadar UI tutarlı kalır.
+          //
+          // CAP kuralları:
+          //   verify           → status<='verified'  (code<=400)
+          //   verify-scheduled → status<='scheduled_accepted' (code<=350)
+          //   prepare          → status<='preparing' (code<=410)
+          //   handover/deliver → CAP yok (Getir kurye akışında 550/700 gerçek olabilir)
+          const ACTION_CAP: Record<string, { status: string; code: number }> = {
+            verify: { status: "verified", code: 400 },
+            "verify-scheduled": { status: "scheduled_accepted", code: 350 },
+            prepare: { status: "preparing", code: 410 },
+          };
+          const cap = ACTION_CAP[body.action];
+          if (cap) {
+            // Sadece DB'deki getir_status_code, cap'in ÜSTÜNDE ise geri çek (cap'le).
+            // Aksi halde (cap'in altındaysa) Getir'in gerçek polling değeri korunur.
+            await admin
+              .from("online_orders")
+              .update({ status: cap.status, getir_status_code: cap.code })
+              .eq("platform_id", platform.id)
+              .eq("platform_order_id", body.orderId)
+              .gt("getir_status_code", cap.code);
           }
 
           // Embedded yoksa sabit tahminci patch (yedek)
