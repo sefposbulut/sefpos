@@ -3861,6 +3861,37 @@ function GetirPlatformControls({ platform, onChanged }: GetirPlatformControlsPro
     }
   };
 
+  const testConnection = async () => {
+    setBusy('login');
+    try {
+      const res = await callGetir({ platformId: platform.id, action: 'login' });
+      if (!res.ok) {
+        const msg = (res as any)?.data?.message || (res as any)?.data?.error || res.error || 'Getir tarafı reddetti';
+        alert(`❌ Bağlantı başarısız\n\n${msg}\n\nLütfen appSecretKey, restaurantSecretKey ve restaurantId değerlerini kontrol edin.`);
+      } else {
+        alert(`✅ Bağlantı başarılı!\n\nGetir API token alındı.\nOrtam: ${platform.getir_environment === 'production' ? 'CANLI' : 'TEST'}`);
+      }
+    } catch (e: any) {
+      alert(`❌ Hata: ${e?.message || 'Bilinmeyen'}`);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const pollUnapproved = async () => {
+    setBusy('poll-unapp');
+    try {
+      const res = await callGetir({ platformId: platform.id, action: 'poll-unapproved' });
+      if (!res.ok) {
+        alert(`Onay bekleyen siparişler çekilemedi: ${(res as any)?.data?.message || res.error}`);
+      } else {
+        alert(`${res.saved ?? 0} onay bekleyen sipariş güncellendi.`);
+      }
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const SectionHeader = ({
     id,
     icon: Icon,
@@ -3972,15 +4003,37 @@ function GetirPlatformControls({ platform, onChanged }: GetirPlatformControlsPro
               </div>
             </div>
 
-            <button
-              type="button"
-              onClick={pollActive}
-              disabled={busy !== null}
-              className="w-full bg-purple-700 hover:bg-purple-800 text-white font-bold py-2 rounded-lg disabled:opacity-50 text-sm flex items-center justify-center gap-2"
-            >
-              <RefreshCw className={`w-4 h-4 ${busy === 'poll' ? 'animate-spin' : ''}`} />
-              {busy === 'poll' ? 'Sipariş alınıyor…' : 'Aktif Siparişleri Senkronize Et'}
-            </button>
+            <div className="grid grid-cols-1 gap-2">
+              <button
+                type="button"
+                onClick={testConnection}
+                disabled={busy !== null}
+                className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 rounded-lg disabled:opacity-50 text-sm flex items-center justify-center gap-2"
+              >
+                <RefreshCw className={`w-4 h-4 ${busy === 'login' ? 'animate-spin' : ''}`} />
+                {busy === 'login' ? 'Bağlanıyor…' : '🔌 Bağlantıyı Test Et (Login)'}
+              </button>
+
+              <button
+                type="button"
+                onClick={pollActive}
+                disabled={busy !== null}
+                className="w-full bg-purple-700 hover:bg-purple-800 text-white font-bold py-2 rounded-lg disabled:opacity-50 text-sm flex items-center justify-center gap-2"
+              >
+                <RefreshCw className={`w-4 h-4 ${busy === 'poll' ? 'animate-spin' : ''}`} />
+                {busy === 'poll' ? 'Sipariş alınıyor…' : 'Aktif Siparişleri Çek'}
+              </button>
+
+              <button
+                type="button"
+                onClick={pollUnapproved}
+                disabled={busy !== null}
+                className="w-full bg-amber-600 hover:bg-amber-700 text-white font-bold py-2 rounded-lg disabled:opacity-50 text-sm flex items-center justify-center gap-2"
+              >
+                <RefreshCw className={`w-4 h-4 ${busy === 'poll-unapp' ? 'animate-spin' : ''}`} />
+                {busy === 'poll-unapp' ? 'Çekiliyor…' : 'Onay Bekleyen Siparişleri Çek'}
+              </button>
+            </div>
           </div>
         )}
 
@@ -4103,6 +4156,40 @@ function GetirPlatformControls({ platform, onChanged }: GetirPlatformControlsPro
                 <li>CANLI ortama geçmeden önce mutlaka test ortamında verify→prepare→handover→deliver akışını tamamlayın.</li>
                 <li>Getir, canlıya geçiş için "Sipariş Fişi" çıktınızı görmek isteyecek (mutfak fişi otomatik basılır).</li>
               </ul>
+            </div>
+
+            <div className="bg-purple-50 border border-purple-200 rounded p-3">
+              <p className="font-bold text-purple-900 mb-1.5 text-[11px]">📋 Resmi Test Senaryoları (Getir doc)</p>
+              <ul className="list-disc pl-4 space-y-0.5 text-[11px] text-purple-800">
+                <li>Sipariş iptali (hem restoran hem müşteri taraflı)</li>
+                <li><strong>Restoran Getirsin</strong> siparişi (deliveryType=2)</li>
+                <li><strong>Getir Getirsin</strong> siparişi (deliveryType=1)</li>
+                <li>Statü işlemleri: <code>verify → prepare → handover → deliver</code></li>
+                <li>Kampanyalı siparişler (Restoran destekli / Getir destekli / <strong>ORTAKKAMPANYA</strong>)</li>
+                <li>İleri tarihli sipariş (verify-scheduled)</li>
+                <li>Restoran açma/kapama (<code>/status/open</code>, <code>/status/close</code>)</li>
+                <li>Menü işlemleri (ürün/opsiyon açma/kapama)</li>
+              </ul>
+              <p className="mt-2 text-[11px] text-purple-700">
+                Test ortamı:&nbsp;
+                <a
+                  href="https://web-workspace.develop.getirapi.com/en/food/restaurants/"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="underline font-bold"
+                >
+                  develop.getirapi.com
+                </a>
+                &nbsp;· Doküman:&nbsp;
+                <a
+                  href="https://developers.getir.com/food/documentation/introduction"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="underline font-bold"
+                >
+                  developers.getir.com
+                </a>
+              </p>
             </div>
           </div>
         )}
