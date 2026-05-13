@@ -5,8 +5,9 @@ import { Database } from '../lib/supabase';
 import {
   X, Plus, Wallet, Banknote, CreditCard, Receipt, TrendingUp, TrendingDown,
   DollarSign, Calendar, User, Filter, ChevronDown, ChevronUp, ShoppingCart,
-  MapPin, Clock, Package
+  MapPin, Clock, Package, Printer
 } from 'lucide-react';
+import { ReprintReceiptModal } from './ReprintReceiptModal';
 
 type CashTransaction = Database['public']['Tables']['cash_register_transactions']['Row'] & {
   profiles?: { full_name: string } | null;
@@ -63,6 +64,7 @@ export function CashRegister({ onClose }: CashRegisterProps) {
   const { tenant, user, activeBranch, branches, isOwnerOrAdmin } = useAuth();
   const [cashTransactions, setCashTransactions] = useState<CashTransaction[]>([]);
   const [showCashForm, setShowCashForm] = useState(false);
+  const [showReprintModal, setShowReprintModal] = useState(false);
   const [cashFormType, setCashFormType] = useState<'cash_in' | 'cash_out' | 'expense'>('cash_in');
   const [cashAmount, setCashAmount] = useState('');
   const [cashDescription, setCashDescription] = useState('');
@@ -241,11 +243,23 @@ export function CashRegister({ onClose }: CashRegisterProps) {
               {branches.map(b => <option key={b.id} value={b.id} className="text-gray-800 bg-white">{b.name}</option>)}
             </select>
           )}
+          <button
+            onClick={() => setShowReprintModal(true)}
+            className="hidden sm:flex items-center gap-1.5 bg-white/20 hover:bg-white/30 text-white text-sm px-3 py-1.5 rounded-lg border border-white/30 transition-all active:scale-95"
+            title="Geçmiş siparişlerin adisyonunu yeniden bas"
+          >
+            <Printer className="w-4 h-4" />
+            <span className="font-bold">Adisyon Yazdır</span>
+          </button>
           <button onClick={onClose} className="text-white hover:bg-white/20 p-2 rounded-lg transition-all active:scale-95">
             <X className="w-6 h-6 md:w-7 md:h-7" />
           </button>
         </div>
       </div>
+
+      {showReprintModal && (
+        <ReprintReceiptModal onClose={() => setShowReprintModal(false)} />
+      )}
 
       <div className="flex-1 overflow-y-auto bg-slate-50">
         <div className="max-w-7xl mx-auto p-3 md:p-6 space-y-4">

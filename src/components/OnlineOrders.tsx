@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback, Fragment, useMemo } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
-import { ShoppingBag, Clock, Phone, MapPin, Check, X, ChevronDown, ChevronUp, Bike, Package, RefreshCw, Volume2, VolumeX, AlertTriangle, Hash, Tag, BellRing } from 'lucide-react';
+import { ShoppingBag, Clock, Phone, MapPin, Check, X, ChevronDown, ChevronUp, Bike, Package, RefreshCw, Volume2, VolumeX, AlertTriangle, Hash, Tag, BellRing, Printer } from 'lucide-react';
 import {
   startContinuousAlert,
   stopContinuousAlert,
@@ -680,6 +680,44 @@ export function OnlineOrders() {
    * sistemle Getir paneli arasında uyumsuzluk varsa kullanıcı bunu tek
    * tıkla düzeltebilir.
    */
+  /**
+   * Online sipariş fişini tekrar bas — Yemeksepeti/Trendyol/Migros/Getir hepsi için.
+   *
+   * Edge function (`online-order-reprint`) DB'deki `dh_raw_payload` veya item snapshot'ından
+   * yeniden HTML üretir ve `print_jobs` kuyruğuna atar. Electron Print Agent kuyruğu okuyup
+   * ilgili yazıcıya gönderir. İlk basımdaki ile birebir aynı çıktı.
+   */
+  const reprintOnlineOrder = async (order: OrderWithDetails): Promise<void> => {
+    setBusyOrderId(order.id);
+    try {
+      const { data: sess } = await supabase.auth.getSession();
+      const token = sess?.session?.access_token;
+      if (!token) {
+        alert('Oturum bilgisi alınamadı. Yeniden giriş yapın.');
+        return;
+      }
+      const baseUrl = (import.meta.env.VITE_SUPABASE_URL || 'https://xdfnozfuuzctubijbnds.supabase.co').replace(/\/$/, '');
+      const res = await fetch(`${baseUrl}/functions/v1/online-order-reprint`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ onlineOrderId: order.id }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.ok) {
+        alert(`Fiş tekrar basılamadı: ${data?.error || res.statusText}`);
+        return;
+      }
+      console.info(`[OnlineOrders] Fiş tekrar baskıya gönderildi: order=${order.id}, job=${data.jobId}`);
+    } catch (err: any) {
+      alert(`Reprint hatası: ${err?.message || err}`);
+    } finally {
+      setBusyOrderId(null);
+    }
+  };
+
   const refreshGetirOrder = async (order: OrderWithDetails): Promise<void> => {
     setBusyOrderId(order.id);
     try {
@@ -1565,13 +1603,23 @@ export function OnlineOrders() {
                           </div>
                         )}
 
-                      {/* GETIR — GetirUiPhase: panel ile aynı sıra (410’da handover yok) */}
-                      {order.online_order_platforms.platform_code === 'getir' &&
-                        order.status !== 'delivered' &&
-                        order.status !== 'cancelled' &&
-                        getirPhase &&
-                        getirPhase !== 'done' && (
-                          <div className="flex justify-end -mt-1">
+                      {/* Reprint + (Getir için) durumu eşle satırı */}
+                      <div className="flex justify-end items-center gap-3 -mt-1">
+                        <button
+                          onClick={() => reprintOnlineOrder(order)}
+                          disabled={busyOrderId === order.id}
+                          title="Fişi tekrar yazıcıya gönder (mutfak / paket fişi)"
+                          className="text-[11px] font-bold text-slate-700 hover:text-slate-900 hover:underline disabled:opacity-50 flex items-center gap-1"
+                        >
+                          <Printer className={`w-3 h-3 ${busyOrderId === order.id ? 'animate-pulse' : ''}`} />
+                          Fişi Tekrar Bas
+                        </button>
+
+                        {order.online_order_platforms.platform_code === 'getir' &&
+                          order.status !== 'delivered' &&
+                          order.status !== 'cancelled' &&
+                          getirPhase &&
+                          getirPhase !== 'done' && (
                             <button
                               onClick={() => refreshGetirOrder(order)}
                               disabled={busyOrderId === order.id}
@@ -1581,8 +1629,8 @@ export function OnlineOrders() {
                               <RefreshCw className={`w-3 h-3 ${busyOrderId === order.id ? 'animate-spin' : ''}`} />
                               {busyOrderId === order.id ? 'Sorguluyor…' : 'Getir ile durumu eşle'}
                             </button>
-                          </div>
-                        )}
+                          )}
+                      </div>
 
                       {order.online_order_platforms.platform_code === 'getir' && getirPhase && (
                         <>

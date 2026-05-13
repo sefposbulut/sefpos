@@ -16,6 +16,7 @@ import {
   type CallerIdStatus,
 } from '../lib/callerId';
 import { HuginSettings, loadHuginSettings, saveHuginSettings, testHuginConnection } from '../lib/huginTps';
+import { isFeatureUnlocked, submitFeatureRequest, FEATURE_LABELS } from '../lib/featureGate';
 import { Branch } from '../contexts/AuthContext';
 import { PrinterSettings } from './PrinterSettings';
 import { SqlServerSettings } from './SqlServerSettings';
@@ -108,6 +109,33 @@ export function Settings({ onClose }: SettingsProps) {
   };
   const [platforms, setPlatforms] = useState<any[]>([]);
   const [showPlatformForm, setShowPlatformForm] = useState(false);
+
+  // ---- Plan-bazlı kilit ----
+  const onlineIntegrationsUnlocked = isFeatureUnlocked('online_integrations', tenant);
+  const [requestingFeature, setRequestingFeature] = useState(false);
+  const [requestMessage, setRequestMessage] = useState('');
+  const [requestSent, setRequestSent] = useState<null | { id?: string; alreadyPending?: boolean }>(null);
+
+  const handleFeatureRequest = async () => {
+    if (!tenant?.id) return;
+    setRequestingFeature(true);
+    try {
+      const res = await submitFeatureRequest({
+        tenantId: tenant.id,
+        featureCode: 'online_integrations',
+        email: tenant.email || profile?.email || null,
+        phone: (tenant as any).phone || null,
+        message: requestMessage.trim() || null,
+      });
+      if (!res.ok) {
+        alert(`Talep gönderilemedi: ${res.error || 'bilinmeyen hata'}`);
+        return;
+      }
+      setRequestSent({ id: res.requestId, alreadyPending: res.alreadyPending });
+    } finally {
+      setRequestingFeature(false);
+    }
+  };
   const [expandedPlatformId, setExpandedPlatformId] = useState<string | null>(null);
   const [platformName, setPlatformName] = useState('');
   const [platformCode, setPlatformCode] = useState('');
@@ -1652,6 +1680,75 @@ export function Settings({ onClose }: SettingsProps) {
                 </p>
               </div>
 
+              {/* ---- Plan kilidi: özellik açık değilse içerik yerine talep kartı çıkar ---- */}
+              {!onlineIntegrationsUnlocked ? (
+                <div className="bg-gradient-to-br from-amber-50 via-orange-50 to-red-50 border-2 border-orange-300 rounded-2xl p-8 text-center max-w-3xl mx-auto">
+                  <div className="inline-flex items-center justify-center w-16 h-16 bg-orange-100 rounded-full mb-4">
+                    <Lock className="w-8 h-8 text-orange-600" />
+                  </div>
+                  <h3 className="text-2xl font-black text-slate-900 mb-2">
+                    {FEATURE_LABELS.online_integrations.tr} — Ücretli Modül
+                  </h3>
+                  <p className="text-slate-700 text-sm max-w-xl mx-auto mb-1">
+                    Bu özellik <b>{FEATURE_LABELS.online_integrations.planRequired}</b> planına özeldir.
+                    Yemeksepeti, Getir Yemek, Trendyol Yemek vb. siparişlerin otomatik düşmesi,
+                    mutfak fişinin basılması ve onay/red akışı dahildir.
+                  </p>
+                  <p className="text-slate-500 text-xs mb-5">
+                    Mevcut planınız: <b>{(tenant?.subscription_plan || 'trial').toString().toUpperCase()}</b>
+                    {' • '}
+                    Durum: <b>{(tenant?.subscription_status || 'trial').toString().toUpperCase()}</b>
+                  </p>
+
+                  {requestSent ? (
+                    <div className="bg-emerald-50 border-2 border-emerald-300 rounded-xl p-5 text-left max-w-xl mx-auto">
+                      <div className="flex items-center gap-2 mb-1">
+                        <CheckCircle className="w-5 h-5 text-emerald-600" />
+                        <span className="font-bold text-emerald-900">
+                          {requestSent.alreadyPending ? 'Daha önce talep gönderdiniz' : 'Talebiniz alındı'}
+                        </span>
+                      </div>
+                      <p className="text-emerald-800 text-sm">
+                        ŞefPOS satış ekibi en kısa sürede sizinle iletişime geçecek.
+                        Aktivasyon yapıldıktan sonra bu sayfa otomatik açılır.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="bg-white rounded-xl p-5 shadow border border-orange-200 max-w-xl mx-auto text-left">
+                      <label className="block text-xs font-bold text-slate-700 mb-1">Mesaj (opsiyonel)</label>
+                      <textarea
+                        value={requestMessage}
+                        onChange={(e) => setRequestMessage(e.target.value)}
+                        rows={3}
+                        placeholder="Örn: Yemeksepeti + Getir entegrasyonu istiyoruz. 2 şubemiz var."
+                        className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-orange-400 focus:border-transparent text-sm resize-none"
+                      />
+                      <button
+                        onClick={handleFeatureRequest}
+                        disabled={requestingFeature}
+                        className="mt-3 w-full bg-orange-600 hover:bg-orange-700 disabled:opacity-50 text-white font-black py-3 rounded-xl transition-all active:scale-95 flex items-center justify-center gap-2"
+                      >
+                        {requestingFeature ? (
+                          <>
+                            <RefreshCw className="w-5 h-5 animate-spin" />
+                            Gönderiliyor…
+                          </>
+                        ) : (
+                          <>
+                            <ShieldCheck className="w-5 h-5" />
+                            Aktivasyon Talebi Gönder
+                          </>
+                        )}
+                      </button>
+                      <p className="text-[11px] text-slate-500 mt-2">
+                        Talep ŞefPOS lisans paneline iletilir; uygunsa hesabınız Profesyonel/Kurumsal plana yükseltilir
+                        ve bu modül otomatik açılır.
+                      </p>
+                    </div>
+                  )}
+                </div>
+              ) : (
+              <>
               <div className="bg-gray-50 rounded-xl p-6">
                 <div className="flex items-center justify-between mb-4">
                   <h3 className="text-lg font-bold text-gray-800">Aktif Platformlar</h3>
@@ -1669,6 +1766,57 @@ export function Settings({ onClose }: SettingsProps) {
                     <h4 className="font-bold text-gray-800 text-base border-b pb-2">
                       {editingPlatformId ? 'Platform Düzenle' : 'Yeni Platform Ekle'}
                     </h4>
+
+                    {isYemeksepetiPlatform && (
+                      <div className="bg-gradient-to-br from-pink-50 to-rose-50 border-2 border-pink-300 rounded-xl p-4 space-y-3">
+                        <div className="flex items-start gap-2">
+                          <div className="text-2xl leading-none">🛵</div>
+                          <div className="flex-1">
+                            <h5 className="font-bold text-pink-900 text-sm mb-1">Yemeksepeti Entegrasyonu — Adım Adım</h5>
+                            <p className="text-pink-900 text-xs leading-relaxed">
+                              Yemeksepeti / Delivery Hero (DH) standart entegrasyonu kullanılır. Aşağıdaki bilgiler restoran sahibinden alınır ve <b>aşağıdaki forma girilir</b>:
+                            </p>
+                            <ol className="list-decimal list-inside text-pink-900 text-xs mt-2 space-y-1">
+                              <li>Yemeksepeti Partner panelinden veya entegrasyon ekibinden bu bilgileri alın: <code className="bg-pink-100 px-1 rounded">Vendor Code</code> (restoran ID), <code className="bg-pink-100 px-1 rounded">Chain Code</code> (zincir kodu — varsa), <code className="bg-pink-100 px-1 rounded">Webhook Secret</code> (HMAC SHA-512 imza anahtarı).</li>
+                              <li>Aşağıdaki forma: <b>Platform Restaurant ID</b> = Vendor Code · <b>API Key (Webhook Secret)</b> = HMAC anahtarı.</li>
+                              <li>Yemeksepeti / DH entegrasyon ekibine <b>aşağıdaki Webhook URL'inizi</b> iletin. URL kişiseldir; Vendor Code'unuzla biter.</li>
+                              <li>Yemeksepeti Partner / Foody panelinden POS entegrasyonunu <b>aktif</b> hale getirin (ekipten talep edin). Aktif olunca yeni siparişler otomatik ŞefPOS'a düşer ve mutfak yazıcısına basılır.</li>
+                              <li>Destek e-posta: <a href="mailto:integration@yemeksepeti.com" className="font-semibold underline">integration@yemeksepeti.com</a> · Trendyol Yemek için: <a href="mailto:trendyol-yemek-api@trendyol.com" className="font-semibold underline">trendyol-yemek-api@trendyol.com</a></li>
+                            </ol>
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-bold text-pink-900 mb-1">Webhook URL (Yemeksepeti'ye verilecek)</label>
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="text"
+                              readOnly
+                              value={`${(import.meta.env.VITE_SUPABASE_URL || 'https://xdfnozfuuzctubijbnds.supabase.co').replace(/\/$/, '')}/functions/v1/yemeksepeti-webhook/${platformRestaurantId || '<VENDOR_CODE>'}`}
+                              className="flex-1 px-2 py-1.5 rounded-lg border border-pink-300 bg-white font-mono text-[11px] text-gray-700"
+                              onFocus={(e) => e.currentTarget.select()}
+                            />
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                if (!platformRestaurantId) {
+                                  alert("Önce 'Platform Restaurant ID' (Vendor Code) alanını doldurun.");
+                                  return;
+                                }
+                                const url = `${(import.meta.env.VITE_SUPABASE_URL || 'https://xdfnozfuuzctubijbnds.supabase.co').replace(/\/$/, '')}/functions/v1/yemeksepeti-webhook/${platformRestaurantId}`;
+                                try { await navigator.clipboard.writeText(url); alert('Webhook URL panoya kopyalandı!'); } catch { prompt('URL:', url); }
+                              }}
+                              className="px-3 py-1.5 bg-pink-600 hover:bg-pink-700 text-white rounded-lg font-bold text-xs"
+                            >
+                              Kopyala
+                            </button>
+                          </div>
+                          <p className="text-pink-800 text-[11px] mt-1.5">
+                            Method <b>POST</b> · Authorization <b>Bearer &lt;Webhook Secret&gt;</b> ile imzalı JWT. ŞefPOS imzayı HMAC SHA-512 ile doğrular, geçersizse 401 döner.
+                          </p>
+                        </div>
+                      </div>
+                    )}
 
                     {isGetirPlatform && (
                       <div className="bg-gradient-to-br from-amber-50 to-orange-50 border-2 border-amber-300 rounded-xl p-4 space-y-3">
@@ -2236,6 +2384,8 @@ export function Settings({ onClose }: SettingsProps) {
                   </p>
                 </div>
               </div>
+              </>
+              )}
             </div>
           ) : activeTab === 'printers' ? (
             <PrinterSettings />

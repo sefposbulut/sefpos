@@ -1,0 +1,15 @@
+feat(v1.0.66): Yemeksepeti fişi detaylandırma, online sipariş reprint, plan-bazlı entegrasyon kapısı
+
+- Yemeksepeti/Trendyol/Migros (DH) fişi: ürün/topping/not detayı,
+  adres bileşenleri, ödeme/tip/express flag'leri, profesyonel paket fişi düzeni
+  (yeni helper supabase/functions/_shared/dhOrderReceipt.ts; webhook bu helper'a yönlendirildi)
+- Yeni edge function online-order-reprint: DB snapshot'tan (dh_raw_payload veya items)
+  HTML üretip print_jobs kuyruğuna atar — hem Yemeksepeti/DH hem Getir destekli
+- OnlineOrders sipariş kartına "Fişi Tekrar Bas" butonu (busy state ile)
+- Kasa Yönetimi üst barına "Adisyon Yazdır" butonu (ReprintReceiptModal)
+- Settings → Online Platform: Yemeksepeti için adım adım rehber paneli
+  (Vendor Code, Webhook URL kopyala, HMAC SHA-512 Bearer açıklaması)
+- Plan-bazlı kilit: src/lib/featureGate.ts — Profesyonel/Kurumsal dışındaki tenant'lar
+  için Online Platform sekmesi kilitli; "Aktivasyon Talebi Gönder" CTA
+- Migration 20260514210000_feature_requests.sql: tenant taleplerini AYKA admin'in
+  görüp yönettiği yeni tablo + RLS politikaları

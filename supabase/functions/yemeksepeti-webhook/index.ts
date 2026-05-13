@@ -1,5 +1,6 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
+import { renderDHOrderReceiptHtml } from "../_shared/dhOrderReceipt.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -178,65 +179,71 @@ async function queueDHKitchenReceipt(
   platformName: string,
   order: DHOrder,
 ): Promise<void> {
-  const platformLabel = (platformName || "Online").toUpperCase();
-  const lines = (order.products || []).map((p) => {
-    const opts = (p.selectedToppings || [])
-      .map((t) => `${t.quantity || 1}x ${t.name}`)
-      .join(", ");
-    const note = p.comment ? ` (Not: ${p.comment})` : "";
-    return `${p.quantity}x ${p.name}${opts ? ` [${opts}]` : ""}${note}`;
-  }).join("<br/>");
-
-  const customer = buildCustomerName(order.customer);
-  const phone = order.customer.mobilePhone || "";
-  const addr = order.expeditionType === "delivery"
-    ? buildDeliveryAddress(order.delivery)
-    : (order.pickup?.pickupCode ? `Gel-al - Kod: ${order.pickup.pickupCode}` : "Gel-al");
   const grandTotal = parseFloat(order.price.grandTotal) || 0;
   const subTotal = parseFloat(order.price.subTotal || order.price.totalNet || "0") || 0;
   const discount = calcDiscountAmount(order.price, order.discounts);
-  const isPaid = order.payment?.status === "paid";
-  const orderCode = order.shortCode || order.code || "";
+  const fee = calcDeliveryFee(order.price);
+  const vat = parseFloat(order.price.vatTotal || "0") || 0;
+  const tip = parseFloat(order.price.riderTip || "0") || 0;
 
-  const html = `
-<style>
-  .dh { font-family: Arial, sans-serif; width: 72mm; padding: 2mm; color: #000; }
-  .dh .h { text-align: center; font-weight: 900; font-size: 18px; letter-spacing: 2px; padding: 4px 0; border: 2px solid #000; margin-bottom: 4px; }
-  .dh .row { display: flex; justify-content: space-between; gap: 6px; font-size: 12px; margin: 1px 0; }
-  .dh .label { font-weight: 800; }
-  .dh .box { border: 1px solid #000; padding: 4px 6px; margin: 4px 0; font-size: 12px; }
-  .dh .code { font-size: 22px; font-weight: 900; text-align: center; letter-spacing: 3px; padding: 4px 0; border: 2px solid #000; margin: 4px 0; }
-  .dh .items { font-size: 13px; line-height: 1.4; margin: 6px 0; padding: 4px 0; border-top: 1px dashed #000; border-bottom: 1px dashed #000; font-weight: 700; }
-  .dh .total { font-size: 15px; font-weight: 900; text-align: right; margin-top: 4px; }
-  .dh .note { background: #ffe66b; padding: 4px 6px; font-weight: 800; font-size: 12px; margin: 4px 0; border: 1px solid #000; }
-  .dh .small { font-size: 11px; }
-</style>
-<div class="dh">
-  <div class="h">${platformLabel}</div>
-  <div class="row"><span class="label">Sipariş:</span><span>${orderCode}</span></div>
-  <div class="row"><span class="label">Tarih:</span><span>${order.createdAt ? new Date(order.createdAt).toLocaleString("tr-TR") : new Date().toLocaleString("tr-TR")}</span></div>
-  <div class="row"><span class="label">Tip:</span><span>${order.expeditionType === "delivery" ? "Kurye Teslimat" : "Gel-Al"}</span></div>
-  <div class="row"><span class="label">Ödeme:</span><span>${isPaid ? "Online Ödendi" : `Kapıda (${order.payment?.type || "—"})`}</span></div>
+  const html = renderDHOrderReceiptHtml({
+    platformLabel: platformName || order.localInfo?.platform || "Online",
+    orderCode: order.shortCode || order.code || "",
+    orderToken: order.token || null,
+    createdAt: order.createdAt || null,
+    expeditionType: order.expeditionType,
+    isPaid: order.payment?.status === "paid",
+    paymentType: order.payment?.type || null,
+    testOrder: !!order.test,
+    preOrder: !!order.preOrder,
+    customer: {
+      firstName: order.customer.firstName || null,
+      lastName: order.customer.lastName || null,
+      mobilePhone: order.customer.mobilePhone || null,
+      email: order.customer.email || null,
+    },
+    delivery: order.delivery
+      ? {
+          address: order.delivery.address || null,
+          expectedDeliveryTime: order.delivery.expectedDeliveryTime || null,
+          expressDelivery: !!order.delivery.expressDelivery,
+          riderPickupTime: order.delivery.riderPickupTime || null,
+        }
+      : null,
+    pickup: order.pickup
+      ? {
+          pickupCode: order.pickup.pickupCode || null,
+          pickupTime: order.pickup.pickupTime || null,
+        }
+      : null,
+    customerComment: order.comments?.customerComment || null,
+    vendorComment: order.comments?.vendorComment || null,
+    products: (order.products || []).map((p) => ({
+      name: p.name,
+      quantity: p.quantity,
+      unitPrice: p.unitPrice,
+      paidPrice: p.paidPrice,
+      comment: p.comment || null,
+      remoteCode: p.remoteCode || null,
+      sku: p.sku || null,
+      categoryName: p.categoryName || null,
+      selectedToppings: (p.selectedToppings || []).map((t) => ({
+        name: t.name,
+        quantity: t.quantity,
+        price: t.price,
+        children: t.children,
+      })),
+    })),
+    totals: {
+      grandTotal,
+      subTotal: subTotal || undefined,
+      vatTotal: vat || undefined,
+      deliveryFee: fee || undefined,
+      discountTotal: discount || undefined,
+      riderTip: tip || undefined,
+    },
+  });
 
-  ${orderCode ? `<div class="code">${orderCode}</div>` : ""}
-
-  <div class="box">
-    <div><span class="label">Müşteri:</span> ${customer}</div>
-    ${phone ? `<div><span class="label">Telefon:</span> ${phone}</div>` : ""}
-    ${addr ? `<div><span class="label">Adres:</span> ${addr}</div>` : ""}
-  </div>
-
-  <div class="items">${lines || "(ürün yok)"}</div>
-
-  ${order.comments?.customerComment ? `<div class="note">MÜŞTERİ NOTU: ${order.comments.customerComment}</div>` : ""}
-
-  ${discount > 0 ? `<div class="row small"><span>Ara Toplam:</span><span>${subTotal.toFixed(2)} TL</span></div>` : ""}
-  ${discount > 0 ? `<div class="row small"><span>İndirim (-):</span><span>${discount.toFixed(2)} TL</span></div>` : ""}
-  <div class="total">TOPLAM: ${grandTotal.toFixed(2)} TL</div>
-
-  <div class="small" style="text-align:center;margin-top:6px">${platformLabel} tarafından gönderildi</div>
-</div>
-`;
   const { error } = await admin.from("print_jobs").insert({
     tenant_id: tenantId,
     html,
