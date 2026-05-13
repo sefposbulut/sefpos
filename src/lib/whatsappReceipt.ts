@@ -25,11 +25,21 @@ export interface WhatsAppReceiptInput {
   }>;
   subtotal: number;
   discountAmount?: number;
+  discountPercent?: number | null;
   taxAmount?: number;
   total: number;
   paymentMethod: 'cash' | 'credit_card' | 'open_account' | string;
-  /** Müşteri adı (açık hesap vs.) — opsiyonel selamlama. */
+  /** Müşteri adı (açık hesap vs.) — opsiyonel selamlama / fiş üstü. */
   customerName?: string | null;
+  /**
+   * Açık hesap (cari) için bakiye snapshot'ı.
+   * - `previousBalance`: bu satıştan **önce**ki bakiye
+   * - `newBalance`: bu satış işlendikten **sonra**ki bakiye
+   * Tipik olarak `newBalance = previousBalance + total` olur ama bazen
+   * indirim/kismi tahsil farkı için ayrı verilebilir.
+   */
+  previousBalance?: number | null;
+  newBalance?: number | null;
   footer?: string | null;
 }
 
@@ -77,13 +87,30 @@ export function buildWhatsAppReceiptText(input: WhatsAppReceiptInput): string {
   lines.push('--------------------------------');
   lines.push(`Ara toplam: ${fmtTry(input.subtotal)} ₺`);
   if (input.discountAmount && input.discountAmount > 0) {
-    lines.push(`İndirim: -${fmtTry(input.discountAmount)} ₺`);
+    const pctLabel = input.discountPercent && input.discountPercent > 0
+      ? ` (%${input.discountPercent})`
+      : '';
+    lines.push(`İndirim${pctLabel}: -${fmtTry(input.discountAmount)} ₺`);
   }
   if (input.taxAmount && input.taxAmount > 0) {
     lines.push(`KDV: ${fmtTry(input.taxAmount)} ₺`);
   }
   lines.push(`*Toplam: ${fmtTry(input.total)} ₺*`);
   lines.push(`Ödeme: ${methodLabel(input.paymentMethod)}`);
+
+  // Cari (açık hesap) bilgisi — önceki ve yeni bakiye
+  if (input.paymentMethod === 'open_account' && (
+    typeof input.previousBalance === 'number' || typeof input.newBalance === 'number'
+  )) {
+    lines.push('--------------------------------');
+    lines.push('CARİ HESAP');
+    if (typeof input.previousBalance === 'number') {
+      lines.push(`Önceki bakiye: ${fmtTry(input.previousBalance)} ₺`);
+    }
+    if (typeof input.newBalance === 'number') {
+      lines.push(`*Yeni bakiye:  ${fmtTry(input.newBalance)} ₺*`);
+    }
+  }
 
   if (input.footer) {
     lines.push('');
@@ -153,6 +180,13 @@ export function buildWhatsAppReceiptHtml(input: WhatsAppReceiptInput): string {
     .wfis .disclaim  { text-align: center; margin-top: 10px; font-size: 10px; color: #666; letter-spacing: 0.5px; }
     .wfis .badge     { display: inline-block; padding: 2px 8px; border: 1px solid #111;
                        border-radius: 999px; font-size: 11px; font-weight: 700; }
+    .wfis .muted     { color: #777; font-weight: 400; font-size: 11px; }
+    .wfis .discount  { color: #b45309; font-weight: 700; }
+    .wfis .balance-box { border: 1.5px solid #111; border-radius: 6px; padding: 8px 10px; margin-top: 6px; background: #fafafa; }
+    .wfis .balance-title { font-weight: 900; font-size: 11px; letter-spacing: 1px;
+                           text-align: center; margin-bottom: 4px; color: #111; }
+    .wfis .balance-new { font-weight: 900; font-size: 14px; color: #b91c1c;
+                         border-top: 1px dashed #aaa; padding-top: 4px; margin-top: 4px; }
   `;
 
   const fmt = (n: number) => fmtTry(n);
@@ -198,13 +232,33 @@ export function buildWhatsAppReceiptHtml(input: WhatsAppReceiptInput): string {
   html += `<div class="hr-dash"></div>`;
   html += `<div class="row"><span>Ara Toplam</span><span>${fmt(input.subtotal)} ₺</span></div>`;
   if (input.discountAmount && input.discountAmount > 0) {
-    html += `<div class="row"><span>İndirim</span><span>-${fmt(input.discountAmount)} ₺</span></div>`;
+    const pctLabel = input.discountPercent && input.discountPercent > 0
+      ? ` <span class="muted">(%${input.discountPercent})</span>`
+      : '';
+    html += `<div class="row discount"><span>İndirim${pctLabel}</span><span>-${fmt(input.discountAmount)} ₺</span></div>`;
   }
   if (input.taxAmount && input.taxAmount > 0) {
     html += `<div class="row"><span>KDV</span><span>${fmt(input.taxAmount)} ₺</span></div>`;
   }
   html += `<div class="total-row"><span>TOPLAM</span><span>${fmt(input.total)} ₺</span></div>`;
   html += `<div class="row"><span>Ödeme</span><span class="badge">${esc(methodLabel(input.paymentMethod))}</span></div>`;
+
+  // Cari (açık hesap) bakiye kutusu — sadece open_account ödemelerinde gösterilir.
+  if (
+    input.paymentMethod === 'open_account' &&
+    (typeof input.previousBalance === 'number' || typeof input.newBalance === 'number')
+  ) {
+    html += `<div class="hr-dash"></div>`;
+    html += `<div class="balance-box">`;
+    html += `<div class="balance-title">CARİ HESAP</div>`;
+    if (typeof input.previousBalance === 'number') {
+      html += `<div class="row"><span>Önceki Bakiye</span><span>${fmt(input.previousBalance)} ₺</span></div>`;
+    }
+    if (typeof input.newBalance === 'number') {
+      html += `<div class="row balance-new"><span>Yeni Bakiye</span><span>${fmt(input.newBalance)} ₺</span></div>`;
+    }
+    html += `</div>`;
+  }
 
   html += `<div class="hr-dash"></div>`;
   html += `<div class="footer">${esc(input.footer || 'Teşekkürler, iyi günler!')}</div>`;

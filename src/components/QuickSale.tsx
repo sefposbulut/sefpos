@@ -324,9 +324,15 @@ export function QuickSale() {
     const totalNow = total;
     const subtotalNow = subtotal;
     const discountNow = discountAmount;
+    const discountPctNow = Math.min(100, Math.max(0, Math.round(discount)));
+
+    // Cari (açık hesap) ödemelerde fiş üstüne basılacak müşteri bilgisi
+    // ve önceki/yeni bakiye snapshot'ı. Ödeme öncesi yakalanır.
+    let openAccountCustomer: { name: string; phone: string | null } | null = null;
+    let openAccountPrevBalance: number | null = null;
 
     try {
-      // 1) Cari ödeme öncesi limit kontrolü
+      // 1) Cari ödeme öncesi limit kontrolü + bakiye snapshot
       if (method === 'open_account') {
         if (!customerId) {
           alert('Cari hesap ödemesi için müşteri seçin.');
@@ -334,7 +340,7 @@ export function QuickSale() {
         }
         const { data: cust, error: custErr } = await supabase
           .from('customers')
-          .select('id, current_balance, credit_limit, name, is_active')
+          .select('id, current_balance, credit_limit, name, phone, is_active')
           .eq('id', customerId)
           .eq('tenant_id', tenant.id)
           .maybeSingle();
@@ -345,6 +351,8 @@ export function QuickSale() {
         if (limit > 0 && bal + amount > limit) {
           if (!window.confirm(`Kredi limiti (${limit.toFixed(2)} ₺) aşılacak. Yine de işlensin mi?`)) return;
         }
+        openAccountCustomer = { name: (cust as any).name || '', phone: (cust as any).phone || null };
+        openAccountPrevBalance = bal;
       }
 
       // 2) Sipariş oluştur (counter, status pending önce, sonra completed)
@@ -524,6 +532,10 @@ export function QuickSale() {
         total: totalNow,
         method,
       });
+      const isOpenAcc = method === 'open_account' && customerId;
+      const newBalance = isOpenAcc && openAccountPrevBalance !== null
+        ? openAccountPrevBalance + amount
+        : null;
       setLastReceiptData({
         restaurantName: printSettings.restaurantName || (tenant as any)?.name || 'ŞefPOS',
         restaurantPhone: printSettings.restaurantPhone,
@@ -541,20 +553,15 @@ export function QuickSale() {
         subtotal: subtotalNow,
         taxAmount: 0,
         discountAmount: discountNow,
+        discountPercent: discountPctNow,
         total: totalNow,
         paymentMethod: method,
+        customerName: openAccountCustomer?.name || null,
+        previousBalance: isOpenAcc ? openAccountPrevBalance : null,
+        newBalance,
         footer: printSettings.receiptFooter,
       });
-      if (method === 'open_account' && customerId) {
-        const { data: cust } = await supabase
-          .from('customers')
-          .select('phone')
-          .eq('id', customerId)
-          .maybeSingle();
-        setLastReceiptDefaultPhone((cust as any)?.phone || null);
-      } else {
-        setLastReceiptDefaultPhone(null);
-      }
+      setLastReceiptDefaultPhone(openAccountCustomer?.phone || null);
       if (lastReceiptTimerRef.current) window.clearTimeout(lastReceiptTimerRef.current);
       lastReceiptTimerRef.current = window.setTimeout(() => setLastReceiptInfo(null), 9000);
 
@@ -566,7 +573,7 @@ export function QuickSale() {
     } finally {
       setBusy(false);
     }
-  }, [tenant?.id, user?.id, activeBranch?.id, cart, total, subtotal, discountAmount, busy, clearCart]);
+  }, [tenant?.id, user?.id, activeBranch?.id, cart, total, subtotal, discount, discountAmount, busy, clearCart]);
 
   // ─── UI ───────────────────────────────────────────────────────────────────
   return (
