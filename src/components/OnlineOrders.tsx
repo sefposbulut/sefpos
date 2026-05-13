@@ -635,6 +635,43 @@ export function OnlineOrders() {
    * uretiyordu. Senkron ihtiyaci: yalnizca "invalid status" hatasinda inquiry.
    */
   /**
+   * "HAZIRLANMAYA BAŞLA" lokal işaretlemesi — Getir'e `prepare` aksiyonu gönderilmez.
+   *
+   * Neden lokal?
+   *   - Getir Food API'sinde `prepare` çağrısı bir "zaman sınırı" kontrolüne tabi:
+   *     verify hemen ardından çağrılırsa Getir `code:74 "prepared time limit error"` döner.
+   *     Bekleme + retry de 429 RateLimit baskısı yaratır.
+   *   - Pratik gözlem: Getir verify sonrası order'u zaten otomatik olarak "Hazırlanıyor"
+   *     (status 410) duruma alıyor. Restoranın ayrıca bir prepare aksiyonu göndermesine
+   *     gerek yok (Getir paneli de bu adımı UI'da göstermiyor).
+   *   - Bu yüzden ŞefPOS'taki "HAZIRLANMAYA BAŞLA" butonu yalnızca mutfak takibi için lokal
+   *     bir işaret: DB'de status='preparing', getir_status_code=410 set edilir.
+   *     UI bir sonraki adıma (YEMEK HAZIR → handover) geçer.
+   */
+  const markGetirOrderPreparingLocal = async (order: OrderWithDetails): Promise<void> => {
+    setBusyOrderId(order.id);
+    try {
+      const { error } = await supabase
+        .from('online_orders')
+        .update({
+          status: 'preparing',
+          getir_status_code: 410,
+        } as any)
+        .eq('id', order.id)
+        .lt('getir_status_code', 411);
+      if (error) throw error;
+      await loadOrders();
+      console.info(
+        `[Getir] Sipariş #${order.platform_order_number || order.platform_order_id} lokal olarak "Hazırlanıyor" işaretlendi (Getir API'sine prepare gönderilmedi).`,
+      );
+    } catch (err: any) {
+      alert(`Hazırlanmaya başla işaretlemesi başarısız: ${err?.message || err}`);
+    } finally {
+      setBusyOrderId(null);
+    }
+  };
+
+  /**
    * "YEMEK HAZIR" lokal işaretlemesi — Getir'e bir aksiyon gönderilmez.
    * Sadece DB'de `ready_at` set edilir; UI bir sonraki adıma (KURYE YOLA ÇIKTI / handover)
    * geçer. Getir Food API'sinde "hazır" durumu yok (sadece prepare → handover); bu yüzden
@@ -1589,12 +1626,13 @@ export function OnlineOrders() {
 
                           {getirPhase === 'prepare' && (
                             <button
-                              onClick={() => doGetirAction(order, 'prepare')}
+                              onClick={() => markGetirOrderPreparingLocal(order)}
                               disabled={busyOrderId === order.id}
                               className="w-full bg-yellow-600 hover:bg-yellow-700 text-white font-black py-3 rounded-xl transition-all active:scale-95 disabled:opacity-50 flex items-center justify-center gap-2"
+                              title="Mutfak takibi için lokal işaret. Getir API'sine prepare aksiyonu gönderilmez (Getir verify sonrası order'u zaten 'Hazırlanıyor' duruma alır)."
                             >
                               <Package className={`w-5 h-5 ${busyOrderId === order.id ? 'animate-spin' : ''}`} />
-                              {busyOrderId === order.id ? 'Getir bekliyor… (auto-retry)' : 'HAZIRLANMAYA BAŞLA'}
+                              {busyOrderId === order.id ? 'İşleniyor…' : 'HAZIRLANMAYA BAŞLA'}
                             </button>
                           )}
 
