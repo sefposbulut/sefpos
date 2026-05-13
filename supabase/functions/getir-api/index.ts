@@ -255,6 +255,178 @@ function isDuplicateKeyError(err: any): boolean {
   return err?.code === "23505" || String(err?.message || "").includes("duplicate key");
 }
 
+/**
+ * Getir Food API status code semantiği (özet):
+ *   200/325 — yeni / zamanlanmış
+ *   400     — restoran onayladı (verify sonrası)
+ *   410     — hazırlanıyor (prepare sonrası)
+ *   500     — hazır / kuryeye teslim edildi (handover sonrası)
+ *   550/600/700 — kurye akışı (handover sonrası iç durum)
+ *   800     — teslim edildi (deliver sonrası)
+ *   900+    — iptal
+ *
+ * Bir aksiyon "tamamlanmış" sayılır ise Getir status'ü >= ACTION_COMPLETED[action]
+ * olur. Bu, recover senaryolarında "zaten yapılmış" tespiti için.
+ */
+const ACTION_COMPLETED: Record<string, number> = {
+  verify: 400,
+  "verify-scheduled": 350,
+  prepare: 410,
+  handover: 500,
+  deliver: 800,
+};
+
+/**
+ * Bir aksiyon "invalid status" hatası verdiğinde, hangi önceki aksiyonu
+ * otomatik çağırırsak hedef state'e ulaşırız? Yalnızca 1 adım recovery —
+ * 2+ adım recovery test ortamında veriye dokunduğu için riskli.
+ */
+const PREV_ACTION: Record<string, string | null> = {
+  verify: null,
+  "verify-scheduled": null,
+  prepare: null,
+  handover: "prepare",
+  deliver: "handover",
+};
+
+function isInvalidStatusError(data: any): boolean {
+  const msg = String(data?.message || data?.error || "").toLowerCase();
+  return (
+    msg.includes("status is invalid") ||
+    msg.includes("invalid status") ||
+    msg.includes("invalid for given action")
+  );
+}
+
+/**
+ * Bir Getir aksiyonunu çalıştır; "invalid status" hatasında otomatik kurtarma:
+ *   1) inquiry yap → gerçek Getir status'ünü öğren
+ *   2) Cancelled (900+) → DB'yi cancelled yap, ok dön
+ *   3) Already advanced (real >= target) → DB sync, ok dön (success kabul)
+ *   4) 1 adım geride (örn handover ama Getir 400'de) → önceki aksiyonu (prepare) çağır,
+ *      sonra hedef aksiyonu tekrar dene
+ *   5) Recover edilemezse orijinal hatayı dön
+ *
+ * Bu sayede frontend tek bir aksiyon gönderir, server gerekirse zincirleme yapar;
+ * inquiry rate-limit (429) baskısı oluşmaz, ŞefPOS UI Getir paneliyle senkron kalır.
+ */
+async function tryGetirActionWithRecovery(
+  admin: any,
+  platform: any,
+  action: string,
+  orderId: string,
+  payload: any,
+): Promise<{ ok: boolean; status: number; data: any; meta?: Record<string, any> }> {
+  const path = `/food-orders/${encodeURIComponent(orderId)}/${action}`;
+  const res = await callGetir(admin, platform, "POST", path, payload || {});
+  if (res.ok) {
+    return { ok: true, status: 200, data: res.data };
+  }
+
+  if (!isInvalidStatusError(res.data)) {
+    return { ok: false, status: res.status, data: res.data };
+  }
+
+  // ---- Auto-recovery: inquiry ile gerçek state'i öğren ----
+  const inq = await callGetir(
+    admin,
+    platform,
+    "GET",
+    `/food-orders/${encodeURIComponent(orderId)}`,
+  );
+  if (!inq.ok) {
+    return {
+      ok: false,
+      status: res.status,
+      data: res.data,
+      meta: { recoveryFailed: true, reason: "inquiry-failed", inquiryStatus: inq.status },
+    };
+  }
+  const ord = (inq.data as any)?.data || inq.data;
+  if (!ord || typeof ord !== "object") {
+    return { ok: false, status: res.status, data: res.data, meta: { recoveryFailed: true, reason: "empty-inquiry" } };
+  }
+
+  const rawCode = (ord as any).status;
+  const realCode = typeof rawCode === "number" ? rawCode : Number(rawCode);
+
+  await upsertGetirOrder(admin, platform, ord, { skipAckClamp: true });
+
+  // 1) Getir tarafında iptal edilmiş → DB de iptal et, ok dön
+  if (Number.isFinite(realCode) && realCode >= 900 && realCode < 1500) {
+    const nowIso = new Date().toISOString();
+    await admin
+      .from("online_orders")
+      .update({ status: "cancelled", cancelled_at: nowIso })
+      .eq("platform_id", platform.id)
+      .eq("platform_order_id", orderId)
+      .is("cancelled_at", null);
+    return {
+      ok: true,
+      status: 200,
+      data: { recovered: true, cancelled: true, getirStatusCode: realCode },
+      meta: { cancelled: true, realCode },
+    };
+  }
+
+  // 2) Hedef aksiyon zaten yapılmış (Getir ileride) → DB sync edildi, success
+  const targetCode = ACTION_COMPLETED[action];
+  if (Number.isFinite(realCode) && typeof targetCode === "number" && realCode >= targetCode) {
+    return {
+      ok: true,
+      status: 200,
+      data: { recovered: true, alreadyDone: true, getirStatusCode: realCode },
+      meta: { alreadyDone: true, realCode },
+    };
+  }
+
+  // 3) 1 adım geride → önceki aksiyonu otomatik çağır, sonra hedef aksiyonu tekrar dene
+  const prev = PREV_ACTION[action];
+  if (prev) {
+    const prevPath = `/food-orders/${encodeURIComponent(orderId)}/${prev}`;
+    const prevRes = await callGetir(admin, platform, "POST", prevPath, {});
+    if (prevRes.ok) {
+      const prevEmbedded = extractOrderFromGetirActionResponse(prevRes.data);
+      if (prevEmbedded) {
+        await upsertGetirOrder(admin, platform, prevEmbedded, { skipAckClamp: true });
+      }
+      // Getir state'in oturması için kısa bekleme
+      await new Promise((r) => setTimeout(r, 400));
+      // Hedef aksiyonu tekrar dene
+      const retry = await callGetir(admin, platform, "POST", path, payload || {});
+      if (retry.ok) {
+        return {
+          ok: true,
+          status: 200,
+          data: retry.data,
+          meta: { chained: prev, realCodeBefore: realCode },
+        };
+      }
+      // Retry da invalid status verdi → recovery limitini aştık
+      return {
+        ok: false,
+        status: retry.status,
+        data: retry.data,
+        meta: { chained: prev, retryFailed: true, realCodeBefore: realCode },
+      };
+    }
+    return {
+      ok: false,
+      status: prevRes.status,
+      data: prevRes.data,
+      meta: { chainAttempted: prev, chainFailed: true, realCode },
+    };
+  }
+
+  // 4) Recover edilemez → orijinal hatayı dön (frontend bilgilendirir)
+  return {
+    ok: false,
+    status: res.status,
+    data: res.data,
+    meta: { realCode, behind: true },
+  };
+}
+
 function isMissingObjectError(err: any): boolean {
   if (!err) return false;
   const msg = String(err?.message || "").toLowerCase();
@@ -776,76 +948,96 @@ Deno.serve(async (req) => {
       case "handover":
       case "deliver": {
         if (!body.orderId) return badRequest("orderId zorunlu");
-        const path = `/food-orders/${encodeURIComponent(body.orderId)}/${body.action}`;
-        const res = await callGetir(admin, platform as PlatformRow, "POST", path, body.payload || {});
-        let responseOk = res.ok;
-        let httpStatus = res.ok ? 200 : res.status;
-        if (res.ok) {
-          const embedded = extractOrderFromGetirActionResponse(res.data);
+
+        // Tek-istek orkestratör: aksiyon "invalid status" alırsa server tarafında
+        // inquiry yap → already-done / cancelled / 1 adım geride senaryolarını
+        // otomatik kurtar. Frontend tek istek atar, 429 baskısı oluşmaz, ŞefPOS
+        // Getir paneliyle senkron kalır.
+        const result = await tryGetirActionWithRecovery(
+          admin,
+          platform as PlatformRow,
+          body.action,
+          body.orderId,
+          body.payload,
+        );
+
+        if (result.ok) {
+          // Başarı (orijinal veya kurtarılmış) — DB'yi güncelle ve lifecycle
+          // timestamp'leri ekle. Eğer recovery oldysa Getir cevabı `recovered:true`
+          // formatında olabilir, embedded order çıkaramayabiliriz; o zaman direkt
+          // sabit status patch'ine düş.
+          const embedded = extractOrderFromGetirActionResponse(result.data);
           if (embedded) {
-            // Getir'in dondugu gercek siparis nesnesiyle DB'yi guncelle —
-            // sabit status patch'i (ozellikle handover sonrasi 550 vs 700)
-            // ile Getir paneli arasinda sapma olmasin.
             await upsertGetirOrder(admin, platform as PlatformRow, embedded, { skipAckClamp: true });
-            // Verify aksiyonunda Getir bazen siparişi otomatik 410'a (preparing)
-            // geçiriyor. Bu durumda `applyLifecycleTimestampsPoll` accepted_at'i
-            // YAZMAZ (sadece verified/accepted/scheduled_accepted için yazıyor).
-            // Sonuç: kasa onayı atlanmış gibi görünür, mutfak fişi basılmaz.
-            // Çözüm: kullanıcı «ONAYLA» dediyse accepted_at her zaman set edilsin.
-            if (body.action === "verify" || body.action === "verify-scheduled") {
-              const nowIso = new Date().toISOString();
-              await admin
-                .from("online_orders")
-                .update({ accepted_at: nowIso })
-                .eq("platform_id", platform.id)
-                .eq("platform_order_id", body.orderId)
-                .is("accepted_at", null);
-            }
-            if (body.action === "handover") {
-              const nowIso = new Date().toISOString();
-              await admin
-                .from("online_orders")
-                .update({ ready_at: nowIso })
-                .eq("platform_id", platform.id)
-                .eq("platform_order_id", body.orderId)
-                .is("ready_at", null);
-            }
-            if (body.action === "deliver") {
-              const nowIso = new Date().toISOString();
-              await admin
-                .from("online_orders")
-                .update({ delivered_at: nowIso })
-                .eq("platform_id", platform.id)
-                .eq("platform_order_id", body.orderId)
-                .is("delivered_at", null);
-            }
-          } else {
-            // Cevapta siparis yoksa eski tahminci patch (yedek)
-            const nextStatus: Record<
-              string,
-              { status: string; statusCode: number; col: string | null }
-            > = {
-              verify: { status: "verified", statusCode: 400, col: "accepted_at" },
-              "verify-scheduled": { status: "scheduled_accepted", statusCode: 350, col: "accepted_at" },
-              prepare: { status: "preparing", statusCode: 410, col: null },
-              handover: { status: "handed_over", statusCode: 550, col: "ready_at" },
-              deliver: { status: "delivered", statusCode: 900, col: "delivered_at" },
-            };
-            const upd = nextStatus[body.action];
-            const patch: Record<string, any> = {
-              status: upd.status,
-              getir_status_code: upd.statusCode,
-            };
-            if (upd.col) patch[upd.col] = new Date().toISOString();
+          }
+
+          // Lifecycle timestamps — her zaman set et (Getir state'i atlamış olsa bile
+          // kasada doğru zaman damgası kalsın). `is(..., null)` ile yalnızca ilk kez.
+          const nowIso = new Date().toISOString();
+          if (body.action === "verify" || body.action === "verify-scheduled") {
             await admin
               .from("online_orders")
-              .update(patch)
+              .update({ accepted_at: nowIso })
               .eq("platform_id", platform.id)
-              .eq("platform_order_id", body.orderId);
+              .eq("platform_order_id", body.orderId)
+              .is("accepted_at", null);
           }
-        } else if (body.action === "verify" || body.action === "verify-scheduled") {
-          // Getir bazen zaten 400+ iken verify reddeder; yine de kasa onayını tamamla.
-          const inq = await callGetir(admin, platform as PlatformRow, "GET", `/food-orders/${encodeURIComponent(body.orderId)}`);
+          if (body.action === "handover") {
+            await admin
+              .from("online_orders")
+              .update({ ready_at: nowIso })
+              .eq("platform_id", platform.id)
+              .eq("platform_order_id", body.orderId)
+              .is("ready_at", null);
+          }
+          if (body.action === "deliver") {
+            await admin
+              .from("online_orders")
+              .update({ delivered_at: nowIso })
+              .eq("platform_id", platform.id)
+              .eq("platform_order_id", body.orderId)
+              .is("delivered_at", null);
+          }
+
+          // Embedded yoksa sabit tahminci patch (yedek)
+          if (!embedded && !(result.meta?.alreadyDone || result.meta?.cancelled)) {
+            const nextStatus: Record<
+              string,
+              { status: string; statusCode: number }
+            > = {
+              verify: { status: "verified", statusCode: 400 },
+              "verify-scheduled": { status: "scheduled_accepted", statusCode: 350 },
+              prepare: { status: "preparing", statusCode: 410 },
+              handover: { status: "handed_over", statusCode: 550 },
+              deliver: { status: "delivered", statusCode: 800 },
+            };
+            const upd = nextStatus[body.action];
+            if (upd) {
+              await admin
+                .from("online_orders")
+                .update({ status: upd.status, getir_status_code: upd.statusCode })
+                .eq("platform_id", platform.id)
+                .eq("platform_order_id", body.orderId);
+            }
+          }
+
+          return jsonResponse({
+            ok: true,
+            status: 200,
+            data: result.data,
+            meta: result.meta,
+          });
+        }
+
+        // verify özel fallback: Getir 400+ iken verify reddeder; yine de kasa
+        // onayını tamamla (test ortamında bazen sipariş zaten otomatik onaylanmış).
+        if (body.action === "verify" || body.action === "verify-scheduled") {
+          const inq = await callGetir(
+            admin,
+            platform as PlatformRow,
+            "GET",
+            `/food-orders/${encodeURIComponent(body.orderId)}`,
+          );
           if (inq.ok) {
             const ord = inq.data?.data || inq.data;
             if (ord && typeof ord === "object") {
@@ -856,21 +1048,22 @@ Deno.serve(async (req) => {
                 const st = body.action === "verify-scheduled" ? "scheduled_accepted" : "verified";
                 await admin
                   .from("online_orders")
-                  .update({
-                    accepted_at: nowIso,
-                    status: st,
-                    getir_status_code: c,
-                  })
+                  .update({ accepted_at: nowIso, status: st, getir_status_code: c })
                   .eq("platform_id", platform.id)
                   .eq("platform_order_id", body.orderId);
                 await upsertGetirOrder(admin, platform as PlatformRow, ord, { skipAckClamp: true });
-                responseOk = true;
-                httpStatus = 200;
+                return jsonResponse({ ok: true, status: 200, data: ord, meta: { verifyFallback: true } });
               }
             }
           }
         }
-        return jsonResponse({ ok: responseOk, status: res.status, data: res.data }, httpStatus);
+
+        return jsonResponse({
+          ok: false,
+          status: result.status,
+          data: result.data,
+          meta: result.meta,
+        }, result.status);
       }
 
       case "cancel": {

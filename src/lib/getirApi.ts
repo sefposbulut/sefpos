@@ -58,6 +58,23 @@ export interface GetirActionResult {
   saved?: number;
   expiresAt?: string;
   isFirstTime?: boolean;
+  /**
+   * Server-side recovery meta-data (edge function `tryGetirActionWithRecovery`'den):
+   *   - cancelled: Getir tarafında iptal edilmişti, DB de cancelled yapıldı.
+   *   - alreadyDone: Hedef aksiyon Getir'de zaten yapılmış (DB sync edildi).
+   *   - chained: Önceki aksiyon (örn. prepare) otomatik çalıştırıldı, sonra hedef.
+   *   - realCode / realCodeBefore: Getir'in inquiry sonrası bildirdiği gerçek status.
+   *   - verifyFallback: verify reddedildi ama Getir zaten 400+ idi (kasa onayı tamamlandı).
+   */
+  meta?: {
+    cancelled?: boolean;
+    alreadyDone?: boolean;
+    chained?: string;
+    realCode?: number;
+    realCodeBefore?: number;
+    verifyFallback?: boolean;
+    [k: string]: unknown;
+  };
 }
 
 /** Ayni anda birden fazla getir-api istegi 429 uretir; sirayla gonder. */

@@ -745,6 +745,31 @@ export function OnlineOrders() {
       // inquiry çağrısı kaldırıldı (gereksiz Getir API trafiği + 429 baskısı).
       await loadOrders();
 
+      // Server-side auto-recovery bilgilendirmesi (alert yerine bilgi mesajı):
+      // - cancelled: Getir'de iptal edilmiş, otomatik kapatıldı
+      // - alreadyDone: hedef adım Getir'de zaten yapılmıştı, DB senkronlandı
+      // - chained: önceki aksiyon (prepare/handover) otomatik yapıldı
+      const meta = (res as any).meta as
+        | { cancelled?: boolean; alreadyDone?: boolean; chained?: string; realCode?: number; realCodeBefore?: number }
+        | undefined;
+      if (meta?.cancelled) {
+        alert(
+          `Bu sipariş Getir tarafında iptal edilmiş — ŞefPOS'ta da otomatik olarak kapatıldı.`,
+        );
+      } else if (meta?.alreadyDone) {
+        const codeLabel =
+          typeof meta.realCode === 'number'
+            ? `${meta.realCode} - ${getirStatusLabel(meta.realCode)}`
+            : 'son durum';
+        console.info(
+          `[Getir] ${action} adımı Getir'de zaten tamamlanmıştı (durum: ${codeLabel}). DB senkronlandı.`,
+        );
+      } else if (meta?.chained) {
+        console.info(
+          `[Getir] ${action} öncesi eksik adım "${meta.chained}" otomatik tamamlandı, sonra ${action} başarılı.`,
+        );
+      }
+
       if (action === 'verify' || action === 'verify-scheduled') {
         console.info(
           `[Getir] Sipariş #${order.platform_order_number || order.platform_order_id} onaylandı (verify) → Getir paneline iletildi.`,
