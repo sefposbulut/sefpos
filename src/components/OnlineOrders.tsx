@@ -701,10 +701,13 @@ export function OnlineOrders() {
           return;
         }
 
-        // "Invalid status" hatasi → inquiry ile DB resync + kullaniciya Getir koduyla aciklama
+        // "Invalid status" hatasi → DB'yi yenile + Getir'den son durumu çek.
+        // 429 alırsak inquiry'yi sessizce atla; en azından DB'deki son bilinen
+        // koda göre kullanıcıyı bilgilendir, ek rate-limit baskısı yapma.
         if (isInvalidStatus && retryCount === 0) {
-          console.log(`[Getir] ${action} invalid status → inquiry + UI refresh`);
+          console.log(`[Getir] ${action} invalid status → DB refresh (inquiry rate-limit safe)`);
           let inqCode: number | null = null;
+          let inqRateLimited = false;
           try {
             const inq = await callGetir({
               platformId: order.platform_id,
@@ -713,19 +716,30 @@ export function OnlineOrders() {
             });
             if (inq.ok && typeof (inq as any).getirStatusCode === 'number') {
               inqCode = (inq as any).getirStatusCode;
+            } else if (inq.status === 429) {
+              inqRateLimited = true;
             }
           } catch (e) {
             console.warn('[Getir] inquiry hatasi:', e);
           }
           await loadOrders();
-          const label = inqCode != null ? getirStatusLabel(inqCode) : 'Güncellenemedi';
+          // Inquiry başarısızsa DB'deki son bilinen Getir kodunu kullan
+          const effectiveCode =
+            inqCode ??
+            (typeof order.getir_status_code === 'number' ? order.getir_status_code : null);
+          const label = effectiveCode != null ? getirStatusLabel(effectiveCode) : 'Bilinmiyor';
           const hint =
-            inqCode != null ? getGetirNextStepHint(inqCode, order.getir_delivery_type) : '';
+            effectiveCode != null
+              ? getGetirNextStepHint(effectiveCode, order.getir_delivery_type)
+              : '';
+          const rateNote = inqRateLimited
+            ? `\n\nGetir API geçici limit verdiği için en son bilinen durum gösteriliyor; biraz sonra "Getir ile durumu eşle" ile yenileyin.`
+            : '';
           alert(
-            `Getir bu işlemi şu an kabul etmedi (muhtemelen sıra dışı bir adım).\n\n` +
-              `Güncel Getir durumu: ${inqCode != null ? `${inqCode} — ${label}` : label}\n\n` +
-              (hint ? `${hint}\n\n` : '') +
-              `Liste yenilendi. Yukarıdaki «Getir ile durumu eşle» ile tekrar güncelleyebilirsiniz.`,
+            `Getir bu işlemi şu an kabul etmedi (sıra dışı bir adım).\n\n` +
+              `Mevcut Getir durumu: ${effectiveCode != null ? `${effectiveCode} — ${label}` : label}\n\n` +
+              (hint ? `${hint}` : '') +
+              rateNote,
           );
           return;
         }
@@ -735,18 +749,8 @@ export function OnlineOrders() {
         return;
       }
 
-      // Basariyla Getir'e gonderildi. Getir cevabini DB ile esitlemek icin
-      // de hemen bir inquiry tetikleyip kesin sonucu al — Getir paneliyle
-      // ŞefPOS arasinda gozle gorulur senkron hissi olusur.
-      try {
-        await callGetir({
-          platformId: order.platform_id,
-          action: 'inquiry',
-          orderId: order.platform_order_id,
-        });
-      } catch (e) {
-        console.warn('[Getir] post-action inquiry uyari:', e);
-      }
+      // Edge Function aksiyon cevabını zaten upsert ediyor; eski post-action
+      // inquiry çağrısı kaldırıldı (gereksiz Getir API trafiği + 429 baskısı).
       await loadOrders();
 
       if (action === 'verify' || action === 'verify-scheduled') {
