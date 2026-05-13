@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef, useCallback, Fragment, useMemo } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
-import { Database } from '../lib/supabase';
 import { ShoppingBag, Clock, Phone, MapPin, Check, X, ChevronDown, ChevronUp, Bike, Package, RefreshCw, Volume2, VolumeX, AlertTriangle, Hash, Tag, BellRing } from 'lucide-react';
 import {
   startContinuousAlert,
@@ -13,17 +12,75 @@ import {
   getAudioState,
 } from '../lib/notification';
 import { callGetir, eligibleCancelReasons, getGetirNextStepHint, getGetirUiPhase, getirStatusLabel } from '../lib/getirApi';
+import { internalStatusLabelTr } from '@getir-order-status';
 import { PlatformLogo } from './PlatformLogo';
 import { loadPrintSettings, printOnlineOrderKitchenTicket } from '../lib/printService';
 
-type OnlineOrder = Database['public']['Tables']['online_orders']['Row'];
-type OnlineOrderItem = Database['public']['Tables']['online_order_items']['Row'];
-type OnlineOrderPlatform = Database['public']['Tables']['online_order_platforms']['Row'];
-
-interface OrderWithDetails extends OnlineOrder {
-  online_order_platforms: OnlineOrderPlatform;
-  items: OnlineOrderItem[];
+/**
+ * `Database` tipinde online sipariş tabloları tanımlı olmadığı için bu ekranda yerel model.
+ * Supabase `select('*')` ile gelen alanlar.
+ */
+interface OnlineOrderRow {
+  id: string;
+  tenant_id: string;
+  platform_id: string;
+  platform_order_id: string;
+  platform_order_number?: string | null;
+  status: string;
+  customer_name: string;
+  customer_phone?: string | null;
+  customer_address?: string | null;
+  customer_notes?: string | null;
+  subtotal?: number;
+  delivery_fee?: number;
+  discount_amount?: number;
+  total_amount: number;
+  payment_status?: string | null;
+  created_at: string;
+  updated_at?: string | null;
+  accepted_at?: string | null;
+  ready_at?: string | null;
+  delivered_at?: string | null;
+  cancelled_at?: string | null;
+  getir_verification_code?: string | null;
+  getir_status_code?: number | null;
+  getir_delivery_type?: number | null;
+  getir_is_scheduled?: boolean | null;
+  getir_total_discount?: number | null;
+  getir_courier_name?: string | null;
+  getir_courier_phone?: string | null;
+  getir_courier_pickup_at?: string | null;
+  getir_platform_order_status?: string | null;
 }
+
+interface OnlineOrderItemRow {
+  id: string;
+  tenant_id: string;
+  online_order_id: string;
+  platform_product_name: string;
+  platform_product_code?: string | null;
+  quantity: number;
+  unit_price: number;
+  total_amount: number;
+  notes?: string | null;
+  toppings?: unknown;
+}
+
+interface OnlineOrderPlatformRow {
+  id: string;
+  tenant_id: string;
+  platform_name: string;
+  platform_code: string;
+  is_active?: boolean | null;
+}
+
+interface OrderWithDetails extends OnlineOrderRow {
+  online_order_platforms: OnlineOrderPlatformRow;
+  items: OnlineOrderItemRow[];
+}
+
+/** Supabase client `Database` tipi bu tabloları içermediği için liste satırı. */
+type OnlinePlatformListRow = { id: string; platform_code: string; is_active?: boolean | null };
 
 const REJECT_REASONS: { value: string; label: string }[] = [
   { value: 'TOO_BUSY', label: 'Çok yoğunuz' },
@@ -39,10 +96,10 @@ const REJECT_REASONS: { value: string; label: string }[] = [
 ];
 
 const FILTER_GROUPS: Record<'all' | 'new' | 'active' | 'on_the_way' | 'done', string[] | null> = {
-  new: ['new', 'scheduled_new', 'verified', 'accepted'],
+  new: ['new', 'scheduled_new', 'verified', 'accepted', 'getir_unmapped'],
   active: ['preparing', 'ready', 'scheduled_accepted'],
   on_the_way: ['handed_over', 'on_the_way', 'arrived'],
-  done: ['delivered', 'cancelled'],
+  done: ['delivered', 'cancelled', 'rejected'],
   all: null,
 };
 
@@ -285,7 +342,7 @@ export function OnlineOrders() {
           .eq('tenant_id', tenant.id)
           .eq('is_active', true)
           .eq('platform_code', 'getir');
-        for (const p of platforms || []) {
+        for (const p of (platforms || []) as OnlinePlatformListRow[]) {
           if (stopped || busyOrderIdRef.current) break;
           const action = alternate ? 'poll-unapproved' : 'poll-active';
           await callGetir({ platformId: p.id, action });
@@ -418,7 +475,7 @@ export function OnlineOrders() {
         // Edge function DB'yi de update ediyor; local state zaten dogru.
         await loadOrders();
       } else {
-        const { error } = await supabase
+        const { error } = await (supabase as any)
           .from('online_orders')
           .update(updateData)
           .eq('id', orderId);
@@ -635,7 +692,9 @@ export function OnlineOrders() {
       let totalSaved = 0;
       let messages: string[] = [];
 
-      const getirPlatforms = (platforms || []).filter((p: any) => p.platform_code === 'getir');
+      const getirPlatforms = (platforms || []).filter(
+        (p: OnlinePlatformListRow) => p.platform_code === 'getir',
+      ) as OnlinePlatformListRow[];
       for (const gp of getirPlatforms) {
         const res = await callGetir({ platformId: gp.id, action: 'poll-active' });
         if (res.ok) {
@@ -647,7 +706,9 @@ export function OnlineOrders() {
       }
 
       // Eski sync-online-orders (Yemeksepeti vb.) — sadece Getir DISI platform varsa
-      const nonGetir = (platforms || []).filter((p: any) => p.platform_code !== 'getir');
+      const nonGetir = (platforms || []).filter(
+        (p: OnlinePlatformListRow) => p.platform_code !== 'getir',
+      );
       if (nonGetir.length > 0) {
         const baseUrl = (import.meta.env.VITE_SUPABASE_URL || 'https://xdfnozfuuzctubijbnds.supabase.co').replace(/\/$/, '');
         const { data: { session } } = await supabase.auth.getSession();
@@ -710,9 +771,14 @@ export function OnlineOrders() {
       arrived: { label: 'ULAŞTI', color: 'bg-teal-100 text-teal-700 ring-1 ring-teal-200' },
       delivered: { label: 'TESLİM EDİLDİ', color: 'bg-slate-100 text-slate-600 ring-1 ring-slate-200' },
       cancelled: { label: 'İPTAL', color: 'bg-rose-100 text-rose-700 ring-1 ring-rose-200' },
+      rejected: { label: 'REDDEDİLDİ', color: 'bg-slate-200 text-slate-700 ring-1 ring-slate-300' },
+      getir_unmapped: { label: 'GETİR · EŞLEŞMEMİŞ', color: 'bg-amber-100 text-amber-900 ring-1 ring-amber-300' },
     };
 
-    const badge = badges[status] || badges.new;
+    const badge = badges[status] ?? {
+      label: internalStatusLabelTr(status).toUpperCase().slice(0, 28),
+      color: 'bg-slate-100 text-slate-600 ring-1 ring-slate-200',
+    };
     return (
       <span
         className={`${badge.color} text-[10px] font-bold px-2 py-1 rounded-md uppercase tracking-wide inline-flex items-center`}
@@ -930,7 +996,6 @@ export function OnlineOrders() {
                     const isExpanded = expandedOrder === order.id;
                     const platformCode = order.online_order_platforms.platform_code;
                     const platformColor = getPlatformColor(platformCode);
-                    const platformLabel = (order.online_order_platforms.platform_name || platformCode || '').toUpperCase();
                     const orderDate = new Date(order.created_at);
                     const getirPhase =
                       order.online_order_platforms.platform_code === 'getir'
@@ -1103,9 +1168,28 @@ export function OnlineOrders() {
                               {order.getir_verification_code.toUpperCase()}
                             </span>
                           )}
-                          {typeof order.getir_status_code === 'number' && (
+                          {typeof order.getir_status_code === 'number' ? (
                             <span className="bg-slate-200 text-slate-700 font-bold px-2 py-0.5 rounded">
                               {getirStatusLabel(order.getir_status_code)}
+                            </span>
+                          ) : (
+                            (order.getir_platform_order_status ||
+                              order.status === 'rejected' ||
+                              order.status === 'getir_unmapped') && (
+                              <span className="bg-slate-200 text-slate-700 font-bold px-2 py-0.5 rounded">
+                                {order.getir_platform_order_status
+                                  ? `${order.getir_platform_order_status}: ${internalStatusLabelTr(order.status)}`
+                                  : internalStatusLabelTr(order.status)}
+                              </span>
+                            )
+                          )}
+                          {order.getir_courier_name && (
+                            <span className="bg-indigo-100 text-indigo-900 font-semibold px-2 py-0.5 rounded max-w-full truncate" title={order.getir_courier_phone || ''}>
+                              Kurye: {order.getir_courier_name}
+                              {order.getir_courier_phone ? ` · ${order.getir_courier_phone}` : ''}
+                              {order.getir_courier_pickup_at
+                                ? ` · ${new Date(order.getir_courier_pickup_at).toLocaleString('tr-TR', { dateStyle: 'short', timeStyle: 'short' })}`
+                                : ''}
                             </span>
                           )}
                           {order.getir_delivery_type === 1 && (

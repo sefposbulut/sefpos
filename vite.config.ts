@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve as pathResolve } from 'node:path';
 import type { IncomingMessage } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { defineConfig, loadEnv } from 'vite';
@@ -270,6 +270,12 @@ export default defineConfig(({ mode, command }) => {
   return {
     define,
     plugins,
+    resolve: {
+      alias: {
+        /** Edge `_shared` ile aynı Getir durum sözlüğü — tek kaynak, çift bakım yok. */
+        '@getir-order-status': pathResolve(__root, 'supabase/functions/_shared/getirOrderStatus.ts'),
+      },
+    },
     base: './',
     server: {
       port: SEFPOS_DEV_PORT,

@@ -8,6 +8,7 @@
 //   const res = await callGetir({ platformId, action: 'pos-status-set', status: 100 });
 
 import { supabase } from './supabase';
+import { GETIR_NUMERIC_STATUS_MAP, INTERNAL_UNKNOWN_STATUS, mapUnknownNumeric } from '@getir-order-status';
 
 export interface GetirActionPayload {
   platformId: string;
@@ -196,35 +197,23 @@ export function eligibleCancelReasons(getirStatus: number, deliveryType: number)
   );
 }
 
-/** Insani okunabilir Getir statu ismi (Food API resmi kodlari). */
-export function getirStatusLabel(code: number): string {
-  switch (code) {
-    case 325:
-      return 'Yeni sipariş · onay bekleniyor';
-    case 350:
-      return 'İleri tarihli · yeni';
-    case 400:
-      return 'Onaylandı · hazırlanmaya başlanabilir';
-    case 410:
-      return 'Hazırlanıyor';
-    case 500:
-      return 'Hazır · kuryeye teslim bekleniyor';
-    case 550:
-      return 'Kurye siparişi teslim aldı';
-    case 600:
-    case 700:
-      return 'Yolda';
-    case 800:
-      return 'Adreste';
-    case 900:
-      return 'Teslim edildi';
-    case 1500:
-      return 'İptal (yönetici)';
-    case 1600:
-      return 'İptal';
-    default:
-      return `Getir statü kodu: ${code}`;
+/** İnsan okunur Getir statü adı — kodlar `_shared/getirOrderStatus` ile Getir Food API dokümantasyonuyla hizalı. */
+export function getirStatusLabel(code: number | null | undefined): string {
+  if (code == null || !Number.isFinite(Number(code))) return 'Durum kodu yok';
+  const n = Number(code);
+  const row = GETIR_NUMERIC_STATUS_MAP[n];
+  if (row) {
+    const hints: Record<number, string> = {
+      325: `${row.labelTr} · onay bekleniyor`,
+      350: `İleri tarihli · ${row.labelTr.toLowerCase()}`,
+      400: `${row.labelTr} · hazırlanmaya başlanabilir`,
+      500: `${row.labelTr} · kuryeye teslim bekleniyor`,
+      550: 'Kurye siparişi teslim aldı',
+      1500: 'İptal (yönetici)',
+    };
+    return hints[n] ?? row.labelTr;
   }
+  return mapUnknownNumeric(n).labelTr;
 }
 
 /**
@@ -271,7 +260,7 @@ export type GetirUiPhase =
 
 export function getGetirUiPhase(order: {
   status: string;
-  getir_status_code: number | null;
+  getir_status_code?: number | null;
   getir_is_scheduled?: boolean | null;
   getir_delivery_type?: number | null;
 }): GetirUiPhase {
@@ -279,7 +268,15 @@ export function getGetirUiPhase(order: {
   const dt = order.getir_delivery_type ?? 0;
 
   if (order.status === 'delivered' || code === 900) return 'done';
-  if (order.status === 'cancelled' || code === 1500 || code === 1600) return 'done';
+  if (
+    order.status === 'cancelled' ||
+    order.status === 'rejected' ||
+    order.status === INTERNAL_UNKNOWN_STATUS ||
+    code === 1500 ||
+    code === 1600
+  ) {
+    return 'done';
+  }
   if (order.status === 'scheduled_accepted') return 'scheduled_accepted_wait';
 
   if (code !== null) {

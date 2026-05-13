@@ -31,6 +31,7 @@
 // deno-lint-ignore-file no-explicit-any
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
+import { extractGetirCourier, resolveFromNumeric, resolveFromPlatformEnum } from "../_shared/getirOrderStatus.ts";
 
 const corsHeaders: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -214,8 +215,8 @@ async function callGetir(
 /**
  * Gelen Getir order payload'ini online_orders + online_order_items tablosuna
  * idempotent sekilde upsert eder. Mevcut kayit varsa status guncellenir.
- */
-/**
+ * Durum eşlemesi: `../_shared/getirOrderStatus.ts`.
+ *
  * Multi-language string'leri normalize et. Getir API bazen sade string,
  * bazen { tr: '...', en: '...' } sekilinde dondurur.
  */
@@ -250,11 +251,53 @@ function extractOrderFromGetirActionResponse(data: any): any | null {
   return null;
 }
 
+function isDuplicateKeyError(err: any): boolean {
+  return err?.code === "23505" || String(err?.message || "").includes("duplicate key");
+}
+
+function applyLifecycleTimestampsPoll(patch: Record<string, any>, toStatus: string, nowIso: string) {
+  if (toStatus === "verified" || toStatus === "accepted" || toStatus === "scheduled_accepted") {
+    patch.accepted_at = nowIso;
+  }
+  if (toStatus === "ready") patch.ready_at = nowIso;
+  if (toStatus === "delivered") patch.delivered_at = nowIso;
+  if (toStatus === "cancelled" || toStatus === "rejected") patch.cancelled_at = nowIso;
+}
+
+async function appendPollStatusEvent(
+  admin: any,
+  opts: {
+    tenantId: string;
+    onlineOrderId: string;
+    fromStatus: string | null;
+    toStatus: string;
+    platformEnum: string | null;
+    numericCode: number | null;
+    payload: any;
+    dedupeKey: string;
+  },
+): Promise<void> {
+  const dk = opts.dedupeKey.slice(0, 250);
+  const { error } = await admin.from("online_order_status_events").insert({
+    tenant_id: opts.tenantId,
+    online_order_id: opts.onlineOrderId,
+    from_status: opts.fromStatus,
+    to_status: opts.toStatus,
+    getir_platform_order_status: opts.platformEnum,
+    getir_status_code: opts.numericCode,
+    source: "getir_poll",
+    event_payload: opts.payload,
+    dedupe_key: dk,
+  });
+  if (error && isDuplicateKeyError(error)) return;
+  if (error) console.warn("[getir-api] status event insert:", error?.message || error);
+}
+
 async function upsertGetirOrder(
   admin: any,
   platform: PlatformRow,
   order: any,
-): Promise<{ id: string; isNew: boolean; statusCode: number; normalizedStatus: string } | null> {
+): Promise<{ id: string; isNew: boolean; statusCode: number | null; normalizedStatus: string } | null> {
   const platformOrderId = String(order.id || order._id || order.orderId || "");
   if (!platformOrderId) return null;
 
@@ -281,6 +324,29 @@ async function upsertGetirOrder(
   const deliveryFee = Number(order.deliveryFee ?? 0);
   const supplierSupportRate = Number(order.supplierSupportRate ?? 0);
 
+  const rawStatusVal = (order as any).status;
+  const hasStatusVal = rawStatusVal != null && rawStatusVal !== "" && !isNaN(Number(rawStatusVal));
+  const isSched = !!(order as any).isScheduled;
+
+  let normalizedStatus: string;
+  let statusCode: number | null;
+  let platformEnum: string | null = null;
+
+  if (typeof rawStatusVal === "string" && rawStatusVal.trim() && isNaN(Number(rawStatusVal))) {
+    const r = resolveFromPlatformEnum(rawStatusVal, isSched);
+    normalizedStatus = r.internalStatus;
+    statusCode = r.numericCode;
+    platformEnum = r.platformEnum;
+  } else {
+    const code = hasStatusVal ? Number(rawStatusVal) : (isSched ? 350 : 325);
+    const r = resolveFromNumeric(code, isSched);
+    normalizedStatus = r.internalStatus;
+    statusCode = r.numericCode;
+  }
+
+  const courier = extractGetirCourier(order);
+  const nowIso = new Date().toISOString();
+
   // Getir resmi status kodlari (Food API doc):
   //   325 = New order (verify bekleniyor)
   //   350 = New scheduled order
@@ -292,32 +358,7 @@ async function upsertGetirOrder(
   //   800 = Arrived (teslim noktasinda)
   //   900 = Delivered (teslim edildi)
   //   1500/1600 = Cancelled
-  // Getir resmi status kodlari — status alani gelmezse varsayilan olarak
-  // "new (325)" kabul edelim. isScheduled=true ise scheduled_new (350).
-  // Polling/inquiry'da Getir genelde status alanini doldurur ama webhook
-  // payload'inda nadiren bos gelebilir; ESKI kod default 0 olunca status
-  // yine "new"e dusuyordu, ama herhangi bir baska yan etki olmasin diye
-  // burada da net davranis ile garanti edelim.
-  const rawStatusVal = (order as any).status;
-  const hasStatusVal = rawStatusVal != null && !isNaN(Number(rawStatusVal));
-  const isSched = !!(order as any).isScheduled;
-  const statusCode = hasStatusVal ? Number(rawStatusVal) : (isSched ? 350 : 325);
-  let normalizedStatus: string = "new";
-  switch (statusCode) {
-    case 325: normalizedStatus = "new"; break;
-    case 350: normalizedStatus = "scheduled_new"; break;
-    case 400: normalizedStatus = "verified"; break;
-    case 410: normalizedStatus = "preparing"; break;
-    case 500: normalizedStatus = "ready"; break;
-    case 550: normalizedStatus = "handed_over"; break;
-    case 600: case 700: normalizedStatus = "on_the_way"; break;
-    case 800: normalizedStatus = "arrived"; break;
-    case 900: normalizedStatus = "delivered"; break;
-    case 1500: case 1600: normalizedStatus = "cancelled"; break;
-    default: normalizedStatus = "new";
-  }
-
-  // Idempotent upsert: (tenant, platform, platform_order_id) unique
+  // Eşleme: ../_shared/getirOrderStatus.ts (tek kaynak).
   const baseRow: Record<string, any> = {
     tenant_id: platform.tenant_id,
     platform_id: platform.id,
@@ -335,6 +376,7 @@ async function upsertGetirOrder(
     payment_status: "paid",
     platform_created_at: order.createdAt ? new Date(order.createdAt).toISOString() : null,
     getir_status_code: statusCode,
+    getir_platform_order_status: platformEnum,
     getir_is_scheduled: !!order.isScheduled,
     getir_scheduled_at: order.scheduledDate ? new Date(order.scheduledDate).toISOString() : null,
     getir_delivery_type: Number(order.deliveryType ?? 0) || null,
@@ -344,22 +386,26 @@ async function upsertGetirOrder(
     getir_total_discount: totalDiscount || null,
     getir_total_discounted_price: discounted || null,
     getir_raw_payload: order,
+    getir_courier_name: courier.name,
+    getir_courier_phone: courier.phone,
+    getir_courier_pickup_at: courier.pickupAt,
   };
 
-  // Once mevcut var mi tespit et — yeni mi gelecek karari icin
+  applyLifecycleTimestampsPoll(baseRow, normalizedStatus, nowIso);
+
   const { data: existing } = await admin
     .from("online_orders")
-    .select("id")
+    .select("id, status, tenant_id")
     .eq("tenant_id", platform.tenant_id)
     .eq("platform_id", platform.id)
     .eq("platform_order_id", platformOrderId)
     .maybeSingle();
-  const isNew = !existing;
+  const isNew = !existing?.id;
 
   const { data: upserted, error: upErr } = await admin
     .from("online_orders")
     .upsert(baseRow, { onConflict: "tenant_id,platform_id,platform_order_id" })
-    .select("id")
+    .select("id, tenant_id")
     .maybeSingle();
 
   if (upErr) {
@@ -368,6 +414,21 @@ async function upsertGetirOrder(
   }
   const onlineOrderId: string = upserted?.id;
   if (!onlineOrderId) return null;
+
+  const prevStatus = existing?.status ?? null;
+  if (prevStatus !== normalizedStatus && upserted?.tenant_id) {
+    const dk = `poll:${onlineOrderId}:${prevStatus ?? "null"}:${normalizedStatus}:${statusCode ?? "null"}`;
+    await appendPollStatusEvent(admin, {
+      tenantId: upserted.tenant_id,
+      onlineOrderId,
+      fromStatus: prevStatus,
+      toStatus: normalizedStatus,
+      platformEnum,
+      numericCode: statusCode,
+      payload: { source: "getir-api upsertGetirOrder", getirOrderId: platformOrderId },
+      dedupeKey: dk,
+    });
+  }
 
   // Item replace (delete + insert) — siparis icerigi degisebiliyor mu? Getir spec: hayir,
   // ama yine de idempotent davranis icin sil-tekrar yaz.
