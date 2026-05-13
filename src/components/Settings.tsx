@@ -515,7 +515,9 @@ export function Settings({ onClose }: SettingsProps) {
   ) => {
     const payload: any = {};
     if (typeof patch.percent === 'number') {
-      payload.default_discount_percent = Math.min(100, Math.max(0, Math.round(patch.percent)));
+      // 2 ondalık hassasiyet (numeric(5,2)) — 3.38 gibi kesirli yüzdeleri destekle.
+      const clamped = Math.min(100, Math.max(0, patch.percent));
+      payload.default_discount_percent = Math.round(clamped * 100) / 100;
     }
     if (typeof patch.active === 'boolean') {
       payload.default_discount_active = patch.active;
@@ -4581,14 +4583,26 @@ function BranchDefaultDiscountRow({
 }) {
   const initialPercent = Number(branch.default_discount_percent || 0);
   const initialActive = branch.default_discount_active === true;
-  const [percent, setPercent] = useState<number>(initialPercent);
+
+  // Input metnini olduğu gibi tut (virgül de nokta da kabul). Sayıya çevirme
+  // ancak blur/commit anında olur — böylece "3," yazarken "3" olarak yenilenmez.
+  const formatForInput = (n: number) => (n === 0 ? '' : String(n).replace('.', ','));
+  const [inputText, setInputText] = useState<string>(formatForInput(initialPercent));
   const [active, setActive] = useState<boolean>(initialActive);
   const [saving, setSaving] = useState(false);
 
-  useEffect(() => { setPercent(Number(branch.default_discount_percent || 0)); }, [branch.default_discount_percent]);
+  useEffect(() => {
+    setInputText(formatForInput(Number(branch.default_discount_percent || 0)));
+  }, [branch.default_discount_percent]);
   useEffect(() => { setActive(branch.default_discount_active === true); }, [branch.default_discount_active]);
 
-  const dirty = percent !== initialPercent;
+  const parsePercent = (s: string): number => {
+    const raw = s.trim().replace(',', '.');
+    if (!raw) return 0;
+    const n = Number(raw);
+    if (Number.isNaN(n)) return initialPercent;
+    return Math.min(100, Math.max(0, Math.round(n * 100) / 100));
+  };
 
   const commit = async (next: { percent?: number; active?: boolean }) => {
     setSaving(true);
@@ -4613,19 +4627,18 @@ function BranchDefaultDiscountRow({
           <input
             type="text"
             inputMode="decimal"
-            value={percent === 0 ? '' : String(percent)}
+            value={inputText}
             placeholder="0"
             onChange={(e) => {
-              // Türk klavyesinde virgül de kabul et (3,38 → 3.38 → integer 3)
-              const raw = e.target.value.replace(',', '.');
-              const num = Number(raw);
-              if (raw === '' || Number.isNaN(num)) {
-                setPercent(0);
-              } else {
-                setPercent(Math.min(100, Math.max(0, Math.round(num))));
-              }
+              // Sadece rakam / virgül / nokta kabul et — kullanıcı virgül yazarsa kalsın.
+              const cleaned = e.target.value.replace(/[^\d.,]/g, '');
+              setInputText(cleaned);
             }}
-            onBlur={() => { if (dirty) void commit({ percent }); }}
+            onBlur={() => {
+              const parsed = parsePercent(inputText);
+              setInputText(formatForInput(parsed));
+              if (parsed !== initialPercent) void commit({ percent: parsed });
+            }}
             disabled={saving}
             className="w-20 px-2 py-1.5 pr-7 rounded-lg border-2 border-slate-200 focus:border-orange-400 focus:outline-none text-right font-bold text-sm"
           />
@@ -4633,7 +4646,12 @@ function BranchDefaultDiscountRow({
         </div>
         <button
           type="button"
-          onClick={() => { const next = !active; setActive(next); void commit({ active: next, percent }); }}
+          onClick={() => {
+            const next = !active;
+            setActive(next);
+            const parsed = parsePercent(inputText);
+            void commit({ active: next, percent: parsed });
+          }}
           disabled={saving}
           className="transition-all active:scale-95"
           aria-label="Sabit iskontoyu aç/kapat"
