@@ -271,8 +271,10 @@ function isDuplicateKeyError(err: any): boolean {
 const ACTION_COMPLETED: Record<string, number> = {
   verify: 400,
   "verify-scheduled": 350,
-  prepare: 410,
-  handover: 500,
+  /** Getir OpenAPI: POST .../prepare = "Restaurant prepared the food order" → genelde 500 (Hazır). */
+  prepare: 500,
+  /** Kurye teslimi tamam sayılır: 550+ (500 = hâlâ kurye bekleniyor, handover henüz değil). */
+  handover: 550,
   deliver: 800,
 };
 
@@ -998,24 +1000,20 @@ Deno.serve(async (req) => {
           }
 
           // ---- Action status CAP --------------------------------------------------
-          // Sorun: Getir test ortamı bazen verify/prepare sonrası embedded order'da
-          // ileri bir status döndürüyor (örn. verify yapıldı, embedded.status=500/READY).
-          // upsertGetirOrder bunu olduğu gibi DB'ye yazınca ŞefPOS "HAZIR" badge'i
-          // gösteriyor, oysa Getir paneli hâlâ "Hazırlanıyor" (410). Kullanıcı kafası
-          // karışıyor + olmayan "KURYE YOLA ÇIKTI" butonuna basıp 400 alıyor.
-          //
-          // Çözüm: Aksiyonun mantıksal hedefinin üzerine çıkmasını engelle. Getir'in
-          // gerçek durumu zaten 15s polling'de yansıtılır; o zamana kadar UI tutarlı kalır.
-          //
+          // Sorun: Getir test ortamı bazen verify sonrası embedded order'da ileri bir status
+          // döndürüyor (örn. embedded.status=500). upsertGetirOrder bunu DB'ye yazınca ŞefPOS
+          // "HAZIR" gösteriyor, oysa kasada henüz ONAYLA yapılmamış. Bu yüzden yalnızca
+          // verify / verify-scheduled CAP'lenir. `prepare` CAP'lenmez: resmi anlamı
+          // "Restaurant prepared the food order" (Hazır / 500) — CAP 410'a çekmek handover'ı kırıyordu.
           // CAP kuralları:
           //   verify           → status<='verified'  (code<=400)
           //   verify-scheduled → status<='scheduled_accepted' (code<=350)
-          //   prepare          → status<='preparing' (code<=410)
+          //   prepare          → CAP YOK: resmi API'de `prepare` = "Restaurant prepared the food order"
+          //     (yemek hazır / kurye bekliyor, tipik kod 500). Bunu 410'a zorlamak handover'ı kırıyordu.
           //   handover/deliver → CAP yok (Getir kurye akışında 550/700 gerçek olabilir)
           const ACTION_CAP: Record<string, { status: string; code: number }> = {
             verify: { status: "verified", code: 400 },
             "verify-scheduled": { status: "scheduled_accepted", code: 350 },
-            prepare: { status: "preparing", code: 410 },
           };
           const cap = ACTION_CAP[body.action];
           if (cap) {
@@ -1037,7 +1035,7 @@ Deno.serve(async (req) => {
             > = {
               verify: { status: "verified", statusCode: 400 },
               "verify-scheduled": { status: "scheduled_accepted", statusCode: 350 },
-              prepare: { status: "preparing", statusCode: 410 },
+              prepare: { status: "ready", statusCode: 500 },
               handover: { status: "handed_over", statusCode: 550 },
               deliver: { status: "delivered", statusCode: 800 },
             };

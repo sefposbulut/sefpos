@@ -318,10 +318,10 @@ export function getGetirNextStepHint(code: number, deliveryType: number | null |
     return 'Sıradaki adım: ŞefPOS’tan «Onayla» (Getir’e kabul bildirimi).';
   }
   if (code === 400) {
-    return 'Sıradaki adım: «Hazırlanmaya başla» ile mutfağı başlatın.';
+    return 'Sıradaki adım: mutfak başladıysa «Hazırlanmaya başla» (lokal); yemek paketlendiğinde «Yemek hazır» — Getir’e hazır bildirimi (prepare) gider, ardından kurye teslimi.';
   }
   if (code === 410) {
-    return 'Getir tarafında sipariş hâlâ «Hazırlanıyor». Kuryeye teslim ancak Getir durumu «Hazır» (500) olunca mümkündür. «Getir ile durumu eşle» ile güncelleyin.';
+    return 'Getir tarafında sipariş «Hazırlanıyor». Kuryeye teslim için önce «Yemek hazır» (Getir prepare → genelde 500), sonra «Kurye yola çıktı» (handover).';
   }
   if (code === 500) {
     return dt === 1
@@ -355,7 +355,7 @@ export function getGetirUiPhase(order: {
   status: string;
   /** ŞefPOS'ta «Onayla» ile set — yokken Getir kodu 400+ olsa bile önce onay adımı gösterilir. */
   accepted_at?: string | null;
-  /** ŞefPOS'ta «Yemek Hazır» ile set — Getir'e gönderilmez; lokal hazırlama bitti işareti. */
+  /** ŞefPOS'ta «Yemek Hazır» ile set — Getir'de `prepare` API (yemek hazır) ile uyum için kullanılır. */
   ready_at?: string | null;
   getir_status_code?: number | null;
   getir_is_scheduled?: boolean | null;
@@ -407,11 +407,10 @@ export function getGetirUiPhase(order: {
   if (code !== null) {
     if (code === 325 || code === 350) return 'verify';
     if (code === 400) return 'prepare';
-    // 410 (PREPARING) — Getir akışında "hazır" diye ayrı durum yok (sadece prepare->handover).
-    // ŞefPOS gerçek dünya akışını ekler: önce "YEMEK HAZIR" (lokal, paketleme bitti),
-    // sonra kurye gelince "KURYE YOLA ÇIKTI" (handover → Getir 500).
-    //   - 410 + ready_at YOK   → 'ready_local' (YEMEK HAZIR butonu)
-    //   - 410 + ready_at VAR   → 'handover'    (KURYE YOLA ÇIKTI butonu)
+    // 410 (PREPARING) — Getir'de hâlâ hazırlanıyor; «Hazır» (500) için resmi `prepare` API gerekir.
+    // ŞefPOS: önce «YEMEK HAZIR» (prepare), sonra Getir 500 iken «KURYE YOLA ÇIKTI» (handover).
+    //   - 410 + ready_at YOK   → 'ready_local' (YEMEK HAZIR — Getir prepare)
+    //   - 410 + ready_at VAR   → 'handover' (eski/lokal işaret + Getir hâlâ 410 ise recovery zinciri)
     if (code === 410) return hasReady ? 'handover' : 'ready_local';
     if (code === 500) return 'handover';
     if (code === 550) return dt === 1 ? 'getir_courier_enroute' : 'deliver';
