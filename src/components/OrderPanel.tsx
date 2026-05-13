@@ -26,6 +26,7 @@ import {
   TEMP_ORDER_PREFIX,
 } from '../lib/orderOptimistic';
 import { runWithRetry } from '../lib/outboundQueue';
+import { ensureCashRegisterRowForPayment } from '../lib/cashRegisterFallback';
 import {
   peekWarmOrderItems,
   takeWarmOrderItems,
@@ -1838,6 +1839,27 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
 
       if (error) throw error;
       insertedPaymentId = insertedPayment?.id || null;
+
+      if (insertedPaymentId) {
+        const tableLabelForCash =
+          table.table_number === 0
+            ? (currentOrder.order_type === 'takeaway'
+                ? 'Paket / Gel-Al'
+                : currentOrder.order_type === 'delivery'
+                  ? 'Teslimat'
+                  : 'Paket')
+            : `Masa ${table.table_number}`;
+        void ensureCashRegisterRowForPayment({
+          tenantId: tenant.id,
+          branchId: currentOrder.branch_id ?? activeBranch?.id ?? null,
+          paymentId: insertedPaymentId,
+          paymentMethod: method,
+          amount,
+          createdBy: user.id,
+          tableLabel: tableLabelForCash,
+          orderNumber: currentOrder.order_number,
+        });
+      }
 
       if (method === 'open_account' && customerId && insertedPaymentId) {
         const tableLabel =
