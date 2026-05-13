@@ -593,17 +593,21 @@ Deno.serve(async (req) => {
 
       // ---- POLL (sipariş çekme) -------------------------------------------
       /**
-       * Getir Food API'de yalnızca POST `/food-orders/active` endpoint'i mevcut.
-       * "Unapproved" (status 325/350) siparişler bu listenin **içinde** gelir;
-       * ayrı `/food-orders/unapproved` endpoint'i 404 döner (RouteNotFoundError).
-       * `/food-orders/cancelled` da kalıcı endpoint değil — iptaller webhook ile
-       * `?type=cancel` üzerinden düşer. Bu yüzden üç action da tek active çağrısı
-       * yapar; `poll-cancelled` zaten frontend tarafında auto-poll'da kullanılmaz.
+       * Getir Food API resmi endpoint'leri (developers.getir.com/food):
+       *   POST /food-orders/active                — POS'a gönderilmiş aktif siparişler
+       *   POST /food-orders/periodic/unapproved   — onay bekleyen yeni siparişler (325/350)
+       *   POST /food-orders/periodic/cancelled    — iptal edilmiş siparişler (24 saat)
+       * Hepsi POST, body yok; auth `token` header.
        */
       case "poll-active":
       case "poll-unapproved":
       case "poll-cancelled": {
-        const path = "/food-orders/active";
+        const path =
+          body.action === "poll-active"
+            ? "/food-orders/active"
+            : body.action === "poll-unapproved"
+              ? "/food-orders/periodic/unapproved"
+              : "/food-orders/periodic/cancelled";
         const res = await callGetir(admin, platform as PlatformRow, "POST", path, body.payload);
         if (!res.ok) return jsonResponse({ ok: false, status: res.status, data: res.data }, res.status);
         const list: any[] = Array.isArray(res.data) ? res.data : (res.data?.data || res.data?.orders || []);
