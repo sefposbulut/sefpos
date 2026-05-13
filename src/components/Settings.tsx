@@ -1670,6 +1670,58 @@ export function Settings({ onClose }: SettingsProps) {
                       {editingPlatformId ? 'Platform Düzenle' : 'Yeni Platform Ekle'}
                     </h4>
 
+                    {isGetirPlatform && (
+                      <div className="bg-gradient-to-br from-amber-50 to-orange-50 border-2 border-amber-300 rounded-xl p-4 space-y-3">
+                        <div className="flex items-start gap-2">
+                          <div className="text-2xl leading-none">📋</div>
+                          <div className="flex-1">
+                            <h5 className="font-bold text-amber-900 text-sm mb-1">Getir Yemek Entegrasyonu Nasıl Çalışır?</h5>
+                            <p className="text-amber-900 text-xs leading-relaxed">
+                              Aşağıdaki kimlik bilgilerini <b>Getir entegrasyon ekibi</b> size verir; ŞefPOS değil. Restoran sahibi olarak yapmanız gereken:
+                            </p>
+                            <ol className="list-decimal list-inside text-amber-900 text-xs mt-2 space-y-1">
+                              <li>Getir entegrasyon başvurusu için <a href="mailto:integration@getir.com" className="font-semibold underline">integration@getir.com</a> adresine yazın.</li>
+                              <li>Onlara aşağıdaki <b>Webhook URL</b>'inizi iletin (siparişleri bu URL'e push edecekler).</li>
+                              <li>Getir size <code className="bg-amber-100 px-1 rounded">appSecretKey</code>, <code className="bg-amber-100 px-1 rounded">restaurantSecretKey</code>, <code className="bg-amber-100 px-1 rounded">restaurantId</code> ve isterse <code className="bg-amber-100 px-1 rounded">webhookSecret</code> verir.</li>
+                              <li>Aldığınız değerleri aşağıdaki forma girin → Kaydet → Aktifleştir.</li>
+                            </ol>
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-bold text-amber-900 mb-1">ŞefPOS Webhook URL'iniz</label>
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="text"
+                              readOnly
+                              value={`${(import.meta.env.VITE_SUPABASE_URL || 'https://xdfnozfuuzctubijbnds.supabase.co').replace(/\/$/, '')}/functions/v1/getir-webhook`}
+                              className="flex-1 px-2 py-1.5 rounded-lg border border-amber-300 bg-white font-mono text-xs text-gray-700"
+                              onFocus={(e) => e.currentTarget.select()}
+                            />
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                const url = `${(import.meta.env.VITE_SUPABASE_URL || 'https://xdfnozfuuzctubijbnds.supabase.co').replace(/\/$/, '')}/functions/v1/getir-webhook`;
+                                try {
+                                  await navigator.clipboard.writeText(url);
+                                  alert('Webhook URL panoya kopyalandı!');
+                                } catch {
+                                  prompt('Webhook URL:', url);
+                                }
+                              }}
+                              className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg font-bold text-xs"
+                            >
+                              Kopyala
+                            </button>
+                          </div>
+                          <p className="text-amber-800 text-[11px] mt-1.5">
+                            Method: <b>POST</b> · Header: <b>x-api-key</b> = aşağıdaki "API Key" alanına yazdığınız değer.<br />
+                            Getir farklı event türleri için <code className="bg-amber-100 px-1 rounded">?type=new</code>, <code className="bg-amber-100 px-1 rounded">?type=updated</code>, <code className="bg-amber-100 px-1 rounded">?type=cancelled</code> query parametresi ekler.
+                          </p>
+                        </div>
+                      </div>
+                    )}
+
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       <div>
                         <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -1747,6 +1799,7 @@ export function Settings({ onClose }: SettingsProps) {
                               placeholder="Getir appSecretKey"
                               className="w-full px-3 py-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-orange-500 focus:border-transparent"
                             />
+                            <p className="text-[11px] text-gray-500 mt-1">Getir entegrasyon ekibinden alın (marka geneli).</p>
                           </div>
                           <div>
                             <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -1759,6 +1812,7 @@ export function Settings({ onClose }: SettingsProps) {
                               placeholder="Getir restaurantSecretKey"
                               className="w-full px-3 py-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-orange-500 focus:border-transparent"
                             />
+                            <p className="text-[11px] text-gray-500 mt-1">Getir'den alın — restoranınıza özel imzalama anahtarı.</p>
                           </div>
                         </div>
                       )}
@@ -1799,9 +1853,12 @@ export function Settings({ onClose }: SettingsProps) {
                             type="text"
                             value={platformRestaurantId}
                             onChange={(e) => setPlatformRestaurantId(e.target.value)}
-                            placeholder="Platformdaki restoran ID"
+                            placeholder={isGetirPlatform ? 'Getir restaurantId (24 karakterli)' : 'Platformdaki restoran ID'}
                             className="w-full px-3 py-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-orange-500 focus:border-transparent"
                           />
+                          {isGetirPlatform && (
+                            <p className="text-[11px] text-gray-500 mt-1">Getir paneldeki restoran kimliğiniz — Getir entegrasyon ekibi verir.</p>
+                          )}
                         </div>
                         {!isGetirPlatform && (
                         <div>
@@ -1821,15 +1878,18 @@ export function Settings({ onClose }: SettingsProps) {
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         <div>
                           <label className="block text-sm font-medium text-gray-700 mb-1">
-                            Webhook Secret
+                            Webhook Secret {isGetirPlatform ? '(Opsiyonel)' : ''}
                           </label>
                           <input
                             type="password"
                             value={platformWebhookSecret}
                             onChange={(e) => setPlatformWebhookSecret(e.target.value)}
-                            placeholder="İstek doğrulama anahtarı"
+                            placeholder={isGetirPlatform ? 'Getir HMAC secret (Getir verdiyse)' : 'İstek doğrulama anahtarı'}
                             className="w-full px-3 py-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-orange-500 focus:border-transparent"
                           />
+                          {isGetirPlatform && (
+                            <p className="text-[11px] text-gray-500 mt-1">Getir webhook imzalama secret'ı veriyorsa girin; vermediyse boş bırakın.</p>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -1837,15 +1897,18 @@ export function Settings({ onClose }: SettingsProps) {
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       <div>
                         <label className="block text-sm font-medium text-gray-700 mb-1">
-                          API Key (Opsiyonel)
+                          API Key {isGetirPlatform ? '(Zorunlu — Webhook x-api-key)' : '(Opsiyonel)'}
                         </label>
                         <input
                           type="text"
                           value={platformApiKey}
                           onChange={(e) => setPlatformApiKey(e.target.value)}
-                          placeholder="Platform API anahtarı"
+                          placeholder={isGetirPlatform ? 'Kendi belirleyin (Getir\'e ileteceğiniz)' : 'Platform API anahtarı'}
                           className="w-full px-3 py-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-orange-500 focus:border-transparent"
                         />
+                        {isGetirPlatform && (
+                          <p className="text-[11px] text-gray-500 mt-1">Güçlü rastgele bir değer üretin (ör. 32+ karakter). Getir bu değeri webhook'larda <code className="bg-gray-100 px-1 rounded">x-api-key</code> header'ı olarak gönderir.</p>
+                        )}
                       </div>
                       <div>
                         <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -2054,14 +2117,70 @@ export function Settings({ onClose }: SettingsProps) {
                 </div>
               </div>
 
-              <div className="bg-blue-50 border-2 border-blue-200 rounded-xl p-6">
-                <h4 className="font-bold text-blue-900 mb-3">Webhook URL (Platformlara verin)</h4>
-                <div className="bg-white rounded-lg p-3 font-mono text-sm break-all border border-blue-300">
-                  {`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/online-order-webhook`}
+              <div className="space-y-3">
+                <div className="bg-blue-50 border-2 border-blue-200 rounded-xl p-5">
+                  <h4 className="font-bold text-blue-900 mb-2">Yemeksepeti / Trendyol / Migros — Genel Webhook URL'i</h4>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      readOnly
+                      value={`${(import.meta.env.VITE_SUPABASE_URL || 'https://xdfnozfuuzctubijbnds.supabase.co').replace(/\/$/, '')}/functions/v1/online-order-webhook`}
+                      className="flex-1 bg-white rounded-lg p-2.5 font-mono text-xs break-all border border-blue-300"
+                      onFocus={(e) => e.currentTarget.select()}
+                    />
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const url = `${(import.meta.env.VITE_SUPABASE_URL || 'https://xdfnozfuuzctubijbnds.supabase.co').replace(/\/$/, '')}/functions/v1/online-order-webhook`;
+                        try {
+                          await navigator.clipboard.writeText(url);
+                          alert('URL panoya kopyalandı!');
+                        } catch {
+                          prompt('URL:', url);
+                        }
+                      }}
+                      className="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-bold text-xs"
+                    >
+                      Kopyala
+                    </button>
+                  </div>
+                  <p className="text-blue-800 text-xs mt-2">
+                    Bu URL'i platform/middleware panelinde webhook olarak tanımlayın. Header: <b>x-api-key</b> = ilgili platformun "API Key" alanı.
+                  </p>
                 </div>
-                <p className="text-blue-800 text-sm mt-3">
-                  Bu URL'yi platform yönetim panellerinde webhook olarak tanımlayın. Siparişler otomatik olarak sisteme düşecektir.
-                </p>
+
+                <div className="bg-amber-50 border-2 border-amber-300 rounded-xl p-5">
+                  <h4 className="font-bold text-amber-900 mb-2">Getir Yemek — Özel Webhook URL'i</h4>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      readOnly
+                      value={`${(import.meta.env.VITE_SUPABASE_URL || 'https://xdfnozfuuzctubijbnds.supabase.co').replace(/\/$/, '')}/functions/v1/getir-webhook`}
+                      className="flex-1 bg-white rounded-lg p-2.5 font-mono text-xs break-all border border-amber-300"
+                      onFocus={(e) => e.currentTarget.select()}
+                    />
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const url = `${(import.meta.env.VITE_SUPABASE_URL || 'https://xdfnozfuuzctubijbnds.supabase.co').replace(/\/$/, '')}/functions/v1/getir-webhook`;
+                        try {
+                          await navigator.clipboard.writeText(url);
+                          alert('Getir Webhook URL panoya kopyalandı!');
+                        } catch {
+                          prompt('URL:', url);
+                        }
+                      }}
+                      className="px-3 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg font-bold text-xs"
+                    >
+                      Kopyala
+                    </button>
+                  </div>
+                  <p className="text-amber-900 text-xs mt-2">
+                    Getir entegrasyon ekibine (<a href="mailto:integration@getir.com" className="underline font-semibold">integration@getir.com</a>) bu URL'i iletin.
+                    Method: <b>POST</b> · Header: <b>x-api-key</b> = Getir platformunun "API Key" alanı.
+                    Getir event türü için <code className="bg-amber-100 px-1 rounded">?type=new|updated|cancelled</code> ekler.
+                  </p>
+                </div>
               </div>
             </div>
           ) : activeTab === 'printers' ? (
