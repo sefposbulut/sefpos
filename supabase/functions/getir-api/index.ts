@@ -951,6 +951,31 @@ Deno.serve(async (req) => {
       case "deliver": {
         if (!body.orderId) return badRequest("orderId zorunlu");
 
+        // ---- deliveryType=1 (Getir kuryesi) güvenlik kapısı --------------------
+        // Getir Food sözleşmesi: Getir kuryesi (deliveryType=1) için restoran handover/deliver
+        // çağırmaz; Getir kuryesi gelir, alır, götürür, otomatik 550→600→700→800→900 ilerler.
+        // UI zaten dt=1'de bu butonları göstermiyor ama eski/önbellekli istemciden geldiyse
+        // burada yutarak Getir'e gönderme — sadece DB'yi senkron tutuyoruz.
+        if (body.action === "handover" || body.action === "deliver") {
+          const { data: dtRow } = await admin
+            .from("online_orders")
+            .select("getir_delivery_type, getir_status_code")
+            .eq("platform_id", platform.id)
+            .eq("platform_order_id", body.orderId)
+            .maybeSingle();
+          if (dtRow && Number(dtRow.getir_delivery_type) === 1) {
+            return jsonResponse({
+              ok: true,
+              status: 200,
+              data: { skipped: true, reason: "delivery_type=1 (Getir courier); restaurant does not handover/deliver" },
+              meta: {
+                skippedGetirCourier: true,
+                realCode: typeof dtRow.getir_status_code === "number" ? dtRow.getir_status_code : null,
+              },
+            });
+          }
+        }
+
         // Tek-istek orkestratör: aksiyon "invalid status" alırsa server tarafında
         // inquiry yap → already-done / cancelled / 1 adım geride senaryolarını
         // otomatik kurtar. Frontend tek istek atar, 429 baskısı oluşmaz, ŞefPOS

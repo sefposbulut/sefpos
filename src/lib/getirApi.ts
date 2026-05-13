@@ -73,6 +73,8 @@ export interface GetirActionResult {
     realCode?: number;
     realCodeBefore?: number;
     verifyFallback?: boolean;
+    /** Getir kuryesi (deliveryType=1) — restoran handover/deliver yapmaz; server yutar. */
+    skippedGetirCourier?: boolean;
     [k: string]: unknown;
   };
 }
@@ -325,16 +327,18 @@ export function getGetirNextStepHint(code: number, deliveryType: number | null |
   }
   if (code === 500) {
     return dt === 1
-      ? 'Sıradaki adım: «Getir kuryesine teslim ettim» (elden teslim).'
-      : 'Sıradaki adım: «Kurye yola çıktı» (restoran kuryesi).';
+      ? 'Getir kuryesi geliyor — restoran tarafında ek işlem gerekmez. Getir teslim alınca durum otomatik ilerler.'
+      : 'Sıradaki adım: «Kurye yola çıktı» (restoran kuryesi siparişi aldı).';
   }
   if (code === 550 || code === 600 || code === 700) {
     return dt === 1
-      ? 'Getir kuryesi süreci yönetiyor; restoran tarafında ek işlem gerekmez.'
+      ? 'Getir kuryesi siparişi taşıyor — restoran tarafında ek işlem yok.'
       : 'Sıradaki adım: Teslimatta «Teslim edildi».';
   }
   if (code === 800) {
-    return 'Kurye adreste; teslim onayı Getir tarafında tamamlanır.';
+    return dt === 1
+      ? 'Getir kuryesi teslim noktasında — teslim onayı Getir tarafında tamamlanır.'
+      : 'Kurye adreste; teslim sonrası «Teslim edildi».';
   }
   return '';
 }
@@ -411,17 +415,22 @@ export function getGetirUiPhase(order: {
     // ŞefPOS: önce «YEMEK HAZIR» (prepare), sonra Getir 500 iken «KURYE YOLA ÇIKTI» (handover).
     //   - 410 + ready_at YOK   → 'ready_local' (YEMEK HAZIR — Getir prepare)
     //   - 410 + ready_at VAR   → 'handover' (eski/lokal işaret + Getir hâlâ 410 ise recovery zinciri)
-    if (code === 410) return hasReady ? 'handover' : 'ready_local';
-    if (code === 500) return 'handover';
+    if (code === 410) return hasReady ? (dt === 1 ? 'getir_courier_enroute' : 'handover') : 'ready_local';
+    /**
+     * 500 = Hazır.
+     *   dt=1 (Getir kuryesi)  → Restoran handover yapmaz; Getir kuryesi geliyor → bilgi rozeti.
+     *   dt=2 (Restoran kuryesi) → «KURYE YOLA ÇIKTI» butonu (handover API'si).
+     */
+    if (code === 500) return dt === 1 ? 'getir_courier_enroute' : 'handover';
     if (code === 550) return dt === 1 ? 'getir_courier_enroute' : 'deliver';
     if (code === 600 || code === 700) return dt === 1 ? 'getir_courier_enroute' : 'deliver';
-    if (code === 800) return 'arrived_info';
+    if (code === 800) return dt === 1 ? 'getir_courier_enroute' : 'arrived_info';
   }
 
   if (order.status === 'new' || order.status === 'scheduled_new') return 'verify';
   if (order.status === 'verified' || order.status === 'accepted') return 'prepare';
-  if (order.status === 'preparing') return hasReady ? 'handover' : 'ready_local';
-  if (order.status === 'ready') return 'handover';
+  if (order.status === 'preparing') return hasReady ? (dt === 1 ? 'getir_courier_enroute' : 'handover') : 'ready_local';
+  if (order.status === 'ready') return dt === 1 ? 'getir_courier_enroute' : 'handover';
   if (order.status === 'handed_over' || order.status === 'on_the_way') {
     return dt === 1 ? 'getir_courier_enroute' : 'deliver';
   }

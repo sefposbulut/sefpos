@@ -732,12 +732,24 @@ export function OnlineOrders() {
           return;
         }
 
-        // Time-limit hatalari icin otomatik retry (max 3, 12 sn ara ile)
-        if (isTimeLimit && retryCount < 3) {
-          const delaySec = 12;
-          console.log(`[Getir] ${action} time-limit → ${delaySec} sn sonra otomatik tekrar (${retryCount + 1}/3)`);
-          await new Promise((r) => setTimeout(r, delaySec * 1000));
-          await doGetirAction(order, action, extra, retryCount + 1);
+        // Time-limit hatalari (prepare/deliver/handover) — Getir bu aksiyonlar arasında
+        // dakika düzeyinde bir bekleme istiyor. Otomatik retry yapmıyoruz (429 baskısı
+        // yaratıyor); kullanıcıya açıklayıcı bir mesaj göster.
+        if (isTimeLimit) {
+          const actionTr =
+            action === 'prepare'
+              ? '«Yemek hazır»'
+              : action === 'handover'
+                ? '«Kurye yola çıktı»'
+                : action === 'deliver'
+                  ? '«Teslim edildi»'
+                  : `«${action}»`;
+          alert(
+            `${actionTr} aksiyonu için Getir bir bekleme süresi uyguluyor.\n\n` +
+              `Önceki adımdan sonra ~1–2 dakika geçmeden bu aksiyon kabul edilmiyor.\n\n` +
+              `Lütfen 1–2 dakika sonra aynı butona tekrar basın.`,
+          );
+          await loadOrders();
           return;
         }
 
@@ -790,9 +802,21 @@ export function OnlineOrders() {
       // - alreadyDone: hedef adım Getir'de zaten yapılmıştı, DB senkronlandı
       // - chained: önceki aksiyon (prepare/handover) otomatik yapıldı
       const meta = (res as any).meta as
-        | { cancelled?: boolean; alreadyDone?: boolean; chained?: string; realCode?: number; realCodeBefore?: number }
+        | {
+            cancelled?: boolean;
+            alreadyDone?: boolean;
+            chained?: string;
+            realCode?: number;
+            realCodeBefore?: number;
+            skippedGetirCourier?: boolean;
+          }
         | undefined;
-      if (meta?.cancelled) {
+      if (meta?.skippedGetirCourier) {
+        alert(
+          'Bu sipariş Getir kuryesi tarafından taşınıyor.\n\n' +
+            'Restoran «Kurye yola çıktı» / «Teslim edildi» basmaz; Getir teslim alınca ve teslim ettiğinde durum otomatik ilerler.',
+        );
+      } else if (meta?.cancelled) {
         alert(
           `Bu sipariş Getir tarafında iptal edilmiş — ŞefPOS'ta da otomatik olarak kapatıldı.`,
         );
@@ -1640,9 +1664,14 @@ export function OnlineOrders() {
                           )}
 
                           {getirPhase === 'getir_courier_enroute' && (
-                            <div className="w-full bg-purple-100 text-purple-800 font-bold py-3 rounded-xl text-center text-sm flex items-center justify-center gap-2">
-                              <Bike className="w-4 h-4" />
-                              Getir kuryesinde — teslim Getir tarafından tamamlanır
+                            <div className="w-full bg-purple-100 text-purple-800 font-bold py-3 rounded-xl text-center text-sm flex flex-col items-center gap-1">
+                              <div className="flex items-center gap-2">
+                                <Bike className="w-4 h-4" />
+                                Getir kuryesi yönetiyor
+                              </div>
+                              <div className="text-[11px] font-normal text-purple-700">
+                                Bu sipariş Getir kuryesinde — restoranın «Kurye yola çıktı» / «Teslim edildi» basmasına gerek yok. Durum Getir tarafından otomatik ilerler.
+                              </div>
                             </div>
                           )}
 
