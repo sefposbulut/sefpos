@@ -324,6 +324,52 @@ export function OnlineOrders() {
     };
   }, []);
 
+  // Uygulama açılır açılmaz Getir platformu credential ve POS durumunu kontrol et;
+  // eksik/pasif ise banner'da net mesaj göster (polling beklemeden).
+  useEffect(() => {
+    if (!tenant) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data: rows } = await supabase
+          .from('online_order_platforms')
+          .select(
+            'id, platform_code, is_active, getir_app_secret_key, getir_restaurant_secret_key, getir_restaurant_id, getir_pos_status, getir_environment',
+          )
+          .eq('tenant_id', tenant.id)
+          .eq('platform_code', 'getir')
+          .eq('is_active', true);
+        if (cancelled) return;
+        const platform = (rows || [])[0] as
+          | {
+              getir_app_secret_key?: string | null;
+              getir_restaurant_secret_key?: string | null;
+              getir_restaurant_id?: string | null;
+              getir_pos_status?: number | null;
+              getir_environment?: string | null;
+            }
+          | undefined;
+        if (!platform) return;
+        const missing: string[] = [];
+        if (!platform.getir_app_secret_key) missing.push('appSecretKey');
+        if (!platform.getir_restaurant_secret_key) missing.push('restaurantSecretKey');
+        if (!platform.getir_restaurant_id) missing.push('restaurantId');
+        if (missing.length) {
+          setGetirPollIssue(`Getir credential eksik: ${missing.join(', ')}`);
+          return;
+        }
+        if (platform.getir_pos_status === 200) {
+          setGetirPollIssue('Getir POS durumu PASİF (200). Polling devre dışı.');
+        }
+      } catch (e) {
+        console.warn('[OnlineOrders] Getir platform precheck:', e);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [tenant]);
+
   // Getir API auto-poll — hem onay bekleyenler (poll-unapproved) hem aktifler
   // (poll-active). Webhook gecikir veya kaybolursa bu sayede sipariş yine düşer.
   // 429 limitlerini asmamak icin 45 sn aralik + her tick'te bir Getir cagrisi.
