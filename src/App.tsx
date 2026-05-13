@@ -142,6 +142,21 @@ function App() {
   const { user, profile, tenant, loading, refreshProfile, activeBranch, signOut, profileLoadFailed } = useAuth();
   const [selectedTable, setSelectedTable] = useState<Table | null>(null);
   const [currentPage, setCurrentPage] = useState('tables');
+  // Tenant'ın "Masalar" modülü kapalıysa açılış sayfası olarak ilk uygun
+  // modülü seç (hızlı satış / paket servis / vs.). Bu sayede sadece "Hızlı
+  // Satış" kullanan müşteri girer girmez doğru ekrana düşer.
+  useEffect(() => {
+    if (!tenant) return;
+    const disabled = Array.isArray((tenant as any).disabled_modules)
+      ? new Set<string>((tenant as any).disabled_modules as string[])
+      : new Set<string>();
+    if (currentPage === 'tables' && disabled.has('tables')) {
+      const fallback = ['quick-sale', 'takeaway', 'online-orders', 'products', 'reports']
+        .find((m) => !disabled.has(m));
+      if (fallback) setCurrentPage(fallback);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tenant?.id]);
   const [showShiftQuickClose, setShowShiftQuickClose] = useState(false);
   const [dbMode, setDbMode] = useState<'cloud' | 'sqlserver' | null | 'loading'>('loading');
   // Always-mounted sayfalar yalnizca bir kez ziyaret edildiklerinde DOM'a girer

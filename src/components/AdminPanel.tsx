@@ -3,6 +3,7 @@ import { supabase, invokeEdgeFunction } from '../lib/supabase';
 import { Shield, Search, Building2, Users, CheckCircle, XCircle, Clock, AlertTriangle, RefreshCw, ChevronDown, ChevronUp, X, Save, Calendar, CreditCard, TrendingUp, LogOut, Bell, Send, TicketCheck, MessageCircle, Trash2, Eye, EyeOff, Ban, Play, ChevronRight, Mail, Phone, MapPin, Hash, UserCheck, AlertCircle, Info, Headphones, BarChart3, Banknote, Package2, Server, Handshake, Key, Plus, CreditCard as Edit2 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { AYKA_ADMIN_PATH } from '../lib/aykaRoute';
+import { TOGGLEABLE_MODULES } from '../lib/modules';
 
 interface TenantRow {
   id: string;
@@ -132,6 +133,11 @@ interface EditModalProps {
 }
 
 function EditModal({ tenant, onClose, onSaved }: EditModalProps) {
+  // Mevcut tenant.disabled_modules — null/undefined ise boş array kabul edilir
+  // (yani tüm modüller görünür). Set'e çevirip checkbox state'i olarak tutuyoruz.
+  const initialDisabled = Array.isArray((tenant as any).disabled_modules)
+    ? new Set<string>((tenant as any).disabled_modules as string[])
+    : new Set<string>();
   const [form, setForm] = useState({
     subscription_plan: tenant.subscription_plan || 'trial',
     subscription_status: tenant.subscription_status || 'trial',
@@ -140,8 +146,18 @@ function EditModal({ tenant, onClose, onSaved }: EditModalProps) {
     notes: tenant.notes || '',
     deployment_mode: tenant.deployment_mode || 'online',
   });
+  const [disabledModules, setDisabledModules] = useState<Set<string>>(initialDisabled);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+
+  const toggleModule = (code: string) => {
+    setDisabledModules((prev) => {
+      const next = new Set(prev);
+      if (next.has(code)) next.delete(code);
+      else next.add(code);
+      return next;
+    });
+  };
 
   const handleSave = async () => {
     setSaving(true);
@@ -153,10 +169,24 @@ function EditModal({ tenant, onClose, onSaved }: EditModalProps) {
       max_branches: form.max_branches,
       notes: form.notes,
       deployment_mode: form.deployment_mode,
-    }).eq('id', tenant.id);
+      // Boş array = "her şey açık" — eski davranış. PostgREST text[] olarak yazar.
+      disabled_modules: Array.from(disabledModules),
+    } as any).eq('id', tenant.id);
 
-    if (err) setError(err.message);
-    else { onSaved(); onClose(); }
+    if (err) {
+      // disabled_modules kolonu yoksa kullanıcıya net mesaj
+      if (/disabled_modules/i.test(err.message)) {
+        setError(
+          'disabled_modules kolonu veritabanında yok. Migration ' +
+          '20260515240000_tenants_disabled_modules.sql henüz uygulanmamış.'
+        );
+      } else {
+        setError(err.message);
+      }
+    } else {
+      onSaved();
+      onClose();
+    }
     setSaving(false);
   };
 
@@ -242,6 +272,64 @@ function EditModal({ tenant, onClose, onSaved }: EditModalProps) {
               ))}
             </div>
           </div>
+          {/* Modüller — restoran menüsünde hangi başlıklar görünsün?
+              İşaretli olanlar GİZLİ olur; tikleri kaldırarak (yani disable
+              ederek) müşterinin POS arayüzünden ilgili sekme/sayfa kaybolur.
+              Eski davranış için tüm tikler kaldırılır (= boş array). */}
+          <div>
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide">
+                Modül Görünürlüğü
+              </label>
+              <div className="text-[10px] text-slate-400">
+                {disabledModules.size === 0
+                  ? 'Tüm modüller açık'
+                  : `${disabledModules.size} modül gizli`}
+              </div>
+            </div>
+            <p className="text-[11px] text-slate-400 mb-2">
+              İşaretli modüller bu restoranda <strong>gizli</strong> olur — örn. masa
+              kullanmayan, sadece "Hızlı Satış" yapan müşteriler için.
+            </p>
+            <div className="grid grid-cols-2 gap-1.5 max-h-64 overflow-y-auto pr-1">
+              {TOGGLEABLE_MODULES.map((m) => {
+                const checked = disabledModules.has(m.code);
+                return (
+                  <label
+                    key={m.code}
+                    className={`flex items-start gap-2 px-2.5 py-2 rounded-lg border-2 cursor-pointer transition text-xs ${
+                      checked
+                        ? 'border-rose-300 bg-rose-50 text-rose-700'
+                        : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300'
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => toggleModule(m.code)}
+                      className="mt-0.5 w-4 h-4 accent-rose-500 shrink-0"
+                    />
+                    <div className="min-w-0">
+                      <div className="font-bold leading-tight">{m.label}</div>
+                      <div className="text-[10px] opacity-80 leading-tight mt-0.5 line-clamp-2">
+                        {m.description}
+                      </div>
+                    </div>
+                  </label>
+                );
+              })}
+            </div>
+            {disabledModules.size > 0 && (
+              <button
+                type="button"
+                onClick={() => setDisabledModules(new Set())}
+                className="mt-2 text-[11px] text-slate-500 hover:text-slate-700 underline"
+              >
+                Tüm modülleri aç (varsayılan)
+              </button>
+            )}
+          </div>
+
           <div>
             <label className="block text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wide">İç Notlar</label>
             <textarea

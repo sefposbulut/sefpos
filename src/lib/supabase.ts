@@ -381,6 +381,7 @@ export type Database = {
           lock_pin: string | null;
           ip_lock_enabled: boolean | null;
           deployment_mode: string | null;
+          disabled_modules: string[] | null;
         };
         Insert: {
           id?: string;

@@ -296,6 +296,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           require_cancel_reason: rec2?.require_cancel_reason ?? false,
           lock_pin: rec2?.lock_pin || null,
           ip_lock_enabled: null,
+          disabled_modules: null,
         };
 
         setProfile(profileData);
@@ -363,6 +364,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           require_cancel_reason: rec?.require_cancel_reason ?? false,
           lock_pin: rec?.lock_pin || null,
           ip_lock_enabled: null,
+          disabled_modules: null,
         };
 
         setProfile(profileData);

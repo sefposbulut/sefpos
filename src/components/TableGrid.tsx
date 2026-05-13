@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
+import { isModuleEnabled } from '../lib/modules';
 import { Database } from '../lib/supabase';
 import { Plus, Clock, Lock, ZoomIn, ZoomOut, ScanBarcode, Truck, Eye, EyeOff, Receipt } from 'lucide-react';
 import { ReprintReceiptModal } from './ReprintReceiptModal';
@@ -820,7 +821,7 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
               className="flex gap-2 md:gap-3 pb-0.5 md:pb-1 flex-1 min-w-0"
               style={{ overflowX: 'scroll', WebkitOverflowScrolling: 'touch' as any, scrollbarWidth: 'none' }}
             >
-              {permissions.can_take_orders && permissions.can_process_payments && onNavigate && (
+              {permissions.can_take_orders && permissions.can_process_payments && onNavigate && isModuleEnabled('quick-sale', tenant as any) && (
                 <button
                   onClick={() => onNavigate('quick-sale')}
                   title="Hızlı Satış / Barkod Oku"
@@ -830,7 +831,7 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
                   <ScanBarcode className="w-5 h-5 md:w-6 md:h-6" strokeWidth={2.5} />
                 </button>
               )}
-              {showTakeawayButton && (
+              {showTakeawayButton && isModuleEnabled('takeaway', tenant as any) && (
                 <button
                   onClick={() => onNavigate ? onNavigate('takeaway') : createTakeawayOrder()}
                   className="p-2.5 md:p-3 rounded-lg md:rounded-xl flex items-center justify-center transition-all active:scale-95 border-2 bg-gradient-to-br from-amber-400 via-orange-500 to-red-500 text-white shadow-lg border-orange-600 hover:from-amber-500 hover:via-orange-600 hover:to-red-600 shrink-0"

@@ -2,6 +2,7 @@ import { Package, Users, TrendingUp, Wallet, Clock, Grid3x3, Menu, X, UserCog, S
 import { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useUiPrefs } from '../lib/uiPrefs';
+import { isModuleEnabled } from '../lib/modules';
 
 interface MainMenuProps {
   onNavigate: (page: string) => void;
@@ -24,20 +25,25 @@ export function MainMenu({ onNavigate, currentPage, onOpenSettings, onLockScreen
     return () => window.removeEventListener('sefpos-open-main-menu', handler as EventListener);
   }, []);
 
+  // Tenant'ın disabled_modules listesinde olan modüller — lisans panelinden
+  // süper-admin tarafından gizlenmiştir. UI'da görünmesin diye `show` flag'i
+  // ile birleştiriyoruz. `users` ve `settings` her zaman görünür (admin yolu).
+  const mod = (code: string) => isModuleEnabled(code, tenant as any);
+
   const menuItems = [
-    { id: 'tables', label: 'Masalar', icon: Grid3x3, show: permissions.can_view_tables },
-    { id: 'quick-sale', label: 'Hızlı Satış', icon: Zap, show: permissions.can_take_orders && permissions.can_process_payments },
-    { id: 'takeaway', label: 'Paket Servis', icon: ShoppingCart, show: permissions.can_take_orders || permissions.can_view_tables },
-    { id: 'online-orders', label: 'Online Siparişler', icon: ShoppingBag, show: permissions.can_take_orders || permissions.can_view_tables },
-    { id: 'products', label: 'Ürünler', icon: Package, show: permissions.can_manage_products },
-    { id: 'inventory', label: 'Stok / Reçete', icon: Boxes, show: permissions.can_manage_products },
+    { id: 'tables', label: 'Masalar', icon: Grid3x3, show: permissions.can_view_tables && mod('tables') },
+    { id: 'quick-sale', label: 'Hızlı Satış', icon: Zap, show: permissions.can_take_orders && permissions.can_process_payments && mod('quick-sale') },
+    { id: 'takeaway', label: 'Paket Servis', icon: ShoppingCart, show: (permissions.can_take_orders || permissions.can_view_tables) && mod('takeaway') },
+    { id: 'online-orders', label: 'Online Siparişler', icon: ShoppingBag, show: (permissions.can_take_orders || permissions.can_view_tables) && mod('online-orders') },
+    { id: 'products', label: 'Ürünler', icon: Package, show: permissions.can_manage_products && mod('products') },
+    { id: 'inventory', label: 'Stok / Reçete', icon: Boxes, show: permissions.can_manage_products && mod('inventory') },
     { id: 'users', label: 'Kullanıcı Yönetimi', icon: UserCog, show: permissions.can_manage_users },
-    { id: 'customers', label: 'Cari Hesaplar', icon: Users, show: permissions.can_process_payments || permissions.can_manage_products },
-    { id: 'reports', label: 'Raporlar', icon: TrendingUp, show: permissions.can_view_reports },
-    { id: 'cashier', label: 'Kasa', icon: Wallet, show: permissions.can_manage_cash_register },
-    { id: 'shifts', label: 'Vardiyalar', icon: Layers, show: shiftsEnabled && (permissions.can_use_shifts || permissions.can_end_of_day) },
-    { id: 'endofday', label: 'Gün Sonu', icon: Clock, show: permissions.can_end_of_day },
-    { id: 'cancel-logs', label: 'İptal Kayıtları', icon: Ban, show: permissions.can_view_cancel_logs },
+    { id: 'customers', label: 'Cari Hesaplar', icon: Users, show: (permissions.can_process_payments || permissions.can_manage_products) && mod('customers') },
+    { id: 'reports', label: 'Raporlar', icon: TrendingUp, show: permissions.can_view_reports && mod('reports') },
+    { id: 'cashier', label: 'Kasa', icon: Wallet, show: permissions.can_manage_cash_register && mod('cashier') },
+    { id: 'shifts', label: 'Vardiyalar', icon: Layers, show: shiftsEnabled && (permissions.can_use_shifts || permissions.can_end_of_day) && mod('shifts') },
+    { id: 'endofday', label: 'Gün Sonu', icon: Clock, show: permissions.can_end_of_day && mod('endofday') },
+    { id: 'cancel-logs', label: 'İptal Kayıtları', icon: Ban, show: permissions.can_view_cancel_logs && mod('cancel-logs') },
   ];
 
   const availableItems = menuItems.filter(item => item.show);
