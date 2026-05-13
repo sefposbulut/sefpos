@@ -283,14 +283,54 @@ function EditModal({ tenant, onClose, onSaved }: EditModalProps) {
               </label>
               <div className="text-[10px] text-slate-400">
                 {disabledModules.size === 0
-                  ? 'Tüm modüller açık'
+                  ? 'Tüm modüller açık (varsayılan)'
                   : `${disabledModules.size} modül gizli`}
               </div>
             </div>
             <p className="text-[11px] text-slate-400 mb-2">
               İşaretli modüller bu restoranda <strong>gizli</strong> olur — örn. masa
-              kullanmayan, sadece "Hızlı Satış" yapan müşteriler için.
+              kullanmayan, sadece "Hızlı Satış" yapan müşteriler için. Boş bırakırsan
+              müşteri eskisi gibi tam menüyü kullanır.
             </p>
+
+            {/* Hazır ön ayarlar — tek tıkla tipik senaryolar. Yine "Kaydet"e
+                basana kadar veritabanına yazmaz, sadece checkbox'ları doldurur. */}
+            <div className="flex flex-wrap gap-1.5 mb-2">
+              <button
+                type="button"
+                onClick={() => {
+                  // Sadece Hızlı Satış: quick-sale ve kasa ile vardiya açık,
+                  // diğer 9 modül gizli. Cancel-logs/Settings/Users zaten ayrı.
+                  const keep = new Set<string>(['quick-sale', 'cashier', 'shifts', 'endofday']);
+                  const next = new Set<string>(
+                    TOGGLEABLE_MODULES.map((m) => m.code).filter((c) => !keep.has(c))
+                  );
+                  setDisabledModules(next);
+                }}
+                className="px-2.5 py-1 rounded-lg bg-amber-100 text-amber-700 text-[11px] font-bold hover:bg-amber-200 active:scale-95"
+              >
+                ⚡ Sadece Hızlı Satış
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  // Masa + Paket: online entegrasyonu olmayan klasik restoran.
+                  const next = new Set<string>(['online-orders']);
+                  setDisabledModules(next);
+                }}
+                className="px-2.5 py-1 rounded-lg bg-blue-100 text-blue-700 text-[11px] font-bold hover:bg-blue-200 active:scale-95"
+              >
+                🍽️ Masa + Paket
+              </button>
+              <button
+                type="button"
+                onClick={() => setDisabledModules(new Set())}
+                className="px-2.5 py-1 rounded-lg bg-emerald-100 text-emerald-700 text-[11px] font-bold hover:bg-emerald-200 active:scale-95"
+              >
+                ✅ Tümü açık
+              </button>
+            </div>
+
             <div className="grid grid-cols-2 gap-1.5 max-h-64 overflow-y-auto pr-1">
               {TOGGLEABLE_MODULES.map((m) => {
                 const checked = disabledModules.has(m.code);
@@ -319,15 +359,6 @@ function EditModal({ tenant, onClose, onSaved }: EditModalProps) {
                 );
               })}
             </div>
-            {disabledModules.size > 0 && (
-              <button
-                type="button"
-                onClick={() => setDisabledModules(new Set())}
-                className="mt-2 text-[11px] text-slate-500 hover:text-slate-700 underline"
-              >
-                Tüm modülleri aç (varsayılan)
-              </button>
-            )}
           </div>
 
           <div>
