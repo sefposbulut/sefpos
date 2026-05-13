@@ -133,11 +133,15 @@ interface EditModalProps {
 }
 
 function EditModal({ tenant, onClose, onSaved }: EditModalProps) {
-  // Mevcut tenant.disabled_modules — null/undefined ise boş array kabul edilir
-  // (yani tüm modüller görünür). Set'e çevirip checkbox state'i olarak tutuyoruz.
+  // UI mantığı: "İşaretli olan modül müşterinin menüsünde GÖRÜNÜR".
+  // Veritabanı `disabled_modules` (gizli olanların listesi) tutuyor; biz UI'da
+  // ters çeviriyoruz. Hiç kayıt yoksa = boş disabled = her şey görünür.
   const initialDisabled = Array.isArray((tenant as any).disabled_modules)
     ? new Set<string>((tenant as any).disabled_modules as string[])
     : new Set<string>();
+  const allCodes = TOGGLEABLE_MODULES.map((m) => m.code);
+  const initialEnabled = new Set<string>(allCodes.filter((c) => !initialDisabled.has(c)));
+
   const [form, setForm] = useState({
     subscription_plan: tenant.subscription_plan || 'trial',
     subscription_status: tenant.subscription_status || 'trial',
@@ -146,12 +150,12 @@ function EditModal({ tenant, onClose, onSaved }: EditModalProps) {
     notes: tenant.notes || '',
     deployment_mode: tenant.deployment_mode || 'online',
   });
-  const [disabledModules, setDisabledModules] = useState<Set<string>>(initialDisabled);
+  const [enabledModules, setEnabledModules] = useState<Set<string>>(initialEnabled);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
   const toggleModule = (code: string) => {
-    setDisabledModules((prev) => {
+    setEnabledModules((prev) => {
       const next = new Set(prev);
       if (next.has(code)) next.delete(code);
       else next.add(code);
@@ -162,6 +166,8 @@ function EditModal({ tenant, onClose, onSaved }: EditModalProps) {
   const handleSave = async () => {
     setSaving(true);
     setError('');
+    // UI: enabled set → DB: disabled = tüm modüller \ enabled
+    const disabledList = allCodes.filter((c) => !enabledModules.has(c));
     const { error: err } = await supabase.from('tenants').update({
       subscription_plan: form.subscription_plan,
       subscription_status: form.subscription_status,
@@ -169,12 +175,11 @@ function EditModal({ tenant, onClose, onSaved }: EditModalProps) {
       max_branches: form.max_branches,
       notes: form.notes,
       deployment_mode: form.deployment_mode,
-      // Boş array = "her şey açık" — eski davranış. PostgREST text[] olarak yazar.
-      disabled_modules: Array.from(disabledModules),
+      // Boş array = "her şey açık" (varsayılan, eski davranış).
+      disabled_modules: disabledList,
     } as any).eq('id', tenant.id);
 
     if (err) {
-      // disabled_modules kolonu yoksa kullanıcıya net mesaj
       if (/disabled_modules/i.test(err.message)) {
         setError(
           'disabled_modules kolonu veritabanında yok. Migration ' +
@@ -273,24 +278,23 @@ function EditModal({ tenant, onClose, onSaved }: EditModalProps) {
             </div>
           </div>
           {/* Modüller — restoran menüsünde hangi başlıklar görünsün?
-              İşaretli olanlar GİZLİ olur; tikleri kaldırarak (yani disable
-              ederek) müşterinin POS arayüzünden ilgili sekme/sayfa kaybolur.
-              Eski davranış için tüm tikler kaldırılır (= boş array). */}
+              Mantık: TİKLİ olan modül müşteride GÖRÜNÜR.
+              Hiç tik yoksa = "hiçbir şey seçilmemiş" → eski davranış (her şey görünür).
+              (DB tarafında ters çevrilip disabled_modules olarak yazılır.) */}
           <div>
             <div className="flex items-center justify-between mb-1.5">
               <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide">
-                Modül Görünürlüğü
+                Müşteri Menüsü
               </label>
               <div className="text-[10px] text-slate-400">
-                {disabledModules.size === 0
-                  ? 'Tüm modüller açık (varsayılan)'
-                  : `${disabledModules.size} modül gizli`}
+                {enabledModules.size === TOGGLEABLE_MODULES.length
+                  ? 'Tüm menüler açık (varsayılan)'
+                  : `${enabledModules.size} menü görünür`}
               </div>
             </div>
             <p className="text-[11px] text-slate-400 mb-2">
-              İşaretli modüller bu restoranda <strong>gizli</strong> olur — örn. masa
-              kullanmayan, sadece "Hızlı Satış" yapan müşteriler için. Boş bırakırsan
-              müşteri eskisi gibi tam menüyü kullanır.
+              <strong>İşaretli olanlar</strong> müşterinin ana menüsünde görünür.
+              Hiç değiştirmezsen tüm modüller açık kalır (eski davranış).
             </p>
 
             {/* Hazır ön ayarlar — tek tıkla tipik senaryolar. Yine "Kaydet"e
@@ -298,33 +302,21 @@ function EditModal({ tenant, onClose, onSaved }: EditModalProps) {
             <div className="flex flex-wrap gap-1.5 mb-2">
               <button
                 type="button"
-                onClick={() => {
-                  // Sadece Hızlı Satış: quick-sale ve kasa ile vardiya açık,
-                  // diğer 9 modül gizli. Cancel-logs/Settings/Users zaten ayrı.
-                  const keep = new Set<string>(['quick-sale', 'cashier', 'shifts', 'endofday']);
-                  const next = new Set<string>(
-                    TOGGLEABLE_MODULES.map((m) => m.code).filter((c) => !keep.has(c))
-                  );
-                  setDisabledModules(next);
-                }}
+                onClick={() => setEnabledModules(new Set(['quick-sale', 'cashier', 'shifts', 'endofday']))}
                 className="px-2.5 py-1 rounded-lg bg-amber-100 text-amber-700 text-[11px] font-bold hover:bg-amber-200 active:scale-95"
               >
                 ⚡ Sadece Hızlı Satış
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  // Masa + Paket: online entegrasyonu olmayan klasik restoran.
-                  const next = new Set<string>(['online-orders']);
-                  setDisabledModules(next);
-                }}
+                onClick={() => setEnabledModules(new Set(TOGGLEABLE_MODULES.map((m) => m.code).filter((c) => c !== 'online-orders')))}
                 className="px-2.5 py-1 rounded-lg bg-blue-100 text-blue-700 text-[11px] font-bold hover:bg-blue-200 active:scale-95"
               >
                 🍽️ Masa + Paket
               </button>
               <button
                 type="button"
-                onClick={() => setDisabledModules(new Set())}
+                onClick={() => setEnabledModules(new Set(TOGGLEABLE_MODULES.map((m) => m.code)))}
                 className="px-2.5 py-1 rounded-lg bg-emerald-100 text-emerald-700 text-[11px] font-bold hover:bg-emerald-200 active:scale-95"
               >
                 ✅ Tümü açık
@@ -333,21 +325,21 @@ function EditModal({ tenant, onClose, onSaved }: EditModalProps) {
 
             <div className="grid grid-cols-2 gap-1.5 max-h-64 overflow-y-auto pr-1">
               {TOGGLEABLE_MODULES.map((m) => {
-                const checked = disabledModules.has(m.code);
+                const visible = enabledModules.has(m.code);
                 return (
                   <label
                     key={m.code}
                     className={`flex items-start gap-2 px-2.5 py-2 rounded-lg border-2 cursor-pointer transition text-xs ${
-                      checked
-                        ? 'border-rose-300 bg-rose-50 text-rose-700'
-                        : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300'
+                      visible
+                        ? 'border-emerald-300 bg-emerald-50 text-emerald-800'
+                        : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300'
                     }`}
                   >
                     <input
                       type="checkbox"
-                      checked={checked}
+                      checked={visible}
                       onChange={() => toggleModule(m.code)}
-                      className="mt-0.5 w-4 h-4 accent-rose-500 shrink-0"
+                      className="mt-0.5 w-4 h-4 accent-emerald-500 shrink-0"
                     />
                     <div className="min-w-0">
                       <div className="font-bold leading-tight">{m.label}</div>
