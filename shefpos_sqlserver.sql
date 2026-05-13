@@ -475,6 +475,14 @@ BEGIN
 END;
 GO
 
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('cash_register_transactions') AND name = 'voided_at')
+    ALTER TABLE cash_register_transactions ADD voided_at DATETIME2 NULL;
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('cash_register_transactions') AND name = 'voided_by')
+    ALTER TABLE cash_register_transactions ADD voided_by UNIQUEIDENTIFIER NULL REFERENCES profiles(id);
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('cash_register_transactions') AND name = 'void_reason')
+    ALTER TABLE cash_register_transactions ADD void_reason NVARCHAR(MAX) NULL;
+GO
+
 -- ============================================================
 -- 19. CUSTOMER TRANSACTIONS (Musteri Cari Hareketleri)
 -- ============================================================

@@ -400,24 +400,11 @@ export function QuickSale() {
         payment_method: method,
       } as any).eq('id', order.id);
 
-      // 7) Cash register transaction (cari hariç)
-      if (method !== 'open_account') {
-        await supabase.from('cash_register_transactions').insert({
-          tenant_id: tenant.id,
-          branch_id: branchId,
-          transaction_type: 'order_payment',
-          payment_method: method,
-          amount,
-          description: `Hızlı Satış - Sipariş #${order.order_number}`,
-          reference_id: order.id,
-          reference_type: 'order',
-          order_number: order.order_number,
-          table_name: 'Hızlı Satış',
-          created_by: user.id,
-        } as any);
-      }
+      // Kasa satırı: payment_transactions INSERT sonrası DB tetikleyicisi
+      // (log_payment_to_cash_register) zaten cash_register_transactions ekler.
+      // Burada tekrar insert EKLEME — çift kayıt oluşur.
 
-      // 8) Reçetesi olmayan ürünler için products.stock_quantity düşümü
+      // 7) Reçetesi olmayan ürünler için products.stock_quantity düşümü
       // (recipe trigger sadece reçeteli ürünleri ingredients'tan düşer; ürün stoğu için fallback)
       void Promise.all(cart.map(async (l) => {
         const { count } = await supabase
@@ -452,7 +439,7 @@ export function QuickSale() {
         }
       })).catch((e) => console.warn('quick-sale stock fallback:', e));
 
-      // 9) Hugin yazarkasa + fiş yazdırma (arka plan)
+      // 8) Hugin yazarkasa + fiş yazdırma (arka plan)
       const printSettings = loadPrintSettings();
       if (method === 'cash' || method === 'credit_card') {
         void sendSaleToHugin({

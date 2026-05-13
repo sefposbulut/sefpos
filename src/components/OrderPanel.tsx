@@ -1946,36 +1946,24 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
       const { discountAmount, total } = calculateTotal();
 
       if (totalPaid >= total) {
-        const cashRegisterRows = payments
-          .filter((p: any) => p.payment_method !== 'open_account')
-          .map((p: any) => ({
-            tenant_id: tenant.id,
-            branch_id: (table as any).branch_id || null,
-            transaction_type: 'order_payment',
-            payment_method: p.payment_method,
-            amount: Number(p.amount),
-            description: `Sipariş #${currentOrder.order_number} - ${table.table_number === 0 ? 'Paket Servis' : `Masa ${table.table_number}`}`,
-            reference_id: currentOrder.id,
-            reference_type: 'order',
-            order_number: currentOrder.order_number,
-            table_name: table.table_number === 0 ? 'Paket Servis' : `Masa ${table.table_number}`,
-            created_by: user!.id,
-          }));
+        // Kasa: her payment_transactions INSERT zaten log_payment_to_cash_register
+        // tetikleyicisiyle cash_register_transactions oluşturur. Sipariş kapanırken
+        // burada tekrar insert ETME — aynı tutar iki kez kasada görünür.
 
-      // Önce optimistik UI: masa anında "available" görünsün, panel kapansın.
-      // DB yazımı arka planda yapılır; hata olursa restaurant_tables realtime ile
-      // gerçek state geri gelir.
-      if (table.table_number !== 0 && table.id) {
-        emitTableStateChanged({
-          id: table.id,
-          status: 'available' as any,
-          current_order_id: null,
-          session_start: null,
-          payment_locked: false,
-          order: null,
-        });
-      }
-      queueMicrotask(() => onClose());
+        // Önce optimistik UI: masa anında "available" görünsün, panel kapansın.
+        // DB yazımı arka planda yapılır; hata olursa restaurant_tables realtime ile
+        // gerçek state geri gelir.
+        if (table.table_number !== 0 && table.id) {
+          emitTableStateChanged({
+            id: table.id,
+            status: 'available' as any,
+            current_order_id: null,
+            session_start: null,
+            payment_locked: false,
+            order: null,
+          });
+        }
+        queueMicrotask(() => onClose());
 
       void Promise.all([
         supabase.from('orders').update({
@@ -1985,9 +1973,6 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
           discount_amount: discountAmount,
           total_amount: total
         }).eq('id', currentOrder.id),
-        cashRegisterRows.length > 0 && tenant && user
-          ? supabase.from('cash_register_transactions').insert(cashRegisterRows)
-          : Promise.resolve(),
         table.table_number !== 0
           ? supabase.from('restaurant_tables').update({
               status: 'available',

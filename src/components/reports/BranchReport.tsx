@@ -64,7 +64,7 @@ export function BranchReport() {
         .lte('created_at', end),
       supabase
         .from('cash_register_transactions')
-        .select('amount, transaction_type, payment_method, branch_id')
+        .select('amount, transaction_type, payment_method, branch_id, voided_at')
         .eq('tenant_id', tenant.id)
         .eq('transaction_type', 'order_payment')
         .gte('created_at', start)
@@ -106,6 +106,7 @@ export function BranchReport() {
     });
 
     (txs || []).forEach((tx: any) => {
+      if (tx.voided_at) return;
       const bid = tx.branch_id;
       if (!bid || !branchMap[bid]) return;
       const b = branchMap[bid];

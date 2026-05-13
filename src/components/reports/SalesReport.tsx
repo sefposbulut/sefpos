@@ -114,7 +114,7 @@ export function SalesReport({ selectedBranch }: SalesReportProps) {
 
     let txQ = supabase
       .from('cash_register_transactions')
-      .select('amount, transaction_type, payment_method, created_at')
+      .select('amount, transaction_type, payment_method, created_at, voided_at')
       .eq('tenant_id', tenant.id)
       .gte('created_at', start)
       .lte('created_at', end);
@@ -138,7 +138,7 @@ export function SalesReport({ selectedBranch }: SalesReportProps) {
     const [{ data: orders }, { data: txs }, { data: cancelLogs }] = await Promise.all([ordersQ, txQ, cancelQ]);
 
     const ordersData = orders || [];
-    const txData = txs || [];
+    const txData = (txs || []).filter((t: any) => !t.voided_at);
     const completed = ordersData.filter(o => o.status === 'completed');
     const cancelled = ordersData.filter(o => o.status === 'cancelled');
 

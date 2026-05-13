@@ -43,6 +43,7 @@ export function ShiftQuickClose({ open, onClose }: Props) {
         .from('cash_register_transactions')
         .select('transaction_type,payment_method,amount')
         .eq('tenant_id', tenant.id)
+        .is('voided_at', null)
         .gte('created_at', activeShift.opened_at);
       if (activeShift.branch_id) q = q.or(`branch_id.eq.${activeShift.branch_id},branch_id.is.null`);
       // sadece bu kullanicinin

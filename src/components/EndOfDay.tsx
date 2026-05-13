@@ -34,6 +34,8 @@ interface DayStats {
   netCash: number;
   openTables: number;
   totalCovers: number;
+  /** Kasa ekranından iptal (void) edilen hareket sayısı — cirodan düşmüş, kayıt silinmemiştir. */
+  voidedCashRegisterCount: number;
 }
 
 interface EndOfDayProps {
@@ -255,6 +257,8 @@ export function EndOfDay({ onClose }: EndOfDayProps) {
 
     const ordersData = orders || [];
     const txData = transactions || [];
+    const txActive = txData.filter((t: any) => !t.voided_at);
+    const voidedCashCount = txData.filter((t: any) => t.voided_at).length;
     const cancelLogsData = (cancelLogs || []) as Array<{ quantity: number; unit_price: number }>;
 
     const completed = ordersData.filter(o => o.status === 'completed');
@@ -263,24 +267,24 @@ export function EndOfDay({ onClose }: EndOfDayProps) {
     const itemCancelCount = cancelLogsData.reduce((s, l) => s + Number(l.quantity || 0), 0);
     const itemCancelRevenue = cancelLogsData.reduce((s, l) => s + Number(l.quantity || 0) * Number(l.unit_price || 0), 0);
 
-    const cashRevenue = txData
+    const cashRevenue = txActive
       .filter(t => t.transaction_type === 'order_payment' && t.payment_method === 'cash')
       .reduce((s, t) => s + Math.abs(t.amount), 0);
-    const cardRevenue = txData
+    const cardRevenue = txActive
       .filter(t => t.transaction_type === 'order_payment' && t.payment_method === 'credit_card')
       .reduce((s, t) => s + Math.abs(t.amount), 0);
-    const openAccRevenue = txData
+    const openAccRevenue = txActive
       .filter(t => t.transaction_type === 'order_payment' && t.payment_method === 'open_account')
       .reduce((s, t) => s + Math.abs(t.amount), 0);
     const totalRevenue = cashRevenue + cardRevenue + openAccRevenue;
 
-    const expenses = txData
+    const expenses = txActive
       .filter(t => t.transaction_type === 'expense')
       .reduce((s, t) => s + Math.abs(t.amount), 0);
-    const cashIn = txData
+    const cashIn = txActive
       .filter(t => t.transaction_type === 'cash_in')
       .reduce((s, t) => s + Math.abs(t.amount), 0);
-    const cashOut = txData
+    const cashOut = txActive
       .filter(t => t.transaction_type === 'cash_out')
       .reduce((s, t) => s + Math.abs(t.amount), 0);
     const netCash = cashRevenue + cashIn - cashOut - expenses;
@@ -362,6 +366,7 @@ export function EndOfDay({ onClose }: EndOfDayProps) {
       netCash,
       openTables: 0, // setOpenTables zaten ayrica state'i guncelliyor
       totalCovers: 0,
+      voidedCashRegisterCount: voidedCashCount,
     });
     setLoading(false);
   };
@@ -475,6 +480,7 @@ export function EndOfDay({ onClose }: EndOfDayProps) {
   <div class="row"><span class="l">Giderler</span><span class="r">-${fmt(stats.expenses)} ₺</span></div>
   <div class="line"></div>
   <div class="row bold"><span class="l">Net Kasa</span><span class="r">${fmt(stats.netCash)} ₺</span></div>
+  ${stats.voidedCashRegisterCount > 0 ? `<div class="row small muted"><span class="l">Kasa satırı iptali (void)</span><span class="r">${stats.voidedCashRegisterCount} kayıt — cirodan düşülmüştür, satır silinmemiştir</span></div>` : ''}
   <div class="double"></div>
 
   <div class="section">Sipariş Özeti</div>
@@ -1031,6 +1037,12 @@ export function EndOfDay({ onClose }: EndOfDayProps) {
                   </div>
                 ))}
               </div>
+              {stats.voidedCashRegisterCount > 0 && (
+                <p className="text-xs text-amber-200/95 mt-4 text-center leading-relaxed">
+                  Kasa ekranından iptal edilen hareket: <b>{stats.voidedCashRegisterCount}</b> satır
+                  (gerekçe ile kayıt altında; tutarlar yukarıdaki özette düşülmüştür).
+                </p>
+              )}
             </div>
 
           </div>

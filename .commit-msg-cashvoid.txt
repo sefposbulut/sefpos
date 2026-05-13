@@ -1,0 +1,9 @@
+feat(v1.0.68): Kasa hareketi iptali (void) — gerekçe + audit, gün sonu uyumu
+
+- cash_register_transactions: voided_at, voided_by, void_reason; DELETE politikası kaldırıldı
+- Kasa Yönetimi: yetkili kullanıcı «İptal» → modalda zorunlu gerekçe (min 5 karakter);
+  satır silinmez, özet iptalsiz tutarı gösterir; iptalleri listede gizle seçeneği
+- Gün sonu / Satış raporu / Şube raporu / vardiya canlı özet: voided satırlar toplamlardan düşer;
+  gün sonu özeti ve yazdırılabilir raporda kasa void sayısı gösterilir
+- SQL Server şema: aynı void kolonları (Electron şube modu)
+- Sipariş kalemi genişletme: payment_transaction referansında order_id çözülür

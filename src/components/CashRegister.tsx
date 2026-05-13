@@ -5,13 +5,32 @@ import { Database } from '../lib/supabase';
 import {
   X, Plus, Wallet, Banknote, CreditCard, Receipt, TrendingUp, TrendingDown,
   DollarSign, Calendar, User, Filter, ChevronDown, ChevronUp, ShoppingCart,
-  MapPin, Clock, Package, Printer
+  MapPin, Clock, Package, Printer, Ban, Loader2
 } from 'lucide-react';
 import { ReprintReceiptModal } from './ReprintReceiptModal';
 
-type CashTransaction = Database['public']['Tables']['cash_register_transactions']['Row'] & {
+/** Kasa satırı (Supabase Database tipinde tablo eksik; void alanları migration ile gelir). */
+export interface CashTransaction {
+  id: string;
+  tenant_id: string;
+  branch_id?: string | null;
+  shift_id?: string | null;
+  transaction_type: string;
+  payment_method: string | null;
+  amount: number;
+  reference_id: string | null;
+  reference_type: string | null;
+  description: string;
+  order_number: string | null;
+  table_name: string | null;
+  notes?: string | null;
+  created_at: string;
+  created_by: string | null;
+  voided_at?: string | null;
+  voided_by?: string | null;
+  void_reason?: string | null;
   profiles?: { full_name: string } | null;
-};
+}
 
 type OrderItem = Database['public']['Tables']['order_items']['Row'] & {
   products: Database['public']['Tables']['products']['Row'];
@@ -61,10 +80,14 @@ function getPresetRange(preset: DatePreset): { start: Date; end: Date } {
 }
 
 export function CashRegister({ onClose }: CashRegisterProps) {
-  const { tenant, user, activeBranch, branches, isOwnerOrAdmin } = useAuth();
+  const { tenant, user, activeBranch, branches, isOwnerOrAdmin, permissions } = useAuth();
   const [cashTransactions, setCashTransactions] = useState<CashTransaction[]>([]);
   const [showCashForm, setShowCashForm] = useState(false);
   const [showReprintModal, setShowReprintModal] = useState(false);
+  const [hideVoided, setHideVoided] = useState(false);
+  const [voidModalTx, setVoidModalTx] = useState<CashTransaction | null>(null);
+  const [voidReason, setVoidReason] = useState('');
+  const [voidSubmitting, setVoidSubmitting] = useState(false);
   const [cashFormType, setCashFormType] = useState<'cash_in' | 'cash_out' | 'expense'>('cash_in');
   const [cashAmount, setCashAmount] = useState('');
   const [cashDescription, setCashDescription] = useState('');
@@ -105,7 +128,7 @@ export function CashRegister({ onClose }: CashRegisterProps) {
     if (tenant) {
       loadCashTransactions();
     }
-  }, [tenant, filterType, filterMethod, datePreset, customStart, customEnd, filterBranch, filterUser]);
+  }, [tenant, filterType, filterMethod, datePreset, customStart, customEnd, filterBranch, filterUser, hideVoided]);
 
   const loadAvailableUsers = async () => {
     if (!tenant) return;
@@ -140,6 +163,9 @@ export function CashRegister({ onClose }: CashRegisterProps) {
     if (filterUser !== 'all') {
       query = query.eq('created_by', filterUser);
     }
+    if (hideVoided) {
+      query = query.is('voided_at', null);
+    }
 
     const range = getDateRange();
     if (range) {
@@ -151,22 +177,34 @@ export function CashRegister({ onClose }: CashRegisterProps) {
     setLoading(false);
   };
 
-  const loadOrderItems = async (orderId: string) => {
-    if (!orderId || orderItems[orderId]) return;
+  const loadOrderItemsForCashTx = async (cashTxId: string, orderId: string) => {
+    if (!orderId || orderItems[cashTxId]) return;
     const { data } = await supabase
       .from('order_items')
       .select('*, products(*)')
       .eq('order_id', orderId);
-    if (data) setOrderItems(prev => ({ ...prev, [orderId]: data as OrderItem[] }));
+    if (data) setOrderItems(prev => ({ ...prev, [cashTxId]: data as OrderItem[] }));
   };
 
-  const toggleTransactionDetails = async (transactionId: string, orderId?: string | null) => {
-    if (expandedTransaction === transactionId) {
+  const toggleTransactionDetails = async (t: CashTransaction) => {
+    const hasOrderPayment = t.transaction_type === 'order_payment' && t.reference_id;
+    if (!hasOrderPayment) return;
+    if (expandedTransaction === t.id) {
       setExpandedTransaction(null);
-    } else {
-      setExpandedTransaction(transactionId);
-      if (orderId) await loadOrderItems(orderId);
+      return;
     }
+    setExpandedTransaction(t.id);
+    let orderId: string | null = null;
+    if (t.reference_type === 'order') orderId = t.reference_id;
+    else if (t.reference_type === 'payment_transaction') {
+      const { data } = await supabase
+        .from('payment_transactions')
+        .select('order_id')
+        .eq('id', t.reference_id!)
+        .maybeSingle();
+      orderId = (data as any)?.order_id ?? null;
+    }
+    if (orderId) await loadOrderItemsForCashTx(t.id, orderId);
   };
 
   const handleAddCashTransaction = async (e: React.FormEvent) => {
@@ -197,6 +235,7 @@ export function CashRegister({ onClose }: CashRegisterProps) {
   const summary = useMemo(() => {
     const s = { totalCash: 0, totalCreditCard: 0, totalOpenAccount: 0, orderPayments: 0, expenses: 0, cashIn: 0, cashOut: 0, grandTotal: 0 };
     cashTransactions.forEach(t => {
+      if (t.voided_at) return;
       const amount = Number(t.amount);
       if (t.payment_method === 'cash') s.totalCash += amount;
       else if (t.payment_method === 'credit_card') s.totalCreditCard += amount;
@@ -209,6 +248,41 @@ export function CashRegister({ onClose }: CashRegisterProps) {
     s.grandTotal = s.totalCash + s.totalCreditCard + s.totalOpenAccount;
     return s;
   }, [cashTransactions]);
+
+  const canVoidCashRows = permissions.can_manage_cash_register || isOwnerOrAdmin;
+
+  const submitVoid = async () => {
+    if (!voidModalTx || !user?.id) return;
+    const reason = voidReason.trim();
+    if (reason.length < 5) {
+      alert('İptal gerekçesi en az 5 karakter olmalıdır.');
+      return;
+    }
+    if (['opening_balance', 'closing_balance'].includes(voidModalTx.transaction_type)) {
+      alert('Açılış / kapanış bakiyesi bu ekrandan iptal edilemez.');
+      return;
+    }
+    setVoidSubmitting(true);
+    try {
+      const { error } = await supabase
+        .from('cash_register_transactions')
+        .update({
+          voided_at: new Date().toISOString(),
+          voided_by: user.id,
+          void_reason: reason,
+        } as any)
+        .eq('id', voidModalTx.id)
+        .is('voided_at', null);
+      if (error) throw error;
+      setVoidModalTx(null);
+      setVoidReason('');
+      await loadCashTransactions();
+    } catch (e: any) {
+      alert('İptal kaydedilemedi: ' + (e?.message || String(e)));
+    } finally {
+      setVoidSubmitting(false);
+    }
+  };
 
   const formatDateRange = () => {
     const range = getDateRange();
@@ -259,6 +333,54 @@ export function CashRegister({ onClose }: CashRegisterProps) {
 
       {showReprintModal && (
         <ReprintReceiptModal onClose={() => setShowReprintModal(false)} />
+      )}
+
+      {voidModalTx && (
+        <div
+          className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/55 backdrop-blur-sm"
+          onClick={() => { if (!voidSubmitting) { setVoidModalTx(null); setVoidReason(''); } }}
+        >
+          <div
+            className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 border border-slate-200"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="font-black text-lg text-slate-800 mb-1">Kasa işlemini iptal et</h3>
+            <p className="text-sm text-slate-600 mb-2">
+              Kayıt silinmez; <b>iptal</b> olarak işaretlenir ve üstteki kasa özetinden düşer. Gün sonu ve raporlarda gerekçe ile görünür.
+            </p>
+            <div className="text-xs font-mono bg-slate-50 rounded-lg p-2 mb-3 border border-slate-100 text-slate-700">
+              {voidModalTx.description} · {Number(voidModalTx.amount).toFixed(2)} ₺
+            </div>
+            <label className="block text-xs font-bold text-slate-700 mb-1">İptal gerekçesi (zorunlu, en az 5 karakter)</label>
+            <textarea
+              value={voidReason}
+              onChange={(e) => setVoidReason(e.target.value)}
+              rows={4}
+              className="w-full px-3 py-2 rounded-xl border border-slate-300 focus:ring-2 focus:ring-rose-400 focus:border-transparent text-sm resize-none"
+              placeholder="Örn: Yanlış tutar girildi / müşteri ödemesi iade / test kaydı silinmeli"
+              disabled={voidSubmitting}
+            />
+            <div className="flex gap-2 mt-4">
+              <button
+                type="button"
+                disabled={voidSubmitting}
+                onClick={() => { setVoidModalTx(null); setVoidReason(''); }}
+                className="flex-1 py-3 rounded-xl font-bold text-sm bg-slate-100 text-slate-700 hover:bg-slate-200 disabled:opacity-50"
+              >
+                Vazgeç
+              </button>
+              <button
+                type="button"
+                disabled={voidSubmitting}
+                onClick={() => void submitVoid()}
+                className="flex-1 py-3 rounded-xl font-bold text-sm bg-rose-600 text-white hover:bg-rose-700 disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                {voidSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Ban className="w-4 h-4" />}
+                İptali kaydet
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       <div className="flex-1 overflow-y-auto bg-slate-50">
@@ -474,6 +596,16 @@ export function CashRegister({ onClose }: CashRegisterProps) {
                   </select>
                 </div>
               </div>
+
+              <label className="flex items-center gap-2 text-xs font-semibold text-slate-600 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  className="rounded border-gray-300 text-emerald-600 focus:ring-emerald-500"
+                  checked={hideVoided}
+                  onChange={(e) => setHideVoided(e.target.checked)}
+                />
+                İptal edilenleri listede gizle (üstteki özet yalnızca geçerli işlemleri toplar)
+              </label>
             </div>
 
             <div className="p-3 md:p-4 space-y-2">
@@ -488,9 +620,10 @@ export function CashRegister({ onClose }: CashRegisterProps) {
               )}
               {!loading && cashTransactions.map(transaction => {
                 const isExpanded = expandedTransaction === transaction.id;
-                const items = transaction.reference_id ? orderItems[transaction.reference_id] : null;
-                const hasOrderDetails = transaction.transaction_type === 'order_payment' && transaction.reference_id;
+                const items = orderItems[transaction.id];
+                const hasOrderDetails = transaction.transaction_type === 'order_payment' && !!transaction.reference_id;
                 const isPositive = Number(transaction.amount) > 0;
+                const isVoided = !!transaction.voided_at;
 
                 const typeLabel: Record<string, string> = {
                   order_payment: 'Sipariş Ödemesi',
@@ -501,12 +634,19 @@ export function CashRegister({ onClose }: CashRegisterProps) {
                   closing_balance: 'Kapanış',
                 };
 
+                const canVoidThis =
+                  canVoidCashRows &&
+                  !isVoided &&
+                  !['opening_balance', 'closing_balance'].includes(transaction.transaction_type);
+
                 return (
                   <div key={transaction.id}
-                    className={`bg-white rounded-xl border-l-4 shadow-sm hover:shadow-md transition-shadow ${isPositive ? 'border-green-500' : 'border-red-400'}`}>
+                    className={`bg-white rounded-xl border-l-4 shadow-sm transition-shadow ${
+                      isVoided ? 'opacity-75 border-slate-300' : 'hover:shadow-md'
+                    } ${isPositive && !isVoided ? 'border-green-500' : !isVoided ? 'border-red-400' : ''}`}>
                     <div
-                      className={`p-3 md:p-4 ${hasOrderDetails ? 'cursor-pointer select-none' : ''}`}
-                      onClick={() => hasOrderDetails && toggleTransactionDetails(transaction.id, transaction.reference_id)}
+                      className={`p-3 md:p-4 ${hasOrderDetails && !isVoided ? 'cursor-pointer select-none' : ''}`}
+                      onClick={() => hasOrderDetails && !isVoided && void toggleTransactionDetails(transaction)}
                     >
                       <div className="flex items-start justify-between gap-2">
                         <div className="flex items-center gap-3 flex-1 min-w-0">
@@ -523,7 +663,12 @@ export function CashRegister({ onClose }: CashRegisterProps) {
                           </div>
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2 flex-wrap">
-                              <p className="font-bold text-gray-800 text-sm truncate">{transaction.description}</p>
+                              <p className={`font-bold text-gray-800 text-sm truncate ${isVoided ? 'line-through text-slate-500' : ''}`}>{transaction.description}</p>
+                              {isVoided && (
+                                <span className="text-[10px] font-black px-2 py-0.5 rounded-full shrink-0 bg-rose-100 text-rose-800 border border-rose-200">
+                                  İPTAL
+                                </span>
+                              )}
                               <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full shrink-0 ${
                                 transaction.transaction_type === 'order_payment' ? 'bg-blue-100 text-blue-700' :
                                 transaction.transaction_type === 'expense' ? 'bg-orange-100 text-orange-700' :
@@ -532,12 +677,22 @@ export function CashRegister({ onClose }: CashRegisterProps) {
                               }`}>
                                 {typeLabel[transaction.transaction_type] || transaction.transaction_type}
                               </span>
-                              {hasOrderDetails && (
+                              {hasOrderDetails && !isVoided && (
                                 <span className="text-[10px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full font-semibold shrink-0 flex items-center gap-1">
                                   <Package className="w-3 h-3" />Ürünler
                                 </span>
                               )}
                             </div>
+                            {isVoided && transaction.void_reason && (
+                              <p className="text-[11px] text-rose-700 font-semibold mt-1 bg-rose-50 border border-rose-100 rounded-lg px-2 py-1">
+                                İptal: {transaction.void_reason}
+                                {transaction.voided_at && (
+                                  <span className="text-rose-500 font-normal">
+                                    {' '}· {new Date(transaction.voided_at).toLocaleString('tr-TR')}
+                                  </span>
+                                )}
+                              </p>
+                            )}
                             <div className="flex flex-wrap items-center gap-3 text-xs text-gray-400 mt-1">
                               <div className="flex items-center gap-1">
                                 <Calendar className="w-3 h-3" />
@@ -561,18 +716,35 @@ export function CashRegister({ onClose }: CashRegisterProps) {
                             </div>
                           </div>
                         </div>
-                        <div className="flex items-center gap-1.5 shrink-0">
-                          <p className={`text-base md:text-xl font-bold ${isPositive ? 'text-green-600' : 'text-red-500'}`}>
-                            {isPositive ? '+' : ''}{Number(transaction.amount).toFixed(2)} ₺
-                          </p>
-                          {hasOrderDetails && (
-                            isExpanded ? <ChevronUp className="w-4 h-4 text-gray-400" /> : <ChevronDown className="w-4 h-4 text-gray-400" />
+                        <div className="flex flex-col items-end gap-1.5 shrink-0">
+                          <div className="flex items-center gap-1.5">
+                            <p className={`text-base md:text-xl font-bold ${isVoided ? 'text-slate-400 line-through' : isPositive ? 'text-green-600' : 'text-red-500'}`}>
+                              {isPositive ? '+' : ''}{Number(transaction.amount).toFixed(2)} ₺
+                            </p>
+                            {hasOrderDetails && !isVoided && (
+                              isExpanded ? <ChevronUp className="w-4 h-4 text-gray-400" /> : <ChevronDown className="w-4 h-4 text-gray-400" />
+                            )}
+                          </div>
+                          {canVoidThis && (
+                            <button
+                              type="button"
+                              title="Kasa satırını iptal et (silmez; gerekçe ile kayıt altına alınır)"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setVoidReason('');
+                                setVoidModalTx(transaction);
+                              }}
+                              className="text-[11px] font-black px-2 py-1 rounded-lg border border-rose-200 text-rose-700 bg-rose-50 hover:bg-rose-100 active:scale-95 flex items-center gap-1"
+                            >
+                              <Ban className="w-3 h-3" />
+                              İptal
+                            </button>
                           )}
                         </div>
                       </div>
                     </div>
 
-                    {isExpanded && (
+                    {isExpanded && !isVoided && (
                       <div className="border-t border-gray-100 bg-slate-50 p-4 rounded-b-xl">
                         <div className="flex items-center gap-2 mb-3">
                           <ShoppingCart className="w-4 h-4 text-blue-500" />
