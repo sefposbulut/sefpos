@@ -744,6 +744,38 @@ Deno.serve(async (req) => {
             // sabit status patch'i (ozellikle handover sonrasi 550 vs 700)
             // ile Getir paneli arasinda sapma olmasin.
             await upsertGetirOrder(admin, platform as PlatformRow, embedded, { skipAckClamp: true });
+            // Verify aksiyonunda Getir bazen siparişi otomatik 410'a (preparing)
+            // geçiriyor. Bu durumda `applyLifecycleTimestampsPoll` accepted_at'i
+            // YAZMAZ (sadece verified/accepted/scheduled_accepted için yazıyor).
+            // Sonuç: kasa onayı atlanmış gibi görünür, mutfak fişi basılmaz.
+            // Çözüm: kullanıcı «ONAYLA» dediyse accepted_at her zaman set edilsin.
+            if (body.action === "verify" || body.action === "verify-scheduled") {
+              const nowIso = new Date().toISOString();
+              await admin
+                .from("online_orders")
+                .update({ accepted_at: nowIso })
+                .eq("platform_id", platform.id)
+                .eq("platform_order_id", body.orderId)
+                .is("accepted_at", null);
+            }
+            if (body.action === "handover") {
+              const nowIso = new Date().toISOString();
+              await admin
+                .from("online_orders")
+                .update({ ready_at: nowIso })
+                .eq("platform_id", platform.id)
+                .eq("platform_order_id", body.orderId)
+                .is("ready_at", null);
+            }
+            if (body.action === "deliver") {
+              const nowIso = new Date().toISOString();
+              await admin
+                .from("online_orders")
+                .update({ delivered_at: nowIso })
+                .eq("platform_id", platform.id)
+                .eq("platform_order_id", body.orderId)
+                .is("delivered_at", null);
+            }
           } else {
             // Cevapta siparis yoksa eski tahminci patch (yedek)
             const nextStatus: Record<

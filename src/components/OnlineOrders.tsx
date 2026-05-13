@@ -263,9 +263,13 @@ export function OnlineOrders() {
           const justApproved =
             prevStatus !== undefined && PENDING_APPROVAL_STATUSES.has(prevStatus);
           const hasLocalAck = !!o.accepted_at;
-          let triggerPrint = justApproved;
-          if (!isGetir && isFirstSighting) triggerPrint = true;
-          if (isGetir && hasLocalAck && (justApproved || isFirstSighting)) triggerPrint = true;
+          // Getir için: kasa onayı (accepted_at) zorunlu — getir paneli auto-verify
+          // etse bile fiş YALNIZCA kullanıcı ŞefPOS’ta «Onayla» dedikten sonra basılır.
+          // Diğer platformlar (Yemeksepeti vb.) için eski davranış: durum geçişi veya
+          // ilk görüş yeterli.
+          const triggerPrint = isGetir
+            ? hasLocalAck && (justApproved || isFirstSighting)
+            : justApproved || isFirstSighting;
           if (triggerPrint) {
             void scheduleKitchenPrint(o as OrderWithDetails);
           }
