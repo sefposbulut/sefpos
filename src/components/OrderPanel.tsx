@@ -255,7 +255,22 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [showPayment, setShowPayment] = useState(false);
   const [payOpening, setPayOpening] = useState(false);
-  const [discount, setDiscount] = useState(0);
+  // Aktif şubenin "her satışa otomatik %X iskonto" ayarı (Settings → Şubeler).
+  // Pasifse 0, aktifse şubenin yüzdesi. Yeni masa/sipariş açılışında bu değerle
+  // başlar; kullanıcı tek siparişte istediği gibi değiştirebilir.
+  const branchDefaultDiscount =
+    activeBranch?.default_discount_active && activeBranch?.default_discount_percent
+      ? Math.min(100, Math.max(0, Number(activeBranch.default_discount_percent)))
+      : 0;
+  const [discount, setDiscount] = useState<number>(branchDefaultDiscount);
+  const discountTouchedRef = useRef(false);
+  useEffect(() => {
+    if (!discountTouchedRef.current) setDiscount(branchDefaultDiscount);
+  }, [branchDefaultDiscount]);
+  const setDiscountSafely = useCallback((v: number) => {
+    discountTouchedRef.current = true;
+    setDiscount(v);
+  }, []);
   const [productVariants, setProductVariants] = useState<ProductVariant[]>([]);
   const [selectedProductForVariant, setSelectedProductForVariant] = useState<Product | null>(null);
   const [quantityMultiplier, setQuantityMultiplier] = useState(1);
@@ -2408,7 +2423,7 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
         <PaymentModal
           remainingAmount={paymentModalAmount}
           discount={discount}
-          onDiscountChange={setDiscount}
+          onDiscountChange={setDiscountSafely}
           onPayment={handleAddPayment}
           onClose={() => {
             // ÖNEMLİ: kısmi ödeme ref'lerini burada TEMİZLEME!

@@ -54,7 +54,24 @@ export function QuickSale() {
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [cart, setCart] = useState<CartLine[]>([]);
-  const [discount, setDiscount] = useState(0);
+  // Aktif şubenin "her satışa otomatik %X iskonto" ayarı (Settings → Şubeler).
+  // Pasifse 0, aktifse şubenin yüzdesi. Kullanıcı tek satışta değiştirebilir;
+  // yeni satışta tekrar bu varsayılana döner.
+  const branchDefaultDiscount =
+    activeBranch?.default_discount_active && activeBranch?.default_discount_percent
+      ? Math.min(100, Math.max(0, Number(activeBranch.default_discount_percent)))
+      : 0;
+  const [discount, setDiscount] = useState<number>(branchDefaultDiscount);
+  // Şube değiştiğinde ya da Settings'ten varsayılan iskonto güncellendiğinde
+  // (kullanıcı kendisi değiştirmediyse) UI değerini yenile.
+  const discountTouchedRef = useRef(false);
+  useEffect(() => {
+    if (!discountTouchedRef.current) setDiscount(branchDefaultDiscount);
+  }, [branchDefaultDiscount]);
+  const setDiscountSafely = useCallback((v: number) => {
+    discountTouchedRef.current = true;
+    setDiscount(v);
+  }, []);
   const [showPayment, setShowPayment] = useState(false);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -157,8 +174,9 @@ export function QuickSale() {
 
   const clearCart = useCallback(() => {
     setCart([]);
-    setDiscount(0);
-  }, []);
+    discountTouchedRef.current = false;
+    setDiscount(branchDefaultDiscount);
+  }, [branchDefaultDiscount]);
 
   // ─── Barkod arama / okuma ────────────────────────────────────────────────
   const flashScan = useCallback((kind: 'ok' | 'err', text: string) => {
@@ -980,7 +998,7 @@ export function QuickSale() {
         <PaymentModal
           remainingAmount={total}
           discount={discount}
-          onDiscountChange={setDiscount}
+          onDiscountChange={setDiscountSafely}
           onPayment={handlePayment}
           onClose={() => setShowPayment(false)}
           loading={busy}

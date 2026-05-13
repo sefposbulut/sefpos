@@ -28,6 +28,9 @@ export interface Branch {
   is_active: boolean;
   is_main: boolean;
   created_at: string;
+  /** Bu şube için varsayılan sabit iskonto yüzdesi (0-100). 0/false ise pasif. */
+  default_discount_percent?: number | null;
+  default_discount_active?: boolean | null;
 }
 
 interface ProfileWithRole extends Profile {

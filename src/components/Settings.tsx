@@ -3,7 +3,7 @@ import { supabase } from '../lib/supabase';
 import { createClient } from '@supabase/supabase-js';
 import { useAuth } from '../contexts/AuthContext';
 import { Database } from '../lib/supabase';
-import { X, Plus, Trash2, Settings as SettingsIcon, Building2, ToggleLeft, ToggleRight, Printer, AlertCircle, MapPin, Phone, Save, CreditCard as Edit2, User, Store, CheckCircle, Wifi, WifiOff, Globe, RefreshCw, Lock, ShieldCheck, Eye, EyeOff, Package, CheckSquare, Square, Database as DatabaseIcon, Receipt, Pencil, Scale, Loader, QrCode, PhoneIncoming, FlaskConical, Clock, Download, Sparkles, ChevronDown, ChevronUp, HelpCircle, Info } from 'lucide-react';
+import { X, Plus, Trash2, Settings as SettingsIcon, Building2, ToggleLeft, ToggleRight, Printer, AlertCircle, MapPin, Phone, Save, CreditCard as Edit2, User, Store, CheckCircle, Wifi, WifiOff, Globe, RefreshCw, Lock, ShieldCheck, Eye, EyeOff, Package, CheckSquare, Square, Database as DatabaseIcon, Receipt, Pencil, Scale, Loader, QrCode, PhoneIncoming, FlaskConical, Clock, Download, Sparkles, ChevronDown, ChevronUp, HelpCircle, Info, Percent } from 'lucide-react';
 import {
   isCallerIdAvailable,
   startCallerId,
@@ -502,6 +502,44 @@ export function Settings({ onClose }: SettingsProps) {
     if (!confirm('Bu şubeyi silmek istediğinizden emin misiniz?')) return;
     const { error } = await supabase.from('branches').delete().eq('id', branchId);
     if (!error) { loadBranches(); refreshBranches(); }
+  };
+
+  /**
+   * Şubenin "her satışa otomatik X% iskonto uygula" ayarını günceller.
+   * Bu değer yeni siparişlerde ödeme ekranındaki iskonto kutusunu ön-doldurur.
+   * Kullanıcı tek bir satışta dilerse 0'a çekebilir.
+   */
+  const handleUpdateBranchDefaultDiscount = async (
+    branchId: string,
+    patch: { percent?: number; active?: boolean }
+  ) => {
+    const payload: any = {};
+    if (typeof patch.percent === 'number') {
+      payload.default_discount_percent = Math.min(100, Math.max(0, Math.round(patch.percent)));
+    }
+    if (typeof patch.active === 'boolean') {
+      payload.default_discount_active = patch.active;
+    }
+    if (!Object.keys(payload).length) return;
+    const { error } = await (supabase.from('branches' as any) as any)
+      .update(payload)
+      .eq('id', branchId);
+    if (error) {
+      const msg = String(error.message || '');
+      if (/column .*default_discount/i.test(msg)) {
+        alert(
+          'Sabit iskonto kolonu veritabanında yok. ' +
+          'Supabase migration\'ı (20260515220000_branches_default_discount.sql) ' +
+          'henüz uygulanmamış. GitHub Actions deploy bitince tekrar deneyin ' +
+          'veya Studio → SQL\'de migration\'ı manuel çalıştırın.'
+        );
+      } else {
+        alert('Hata: ' + msg);
+      }
+      return;
+    }
+    loadBranches();
+    refreshBranches();
   };
 
   const loadGroups = async () => {
@@ -1190,6 +1228,14 @@ export function Settings({ onClose }: SettingsProps) {
                             )}
                           </div>
                         </div>
+                      )}
+
+                      {/* Sabit iskonto — düzenleme moduna girmeden hızlıca aç/kapat ve % ayarla */}
+                      {editingBranch !== branch.id && (
+                        <BranchDefaultDiscountRow
+                          branch={branch}
+                          onChange={handleUpdateBranchDefaultDiscount}
+                        />
                       )}
                     </div>
                   ))}
@@ -4516,6 +4562,79 @@ function GetirPlatformControls({ platform, onChanged }: GetirPlatformControlsPro
             </div>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Şube kartının altında yer alan "Sabit İskonto" hızlı kontrolü.
+ * Her satışta otomatik uygulanacak yüzde, ödeme ekranındaki iskonto kutusunu
+ * ön-doldurur. Kullanıcı tek satışta dilerse sıfıra çekebilir.
+ */
+function BranchDefaultDiscountRow({
+  branch,
+  onChange,
+}: {
+  branch: Branch;
+  onChange: (branchId: string, patch: { percent?: number; active?: boolean }) => Promise<void> | void;
+}) {
+  const initialPercent = Number(branch.default_discount_percent || 0);
+  const initialActive = branch.default_discount_active === true;
+  const [percent, setPercent] = useState<number>(initialPercent);
+  const [active, setActive] = useState<boolean>(initialActive);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => { setPercent(Number(branch.default_discount_percent || 0)); }, [branch.default_discount_percent]);
+  useEffect(() => { setActive(branch.default_discount_active === true); }, [branch.default_discount_active]);
+
+  const dirty = percent !== initialPercent;
+
+  const commit = async (next: { percent?: number; active?: boolean }) => {
+    setSaving(true);
+    try { await onChange(branch.id, next); } finally { setSaving(false); }
+  };
+
+  return (
+    <div className="mt-3 pt-3 border-t border-dashed border-slate-200 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
+      <div className="flex items-center gap-2 flex-1 min-w-0">
+        <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${active ? 'bg-orange-100 text-orange-600' : 'bg-slate-100 text-slate-400'}`}>
+          <Percent className="w-4 h-4" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="text-sm font-bold text-slate-800">Sabit İskonto</div>
+          <div className="text-[11px] text-slate-500">
+            Aktif olunca her yeni satışta ödeme ekranı bu % ile açılır.
+          </div>
+        </div>
+      </div>
+      <div className="flex items-center gap-2 shrink-0">
+        <div className="relative">
+          <input
+            type="number"
+            min={0}
+            max={100}
+            inputMode="numeric"
+            value={percent}
+            onChange={(e) => setPercent(Math.min(100, Math.max(0, Number(e.target.value) || 0)))}
+            onBlur={() => { if (dirty) void commit({ percent }); }}
+            disabled={saving}
+            className="w-20 px-2 py-1.5 pr-7 rounded-lg border-2 border-slate-200 focus:border-orange-400 focus:outline-none text-right font-bold text-sm"
+          />
+          <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-slate-400">%</span>
+        </div>
+        <button
+          type="button"
+          onClick={() => { const next = !active; setActive(next); void commit({ active: next, percent }); }}
+          disabled={saving}
+          className="transition-all active:scale-95"
+          aria-label="Sabit iskontoyu aç/kapat"
+        >
+          {active
+            ? <ToggleRight className="w-9 h-9 text-orange-500" />
+            : <ToggleLeft  className="w-9 h-9 text-slate-300" />
+          }
+        </button>
       </div>
     </div>
   );
