@@ -12,7 +12,7 @@ import {
   playOnlineOrderAlert,
   getAudioState,
 } from '../lib/notification';
-import { callGetir, eligibleCancelReasons, getirStatusLabel } from '../lib/getirApi';
+import { callGetir, eligibleCancelReasons, getGetirNextStepHint, getGetirUiPhase, getirStatusLabel } from '../lib/getirApi';
 
 type OnlineOrder = Database['public']['Tables']['online_orders']['Row'];
 type OnlineOrderItem = Database['public']['Tables']['online_order_items']['Row'];
@@ -438,21 +438,31 @@ export function OnlineOrders() {
           return;
         }
 
-        // "Invalid status" hatasi → tek inquiry ile DB resync
+        // "Invalid status" hatasi → inquiry ile DB resync + kullaniciya Getir koduyla aciklama
         if (isInvalidStatus && retryCount === 0) {
           console.log(`[Getir] ${action} invalid status → inquiry + UI refresh`);
+          let inqCode: number | null = null;
           try {
-            await callGetir({
+            const inq = await callGetir({
               platformId: order.platform_id,
               action: 'inquiry',
               orderId: order.platform_order_id,
             });
+            if (inq.ok && typeof (inq as any).getirStatusCode === 'number') {
+              inqCode = (inq as any).getirStatusCode;
+            }
           } catch (e) {
             console.warn('[Getir] inquiry hatasi:', e);
           }
           await loadOrders();
+          const label = inqCode != null ? getirStatusLabel(inqCode) : 'Güncellenemedi';
+          const hint =
+            inqCode != null ? getGetirNextStepHint(inqCode, order.getir_delivery_type) : '';
           alert(
-            'Sipariş Getir ile senkronize edildi. Güncel butona göre lütfen tekrar deneyin.',
+            `Getir bu işlemi şu an kabul etmedi (muhtemelen sıra dışı bir adım).\n\n` +
+              `Güncel Getir durumu: ${inqCode != null ? `${inqCode} — ${label}` : label}\n\n` +
+              (hint ? `${hint}\n\n` : '') +
+              `Liste yenilendi. Yukarıdaki «Getir ile durumu eşle» ile tekrar güncelleyebilirsiniz.`,
           );
           return;
         }
@@ -755,11 +765,11 @@ export function OnlineOrders() {
       <div className="bg-white border-b border-slate-200 px-4 md:px-6 py-2 shrink-0">
         <div className="flex gap-1.5 overflow-x-auto scrollbar-hide">
           {[
-            { id: 'new', label: 'Yeni', icon: ShoppingBag },
-            { id: 'active', label: 'Mutfakta', icon: Package },
-            { id: 'on_the_way', label: 'Yolda', icon: Bike },
-            { id: 'done', label: 'Tamamlanan', icon: Check },
-            { id: 'all', label: 'Tümü', icon: Clock },
+            { id: 'new', label: 'Yeni', sub: 'Onay / hazırlık öncesi', icon: ShoppingBag },
+            { id: 'active', label: 'Mutfakta', sub: 'Hazırlanıyor veya hazır', icon: Package },
+            { id: 'on_the_way', label: 'Yolda', sub: 'Kuryede', icon: Bike },
+            { id: 'done', label: 'Tamamlanan', sub: 'Teslim / iptal', icon: Check },
+            { id: 'all', label: 'Tümü', sub: 'Hepsi', icon: Clock },
           ].map((tab) => {
             const Icon = tab.icon;
             const active = filter === tab.id;
@@ -767,14 +777,23 @@ export function OnlineOrders() {
               <button
                 key={tab.id}
                 onClick={() => setFilter(tab.id as any)}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-bold whitespace-nowrap transition text-xs ${
+                className={`flex flex-col items-start gap-0 px-3 py-1.5 rounded-lg font-bold whitespace-nowrap transition text-xs min-w-[4.5rem] ${
                   active
                     ? 'bg-orange-600 text-white shadow-sm'
                     : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                 }`}
               >
-                <Icon className="w-3.5 h-3.5" />
-                {tab.label}
+                <span className="flex items-center gap-1.5">
+                  <Icon className="w-3.5 h-3.5 shrink-0" />
+                  {tab.label}
+                </span>
+                <span
+                  className={`pl-5 text-[9px] font-semibold leading-tight ${
+                    active ? 'text-orange-100' : 'text-slate-400'
+                  }`}
+                >
+                  {tab.sub}
+                </span>
               </button>
             );
           })}
@@ -833,6 +852,10 @@ export function OnlineOrders() {
                     const platformColor = getPlatformColor(platformCode);
                     const platformLabel = (order.online_order_platforms.platform_name || platformCode || '').toUpperCase();
                     const orderDate = new Date(order.created_at);
+                    const getirPhase =
+                      order.online_order_platforms.platform_code === 'getir'
+                        ? getGetirUiPhase(order)
+                        : null;
 
                     return (
                       <Fragment key={order.id}>
@@ -1023,9 +1046,9 @@ export function OnlineOrders() {
                         </div>
                       )}
 
-                      {/* GETIR akış: yeni siparişte iptal sebepleri Getir resmi listesinden */}
+                      {/* GETIR akış: iptal sadece «onay» aşamasında (verify fazı) */}
                       {order.online_order_platforms.platform_code === 'getir' &&
-                        order.status === 'new' &&
+                        getirPhase === 'verify' &&
                         rejectingOrderId === order.id && (
                           <div className="bg-red-50 border-2 border-red-200 rounded-xl p-3 space-y-3">
                             <div className="flex items-center gap-2 text-red-700 font-bold text-sm">
@@ -1039,7 +1062,7 @@ export function OnlineOrders() {
                             >
                               <option value="">— Sebep seçin —</option>
                               {eligibleCancelReasons(
-                                order.getir_status_code ?? 400,
+                                order.getir_status_code ?? 325,
                                 order.getir_delivery_type ?? 2,
                               ).map((r) => (
                                 <option key={r.id} value={r.id}>
@@ -1088,23 +1111,17 @@ export function OnlineOrders() {
                           </div>
                         )}
 
-                      {/* GETIR butonları — Resmi status code akisi:
-                          325 (new) → verify → 400 (verified)
-                          400      → prepare → 410 (preparing)
-                          410      → handover → 700 (on_the_way)
-                          700      → deliver → 900 (delivered) [sadece Restoran Kuryesi]
-
-                          Eger Getir paneliyle bizim durum farkliysa kullanici
-                          "Durumu Yenile" ile tek tikla senkronize edebilir.
-                      */}
+                      {/* GETIR — GetirUiPhase: panel ile aynı sıra (410’da handover yok) */}
                       {order.online_order_platforms.platform_code === 'getir' &&
                         order.status !== 'delivered' &&
-                        order.status !== 'cancelled' && (
+                        order.status !== 'cancelled' &&
+                        getirPhase &&
+                        getirPhase !== 'done' && (
                           <div className="flex justify-end -mt-1">
                             <button
                               onClick={() => refreshGetirOrder(order)}
                               disabled={busyOrderId === order.id}
-                              title="Getir panelindeki gerçek durumu sorgula"
+                              title="Getir API ile güncel durumu çek ve tabloyu güncelle"
                               className="text-[11px] font-bold text-purple-700 hover:text-purple-900 hover:underline disabled:opacity-50 flex items-center gap-1"
                             >
                               <RefreshCw className={`w-3 h-3 ${busyOrderId === order.id ? 'animate-spin' : ''}`} />
@@ -1113,51 +1130,47 @@ export function OnlineOrders() {
                           </div>
                         )}
 
-                      {order.online_order_platforms.platform_code === 'getir' && (
+                      {order.online_order_platforms.platform_code === 'getir' && getirPhase && (
                         <>
-                          {/* 1️⃣  YENI / SCHEDULED_NEW — REDDET + ONAYLA */}
-                          {(order.status === 'new' || order.status === 'scheduled_new') &&
-                            rejectingOrderId !== order.id && (
-                              <div className="flex gap-2">
-                                <button
-                                  onClick={() => {
-                                    setGetirCancelReasonId('');
-                                    setGetirCancelNote('');
-                                    setRejectingOrderId(order.id);
-                                  }}
-                                  disabled={busyOrderId === order.id}
-                                  className="flex-1 bg-red-600 hover:bg-red-700 text-white font-black py-3 rounded-xl transition-all active:scale-95 disabled:opacity-50 flex items-center justify-center gap-2"
-                                >
-                                  <X className="w-5 h-5" />
-                                  REDDET
-                                </button>
-                                <button
-                                  onClick={() =>
-                                    doGetirAction(
-                                      order,
-                                      order.getir_is_scheduled || order.status === 'scheduled_new'
-                                        ? 'verify-scheduled'
-                                        : 'verify',
-                                    )
-                                  }
-                                  disabled={busyOrderId === order.id}
-                                  className="flex-1 bg-green-600 hover:bg-green-700 text-white font-black py-3 rounded-xl transition-all active:scale-95 disabled:opacity-50 flex items-center justify-center gap-2"
-                                >
-                                  <Check className="w-5 h-5" />
-                                  {busyOrderId === order.id ? 'İşleniyor…' : 'ONAYLA'}
-                                </button>
-                              </div>
-                            )}
+                          {getirPhase === 'verify' && rejectingOrderId !== order.id && (
+                            <div className="flex gap-2">
+                              <button
+                                onClick={() => {
+                                  setGetirCancelReasonId('');
+                                  setGetirCancelNote('');
+                                  setRejectingOrderId(order.id);
+                                }}
+                                disabled={busyOrderId === order.id}
+                                className="flex-1 bg-red-600 hover:bg-red-700 text-white font-black py-3 rounded-xl transition-all active:scale-95 disabled:opacity-50 flex items-center justify-center gap-2"
+                              >
+                                <X className="w-5 h-5" />
+                                REDDET
+                              </button>
+                              <button
+                                onClick={() =>
+                                  doGetirAction(
+                                    order,
+                                    order.getir_is_scheduled || order.status === 'scheduled_new'
+                                      ? 'verify-scheduled'
+                                      : 'verify',
+                                  )
+                                }
+                                disabled={busyOrderId === order.id}
+                                className="flex-1 bg-green-600 hover:bg-green-700 text-white font-black py-3 rounded-xl transition-all active:scale-95 disabled:opacity-50 flex items-center justify-center gap-2"
+                              >
+                                <Check className="w-5 h-5" />
+                                {busyOrderId === order.id ? 'İşleniyor…' : 'ONAYLA'}
+                              </button>
+                            </div>
+                          )}
 
-                          {/* 2️⃣  SCHEDULED_ACCEPTED — Getir kendisi tetikleyecek */}
-                          {order.status === 'scheduled_accepted' && (
+                          {getirPhase === 'scheduled_accepted_wait' && (
                             <div className="w-full bg-amber-100 text-amber-800 font-bold py-3 rounded-xl text-center text-sm">
                               İleri tarihli — Getir teslimat saatinden 1 saat önce hazırlanma akışını başlatacak.
                             </div>
                           )}
 
-                          {/* 3️⃣  VERIFIED (Getir 400) — HAZIRLANMAYA BAŞLA (prepare) */}
-                          {(order.status === 'verified' || order.status === 'accepted') && (
+                          {getirPhase === 'prepare' && (
                             <button
                               onClick={() => doGetirAction(order, 'prepare')}
                               disabled={busyOrderId === order.id}
@@ -1168,8 +1181,27 @@ export function OnlineOrders() {
                             </button>
                           )}
 
-                          {/* 4️⃣  PREPARING / READY (Getir 410/500) — KURYEYE VER (handover) */}
-                          {(order.status === 'preparing' || order.status === 'ready') && (
+                          {getirPhase === 'preparing_wait' && (
+                            <div className="w-full space-y-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-950">
+                              <p className="font-bold">Hazırlanıyor — kuryeye teslim henüz aktif değil</p>
+                              <p className="text-xs leading-relaxed">
+                                {getGetirNextStepHint(
+                                  typeof order.getir_status_code === 'number' ? order.getir_status_code : 410,
+                                  order.getir_delivery_type,
+                                )}
+                              </p>
+                              <button
+                                type="button"
+                                onClick={() => refreshGetirOrder(order)}
+                                disabled={busyOrderId === order.id}
+                                className="w-full rounded-lg bg-amber-600 py-2 text-xs font-black text-white hover:bg-amber-700 disabled:opacity-50"
+                              >
+                                Durumu Getir’den yenile
+                              </button>
+                            </div>
+                          )}
+
+                          {getirPhase === 'handover' && (
                             <button
                               onClick={() => doGetirAction(order, 'handover')}
                               disabled={busyOrderId === order.id}
@@ -1184,33 +1216,30 @@ export function OnlineOrders() {
                             </button>
                           )}
 
-                          {/* 5️⃣  HANDED_OVER / ON_THE_WAY (Getir 550/700) */}
-                          {(order.status === 'handed_over' || order.status === 'on_the_way') &&
-                            order.getir_delivery_type === 1 && (
-                              <div className="w-full bg-purple-100 text-purple-800 font-bold py-3 rounded-xl text-center text-sm flex items-center justify-center gap-2">
-                                <Bike className="w-4 h-4" />
-                                Getir kuryesinde — teslim bekleniyor
-                              </div>
-                            )}
+                          {getirPhase === 'getir_courier_enroute' && (
+                            <div className="w-full bg-purple-100 text-purple-800 font-bold py-3 rounded-xl text-center text-sm flex items-center justify-center gap-2">
+                              <Bike className="w-4 h-4" />
+                              Getir kuryesinde — teslim Getir tarafından tamamlanır
+                            </div>
+                          )}
 
-                          {(order.status === 'handed_over' || order.status === 'on_the_way') &&
-                            order.getir_delivery_type !== 1 && (
-                              <button
-                                onClick={() => doGetirAction(order, 'deliver')}
-                                disabled={busyOrderId === order.id}
-                                className="w-full bg-green-600 hover:bg-green-700 text-white font-black py-3 rounded-xl transition-all active:scale-95 disabled:opacity-50 flex items-center justify-center gap-2"
-                              >
-                                <Check className={`w-5 h-5 ${busyOrderId === order.id ? 'animate-spin' : ''}`} />
-                                {busyOrderId === order.id ? 'İşleniyor…' : 'TESLİM EDİLDİ'}
-                              </button>
-                            )}
+                          {getirPhase === 'deliver' && (
+                            <button
+                              onClick={() => doGetirAction(order, 'deliver')}
+                              disabled={busyOrderId === order.id}
+                              className="w-full bg-green-600 hover:bg-green-700 text-white font-black py-3 rounded-xl transition-all active:scale-95 disabled:opacity-50 flex items-center justify-center gap-2"
+                            >
+                              <Check className={`w-5 h-5 ${busyOrderId === order.id ? 'animate-spin' : ''}`} />
+                              {busyOrderId === order.id ? 'İşleniyor…' : 'TESLİM EDİLDİ'}
+                            </button>
+                          )}
 
-                          {/* 6️⃣  ARRIVED / DELIVERED / CANCELLED — bilgi */}
-                          {order.status === 'arrived' && (
+                          {getirPhase === 'arrived_info' && (
                             <div className="w-full bg-teal-100 text-teal-800 font-bold py-3 rounded-xl text-center text-sm">
                               Müşteriye ulaştı (teslim onayı bekleniyor)
                             </div>
                           )}
+
                           {order.status === 'delivered' && (
                             <div className="w-full bg-green-100 text-green-800 font-bold py-3 rounded-xl text-center text-sm">
                               ✓ Sipariş teslim edildi

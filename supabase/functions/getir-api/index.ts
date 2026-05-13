@@ -233,6 +233,24 @@ function extractLocalized(val: any): string {
 }
 
 /**
+ * verify / prepare / handover / deliver POST cevabinda gomulu siparis
+ * nesnesini cikar. Getir cevap sekli degisken; tum bilinen bicimleri dene.
+ */
+function extractOrderFromGetirActionResponse(data: any): any | null {
+  if (!data || typeof data !== "object") return null;
+  const candidates = [
+    data.data,
+    data.order,
+    data.result,
+    data.payload,
+  ];
+  for (const c of candidates) {
+    if (c && typeof c === "object" && (c.id || c._id)) return c;
+  }
+  return null;
+}
+
+/**
  * Getir order payload icin mutfak fisini print_jobs kuyruguna at. Electron
  * Print Agent kuyrugu cekip mutfak yazicisina basacak. Yalnizca yeni eklenen
  * (idempotent) siparisler icin cagrilmali — yoksa her poll'da yeniden basar.
@@ -330,7 +348,7 @@ async function upsertGetirOrder(
   admin: any,
   platform: PlatformRow,
   order: any,
-): Promise<{ id: string; isNew: boolean } | null> {
+): Promise<{ id: string; isNew: boolean; statusCode: number; normalizedStatus: string } | null> {
   const platformOrderId = String(order.id || order._id || order.orderId || "");
   if (!platformOrderId) return null;
 
@@ -469,7 +487,7 @@ async function upsertGetirOrder(
     await queueGetirKitchenReceipt(admin, platform.tenant_id, order);
   }
 
-  return { id: onlineOrderId, isNew };
+  return { id: onlineOrderId, isNew, statusCode, normalizedStatus };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -656,7 +674,8 @@ Deno.serve(async (req) => {
         return jsonResponse({
           ok: true,
           synced: !!result,
-          getirStatusCode: ord?.status,
+          getirStatusCode: result?.statusCode ?? ord?.status,
+          normalizedStatus: result?.normalizedStatus ?? null,
         });
       }
 
@@ -670,30 +689,36 @@ Deno.serve(async (req) => {
         const path = `/food-orders/${encodeURIComponent(body.orderId)}/${body.action}`;
         const res = await callGetir(admin, platform as PlatformRow, "POST", path, body.payload || {});
         if (res.ok) {
-          // Her aksiyonun ardindan DB'deki status + getir_status_code'u
-          // resmi doc'a gore guncelle. Boylece UI yeniden senkronize bekleyene
-          // kadar dogru buton gosterir.
-          const nextStatus: Record<
-            string,
-            { status: string; statusCode: number; col: string | null }
-          > = {
-            verify: { status: "verified", statusCode: 400, col: "accepted_at" },
-            "verify-scheduled": { status: "scheduled_accepted", statusCode: 350, col: "accepted_at" },
-            prepare: { status: "preparing", statusCode: 410, col: null },
-            handover: { status: "on_the_way", statusCode: 700, col: "ready_at" },
-            deliver: { status: "delivered", statusCode: 900, col: "delivered_at" },
-          };
-          const upd = nextStatus[body.action];
-          const patch: Record<string, any> = {
-            status: upd.status,
-            getir_status_code: upd.statusCode,
-          };
-          if (upd.col) patch[upd.col] = new Date().toISOString();
-          await admin
-            .from("online_orders")
-            .update(patch)
-            .eq("platform_id", platform.id)
-            .eq("platform_order_id", body.orderId);
+          const embedded = extractOrderFromGetirActionResponse(res.data);
+          if (embedded) {
+            // Getir'in dondugu gercek siparis nesnesiyle DB'yi guncelle —
+            // sabit status patch'i (ozellikle handover sonrasi 550 vs 700)
+            // ile Getir paneli arasinda sapma olmasin.
+            await upsertGetirOrder(admin, platform as PlatformRow, embedded);
+          } else {
+            // Cevapta siparis yoksa eski tahminci patch (yedek)
+            const nextStatus: Record<
+              string,
+              { status: string; statusCode: number; col: string | null }
+            > = {
+              verify: { status: "verified", statusCode: 400, col: "accepted_at" },
+              "verify-scheduled": { status: "scheduled_accepted", statusCode: 350, col: "accepted_at" },
+              prepare: { status: "preparing", statusCode: 410, col: null },
+              handover: { status: "handed_over", statusCode: 550, col: "ready_at" },
+              deliver: { status: "delivered", statusCode: 900, col: "delivered_at" },
+            };
+            const upd = nextStatus[body.action];
+            const patch: Record<string, any> = {
+              status: upd.status,
+              getir_status_code: upd.statusCode,
+            };
+            if (upd.col) patch[upd.col] = new Date().toISOString();
+            await admin
+              .from("online_orders")
+              .update(patch)
+              .eq("platform_id", platform.id)
+              .eq("platform_order_id", body.orderId);
+          }
         }
         return jsonResponse({ ok: res.ok, status: res.status, data: res.data });
       }

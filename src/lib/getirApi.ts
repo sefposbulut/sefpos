@@ -196,22 +196,111 @@ export function eligibleCancelReasons(getirStatus: number, deliveryType: number)
   );
 }
 
-/** Insani okunabilir Getir statu ismi. */
+/** Insani okunabilir Getir statu ismi (Food API resmi kodlari). */
 export function getirStatusLabel(code: number): string {
   switch (code) {
-    case 325: return 'İleri tarih · ön onay bekliyor';
-    case 350: return 'İleri tarih · ön onay alındı';
-    case 400: return 'Yeni · onay bekliyor';
-    case 500: return 'Hazırlanıyor';
-    case 550: return 'Hazırlandı';
-    case 600: return 'Kuryeye teslim edildi';
-    case 700: return 'Kurye yolda';
-    case 800: return 'Kurye adreste';
-    case 900: return 'Teslim edildi';
-    case 1500: return 'İptal (admin)';
-    case 1600: return 'İptal';
-    default: return `Statü ${code}`;
+    case 325:
+      return 'Yeni sipariş · onay bekleniyor';
+    case 350:
+      return 'İleri tarihli · yeni';
+    case 400:
+      return 'Onaylandı · hazırlanmaya başlanabilir';
+    case 410:
+      return 'Hazırlanıyor';
+    case 500:
+      return 'Hazır · kuryeye teslim bekleniyor';
+    case 550:
+      return 'Kurye siparişi teslim aldı';
+    case 600:
+    case 700:
+      return 'Yolda';
+    case 800:
+      return 'Adreste';
+    case 900:
+      return 'Teslim edildi';
+    case 1500:
+      return 'İptal (yönetici)';
+    case 1600:
+      return 'İptal';
+    default:
+      return `Getir statü kodu: ${code}`;
   }
+}
+
+/**
+ * Kullaniciya sonraki adimi aciklar (Getir paneli ile ayni sira).
+ */
+export function getGetirNextStepHint(code: number, deliveryType: number | null | undefined): string {
+  const dt = deliveryType ?? 0;
+  if (code === 325 || code === 350) {
+    return 'Sıradaki adım: ŞefPOS’tan «Onayla» (Getir’e kabul bildirimi).';
+  }
+  if (code === 400) {
+    return 'Sıradaki adım: «Hazırlanmaya başla» ile mutfağı başlatın.';
+  }
+  if (code === 410) {
+    return 'Getir tarafında sipariş hâlâ «Hazırlanıyor». Kuryeye teslim ancak Getir durumu «Hazır» (500) olunca mümkündür. «Getir ile durumu eşle» ile güncelleyin.';
+  }
+  if (code === 500) {
+    return dt === 1
+      ? 'Sıradaki adım: «Getir kuryesine teslim ettim» (elden teslim).'
+      : 'Sıradaki adım: «Kurye yola çıktı» (restoran kuryesi).';
+  }
+  if (code === 550 || code === 600 || code === 700) {
+    return dt === 1
+      ? 'Getir kuryesi süreci yönetiyor; restoran tarafında ek işlem gerekmez.'
+      : 'Sıradaki adım: Teslimatta «Teslim edildi».';
+  }
+  if (code === 800) {
+    return 'Kurye adreste; teslim onayı Getir tarafında tamamlanır.';
+  }
+  return '';
+}
+
+/** Siparis ekraninda hangi aksiyon blogunun gosterilecegi (kod oncelikli). */
+export type GetirUiPhase =
+  | 'verify'
+  | 'prepare'
+  | 'preparing_wait'
+  | 'handover'
+  | 'getir_courier_enroute'
+  | 'deliver'
+  | 'scheduled_accepted_wait'
+  | 'arrived_info'
+  | 'done';
+
+export function getGetirUiPhase(order: {
+  status: string;
+  getir_status_code: number | null;
+  getir_is_scheduled?: boolean | null;
+  getir_delivery_type?: number | null;
+}): GetirUiPhase {
+  const code = typeof order.getir_status_code === 'number' ? order.getir_status_code : null;
+  const dt = order.getir_delivery_type ?? 0;
+
+  if (order.status === 'delivered' || code === 900) return 'done';
+  if (order.status === 'cancelled' || code === 1500 || code === 1600) return 'done';
+  if (order.status === 'scheduled_accepted') return 'scheduled_accepted_wait';
+
+  if (code !== null) {
+    if (code === 325 || code === 350) return 'verify';
+    if (code === 400) return 'prepare';
+    if (code === 410) return 'preparing_wait';
+    if (code === 500) return 'handover';
+    if (code === 550) return dt === 1 ? 'getir_courier_enroute' : 'deliver';
+    if (code === 600 || code === 700) return dt === 1 ? 'getir_courier_enroute' : 'deliver';
+    if (code === 800) return 'arrived_info';
+  }
+
+  if (order.status === 'new' || order.status === 'scheduled_new') return 'verify';
+  if (order.status === 'verified' || order.status === 'accepted') return 'prepare';
+  if (order.status === 'preparing') return 'preparing_wait';
+  if (order.status === 'ready') return 'handover';
+  if (order.status === 'handed_over' || order.status === 'on_the_way') {
+    return dt === 1 ? 'getir_courier_enroute' : 'deliver';
+  }
+  if (order.status === 'arrived') return 'arrived_info';
+  return 'verify';
 }
 
 /** Random 32 karakterli x-api-key uretici. */
