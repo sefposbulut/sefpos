@@ -401,8 +401,14 @@ export function OnlineOrders() {
               res.error ||
               `HTTP ${res.status ?? '???'}`;
             setGetirPollIssue(detail);
+            setGetirPollInfo(null);
           } else {
             setGetirPollIssue(null);
+            const fetched = Number(res.fetched ?? 0);
+            const saved = Number(res.saved ?? 0);
+            const ts = new Date().toLocaleTimeString('tr-TR');
+            console.info(`[OnlineOrders] poll-active ok: fetched=${fetched} saved=${saved} (${ts})`);
+            setGetirPollInfo({ fetched, saved, ts });
           }
         }
         alternate = !alternate;
@@ -873,6 +879,8 @@ export function OnlineOrders() {
    * Tipik nedenler: credential eksik, POS pasif (200), restoran kapalı, restaurantId boş.
    */
   const [getirPollIssue, setGetirPollIssue] = useState<string | null>(null);
+  /** Başarılı son senkron özeti — "0 sipariş bulundu" durumunu da kullanıcıya göstermek için. */
+  const [getirPollInfo, setGetirPollInfo] = useState<{ fetched: number; saved: number; ts: string } | null>(null);
   // Sayfa acildiginda audio context'i unlock dene; engellendiyse banner goster.
   useEffect(() => {
     unlockAudio();
@@ -973,6 +981,23 @@ export function OnlineOrders() {
             >
               ZİLİ ETKİNLEŞTİR
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* ─────────── GETIR POLL DURUM ROZETI (başarılı + bilgi) ─────────── */}
+      {!getirPollIssue && getirPollInfo && (
+        <div className="bg-slate-100 border-b border-slate-200 shrink-0">
+          <div className="max-w-7xl mx-auto px-4 md:px-6 py-1.5 text-[11px] text-slate-600 flex items-center gap-3">
+            <span className="font-bold text-slate-700">Getir son senkron:</span>
+            <span>
+              {getirPollInfo.ts} — {getirPollInfo.fetched} sipariş bulundu, {getirPollInfo.saved} kayıt güncellendi
+            </span>
+            {getirPollInfo.fetched === 0 && (
+              <span className="text-amber-700 font-semibold">
+                · Test siparişi düşmediyse: Getir paneline webhook URL'sini eklediğinizden emin olun.
+              </span>
+            )}
           </div>
         </div>
       )}
