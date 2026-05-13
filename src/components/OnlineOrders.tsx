@@ -370,13 +370,33 @@ export function OnlineOrders() {
     };
   }, [tenant]);
 
-  // Getir API auto-poll — hem onay bekleyenler (poll-unapproved) hem aktifler
-  // (poll-active). Webhook gecikir veya kaybolursa bu sayede sipariş yine düşer.
-  // 429 limitlerini asmamak icin 45 sn aralik + her tick'te bir Getir cagrisi.
+  // Getir API auto-poll — her tick'te HEM onay bekleyen (`poll-unapproved`) HEM
+  // aktif (`poll-active`) siparişleri çek. Webhook gecikse veya kaybolsa bile
+  // yeni siparişler 30 sn içinde mutlaka düşer. (Eski sürüm 45 sn aralıkla
+  // alternatif çağrı yapıyordu → yeni siparişler 90 sn beklerdi.)
   useEffect(() => {
     if (!tenant) return;
     let stopped = false;
-    let alternate = false;
+
+    const callOne = async (
+      platformId: string,
+      action: 'poll-unapproved' | 'poll-active' | 'poll-cancelled',
+    ): Promise<{ fetched: number; saved: number } | null> => {
+      const res = await callGetir({ platformId, action });
+      if (!res.ok) {
+        const dataObj = (res.data && typeof res.data === 'object') ? (res.data as Record<string, unknown>) : {};
+        const detail =
+          (dataObj.error as string | undefined) ||
+          (dataObj.message as string | undefined) ||
+          ((dataObj.data as any)?.message as string | undefined) ||
+          res.error ||
+          `HTTP ${res.status ?? '???'}`;
+        setGetirPollIssue(`${action}: ${detail}`);
+        setGetirPollInfo(null);
+        return null;
+      }
+      return { fetched: Number(res.fetched ?? 0), saved: Number(res.saved ?? 0) };
+    };
 
     const tick = async () => {
       if (stopped || document.visibilityState !== 'visible') return;
@@ -390,35 +410,29 @@ export function OnlineOrders() {
           .eq('platform_code', 'getir');
         for (const p of (platforms || []) as OnlinePlatformListRow[]) {
           if (stopped || busyOrderIdRef.current) break;
-          const action = alternate ? 'poll-unapproved' : 'poll-active';
-          const res = await callGetir({ platformId: p.id, action });
-          if (!res.ok) {
-            const dataObj = (res.data && typeof res.data === 'object') ? (res.data as Record<string, unknown>) : {};
-            const detail =
-              (dataObj.error as string | undefined) ||
-              (dataObj.message as string | undefined) ||
-              ((dataObj.data as any)?.message as string | undefined) ||
-              res.error ||
-              `HTTP ${res.status ?? '???'}`;
-            setGetirPollIssue(detail);
-            setGetirPollInfo(null);
-          } else {
+          // 1) Önce onay bekleyenler: yeni sipariş geciktirilmemeli
+          const unapproved = await callOne(p.id, 'poll-unapproved');
+          if (stopped || busyOrderIdRef.current) break;
+          // 2) Sonra aktifler: onaylı/hazırlık aşamasındakileri senkronla
+          const active = await callOne(p.id, 'poll-active');
+          if (unapproved && active) {
             setGetirPollIssue(null);
-            const fetched = Number(res.fetched ?? 0);
-            const saved = Number(res.saved ?? 0);
             const ts = new Date().toLocaleTimeString('tr-TR');
-            console.info(`[OnlineOrders] poll-active ok: fetched=${fetched} saved=${saved} (${ts})`);
-            setGetirPollInfo({ fetched, saved, ts });
+            const totalFetched = unapproved.fetched + active.fetched;
+            const totalSaved = unapproved.saved + active.saved;
+            console.info(
+              `[OnlineOrders] auto-poll ok: unapproved=${unapproved.fetched}/${unapproved.saved} active=${active.fetched}/${active.saved} (${ts})`,
+            );
+            setGetirPollInfo({ fetched: totalFetched, saved: totalSaved, ts });
           }
         }
-        alternate = !alternate;
       } catch (e) {
         console.warn('[OnlineOrders] auto-poll uyari:', e);
       }
     };
 
-    const firstId = window.setTimeout(tick, 1500);
-    const intervalId = window.setInterval(tick, 45_000);
+    const firstId = window.setTimeout(tick, 800);
+    const intervalId = window.setInterval(tick, 30_000);
     return () => {
       stopped = true;
       window.clearTimeout(firstId);
