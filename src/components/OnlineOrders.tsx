@@ -267,11 +267,13 @@ export function OnlineOrders() {
     };
   }, []);
 
-  // Otomatik polling — aralik uzun tutuldu (429 riski). Kullanici Getir
-  // aksiyonu calistirirken poll atlanir.
+  // Getir API auto-poll — hem onay bekleyenler (poll-unapproved) hem aktifler
+  // (poll-active). Webhook gecikir veya kaybolursa bu sayede sipariş yine düşer.
+  // 429 limitlerini asmamak icin 90 sn aralik + her tick'te bir Getir cagrisi.
   useEffect(() => {
     if (!tenant) return;
     let stopped = false;
+    let alternate = false;
 
     const tick = async () => {
       if (stopped || document.visibilityState !== 'visible') return;
@@ -285,21 +287,62 @@ export function OnlineOrders() {
           .eq('platform_code', 'getir');
         for (const p of platforms || []) {
           if (stopped || busyOrderIdRef.current) break;
-          await callGetir({ platformId: p.id, action: 'poll-active' });
+          const action = alternate ? 'poll-unapproved' : 'poll-active';
+          await callGetir({ platformId: p.id, action });
         }
+        alternate = !alternate;
       } catch (e) {
         console.warn('[OnlineOrders] auto-poll uyari:', e);
       }
     };
 
     const firstId = window.setTimeout(tick, 1500);
-    const intervalId = window.setInterval(tick, 90_000);
+    const intervalId = window.setInterval(tick, 45_000);
     return () => {
       stopped = true;
       window.clearTimeout(firstId);
       window.clearInterval(intervalId);
     };
   }, [tenant]);
+
+  // Realtime fallback: 20 sn'de bir hafif bir DB poll — id+status+updated_at
+  // disinde alan cekmedigimiz icin neredeyse bedava. Realtime kacirirsa yine
+  // sipariş düşer. Yeni id veya status degisikligi tespit edilirse loadOrders.
+  useEffect(() => {
+    if (!tenant) return;
+    let stopped = false;
+    let lastSignature = '';
+
+    const tick = async () => {
+      if (stopped || document.visibilityState !== 'visible') return;
+      if (busyOrderIdRef.current) return;
+      try {
+        const { data } = await supabase
+          .from('online_orders')
+          .select('id, status, updated_at')
+          .eq('tenant_id', tenant.id)
+          .order('created_at', { ascending: false })
+          .limit(50);
+        const sig = (data || [])
+          .map((r: any) => `${r.id}:${r.status}:${r.updated_at || ''}`)
+          .join('|');
+        if (sig && sig !== lastSignature) {
+          lastSignature = sig;
+          await loadOrders();
+        }
+      } catch (e) {
+        console.warn('[OnlineOrders] DB poll uyari:', e);
+      }
+    };
+
+    const firstId = window.setTimeout(tick, 3000);
+    const intervalId = window.setInterval(tick, 20_000);
+    return () => {
+      stopped = true;
+      window.clearTimeout(firstId);
+      window.clearInterval(intervalId);
+    };
+  }, [tenant, loadOrders]);
 
   // filter UI tarafında uygulanıyor; ek loadOrders gereksiz.
 
@@ -547,7 +590,26 @@ export function OnlineOrders() {
         await loadOrders();
         return;
       }
+
+      // Basariyla Getir'e gonderildi. Getir cevabini DB ile esitlemek icin
+      // de hemen bir inquiry tetikleyip kesin sonucu al — Getir paneliyle
+      // ŞefPOS arasinda gozle gorulur senkron hissi olusur.
+      try {
+        await callGetir({
+          platformId: order.platform_id,
+          action: 'inquiry',
+          orderId: order.platform_order_id,
+        });
+      } catch (e) {
+        console.warn('[Getir] post-action inquiry uyari:', e);
+      }
       await loadOrders();
+
+      if (action === 'verify' || action === 'verify-scheduled') {
+        console.info(
+          `[Getir] Sipariş #${order.platform_order_number || order.platform_order_id} onaylandı (verify) → Getir paneline iletildi.`,
+        );
+      }
     } catch (err: any) {
       alert(`Getir aksiyonu sırasında hata: ${err?.message || err}`);
       await loadOrders();

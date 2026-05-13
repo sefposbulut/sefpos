@@ -165,14 +165,17 @@ Deno.serve(async (req) => {
   const subtotal = Number(order.totalPrice ?? 0);
   const discounted = Number(order.totalDiscountedPrice ?? order.totalPrice ?? 0);
   const totalDiscount = Math.max(0, subtotal - discounted);
-  // Default status: Getir webhook bize sipariş gonderdiyse genelde "yeni" demektir.
-  // Ileri tarihli ise 350 (scheduled_new), aksi halde 325 (new — verify bekleniyor).
-  // ESKI kod default=400 atiyordu → bu yuzden sipariş bizim sistemde "onayli"
-  // gozukurken Getir panelinde hala "Onayla" bekliyordu.
+
+  // Yeni webhook (?type=new) — Onay daima ŞefPOS kullanıcısında.
+  // Getir test paneli bazen payload icinde status=400 (verified) yolluyor;
+  // buna guvenip "onaylandi" diye DB'ye yazarsak sipariş ŞefPOS'ta otomatik
+  // onaylanmis goruluyor ama Getir panelinde hala "Onayla" bekliyor (cunku
+  // hicbir verify cagrisi yapilmadi). Bu kafa karistirici durumu engellemek
+  // icin webhook ile gelen YENI siparisleri zorla 325/350'ye sabitliyoruz.
+  // Eger order zaten ŞefPOS DB'sinde varsa ve mevcut durumu daha ilerideyse
+  // (preparing/ready/...) onu BOZMAYIZ — sadece taze gelenler icin geri at.
   const isScheduled = !!order.isScheduled;
-  const rawStatus = order.status;
-  const hasStatus = rawStatus != null && !isNaN(Number(rawStatus));
-  const statusCode = hasStatus ? Number(rawStatus) : (isScheduled ? 350 : 325);
+  const statusCode = isScheduled ? 350 : 325;
   const normalized = normalizeStatus(statusCode);
 
   const row: Record<string, any> = {
@@ -205,12 +208,21 @@ Deno.serve(async (req) => {
 
   const { data: existing } = await admin
     .from("online_orders")
-    .select("id, status")
+    .select("id, status, getir_status_code")
     .eq("platform_id", platform.id)
     .eq("platform_order_id", platformOrderId)
     .maybeSingle();
 
   const isFirstTime = !existing;
+
+  // Mevcut sipariş ilerideyse webhook ile geri sarma; sadece yeni gelenler.
+  if (
+    existing &&
+    typeof existing.getir_status_code === "number" &&
+    existing.getir_status_code > statusCode
+  ) {
+    return ok({ ok: true, type: "new", isFirstTime: false, skipped: "existing-newer" });
+  }
 
   const { error: upErr } = await admin
     .from("online_orders")
