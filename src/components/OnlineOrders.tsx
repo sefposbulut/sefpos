@@ -440,8 +440,8 @@ export function OnlineOrders() {
       }
     };
 
-    const firstId = window.setTimeout(tick, 800);
-    const intervalId = window.setInterval(tick, 30_000);
+    const firstId = window.setTimeout(tick, 500);
+    const intervalId = window.setInterval(tick, 15_000);
     return () => {
       stopped = true;
       window.clearTimeout(firstId);
@@ -479,8 +479,8 @@ export function OnlineOrders() {
       }
     };
 
-    const firstId = window.setTimeout(tick, 3000);
-    const intervalId = window.setInterval(tick, 20_000);
+    const firstId = window.setTimeout(tick, 2000);
+    const intervalId = window.setInterval(tick, 10_000);
     return () => {
       stopped = true;
       window.clearTimeout(firstId);

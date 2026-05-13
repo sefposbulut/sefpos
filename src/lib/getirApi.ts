@@ -403,7 +403,10 @@ export function getGetirUiPhase(order: {
   if (code !== null) {
     if (code === 325 || code === 350) return 'verify';
     if (code === 400) return 'prepare';
-    if (code === 410) return 'preparing_wait';
+    // 410 (PREPARING) — restoran "hazırlandı, kuryeye teslim ediyorum" diyebilsin.
+    // Getir Food API akışı: 400 → prepare → 410 → handover → 500. preparing_wait yerine
+    // doğrudan handover butonu gösterilir (restoran ne zaman hazır olduğuna kendi karar verir).
+    if (code === 410) return 'handover';
     if (code === 500) return 'handover';
     if (code === 550) return dt === 1 ? 'getir_courier_enroute' : 'deliver';
     if (code === 600 || code === 700) return dt === 1 ? 'getir_courier_enroute' : 'deliver';
@@ -412,7 +415,7 @@ export function getGetirUiPhase(order: {
 
   if (order.status === 'new' || order.status === 'scheduled_new') return 'verify';
   if (order.status === 'verified' || order.status === 'accepted') return 'prepare';
-  if (order.status === 'preparing') return 'preparing_wait';
+  if (order.status === 'preparing') return 'handover';
   if (order.status === 'ready') return 'handover';
   if (order.status === 'handed_over' || order.status === 'on_the_way') {
     return dt === 1 ? 'getir_courier_enroute' : 'deliver';
