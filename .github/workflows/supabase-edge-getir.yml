@@ -10,6 +10,11 @@ on:
       - ".github/workflows/supabase-edge-getir.yml"
   workflow_dispatch:
 
+env:
+  # Project ref public bilgi (AGENTS.md'de yazılı), hardcode ediyoruz ki
+  # tek eksik secret (SUPABASE_PROJECT_REF) yüzünden deploy fail etmesin.
+  SUPABASE_PROJECT_REF: xdfnozfuuzctubijbnds
+
 jobs:
   deploy-getir-functions:
     runs-on: ubuntu-latest
@@ -27,30 +32,28 @@ jobs:
       - name: Verify secrets
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
-          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
         run: |
-          missing=0
-          [ -z "$SUPABASE_ACCESS_TOKEN" ] && { echo "::error::SUPABASE_ACCESS_TOKEN eksik"; missing=1; }
-          [ -z "$SUPABASE_PROJECT_REF" ] && { echo "::error::SUPABASE_PROJECT_REF eksik"; missing=1; }
-          exit "$missing"
+          if [ -z "$SUPABASE_ACCESS_TOKEN" ]; then
+            echo "::error::SUPABASE_ACCESS_TOKEN secret eksik. Repo Settings → Secrets and variables → Actions → New repository secret"
+            exit 1
+          fi
+          echo "Project ref: $SUPABASE_PROJECT_REF"
 
       - name: Link project
-        run: supabase link --project-ref "${{ secrets.SUPABASE_PROJECT_REF }}"
+        run: supabase link --project-ref "$SUPABASE_PROJECT_REF"
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
 
       - name: Deploy getir-api
         # Auth header'i fonksiyon icinde Supabase JWT ile manuel dogruluyoruz.
         # Gateway-level verify_jwt = false (config.toml) → tag bagimsiz deploy.
-        run: |
-          supabase functions deploy getir-api --no-verify-jwt
+        run: supabase functions deploy getir-api --no-verify-jwt --project-ref "$SUPABASE_PROJECT_REF"
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
 
       - name: Deploy getir-webhook
         # Public endpoint — x-api-key header ile kendi auth'umuzu yapiyoruz.
-        run: |
-          supabase functions deploy getir-webhook --no-verify-jwt
+        run: supabase functions deploy getir-webhook --no-verify-jwt --project-ref "$SUPABASE_PROJECT_REF"
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
 
@@ -58,7 +61,7 @@ jobs:
         run: |
           echo "Checking deployed functions..."
           curl -s -o /dev/null -w "getir-api: %{http_code}\n" \
-            https://${{ secrets.SUPABASE_PROJECT_REF }}.supabase.co/functions/v1/getir-api
+            "https://$SUPABASE_PROJECT_REF.supabase.co/functions/v1/getir-api"
           curl -s -o /dev/null -w "getir-webhook: %{http_code}\n" \
-            https://${{ secrets.SUPABASE_PROJECT_REF }}.supabase.co/functions/v1/getir-webhook
+            "https://$SUPABASE_PROJECT_REF.supabase.co/functions/v1/getir-webhook"
           echo "(404 = deploy basarisiz, 401/400 = deploy ok)"

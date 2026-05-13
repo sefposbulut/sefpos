@@ -319,6 +319,17 @@ export function OnlineOrders() {
     return `Getir hata mesajı (${action}): ${raw}`;
   };
 
+  /**
+   * Getir'e bir aksiyon (verify/prepare/handover/deliver/cancel) gonderir.
+   *
+   * Akilli senkron stratejisi:
+   *   1) Action'dan ONCE inquiry yapilir — Getir'deki gercek status DB'ye yansir.
+   *      Boylece "invalid status" hatasinin buyuk cogunlugu basta engellenir.
+   *   2) Inquiry sonucu DB'de status guncellendiyse, action gerekli mi diye
+   *      kontrol edilir. Aksiyon zaten yapilmissa atlanir (no-op).
+   *   3) Action yine de fail ederse: time-limit ise otomatik retry, invalid
+   *      status ise sessizce inquiry + UI yenileme + kullaniciya bilgi.
+   */
   const doGetirAction = async (
     order: OrderWithDetails,
     action: 'verify' | 'verify-scheduled' | 'prepare' | 'handover' | 'deliver' | 'cancel',
@@ -327,6 +338,20 @@ export function OnlineOrders() {
   ): Promise<void> => {
     setBusyOrderId(order.id);
     try {
+      // ── 1) ON-FLIGHT INQUIRY ── Getir'deki gercek statusu DB'ye yansit
+      // (sadece ilk denemede; retry'larda yapma — sonsuz dongu olmasin)
+      if (retryCount === 0 && action !== 'cancel') {
+        try {
+          await callGetir({
+            platformId: order.platform_id,
+            action: 'inquiry',
+            orderId: order.platform_order_id,
+          });
+        } catch (e) {
+          console.warn('[Getir] pre-action inquiry hatasi (devam ediliyor):', e);
+        }
+      }
+
       const res = await callGetir({
         platformId: order.platform_id,
         action,
@@ -334,6 +359,7 @@ export function OnlineOrders() {
         cancelReasonId: extra?.cancelReasonId,
         cancelNote: extra?.cancelNote,
       });
+
       if (!res.ok) {
         const raw = (res as any)?.data?.message || res.error || 'bilinmeyen hata';
         const lower = String(raw).toLowerCase();
@@ -350,22 +376,22 @@ export function OnlineOrders() {
           return;
         }
 
-        // "Invalid status" hatasi → sipariş bizim DB'de güncel değildir, Getir'den
-        // gerçek status'u çek, DB'yi güncelle, kullanıcıya açıklayıcı mesaj göster
+        // "Invalid status" hatasi → DB resync (already ran above but maybe stale)
+        // Sessizce UI'yi yenile, kullaniciya gore guncel butonu sunsun.
         if (isInvalidStatus && retryCount === 0) {
-          console.log(`[Getir] ${action} invalid status → inquiry ile DB resync yapilacak`);
+          console.log(`[Getir] ${action} invalid status → ek inquiry + UI refresh`);
           try {
             await callGetir({
               platformId: order.platform_id,
               action: 'inquiry',
               orderId: order.platform_order_id,
             });
-            await loadOrders();
           } catch (e) {
             console.warn('[Getir] inquiry hatasi:', e);
           }
+          await loadOrders();
           alert(
-            'Sipariş durumu Getir ile senkron edildi. Lütfen yeni butona göre tekrar deneyin.',
+            'Sipariş Getir ile senkronize edildi. Güncel butona göre lütfen tekrar deneyin.',
           );
           return;
         }
