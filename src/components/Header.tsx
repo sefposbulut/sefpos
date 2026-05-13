@@ -228,21 +228,23 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
                 draggable={false}
               />
 
-              {/* "Masalara Dön" hizli yonlendirici — sadece tables disindaki sayfalarda goster */}
+              {/* "Masalara Dön" hizli yonlendirici — sadece tables disindaki sayfalarda
+                  ve **sadece tablet/desktop**ta gosteriliyor. Mobilde sube secici
+                  ile yan yana sigmadigi icin gizlendi; mobil kullanicisi MainMenu
+                  hamburger menusunden "Masalar"a tek tikla doner. */}
               {currentPage && currentPage !== 'tables' && onBackToTables && (
                 <>
                   <button
                     type="button"
                     onClick={onBackToTables}
                     title="Masalara dön"
-                    className="group inline-flex items-center gap-1.5 md:gap-2 pl-1.5 pr-2.5 md:pl-2 md:pr-3.5 py-1 md:py-1.5 rounded-full bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-600 hover:to-green-700 text-white shadow-sm hover:shadow transition active:scale-95 flex-shrink-0"
+                    className="group hidden md:inline-flex items-center gap-2 pl-2 pr-3.5 py-1.5 rounded-full bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-600 hover:to-green-700 text-white shadow-sm hover:shadow transition active:scale-95 flex-shrink-0"
                   >
-                    <span className="w-6 h-6 md:w-7 md:h-7 rounded-full bg-white/20 flex items-center justify-center group-hover:-translate-x-0.5 transition-transform">
-                      <ArrowLeft className="w-3.5 h-3.5 md:w-4 md:h-4" strokeWidth={2.5} />
+                    <span className="w-7 h-7 rounded-full bg-white/20 flex items-center justify-center group-hover:-translate-x-0.5 transition-transform">
+                      <ArrowLeft className="w-4 h-4" strokeWidth={2.5} />
                     </span>
-                    <span className="text-xs md:text-sm font-extrabold tracking-tight whitespace-nowrap">
-                      <span className="hidden md:inline">Masalara Dön</span>
-                      <span className="md:hidden">Masalar</span>
+                    <span className="text-sm font-extrabold tracking-tight whitespace-nowrap">
+                      Masalara Dön
                     </span>
                   </button>
 
