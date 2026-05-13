@@ -4611,12 +4611,20 @@ function BranchDefaultDiscountRow({
       <div className="flex items-center gap-2 shrink-0">
         <div className="relative">
           <input
-            type="number"
-            min={0}
-            max={100}
-            inputMode="numeric"
-            value={percent}
-            onChange={(e) => setPercent(Math.min(100, Math.max(0, Number(e.target.value) || 0)))}
+            type="text"
+            inputMode="decimal"
+            value={percent === 0 ? '' : String(percent)}
+            placeholder="0"
+            onChange={(e) => {
+              // Türk klavyesinde virgül de kabul et (3,38 → 3.38 → integer 3)
+              const raw = e.target.value.replace(',', '.');
+              const num = Number(raw);
+              if (raw === '' || Number.isNaN(num)) {
+                setPercent(0);
+              } else {
+                setPercent(Math.min(100, Math.max(0, Math.round(num))));
+              }
+            }}
             onBlur={() => { if (dirty) void commit({ percent }); }}
             disabled={saving}
             className="w-20 px-2 py-1.5 pr-7 rounded-lg border-2 border-slate-200 focus:border-orange-400 focus:outline-none text-right font-bold text-sm"
