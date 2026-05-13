@@ -601,7 +601,12 @@ Deno.serve(async (req) => {
             : body.action === "poll-unapproved"
               ? "/food-orders/unapproved"
               : "/food-orders/cancelled";
-        const method: "GET" | "POST" = body.action === "poll-active" ? "POST" : "GET";
+        /**
+         * Getir Food API üç sipariş listesi endpoint'inin hepsi POST.
+         * GET kullanılırsa `:foodOrderId` rotasına düşer ve
+         * `"unapproved" needs to be 24 hex characters` hatası döner.
+         */
+        const method: "GET" | "POST" = "POST";
         const res = await callGetir(admin, platform as PlatformRow, method, path, body.payload);
         if (!res.ok) return jsonResponse({ ok: false, status: res.status, data: res.data }, res.status);
         const list: any[] = Array.isArray(res.data) ? res.data : (res.data?.data || res.data?.orders || []);
