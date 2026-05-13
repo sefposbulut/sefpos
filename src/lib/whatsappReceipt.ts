@@ -87,9 +87,13 @@ export function buildWhatsAppReceiptText(input: WhatsAppReceiptInput): string {
   lines.push('--------------------------------');
   lines.push(`Ara toplam: ${fmtTry(input.subtotal)} ₺`);
   if (input.discountAmount && input.discountAmount > 0) {
-    const pctLabel = input.discountPercent && input.discountPercent > 0
-      ? ` (%${input.discountPercent})`
+    const pct = Number(input.discountPercent || 0);
+    const pctStr = pct > 0
+      ? (Number.isInteger(pct)
+          ? String(pct)
+          : new Intl.NumberFormat('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(pct))
       : '';
+    const pctLabel = pctStr ? ` (%${pctStr})` : '';
     lines.push(`İskonto${pctLabel}: -${fmtTry(input.discountAmount)} ₺`);
   }
   if (input.taxAmount && input.taxAmount > 0) {
@@ -240,9 +244,14 @@ export function buildWhatsAppReceiptHtml(input: WhatsAppReceiptInput): string {
   html += `<div class="hr-dash"></div>`;
   html += `<div class="row"><span>Ara Toplam</span><span>${fmt(input.subtotal)} ₺</span></div>`;
   if (input.discountAmount && input.discountAmount > 0) {
-    const pctLabel = input.discountPercent && input.discountPercent > 0
-      ? ` <span class="muted">(%${input.discountPercent})</span>`
+    // Yüzdeyi tam sayıysa "5", ondalıklıysa "3,38" gibi TR formatta göster.
+    const pct = Number(input.discountPercent || 0);
+    const pctStr = pct > 0
+      ? (Number.isInteger(pct)
+          ? String(pct)
+          : new Intl.NumberFormat('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(pct))
       : '';
+    const pctLabel = pctStr ? ` <span class="muted">(%${pctStr})</span>` : '';
     html += `<div class="row discount"><span>İskonto${pctLabel}</span><span>-${fmt(input.discountAmount)} ₺</span></div>`;
   }
   if (input.taxAmount && input.taxAmount > 0) {

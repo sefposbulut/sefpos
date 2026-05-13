@@ -324,7 +324,9 @@ export function QuickSale() {
     const totalNow = total;
     const subtotalNow = subtotal;
     const discountNow = discountAmount;
-    const discountPctNow = Math.min(100, Math.max(0, Math.round(discount)));
+    // İki ondalık hassasiyet korunsun (örn. 3,38). Round yapmıyoruz; sadece
+    // 0-100 aralığına klampla + 2 ondalığa kestir.
+    const discountPctNow = Math.min(100, Math.max(0, Math.round(discount * 100) / 100));
 
     // Cari (açık hesap) ödemelerde fiş üstüne basılacak müşteri bilgisi
     // ve önceki/yeni bakiye snapshot'ı. Ödeme öncesi yakalanır.
