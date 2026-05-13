@@ -255,6 +255,29 @@ function isDuplicateKeyError(err: any): boolean {
   return err?.code === "23505" || String(err?.message || "").includes("duplicate key");
 }
 
+function isMissingObjectError(err: any): boolean {
+  if (!err) return false;
+  const msg = String(err?.message || "").toLowerCase();
+  return (
+    err.code === "42P01" ||
+    err.code === "42703" ||
+    err.code === "PGRST204" ||
+    err.code === "PGRST205" ||
+    msg.includes("does not exist") ||
+    msg.includes("could not find") ||
+    msg.includes("schema cache")
+  );
+}
+
+function stripNewGetirColumns<T extends Record<string, any>>(row: T): Record<string, any> {
+  const clone: Record<string, any> = { ...row };
+  delete clone.getir_courier_name;
+  delete clone.getir_courier_phone;
+  delete clone.getir_courier_pickup_at;
+  delete clone.getir_platform_order_status;
+  return clone;
+}
+
 function applyLifecycleTimestampsPoll(patch: Record<string, any>, toStatus: string, nowIso: string) {
   if (toStatus === "verified" || toStatus === "accepted" || toStatus === "scheduled_accepted") {
     patch.accepted_at = nowIso;
@@ -290,6 +313,10 @@ async function appendPollStatusEvent(
     dedupe_key: dk,
   });
   if (error && isDuplicateKeyError(error)) return;
+  if (error && isMissingObjectError(error)) {
+    console.warn("[getir-api] online_order_status_events tablosu yok — status history atlandı.");
+    return;
+  }
   if (error) console.warn("[getir-api] status event insert:", error?.message || error);
 }
 
@@ -402,11 +429,20 @@ async function upsertGetirOrder(
     .maybeSingle();
   const isNew = !existing?.id;
 
-  const { data: upserted, error: upErr } = await admin
+  let { data: upserted, error: upErr } = await admin
     .from("online_orders")
     .upsert(baseRow, { onConflict: "tenant_id,platform_id,platform_order_id" })
     .select("id, tenant_id")
     .maybeSingle();
+
+  if (upErr && isMissingObjectError(upErr)) {
+    console.warn("[getir-api] online_orders upsert kolon eksik, fallback deniyor:", upErr.message);
+    ({ data: upserted, error: upErr } = await admin
+      .from("online_orders")
+      .upsert(stripNewGetirColumns(baseRow), { onConflict: "tenant_id,platform_id,platform_order_id" })
+      .select("id, tenant_id")
+      .maybeSingle());
+  }
 
   if (upErr) {
     console.error("[getir-api] online_orders upsert hatasi:", upErr);

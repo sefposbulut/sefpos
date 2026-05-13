@@ -74,6 +74,22 @@ async function buildDedupeKey(
   return `${platformId}:${platformOrderId}:${h}`;
 }
 
+function isMissingObjectError(err: any): boolean {
+  if (!err) return false;
+  const msg = String(err?.message || "").toLowerCase();
+  // Postgres / PostgREST kodları:
+  //   42P01 = undefined_table, 42703 = undefined_column, PGRST204 = column not found, PGRST205 = relation not found
+  return (
+    err.code === "42P01" ||
+    err.code === "42703" ||
+    err.code === "PGRST204" ||
+    err.code === "PGRST205" ||
+    msg.includes("does not exist") ||
+    msg.includes("could not find") ||
+    msg.includes("schema cache")
+  );
+}
+
 async function tryInsertWebhookDedupe(
   admin: any,
   platformId: string,
@@ -91,9 +107,14 @@ async function tryInsertWebhookDedupe(
     console.info("[getir-webhook] duplicate event skipped:", dedupeKey.slice(0, 80));
     return false;
   }
+  if (error && isMissingObjectError(error)) {
+    console.warn("[getir-webhook] getir_webhook_event_log tablosu yok — dedupe atlandı (migration uygulayın).");
+    return true;
+  }
   if (error) {
     console.error("[getir-webhook] dedupe insert error:", error);
-    throw error;
+    // Eski davranışı koru: dedupe kaydedilemese bile siparişi işle.
+    return true;
   }
   return true;
 }
@@ -125,7 +146,24 @@ async function appendStatusEvent(
     dedupe_key: dk,
   });
   if (error && isDuplicateKeyError(error)) return;
+  if (error && isMissingObjectError(error)) {
+    console.warn("[getir-webhook] online_order_status_events tablosu yok — status history atlandı.");
+    return;
+  }
   if (error) console.warn("[getir-webhook] status event insert:", error?.message || error);
+}
+
+/**
+ * Bilinen yeni kolonları satırdan ayıklayarak fallback üretir.
+ * Migration henüz uygulanmamış Supabase için "kolon yok" hatasından sonra deneriz.
+ */
+function stripNewGetirColumns<T extends Record<string, any>>(row: T): Record<string, any> {
+  const clone: Record<string, any> = { ...row };
+  delete clone.getir_courier_name;
+  delete clone.getir_courier_phone;
+  delete clone.getir_courier_pickup_at;
+  delete clone.getir_platform_order_status;
+  return clone;
 }
 
 function applyLifecycleTimestamps(patch: Record<string, any>, toStatus: string, nowIso: string) {
@@ -273,11 +311,20 @@ Deno.serve(async (req) => {
       .eq("platform_id", platform.id)
       .eq("platform_order_id", platformOrderId)
       .maybeSingle();
-    await admin
+    let { error: cancErr } = await admin
       .from("online_orders")
       .update(upd)
       .eq("platform_id", platform.id)
       .eq("platform_order_id", platformOrderId);
+    if (cancErr && isMissingObjectError(cancErr)) {
+      console.warn("[getir-webhook] cancel update kolon eksik, fallback deniyor:", cancErr.message);
+      ({ error: cancErr } = await admin
+        .from("online_orders")
+        .update(stripNewGetirColumns(upd))
+        .eq("platform_id", platform.id)
+        .eq("platform_order_id", platformOrderId));
+    }
+    if (cancErr) console.error("[getir-webhook] cancel update hatasi:", cancErr);
     if (row?.id) {
       await appendStatusEvent(admin, {
         tenantId: row.tenant_id,
@@ -306,11 +353,19 @@ Deno.serve(async (req) => {
   if (!existing) {
     const row = buildOrderRow(platform as PlatformRow, order, target);
     applyLifecycleTimestamps(row, target.internalStatus, nowIso);
-    const { data: ins, error: upErr } = await admin
+    let { data: ins, error: upErr } = await admin
       .from("online_orders")
       .upsert(row, { onConflict: "tenant_id,platform_id,platform_order_id" })
       .select("id, tenant_id")
       .maybeSingle();
+    if (upErr && isMissingObjectError(upErr)) {
+      console.warn("[getir-webhook] insert kolon eksik, fallback deniyor:", upErr.message);
+      ({ data: ins, error: upErr } = await admin
+        .from("online_orders")
+        .upsert(stripNewGetirColumns(row), { onConflict: "tenant_id,platform_id,platform_order_id" })
+        .select("id, tenant_id")
+        .maybeSingle());
+    }
     if (upErr) {
       console.error("[getir-webhook] insert hatasi:", upErr);
       return ok({ ok: false, error: upErr.message }, 500);
@@ -362,10 +417,17 @@ Deno.serve(async (req) => {
   if (courier.pickupAt) patch.getir_courier_pickup_at = courier.pickupAt;
   applyLifecycleTimestamps(patch, target.internalStatus, nowIso);
 
-  const { error: uErr } = await admin
+  let { error: uErr } = await admin
     .from("online_orders")
     .update(patch)
     .eq("id", existing.id);
+  if (uErr && isMissingObjectError(uErr)) {
+    console.warn("[getir-webhook] update kolon eksik, fallback deniyor:", uErr.message);
+    ({ error: uErr } = await admin
+      .from("online_orders")
+      .update(stripNewGetirColumns(patch))
+      .eq("id", existing.id));
+  }
   if (uErr) {
     console.error("[getir-webhook] update hatasi:", uErr);
     return ok({ ok: false, error: uErr.message }, 500);
