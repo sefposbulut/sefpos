@@ -166,6 +166,88 @@ function calcDiscountAmount(price: DHOrder["price"], discounts?: DHOrder["discou
   return 0;
 }
 
+/**
+ * Yemeksepeti / Trendyol / Migros gibi DH-tabanli siparişler icin mutfak
+ * fişini print_jobs kuyruğuna at. Electron Print Agent tenant_id'sine gore
+ * polling yapar ve mutfak yazıcısına gönderir (printer_name="" = default
+ * kitchen printer).
+ */
+async function queueDHKitchenReceipt(
+  admin: any,
+  tenantId: string,
+  platformName: string,
+  order: DHOrder,
+): Promise<void> {
+  const platformLabel = (platformName || "Online").toUpperCase();
+  const lines = (order.products || []).map((p) => {
+    const opts = (p.selectedToppings || [])
+      .map((t) => `${t.quantity || 1}x ${t.name}`)
+      .join(", ");
+    const note = p.comment ? ` (Not: ${p.comment})` : "";
+    return `${p.quantity}x ${p.name}${opts ? ` [${opts}]` : ""}${note}`;
+  }).join("<br/>");
+
+  const customer = buildCustomerName(order.customer);
+  const phone = order.customer.mobilePhone || "";
+  const addr = order.expeditionType === "delivery"
+    ? buildDeliveryAddress(order.delivery)
+    : (order.pickup?.pickupCode ? `Gel-al - Kod: ${order.pickup.pickupCode}` : "Gel-al");
+  const grandTotal = parseFloat(order.price.grandTotal) || 0;
+  const subTotal = parseFloat(order.price.subTotal || order.price.totalNet || "0") || 0;
+  const discount = calcDiscountAmount(order.price, order.discounts);
+  const isPaid = order.payment?.status === "paid";
+  const orderCode = order.shortCode || order.code || "";
+
+  const html = `
+<style>
+  .dh { font-family: Arial, sans-serif; width: 72mm; padding: 2mm; color: #000; }
+  .dh .h { text-align: center; font-weight: 900; font-size: 18px; letter-spacing: 2px; padding: 4px 0; border: 2px solid #000; margin-bottom: 4px; }
+  .dh .row { display: flex; justify-content: space-between; gap: 6px; font-size: 12px; margin: 1px 0; }
+  .dh .label { font-weight: 800; }
+  .dh .box { border: 1px solid #000; padding: 4px 6px; margin: 4px 0; font-size: 12px; }
+  .dh .code { font-size: 22px; font-weight: 900; text-align: center; letter-spacing: 3px; padding: 4px 0; border: 2px solid #000; margin: 4px 0; }
+  .dh .items { font-size: 13px; line-height: 1.4; margin: 6px 0; padding: 4px 0; border-top: 1px dashed #000; border-bottom: 1px dashed #000; font-weight: 700; }
+  .dh .total { font-size: 15px; font-weight: 900; text-align: right; margin-top: 4px; }
+  .dh .note { background: #ffe66b; padding: 4px 6px; font-weight: 800; font-size: 12px; margin: 4px 0; border: 1px solid #000; }
+  .dh .small { font-size: 11px; }
+</style>
+<div class="dh">
+  <div class="h">${platformLabel}</div>
+  <div class="row"><span class="label">Sipariş:</span><span>${orderCode}</span></div>
+  <div class="row"><span class="label">Tarih:</span><span>${order.createdAt ? new Date(order.createdAt).toLocaleString("tr-TR") : new Date().toLocaleString("tr-TR")}</span></div>
+  <div class="row"><span class="label">Tip:</span><span>${order.expeditionType === "delivery" ? "Kurye Teslimat" : "Gel-Al"}</span></div>
+  <div class="row"><span class="label">Ödeme:</span><span>${isPaid ? "Online Ödendi" : `Kapıda (${order.payment?.type || "—"})`}</span></div>
+
+  ${orderCode ? `<div class="code">${orderCode}</div>` : ""}
+
+  <div class="box">
+    <div><span class="label">Müşteri:</span> ${customer}</div>
+    ${phone ? `<div><span class="label">Telefon:</span> ${phone}</div>` : ""}
+    ${addr ? `<div><span class="label">Adres:</span> ${addr}</div>` : ""}
+  </div>
+
+  <div class="items">${lines || "(ürün yok)"}</div>
+
+  ${order.comments?.customerComment ? `<div class="note">MÜŞTERİ NOTU: ${order.comments.customerComment}</div>` : ""}
+
+  ${discount > 0 ? `<div class="row small"><span>Ara Toplam:</span><span>${subTotal.toFixed(2)} TL</span></div>` : ""}
+  ${discount > 0 ? `<div class="row small"><span>İndirim (-):</span><span>${discount.toFixed(2)} TL</span></div>` : ""}
+  <div class="total">TOPLAM: ${grandTotal.toFixed(2)} TL</div>
+
+  <div class="small" style="text-align:center;margin-top:6px">${platformLabel} tarafından gönderildi</div>
+</div>
+`;
+  const { error } = await admin.from("print_jobs").insert({
+    tenant_id: tenantId,
+    html,
+    printer_name: "",
+    status: "pending",
+  });
+  if (error) {
+    console.error("[yemeksepeti-webhook] print_jobs insert error:", error);
+  }
+}
+
 async function verifyDHJWT(authHeader: string | null, secret: string | null): Promise<boolean> {
   if (!authHeader || !authHeader.startsWith("Bearer ")) return false;
   if (!secret) return true;
@@ -349,17 +431,34 @@ Deno.serve(async (req: Request) => {
         .insert(orderItems);
 
       if (itemsError) {
+        console.error("[yemeksepeti-webhook] items insert FAILED:", itemsError);
         await supabase.from("online_orders").delete().eq("id", newOrder.id);
         throw itemsError;
       }
     }
+
+    // Mutfak fişini queue'ye at (Electron Print Agent otomatik yazdiracak)
+    try {
+      await queueDHKitchenReceipt(
+        supabase,
+        platformData.tenant_id,
+        platformData.name || platformData.platform_code || "Online",
+        order,
+      );
+    } catch (e: any) {
+      console.warn("[yemeksepeti-webhook] print_jobs queue uyarisi:", e?.message);
+    }
+
+    console.log(
+      `[yemeksepeti-webhook] OK platform=${platformData.platform_code} tenant=${platformData.tenant_id} order=${order.code} -> ${newOrder.id}`,
+    );
 
     return new Response(
       JSON.stringify({ remoteResponse: { remoteOrderId } }),
       { status: 201, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (error: any) {
-    console.error("Yemeksepeti webhook error:", error);
+    console.error("Yemeksepeti webhook error:", error, error?.stack);
     return new Response(
       JSON.stringify({ error: "Internal error", details: error.message }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
