@@ -701,46 +701,38 @@ export function OnlineOrders() {
           return;
         }
 
-        // "Invalid status" hatasi → DB'yi yenile + Getir'den son durumu çek.
-        // 429 alırsak inquiry'yi sessizce atla; en azından DB'deki son bilinen
-        // koda göre kullanıcıyı bilgilendir, ek rate-limit baskısı yapma.
+        // "Invalid status" hatasi → Getir'in iç state'i DB ile uyumsuz.
+        // Kullanıcıya "yerel olarak kapatmak ister misiniz?" diye sor; onaylarsa
+        // siparişi delivered yap (Getir'e ek istek atılmaz, 429 baskısı yok).
         if (isInvalidStatus && retryCount === 0) {
-          console.log(`[Getir] ${action} invalid status → DB refresh (inquiry rate-limit safe)`);
-          let inqCode: number | null = null;
-          let inqRateLimited = false;
-          try {
-            const inq = await callGetir({
-              platformId: order.platform_id,
-              action: 'inquiry',
-              orderId: order.platform_order_id,
-            });
-            if (inq.ok && typeof (inq as any).getirStatusCode === 'number') {
-              inqCode = (inq as any).getirStatusCode;
-            } else if (inq.status === 429) {
-              inqRateLimited = true;
-            }
-          } catch (e) {
-            console.warn('[Getir] inquiry hatasi:', e);
-          }
-          await loadOrders();
-          // Inquiry başarısızsa DB'deki son bilinen Getir kodunu kullan
-          const effectiveCode =
-            inqCode ??
-            (typeof order.getir_status_code === 'number' ? order.getir_status_code : null);
-          const label = effectiveCode != null ? getirStatusLabel(effectiveCode) : 'Bilinmiyor';
-          const hint =
-            effectiveCode != null
-              ? getGetirNextStepHint(effectiveCode, order.getir_delivery_type)
-              : '';
-          const rateNote = inqRateLimited
-            ? `\n\nGetir API geçici limit verdiği için en son bilinen durum gösteriliyor; biraz sonra "Getir ile durumu eşle" ile yenileyin.`
-            : '';
-          alert(
-            `Getir bu işlemi şu an kabul etmedi (sıra dışı bir adım).\n\n` +
-              `Mevcut Getir durumu: ${effectiveCode != null ? `${effectiveCode} — ${label}` : label}\n\n` +
-              (hint ? `${hint}` : '') +
-              rateNote,
+          console.log(`[Getir] ${action} invalid status → kullanıcıya yerel kapatma seçeneği sun`);
+          const currentCode =
+            typeof order.getir_status_code === 'number' ? order.getir_status_code : null;
+          const label = currentCode != null ? getirStatusLabel(currentCode) : 'bilinmiyor';
+          const confirmClose = confirm(
+            `Getir bu işlemi kabul etmedi (sıra dışı bir adım).\n\n` +
+              `ŞefPOS'taki durum: ${currentCode ?? '?'} - ${label}\n` +
+              `Aksiyon: ${action}\n\n` +
+              `Bu sipariş büyük olasılıkla Getir tarafında zaten teslim edilmiş/iptal olmuş.\n\n` +
+              `Yerel olarak "Tamamlandı" yapmak ister misiniz?\n` +
+              `(Sadece ŞefPOS'taki kaydı kapatır, Getir tarafına bir şey gönderilmez.)`,
           );
+          if (confirmClose) {
+            try {
+              await supabase
+                .from('online_orders')
+                .update({
+                  status: 'delivered',
+                  delivered_at: new Date().toISOString(),
+                } as any)
+                .eq('id', order.id);
+              await loadOrders();
+            } catch (e: any) {
+              alert(`Yerel kapatma başarısız: ${e?.message || e}`);
+            }
+          } else {
+            await loadOrders();
+          }
           return;
         }
 
@@ -768,19 +760,19 @@ export function OnlineOrders() {
 
   /**
    * Eski siparişleri toplu kapat. Getir paneliyle eşleşmeyen, "aktif" durumda
-   * kalmış ve 6+ saatten eski siparişleri "delivered" yapar (Mutfakta sekmesi
+   * kalmış ve 30+ dakikadan eski siparişleri "delivered" yapar (Mutfakta sekmesi
    * temizlenir). Test ortamında biriken eski test siparişleri için.
    */
   const closeStaleOrders = async () => {
     if (!tenant) return;
     if (!confirm(
-      '6 saatten eski "aktif" siparişleri kapatmak istediğinize emin misiniz?\n\n' +
+      '30 dakikadan eski "aktif" siparişleri kapatmak istediğinize emin misiniz?\n\n' +
       'Bunlar genelde Getir tarafında zaten teslim/iptal olmuş ama burada açık kalmış kayıtlardır. ' +
       'Aktif olarak çalışan gerçek bir sipariş varsa onu sonra Getir’den "Siparişleri Çek" ile geri çekebilirsiniz.'
     )) return;
     setSyncing(true);
     try {
-      const cutoff = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString();
+      const cutoff = new Date(Date.now() - 30 * 60 * 1000).toISOString();
       const { data: stale, error } = await supabase
         .from('online_orders')
         .select('id')
@@ -1025,7 +1017,7 @@ export function OnlineOrders() {
               <button
                 onClick={closeStaleOrders}
                 disabled={syncing}
-                title="6 saatten eski, açık kalmış siparişleri kapat (Getir'le eşleşmeyen test/stale kayıtlar)"
+                title="30 dakikadan eski, açık kalmış siparişleri kapat (Getir'le eşleşmeyen test/stale kayıtlar)"
                 className="hidden md:flex items-center gap-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold text-xs ring-1 ring-slate-200 transition active:scale-95 disabled:opacity-50"
               >
                 <X className="w-3.5 h-3.5" />

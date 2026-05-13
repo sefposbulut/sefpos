@@ -5,6 +5,7 @@ import { isLocalMode } from '../lib/sqlDb';
 import { TR_CITY_NAMES, getDistricts } from '../lib/turkeyCitiesDistricts';
 import { getTrialInfo } from '../lib/tenantTrial';
 import { CheckCircle, ChefHat, UtensilsCrossed, MapPin, Phone, Globe, Building2, ArrowRight, ArrowLeft, LayoutGrid, Users, Wifi, Star, WifiOff, RefreshCw, Server, Zap, Shield, Globe as Globe2 } from 'lucide-react';
+import { publicAsset } from '../lib/assetUrl';
 
 /** Zorunlu alan etiketinde kucuk kirmizi nokta */
 const ReqDot = () => (
@@ -350,7 +351,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
       <div className="bg-white rounded-3xl shadow-2xl w-full max-w-2xl overflow-hidden">
         <div className="bg-gradient-to-r from-orange-500 to-red-600 px-8 pt-8 pb-6">
           <div className="flex items-center justify-center mb-6">
-            <img src="/logo.png" alt="ŞefPOS" className="h-14 w-auto brightness-0 invert" />
+            <img src={publicAsset('logo.png')} alt="ŞefPOS" className="h-14 w-auto brightness-0 invert" />
           </div>
 
           <div className="flex items-center justify-between mb-3">

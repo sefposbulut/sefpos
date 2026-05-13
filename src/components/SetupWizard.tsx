@@ -6,6 +6,7 @@ import {
   AlertCircle, Handshake, Star, Monitor, HardDrive
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
+import { publicAsset } from '../lib/assetUrl';
 
 interface Props {
   onModeSelect: (mode: 'cloud' | 'sqlserver' | 'postgres' | 'terminal' | 'local') => void;
@@ -251,7 +252,7 @@ function WelcomeStep({ onNext }: { onNext: () => void }) {
   return (
     <div className="text-center max-w-lg w-full">
       <div className="mb-8">
-        <img src="/logo.png" alt="SefPOS" className="h-16 mx-auto mb-6 drop-shadow-2xl" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
+        <img src={publicAsset('logo.png')} alt="SefPOS" className="h-16 mx-auto mb-6 drop-shadow-2xl" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
         <div className="inline-flex items-center gap-2 bg-blue-500/10 border border-blue-500/20 rounded-full px-4 py-1.5 text-blue-400 text-sm font-medium mb-5">
           <Star className="w-3.5 h-3.5" />
           Kurulum Sihirbazı

@@ -410,7 +410,8 @@ export async function fetchPrintSettingsFromCloud(): Promise<PrintSettings | nul
     // Context bu arada değiştiyse yanıtı uygulama — başka tenant'ın
     // cache'ini bu kayıtla kirletmemek için.
     if (fetchedTenantId !== _currentTenantId || fetchedBranchId !== _currentBranchId) {
-      console.warn('[ŞefPOS] print_settings: tenant/branch fetch sırasında değişti, yanıt uygulanmadı.');
+      // Context değişti — bilgi amaçlı debug log (önceden warn idi, konsolu kirletiyordu)
+      console.debug('[ŞefPOS] print_settings: tenant/branch fetch sırasında değişti, yanıt uygulanmadı.');
       return null;
     }
     if (genAtStart !== __printSettingsSaveGen) {

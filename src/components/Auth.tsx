@@ -7,6 +7,7 @@ import { isCapacitorNative } from '../lib/capacitorPlatform';
 import { Bike, Lock, Building2, Phone, ArrowRight, Sparkles, ChefHat, User, Mail, ShieldCheck, BarChart3, Wifi, Smartphone, Printer, CreditCard } from 'lucide-react';
 import { isAykaAdminPath, AYKA_ADMIN_PATH } from '../lib/aykaRoute';
 import { WaiterLogin } from './WaiterLogin';
+import { publicAsset } from '../lib/assetUrl';
 
 function getInitialAuthMode(): 'main' | 'waiter' {
   if (typeof window === 'undefined') return 'main';
@@ -527,7 +528,7 @@ export function Auth({ onBackToLanding }: AuthProps = {}) {
       <div className="relative z-10 border-b border-slate-700/50 backdrop-blur-sm">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <img src="/logo.png" alt="ŞefPOS" className="w-10 h-10 rounded-xl shadow-lg" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
+            <img src={publicAsset('logo.png')} alt="ŞefPOS" className="w-10 h-10 rounded-xl shadow-lg" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
             <div>
               <h1 className="text-xl md:text-2xl font-bold text-white tracking-tight">ŞefPOS</h1>
               <p className="text-[10px] md:text-xs text-slate-400">Restoran Yönetim Sistemi</p>

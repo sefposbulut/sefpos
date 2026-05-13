@@ -158,21 +158,29 @@ export async function callGetir(payload: GetirActionPayload): Promise<GetirActio
         if (typeof data === 'object' && data !== null && 'ok' in data) {
           const out = data as GetirActionResult;
           if (!out.ok) {
-            try {
-              console.error(
-                `[getir-api] ${payload.action} ${resp.status}: ${JSON.stringify({
-                  err: out.error,
-                  data: (out as any).data,
-                  raw: raw.slice(0, 600),
-                })}`,
-              );
-            } catch {
-              /* noop */
+            // Rate-limit (429) veya server `skipErrorLogging:true` döndüyse
+            // console'u kirletme; aksiyon zaten kullanıcıya alert/banner ile bildiriliyor.
+            const skipLog =
+              resp.status === 429 ||
+              (out as any)?.data?.data?.skipErrorLogging === true ||
+              (out as any)?.data?.skipErrorLogging === true;
+            if (!skipLog) {
+              try {
+                console.error(
+                  `[getir-api] ${payload.action} ${resp.status}: ${JSON.stringify({
+                    err: out.error,
+                    data: (out as any).data,
+                    raw: raw.slice(0, 600),
+                  })}`,
+                );
+              } catch {
+                /* noop */
+              }
             }
           }
           return { ...out, status: out.status ?? resp.status };
         }
-        if (!resp.ok) {
+        if (!resp.ok && resp.status !== 429) {
           try {
             console.error(
               `[getir-api] HTTP ${resp.status} ${payload.action}: ${JSON.stringify(data || raw).slice(0, 800)}`,

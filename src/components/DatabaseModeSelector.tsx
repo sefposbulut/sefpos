@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Cloud, Server, ArrowRight, CheckCircle, Monitor, HardDrive } from 'lucide-react';
+import { publicAsset } from '../lib/assetUrl';
 
 interface Props {
   onSelect: (mode: 'cloud' | 'sqlserver' | 'postgres' | 'terminal' | 'local') => void;
@@ -54,7 +55,7 @@ export function DatabaseModeSelector({ onSelect }: Props) {
   return (
     <div className="min-h-screen flex flex-col items-center justify-center p-8" style={{ background: 'linear-gradient(160deg, #0f172a 0%, #1e3a5f 55%, #0f2744 100%)' }}>
       <div className="mb-10 text-center">
-        <img src="/logo.png" alt="ShefPOS" className="h-14 mx-auto mb-5 drop-shadow-xl" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
+        <img src={publicAsset('logo.png')} alt="ShefPOS" className="h-14 mx-auto mb-5 drop-shadow-xl" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
         <h1 className="text-3xl font-bold text-white mb-2">Bağlantı Modu</h1>
         <p className="text-slate-400 text-base">Veritabanı bağlantı türünü seçin</p>
       </div>

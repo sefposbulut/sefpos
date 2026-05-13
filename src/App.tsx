@@ -1,6 +1,7 @@
 import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { useAuth } from './contexts/AuthContext';
 import { isAykaAdminPath } from './lib/aykaRoute';
+import { publicAsset } from './lib/assetUrl';
 import { Auth } from './components/Auth';
 import { AykaLogin } from './components/AykaLogin';
 import { ElectronAuth } from './components/ElectronAuth';
@@ -70,7 +71,7 @@ const BrandSplash = React.memo(function BrandSplash({ hint }: { hint?: string })
     >
       <div className="flex flex-col items-center gap-3 text-center">
         <img
-          src="/logo.png"
+          src={publicAsset('logo.png')}
           alt="SefPOS"
           className="w-28 h-28 rounded-full object-contain bg-white"
           style={{ boxShadow: '0 12px 32px rgba(15, 23, 42, .08)', padding: 6 }}
