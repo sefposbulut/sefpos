@@ -118,8 +118,12 @@ export function installAudioUnlockOnInteraction(): void {
 // ============================================================================
 
 /**
- * Polis sireni benzeri, dikkat cekici alarm. ~1.8 saniye surer.
- * 2 alternating frekans (yukse-alcak), square dalga karisik → uyandirici.
+ * KURUMSAL ANONS CHIME — TV haber bulteni / havaalani anons tarzi.
+ * 5 notali bir "ding-dong-ding-dong-ding" patterni. Sinüs dalga, yumusak
+ * attack/decay envelope. Dikkat cekici ama agresif degil.
+ *
+ * Notalar: E5 → C#6 → A5 → E5 → C#6 (zarif yukselen pattern)
+ * ~1.8 saniye toplam.
  */
 function playSiren(): Promise<void> {
   return new Promise((resolve) => {
@@ -127,27 +131,47 @@ function playSiren(): Promise<void> {
     if (!ctx) return resolve();
     try {
       const now = ctx.currentTime;
-      // 4 alternating tone (high-low-high-low), her biri 0.4sn
+      // Kurumsal anons jingle pattern
       const tones = [
-        { freq: 1200, start: 0.0, dur: 0.4, type: 'square' as OscillatorType },
-        { freq: 800, start: 0.4, dur: 0.4, type: 'square' as OscillatorType },
-        { freq: 1200, start: 0.8, dur: 0.4, type: 'square' as OscillatorType },
-        { freq: 800, start: 1.2, dur: 0.4, type: 'square' as OscillatorType },
+        { freq: 659.25, start: 0.0, dur: 0.35 }, // E5
+        { freq: 1108.73, start: 0.32, dur: 0.4 }, // C#6
+        { freq: 880.0, start: 0.7, dur: 0.4 },   // A5
+        { freq: 659.25, start: 1.05, dur: 0.4 }, // E5
+        { freq: 1108.73, start: 1.4, dur: 0.55 }, // C#6 (uzun final)
       ];
+      // Master gain — toplam volume kontrol
+      const masterGain = ctx.createGain();
+      masterGain.gain.value = 0.45;
+      masterGain.connect(ctx.destination);
+
       for (const t of tones) {
         const osc = ctx.createOscillator();
         const gain = ctx.createGain();
-        osc.type = t.type;
+        // Sinüs + ufak overtone hissi icin triangle karisim
+        osc.type = 'sine';
         osc.frequency.value = t.freq;
+        // ADSR-benzeri zarf: yumusak attack, biraz sustain, decay
         gain.gain.setValueAtTime(0, now + t.start);
-        gain.gain.linearRampToValueAtTime(0.35, now + t.start + 0.02);
-        gain.gain.setValueAtTime(0.35, now + t.start + t.dur - 0.03);
-        gain.gain.linearRampToValueAtTime(0, now + t.start + t.dur);
-        osc.connect(gain).connect(ctx.destination);
+        gain.gain.linearRampToValueAtTime(0.9, now + t.start + 0.04);
+        gain.gain.linearRampToValueAtTime(0.7, now + t.start + 0.15);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + t.start + t.dur);
+        osc.connect(gain).connect(masterGain);
         osc.start(now + t.start);
         osc.stop(now + t.start + t.dur + 0.02);
+
+        // 2. harmonik (oktav yukari) — daha zengin, profesyonel renk
+        const osc2 = ctx.createOscillator();
+        const gain2 = ctx.createGain();
+        osc2.type = 'sine';
+        osc2.frequency.value = t.freq * 2;
+        gain2.gain.setValueAtTime(0, now + t.start);
+        gain2.gain.linearRampToValueAtTime(0.15, now + t.start + 0.04);
+        gain2.gain.exponentialRampToValueAtTime(0.001, now + t.start + t.dur);
+        osc2.connect(gain2).connect(masterGain);
+        osc2.start(now + t.start);
+        osc2.stop(now + t.start + t.dur + 0.02);
       }
-      setTimeout(() => resolve(), 1700);
+      setTimeout(() => resolve(), 2000);
     } catch {
       resolve();
     }
@@ -190,8 +214,51 @@ function playRingTone(): Promise<void> {
 }
 
 /**
- * Turkce konusma sentezi. Windows'ta Microsoft Tolga (tr-TR) varsayilan.
+ * Turkce kurumsal/haber spikeri tonunda konusma sentezi.
+ *
+ * Voice tercih sirasi (kaliteli kadin sesini onceleyerek):
+ *   1) Microsoft Aslı Online (Natural)   — en kaliteli, neural
+ *   2) Microsoft Aslı                    — Windows 10/11 default kadin
+ *   3) Microsoft Tolga                   — Windows default erkek
+ *   4) Google Türkçe                     — Chrome/Edge yedek
+ *   5) Herhangi bir tr-* voice
+ *
+ * Parametre tuning'i:
+ *   - rate 0.88  — biraz yavas, anons tonu
+ *   - pitch 0.95 — hafif tok ses, otoriter
+ *   - volume 1.0 — full
  */
+function pickTurkishVoice(voices: SpeechSynthesisVoice[]): SpeechSynthesisVoice | null {
+  if (!voices.length) return null;
+  const ranked = [
+    /microsoft aslı (online|natural)/i,
+    /aslı.*natural/i,
+    /microsoft aslı/i,
+    /aslı/i,
+    /microsoft tolga (online|natural)/i,
+    /tolga.*natural/i,
+    /microsoft tolga/i,
+    /tolga/i,
+    /google.*türk/i,
+    /google.*turkish/i,
+  ];
+  for (const pat of ranked) {
+    const v = voices.find((voice) => pat.test(voice.name));
+    if (v) return v;
+  }
+  const anyTr = voices.find((v) => v.lang && v.lang.toLowerCase().startsWith('tr'));
+  return anyTr || null;
+}
+
+let cachedTrVoice: SpeechSynthesisVoice | null = null;
+function getTurkishVoice(): SpeechSynthesisVoice | null {
+  if (cachedTrVoice) return cachedTrVoice;
+  if (!('speechSynthesis' in window)) return null;
+  const voices = window.speechSynthesis.getVoices();
+  cachedTrVoice = pickTurkishVoice(voices);
+  return cachedTrVoice;
+}
+
 function speakTr(text: string): Promise<void> {
   return new Promise((resolve) => {
     try {
@@ -201,23 +268,25 @@ function speakTr(text: string): Promise<void> {
       const speak = () => {
         const utter = new SpeechSynthesisUtterance(text);
         utter.lang = 'tr-TR';
-        utter.rate = 0.95;
-        utter.pitch = 1.0;
+        // Haber spikeri tonu: yavasca anons gibi, hafif tok
+        utter.rate = 0.88;
+        utter.pitch = 0.95;
         utter.volume = 1.0;
-        const voices = synth.getVoices();
-        const trVoice = voices.find(
-          (v) => v.lang && v.lang.toLowerCase().startsWith('tr'),
-        );
-        if (trVoice) utter.voice = trVoice;
+        const v = getTurkishVoice();
+        if (v) utter.voice = v;
         utter.onend = () => resolve();
         utter.onerror = () => resolve();
         synth.speak(utter);
-        setTimeout(() => resolve(), 6000);
+        // Guvenlik: 8 saniye sonra zorla resolve (uzun cumle olabilir)
+        setTimeout(() => resolve(), 8000);
       };
       const voices = synth.getVoices();
       if (voices.length === 0) {
-        synth.onvoiceschanged = () => speak();
-        setTimeout(speak, 200);
+        synth.onvoiceschanged = () => {
+          cachedTrVoice = null;
+          speak();
+        };
+        setTimeout(speak, 250);
       } else {
         speak();
       }
@@ -225,6 +294,26 @@ function speakTr(text: string): Promise<void> {
       resolve();
     }
   });
+}
+
+/**
+ * Platform adina gore kurumsal anons metni uret. "Sipariş alındı" tarzi,
+ * haber spikeri tonu.
+ */
+function buildAnnouncement(platformLabel: string): string {
+  const platform = (platformLabel || 'Online').trim();
+  // Yaygin platform adlarini Turkce telaffuza uygun normalize et
+  const norm = platform
+    .replace(/^getir.*yemek$/i, 'Getir Yemek')
+    .replace(/^getir$/i, 'Getir Yemek')
+    .replace(/^yemek.?sepeti$/i, 'Yemeksepeti')
+    .replace(/^trendyol.*go.*yemek$/i, 'Trendyol Go Yemek')
+    .replace(/^trendyol.*yemek$/i, 'Trendyol Yemek')
+    .replace(/^trendyol$/i, 'Trendyol Yemek')
+    .replace(/^migros.*yemek$/i, 'Migros Yemek')
+    .replace(/^migros$/i, 'Migros Yemek');
+  // Anonsta ufak duraksamalar TTS'in daha "haber" gibi okumasini saglar.
+  return `Dikkat. ${norm} üzerinden yeni sipariş alındı. Lütfen onayınız bekleniyor.`;
 }
 
 /**
@@ -240,8 +329,8 @@ export async function playOnlineOrderAlert(
   await playSiren();
   const phrase =
     count > 1
-      ? `${count} yeni ${platformLabel} siparişi var!`
-      : `Yeni ${platformLabel} siparişi var!`;
+      ? `Dikkat. ${count} yeni online sipariş alındı. Lütfen onayınız bekleniyor.`
+      : buildAnnouncement(platformLabel);
   await speakTr(phrase);
 }
 
@@ -258,7 +347,7 @@ export function playNotificationSound() {
 interface ActiveAlarm {
   orderId: string;
   platformLabel: string;
-  timer: number;
+  running: boolean;
 }
 
 const activeAlarms = new Map<string, ActiveAlarm>();
@@ -268,13 +357,16 @@ const activeAlarms = new Map<string, ActiveAlarm>();
  * cagrilirsa mevcut alarm korunur. localStorage'da sound disabled ise
  * hic baslamaz.
  *
- * Loop: ~2 saniye siren + 1 saniye sessizlik + tekrar.
- * Her 4. siren'de bir TTS soyler ("Yeni Getir siparisi var!").
+ * Akis: chime (~2sn) + TTS anons (~3sn) + ~1.5sn sessizlik → tekrar.
+ * Boylece chime ve anons hic ust uste binmez, profesyonel ve net.
+ *
+ * Anons her zaman calar — kullanici onaylayana kadar her dongude
+ * dikkat cekici ama agresif olmayan haber chime'i + kurumsal anons.
  */
 export function startContinuousAlert(
   orderId: string,
   platformLabel: string = 'Online',
-  intervalMs: number = 3000,
+  pauseBetweenMs: number = 1500,
 ): void {
   const enabled = localStorage.getItem('notification_sound_enabled');
   if (enabled === 'false') return;
@@ -282,23 +374,39 @@ export function startContinuousAlert(
 
   unlockAudio();
 
-  let tick = 0;
-  const ring = async () => {
-    if (!activeAlarms.has(orderId)) return;
-    await playSiren();
-    tick++;
-    // Ilk seferde + her 4. seferde TTS — fazla tekrarlanip rahatsiz etmesin
-    if (tick === 1 || tick % 4 === 0) {
-      void speakTr(`Yeni ${platformLabel} siparişi var. Lütfen onaylayın.`);
+  const announcement = buildAnnouncement(platformLabel);
+  const entry: ActiveAlarm = { orderId, platformLabel, running: true };
+  activeAlarms.set(orderId, entry);
+
+  const loop = async () => {
+    while (entry.running && activeAlarms.has(orderId)) {
+      // 1) Haber bulteni chime
+      await playSiren();
+      if (!entry.running || !activeAlarms.has(orderId)) break;
+      // 2) Kurumsal TTS anons
+      await speakTr(announcement);
+      if (!entry.running || !activeAlarms.has(orderId)) break;
+      // 3) Kisa sessizlik, sonra tekrar
+      await new Promise<void>((r) => {
+        const id = window.setTimeout(() => r(), pauseBetweenMs);
+        // Eger alarm durdurulursa pause'u da kes
+        const check = () => {
+          if (!entry.running || !activeAlarms.has(orderId)) {
+            window.clearTimeout(id);
+            r();
+          } else {
+            window.setTimeout(check, 200);
+          }
+        };
+        check();
+      });
     }
   };
 
-  void ring();
-  const timer = window.setInterval(ring, intervalMs);
-  activeAlarms.set(orderId, { orderId, platformLabel, timer });
+  void loop();
 
   console.log(
-    `[notification] Surekli alarm baslatildi: ${platformLabel} #${orderId} (interval ${intervalMs}ms)`,
+    `[notification] Kurumsal anons alarmi baslatildi: ${platformLabel} #${orderId}`,
   );
 }
 
@@ -306,7 +414,7 @@ export function startContinuousAlert(
 export function stopContinuousAlert(orderId: string): void {
   const a = activeAlarms.get(orderId);
   if (!a) return;
-  clearInterval(a.timer);
+  a.running = false;
   activeAlarms.delete(orderId);
   try {
     window.speechSynthesis?.cancel();
@@ -319,7 +427,7 @@ export function stopContinuousAlert(orderId: string): void {
 /** Tum aktif alarmlari durdurur (kullanici "sustur" butonuna basinca). */
 export function stopAllAlerts(): void {
   for (const a of activeAlarms.values()) {
-    clearInterval(a.timer);
+    a.running = false;
   }
   activeAlarms.clear();
   try {
