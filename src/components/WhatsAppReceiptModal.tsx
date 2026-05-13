@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { X, Send, MessageCircle, Phone, Copy, Check, ImageIcon, Loader2, Download } from 'lucide-react';
 import {
   type WhatsAppReceiptInput,
@@ -35,6 +35,33 @@ export function WhatsAppReceiptModal({ receipt, defaultPhone, onClose }: Props) 
 
   const offscreenRef = useRef<HTMLDivElement | null>(null);
   const previewRef = useRef<HTMLDivElement | null>(null);
+  // Mobilde 384px geniş fiş ekranı taşırmasın diye container genişliğine göre
+  // ölçek hesaplıyoruz. Önizleme küçültülür ama PNG çıktısı (offscreen) hâlâ
+  // tam çözünürlükte üretilir.
+  const previewWrapRef = useRef<HTMLDivElement | null>(null);
+  const RECEIPT_WIDTH = 384;
+  const [previewScale, setPreviewScale] = useState(1);
+  const [previewHeight, setPreviewHeight] = useState<number>(0);
+  useLayoutEffect(() => {
+    const update = () => {
+      const wrap = previewWrapRef.current;
+      const inner = previewRef.current;
+      if (!wrap) return;
+      const avail = Math.max(180, wrap.clientWidth - 24);
+      const s = Math.min(1, avail / RECEIPT_WIDTH);
+      setPreviewScale(s);
+      if (inner) {
+        const baseH = inner.scrollHeight || inner.clientHeight;
+        if (baseH > 0) setPreviewHeight(Math.ceil(baseH * s));
+      }
+    };
+    update();
+    const ro = new ResizeObserver(update);
+    if (previewWrapRef.current) ro.observe(previewWrapRef.current);
+    if (previewRef.current) ro.observe(previewRef.current);
+    window.addEventListener('resize', update);
+    return () => { ro.disconnect(); window.removeEventListener('resize', update); };
+  }, [receipt]);
 
   const receiptHtml = useMemo(() => buildWhatsAppReceiptHtml(receipt), [receipt]);
 
@@ -174,19 +201,35 @@ export function WhatsAppReceiptModal({ receipt, defaultPhone, onClose }: Props) 
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-4 overflow-y-auto flex-1">
-          {/* Sol: Fiş önizleme (gerçek görüntüsü) */}
+          {/* Sol: Fiş önizleme — mobilde otomatik ölçekleniyor, taşma yok.
+              Asıl PNG çıktısı offscreen render'dan tam çözünürlükte alınır. */}
           <div>
             <label className="block text-xs font-bold text-slate-700 mb-1">Fiş görseli</label>
-            <div className="border-2 border-dashed border-slate-200 rounded-xl p-3 bg-slate-50 max-h-[60vh] overflow-auto flex justify-center">
+            <div
+              ref={previewWrapRef}
+              className="border-2 border-dashed border-slate-200 rounded-xl p-3 bg-slate-50 max-h-[60vh] overflow-y-auto overflow-x-hidden flex justify-center"
+            >
               <div
-                className="bg-white rounded-lg shadow-lg overflow-hidden"
-                style={{ boxShadow: '0 6px 24px rgba(0,0,0,0.15)' }}
+                className="bg-white rounded-lg shadow-lg"
+                style={{
+                  boxShadow: '0 6px 24px rgba(0,0,0,0.15)',
+                  width: RECEIPT_WIDTH * previewScale,
+                  height: previewHeight || undefined,
+                  overflow: 'hidden',
+                }}
               >
-                <div ref={previewRef} />
+                <div
+                  ref={previewRef}
+                  style={{
+                    transform: `scale(${previewScale})`,
+                    transformOrigin: 'top left',
+                    width: RECEIPT_WIDTH,
+                  }}
+                />
               </div>
             </div>
             <p className="text-[11px] text-slate-400 mt-1.5">
-              "Görsel Olarak Gönder" bu görüntünün PNG kopyasını üretir.
+              "Görsel Olarak Gönder" tam çözünürlüklü (384px) PNG üretir.
             </p>
           </div>
 
