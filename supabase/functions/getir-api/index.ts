@@ -699,7 +699,50 @@ Deno.serve(async (req) => {
             if (result.isNew) newCount++;
           }
         }
-        return jsonResponse({ ok: true, fetched: list.length, saved, newCount });
+        // Otomatik reconcile: poll-active Getir'in TÜM aktif siparişlerini
+        // döndürür. DB'de "aktif" görünüp Getir listesinde olmayan ve 30+
+        // dakikadır güncellenmemiş kayıtları sessizce kapanmış say (Getir
+        // panelinde teslim/iptal olmuş). Test ortamında bunlar birikip
+        // "Mutfakta" sekmesini şişiriyordu; her handover denemesinde
+        // "invalid status" hatasına yol açıyordu.
+        let reconciled = 0;
+        if (body.action === "poll-active") {
+          const liveIds = new Set(list.map((o: any) => String(o.id || o._id || "")));
+          const cutoffIso = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+          const { data: stale } = await admin
+            .from("online_orders")
+            .select("id, platform_order_id, status")
+            .eq("tenant_id", platform.tenant_id)
+            .eq("platform_id", platform.id)
+            .in("status", [
+              "verified",
+              "accepted",
+              "preparing",
+              "ready",
+              "handed_over",
+              "on_the_way",
+              "arrived",
+              "scheduled_accepted",
+            ])
+            .lt("updated_at", cutoffIso);
+          if (Array.isArray(stale) && stale.length > 0) {
+            const toClose = stale.filter((row: any) => !liveIds.has(String(row.platform_order_id)));
+            if (toClose.length > 0) {
+              const ids = toClose.map((r: any) => r.id);
+              const { error: rcErr } = await admin
+                .from("online_orders")
+                .update({
+                  status: "delivered",
+                  delivered_at: new Date().toISOString(),
+                  getir_cancel_note: "auto-reconcile: Getir aktif listesinde yok",
+                })
+                .in("id", ids);
+              if (!rcErr) reconciled = toClose.length;
+              else console.warn("[getir-api] reconcile update hata:", rcErr.message);
+            }
+          }
+        }
+        return jsonResponse({ ok: true, fetched: list.length, saved, newCount, reconciled });
       }
 
       // ---- INQUIRY: tek sipariş için Getir'den güncel veri çek ----------

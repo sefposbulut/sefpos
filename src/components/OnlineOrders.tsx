@@ -766,6 +766,53 @@ export function OnlineOrders() {
     }
   };
 
+  /**
+   * Eski siparişleri toplu kapat. Getir paneliyle eşleşmeyen, "aktif" durumda
+   * kalmış ve 6+ saatten eski siparişleri "delivered" yapar (Mutfakta sekmesi
+   * temizlenir). Test ortamında biriken eski test siparişleri için.
+   */
+  const closeStaleOrders = async () => {
+    if (!tenant) return;
+    if (!confirm(
+      '6 saatten eski "aktif" siparişleri kapatmak istediğinize emin misiniz?\n\n' +
+      'Bunlar genelde Getir tarafında zaten teslim/iptal olmuş ama burada açık kalmış kayıtlardır. ' +
+      'Aktif olarak çalışan gerçek bir sipariş varsa onu sonra Getir’den "Siparişleri Çek" ile geri çekebilirsiniz.'
+    )) return;
+    setSyncing(true);
+    try {
+      const cutoff = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString();
+      const { data: stale, error } = await supabase
+        .from('online_orders')
+        .select('id')
+        .eq('tenant_id', tenant.id)
+        .in('status', [
+          'verified', 'accepted', 'preparing', 'ready', 'handed_over',
+          'on_the_way', 'arrived', 'scheduled_accepted',
+        ])
+        .lt('updated_at', cutoff);
+      if (error) throw error;
+      const ids = (stale || []).map((r: any) => r.id);
+      if (ids.length === 0) {
+        alert('Temizlenecek eski sipariş bulunmadı.');
+        return;
+      }
+      const { error: upErr } = await supabase
+        .from('online_orders')
+        .update({
+          status: 'delivered',
+          delivered_at: new Date().toISOString(),
+        } as any)
+        .in('id', ids);
+      if (upErr) throw upErr;
+      alert(`${ids.length} eski sipariş kapatıldı.`);
+      await loadOrders();
+    } catch (e: any) {
+      alert(`Temizlik hatası: ${e?.message || e}`);
+    } finally {
+      setSyncing(false);
+    }
+  };
+
   const syncOrders = async () => {
     if (!user || !tenant) return;
 
@@ -974,6 +1021,17 @@ export function OnlineOrders() {
             >
               {soundEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
             </button>
+            {filter === 'active' && (
+              <button
+                onClick={closeStaleOrders}
+                disabled={syncing}
+                title="6 saatten eski, açık kalmış siparişleri kapat (Getir'le eşleşmeyen test/stale kayıtlar)"
+                className="hidden md:flex items-center gap-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold text-xs ring-1 ring-slate-200 transition active:scale-95 disabled:opacity-50"
+              >
+                <X className="w-3.5 h-3.5" />
+                <span>Eski Siparişleri Kapat</span>
+              </button>
+            )}
             <button
               onClick={syncOrders}
               disabled={syncing}
