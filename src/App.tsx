@@ -38,6 +38,7 @@ import { Database, supabase } from './lib/supabase';
 import { isSqlServerMode } from './lib/sqlDb';
 import { queryCache } from './lib/queryCache';
 import { SystemNotificationContainer } from './components/SystemNotificationBanner';
+import { OnlineOrderToast } from './components/OnlineOrderToast';
 import { PrintStatusToast } from './components/PrintStatusToast';
 import { ElectronDesktopShell } from './components/ElectronDesktopShell';
 import { TerminalLogin, TerminalApp, isTerminalMode, exitTerminalMode } from './components/TerminalMode';
@@ -677,6 +678,10 @@ function App() {
       <SystemNotificationContainer
         notifications={systemNotifications}
         onDismiss={(id) => setSystemNotifications(prev => prev.filter(n => n.id !== id))}
+      />
+      <OnlineOrderToast
+        onOpenOnlineOrders={() => handleNavigate('online-orders')}
+        currentPage={currentPage}
       />
       <PrintStatusToast />
       <ElectronDesktopShell />

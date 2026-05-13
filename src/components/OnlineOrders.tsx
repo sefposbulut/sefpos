@@ -13,6 +13,7 @@ import {
   getAudioState,
 } from '../lib/notification';
 import { callGetir, eligibleCancelReasons, getGetirNextStepHint, getGetirUiPhase, getirStatusLabel } from '../lib/getirApi';
+import { PlatformLogo } from './PlatformLogo';
 
 type OnlineOrder = Database['public']['Tables']['online_orders']['Row'];
 type OnlineOrderItem = Database['public']['Tables']['online_order_items']['Row'];
@@ -541,68 +542,6 @@ export function OnlineOrders() {
     } finally {
       setSyncing(false);
     }
-  };
-
-  /**
-   * Platform logosu — gerçek SVG asset'i yok, her platform için kurumsal
-   * renkli badge component'i. Resmi renk paletleriyle uyumlu.
-   */
-  const PlatformLogo = ({ code, name }: { code: string; name: string }) => {
-    const c = (code || '').toLowerCase();
-    const display = (name || code || '').toLowerCase();
-
-    if (c.includes('getir')) {
-      return (
-        <div className="inline-flex flex-col items-center justify-center bg-purple-700 text-white px-2.5 py-1.5 rounded-md leading-none shadow-sm" style={{ minWidth: 78 }}>
-          <span className="text-[11px] font-black tracking-wide">getir</span>
-          <span className="text-[8px] font-bold opacity-90 -mt-0.5">YEMEK</span>
-        </div>
-      );
-    }
-    if (c.includes('yemeksepeti')) {
-      return (
-        <div className="inline-flex items-center justify-center bg-red-600 text-white px-2.5 py-1.5 rounded-md leading-none shadow-sm italic" style={{ minWidth: 78 }}>
-          <span className="text-[10px] font-black">yemek</span>
-          <span className="text-[11px] font-extrabold ml-0.5">sepeti</span>
-        </div>
-      );
-    }
-    if (c.includes('trendyol')) {
-      return (
-        <div className="inline-flex flex-col items-center justify-center bg-orange-500 text-white px-2.5 py-1.5 rounded-md leading-none shadow-sm" style={{ minWidth: 78 }}>
-          <span className="text-[11px] font-black tracking-tight">trendyol</span>
-          <span className="text-[8px] font-bold opacity-90 -mt-0.5">YEMEK</span>
-        </div>
-      );
-    }
-    if (c.includes('migros')) {
-      return (
-        <div className="inline-flex flex-col items-center justify-center bg-amber-400 text-orange-900 px-2.5 py-1.5 rounded-md leading-none shadow-sm" style={{ minWidth: 78 }}>
-          <span className="text-[11px] font-black tracking-tight">migros</span>
-          <span className="text-[8px] font-bold opacity-90 -mt-0.5">YEMEK</span>
-        </div>
-      );
-    }
-    if (c.includes('fody')) {
-      return (
-        <div className="inline-flex items-center justify-center bg-teal-500 text-white px-2.5 py-1.5 rounded-md leading-none shadow-sm italic" style={{ minWidth: 78 }}>
-          <span className="text-[12px] font-black tracking-wide">Fody</span>
-        </div>
-      );
-    }
-    if (c.includes('fuudy')) {
-      return (
-        <div className="inline-flex items-center justify-center bg-cyan-600 text-white px-2.5 py-1.5 rounded-md leading-none shadow-sm" style={{ minWidth: 78 }}>
-          <span className="text-[12px] font-black tracking-wide">Fuudy</span>
-        </div>
-      );
-    }
-    // Default — bilinmeyen platform
-    return (
-      <div className="inline-flex items-center justify-center bg-slate-700 text-white px-2.5 py-1.5 rounded-md leading-none shadow-sm" style={{ minWidth: 78 }}>
-        <span className="text-[11px] font-black tracking-wide">{display.slice(0, 10).toUpperCase()}</span>
-      </div>
-    );
   };
 
   const getPlatformColor = (platformCode: string) => {
