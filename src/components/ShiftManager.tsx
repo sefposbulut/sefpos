@@ -382,9 +382,8 @@ export function ShiftManager() {
     const compute = async () => {
       let q = (supabase as any)
         .from('cash_register_transactions')
-        .select('transaction_type,payment_method,amount')
+        .select('*')
         .eq('tenant_id', tenantId)
-        .is('voided_at', null)
         .gte('created_at', activeShift.opened_at);
       if (activeShift.branch_id) q = q.or(`branch_id.eq.${activeShift.branch_id},branch_id.is.null`);
       const { data: tx } = await q;
@@ -400,7 +399,7 @@ export function ShiftManager() {
       const stats = {
         cash: 0, card: 0, openAcc: 0, expense: 0, cashIn: 0, cashOut: 0, orders: orderCnt || 0,
       };
-      (tx || []).forEach((t: any) => {
+      (tx || []).filter((t: any) => !t.voided_at).forEach((t: any) => {
         const a = Math.abs(Number(t.amount) || 0);
         if (t.transaction_type === 'order_payment') {
           if (t.payment_method === 'cash') stats.cash += a;

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../contexts/AuthContext';
-import { Building2, RefreshCw, TrendingUp, ShoppingCart, DollarSign } from 'lucide-react';
+import { Building2, RefreshCw, ShoppingCart, DollarSign } from 'lucide-react';
 
 interface BranchStat {
   branchId: string;
@@ -64,7 +64,7 @@ export function BranchReport() {
         .lte('created_at', end),
       supabase
         .from('cash_register_transactions')
-        .select('amount, transaction_type, payment_method, branch_id, voided_at')
+        .select('*')
         .eq('tenant_id', tenant.id)
         .eq('transaction_type', 'order_payment')
         .gte('created_at', start)

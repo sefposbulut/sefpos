@@ -63,6 +63,17 @@ function getBusinessDayRange(): { start: Date; end: Date } {
   return { start, end };
 }
 
+/** PostgREST şemada void kolonları yokken dönen hata metnini tanır. */
+function cashVoidMigrationHint(errMsg: string): string | null {
+  if (/void_reason|voided_at|schema cache/i.test(errMsg)) {
+    return (
+      'Veritabanında kasa iptal sütunları henüz yok. Supabase Studio → SQL editöründe şu dosyanın içeriğini çalıştırın: supabase/migrations/20260515103000_cash_register_transaction_void.sql\n\n' +
+      'Alternatif: GitHub’da “Supabase Migrations” iş akışını (workflow_dispatch) çalıştırın. Ardından sayfayı yenileyin.'
+    );
+  }
+  return null;
+}
+
 function getPresetRange(preset: DatePreset): { start: Date; end: Date } {
   if (preset === 'today') {
     return getBusinessDayRange();
@@ -128,7 +139,7 @@ export function CashRegister({ onClose }: CashRegisterProps) {
     if (tenant) {
       loadCashTransactions();
     }
-  }, [tenant, filterType, filterMethod, datePreset, customStart, customEnd, filterBranch, filterUser, hideVoided]);
+  }, [tenant, filterType, filterMethod, datePreset, customStart, customEnd, filterBranch, filterUser]);
 
   const loadAvailableUsers = async () => {
     if (!tenant) return;
@@ -163,10 +174,6 @@ export function CashRegister({ onClose }: CashRegisterProps) {
     if (filterUser !== 'all') {
       query = query.eq('created_by', filterUser);
     }
-    if (hideVoided) {
-      query = query.is('voided_at', null);
-    }
-
     const range = getDateRange();
     if (range) {
       query = query.gte('created_at', range.start.toISOString()).lte('created_at', range.end.toISOString());
@@ -213,7 +220,7 @@ export function CashRegister({ onClose }: CashRegisterProps) {
     const amount = parseFloat(cashAmount);
     if (isNaN(amount) || amount <= 0) { alert('Geçerli bir tutar girin'); return; }
 
-    const { error } = await supabase
+    const { error } = await (supabase as any)
       .from('cash_register_transactions')
       .insert({
         tenant_id: tenant.id,
@@ -249,6 +256,11 @@ export function CashRegister({ onClose }: CashRegisterProps) {
     return s;
   }, [cashTransactions]);
 
+  const visibleTransactions = useMemo(() => {
+    if (!hideVoided) return cashTransactions;
+    return cashTransactions.filter(t => !t.voided_at);
+  }, [cashTransactions, hideVoided]);
+
   const canVoidCashRows = permissions.can_manage_cash_register || isOwnerOrAdmin;
 
   const submitVoid = async () => {
@@ -264,21 +276,22 @@ export function CashRegister({ onClose }: CashRegisterProps) {
     }
     setVoidSubmitting(true);
     try {
-      const { error } = await supabase
+      const { error } = await (supabase as any)
         .from('cash_register_transactions')
         .update({
           voided_at: new Date().toISOString(),
           voided_by: user.id,
           void_reason: reason,
-        } as any)
-        .eq('id', voidModalTx.id)
-        .is('voided_at', null);
+        })
+        .eq('id', voidModalTx.id);
       if (error) throw error;
       setVoidModalTx(null);
       setVoidReason('');
       await loadCashTransactions();
     } catch (e: any) {
-      alert('İptal kaydedilemedi: ' + (e?.message || String(e)));
+      const raw = e?.message || String(e);
+      const hint = cashVoidMigrationHint(raw);
+      alert(hint ? `İptal kaydedilemedi.\n\n${hint}` : `İptal kaydedilemedi: ${raw}`);
     } finally {
       setVoidSubmitting(false);
     }
@@ -612,13 +625,17 @@ export function CashRegister({ onClose }: CashRegisterProps) {
               {loading && (
                 <div className="text-center py-10 text-gray-400 text-sm">Yükleniyor...</div>
               )}
-              {!loading && cashTransactions.length === 0 && (
+              {!loading && visibleTransactions.length === 0 && (
                 <div className="text-center py-16">
                   <Wallet className="w-14 h-14 text-gray-200 mx-auto mb-3" />
-                  <p className="text-gray-400 font-medium">Bu dönemde işlem kaydı bulunamadı</p>
+                  <p className="text-gray-400 font-medium">
+                    {hideVoided && cashTransactions.length > 0
+                      ? 'Bu dönemde listelenecek geçerli (iptal edilmemiş) işlem yok'
+                      : 'Bu dönemde işlem kaydı bulunamadı'}
+                  </p>
                 </div>
               )}
-              {!loading && cashTransactions.map(transaction => {
+              {!loading && visibleTransactions.map(transaction => {
                 const isExpanded = expandedTransaction === transaction.id;
                 const items = orderItems[transaction.id];
                 const hasOrderDetails = transaction.transaction_type === 'order_payment' && !!transaction.reference_id;
