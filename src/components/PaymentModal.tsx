@@ -174,7 +174,8 @@ function CustomerPicker({ tenantId, selected, onSelect, amount }: CustomerPicker
             onChange={e => setAddName(e.target.value)}
             placeholder="Müşteri adı *"
             className="w-full text-sm px-2.5 py-1.5 border border-slate-200 rounded-lg focus:border-orange-400 focus:outline-none"
-            autoFocus
+            // Mobilde sanal klavye otomatik açılmasın — kullanıcı tıklayınca açılır
+            autoFocus={typeof window !== 'undefined' && !window.matchMedia('(max-width: 767px)').matches}
           />
           <div className="flex gap-2">
             <input
@@ -323,6 +324,25 @@ export function PaymentModal({
   useEffect(() => {
     setSplits([{ method: 'cash', amount: remainingAmount.toFixed(2) }]);
   }, [remainingAmount]);
+
+  // Mobilde modal açıldığında bazı tarayıcılar (özellikle Android Chrome)
+  // ilk input'u otomatik focus ederek sanal klavyeyi açar. autoFocus zaten
+  // mobilde `false` veriyoruz ama yine de bir tick gecikmeli olarak aktif
+  // elementi blur'layıp klavyeyi gizliyoruz. Kullanıcı tutarı değiştirmek
+  // isterse input'a kendisi tıklar → klavye o zaman açılır.
+  useEffect(() => {
+    if (!isMobile) return;
+    const t = window.setTimeout(() => {
+      const el = document.activeElement as HTMLElement | null;
+      if (el && typeof el.blur === 'function') {
+        const tag = (el.tagName || '').toLowerCase();
+        if (tag === 'input' || tag === 'textarea' || tag === 'select') {
+          el.blur();
+        }
+      }
+    }, 30);
+    return () => window.clearTimeout(t);
+  }, [isMobile]);
 
   const totalSplit = splits.reduce((s, p) => s + (parseFloat(p.amount) || 0), 0);
   const splitDiff = remainingAmount - totalSplit;
