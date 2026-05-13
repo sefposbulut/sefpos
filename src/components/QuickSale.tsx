@@ -538,10 +538,14 @@ export function QuickSale() {
       const newBalance = isOpenAcc && openAccountPrevBalance !== null
         ? openAccountPrevBalance + amount
         : null;
+      // Adres/telefon: önce yazıcı ayarlarındaki değer, yoksa tenant'ın kayıtlı
+      // değeri. Hiçbiri yoksa fiş üstünde gizli kalır.
+      const headerPhone = (printSettings.restaurantPhone || (tenant as any)?.phone || '').toString().trim();
+      const headerAddress = (printSettings.restaurantAddress || (tenant as any)?.address || '').toString().trim();
       setLastReceiptData({
         restaurantName: printSettings.restaurantName || (tenant as any)?.name || 'ŞefPOS',
-        restaurantPhone: printSettings.restaurantPhone,
-        restaurantAddress: printSettings.restaurantAddress,
+        restaurantPhone: headerPhone || null,
+        restaurantAddress: headerAddress || null,
         tableLabel: 'Hızlı Satış',
         orderNumber: order.order_number,
         items: cart.map((l) => ({
