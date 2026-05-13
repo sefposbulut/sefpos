@@ -1,43 +1,62 @@
 import { supabase } from './supabase';
 
 /**
- * Bir `payment_transactions` satırı için kasa satırı oluşmasını **garantiler**:
+ * Bir satışın **mutlaka tek bir** kasa satırına dönüşmesini garantiler.
  *
- *  - DB tetikleyicisi `log_payment_to_cash_register` çalışırsa zaten satır vardır,
- *    bu fonksiyon hiçbir şey yapmaz (çift kayıt olmaz).
- *  - Tetikleyici yoksa / çalışmadıysa uygulama tarafından **bir kez** insert eder.
+ * Akış:
+ *  1) İlgili `order_number` için kasada `order_payment` satırı sayar.
+ *  2) Beklenen ödeme sayısından az satır varsa eksik kadar yeni satır ekler.
+ *  3) Yeterliyse hiçbir şey yapmaz (DB tetikleyicisi zaten yazmıştır → çift kayıt olmaz).
  *
- * İzolasyon: `tenant_id` + `branch_id` her zaman set edilir; RLS bu alanlara göre
- * kiracıyı / şubeyi ayırdığı için her restoran ve şube kendi kasasını görür.
- *
- * Bu fonksiyon best-effort’tur; başarısızlığı kullanıcı akışını bozmaz.
+ * `tenant_id` + `branch_id` her zaman set edilir; RLS bu alanları izole ediyor
+ * (her restoran/şube yalnız kendi kasasını görür). Hata durumunda `console.warn`
+ * basar ama kullanıcı akışını bozmaz.
  */
 export async function ensureCashRegisterRowForPayment(input: {
   tenantId: string;
   branchId: string | null;
-  paymentId: string;
+  /** payment_transactions.id (biliniyorsa). Bilinmiyorsa boş bırakılabilir. */
+  paymentId?: string | null;
   paymentMethod: 'cash' | 'credit_card' | 'open_account' | string;
   amount: number;
   createdBy: string | null;
-  /** Tablo / hızlı satış / paket etiketi (DB tetikleyicisindeki ile aynı mantık). */
   tableLabel?: string | null;
   orderNumber?: string | null;
+  /** Order ID (paymentId bilinmediğinde lookup için). */
+  orderId?: string | null;
 }): Promise<void> {
-  if (!input.tenantId || !input.paymentId) return;
+  if (!input.tenantId) return;
 
   try {
-    const { count, error: checkErr } = await (supabase as any)
-      .from('cash_register_transactions')
-      .select('id', { count: 'exact', head: true })
-      .eq('reference_id', input.paymentId)
-      .eq('reference_type', 'payment_transaction');
-
-    if (checkErr) {
-      console.warn('[cash-register fallback] count check failed:', checkErr.message);
+    if (!input.orderNumber) {
+      console.warn('[cash-register fallback] orderNumber yok, atlandı.');
       return;
     }
-    if ((count || 0) > 0) {
+
+    const { count: existingCount, error: countErr } = await (supabase as any)
+      .from('cash_register_transactions')
+      .select('id', { count: 'exact', head: true })
+      .eq('tenant_id', input.tenantId)
+      .eq('transaction_type', 'order_payment')
+      .eq('order_number', input.orderNumber);
+
+    if (countErr) {
+      console.warn('[cash-register fallback] count check failed:', countErr.message);
+    }
+    if ((existingCount || 0) > 0) {
       return;
+    }
+
+    let paymentId = input.paymentId ?? null;
+    if (!paymentId && input.orderId) {
+      const { data: pay } = await (supabase as any)
+        .from('payment_transactions')
+        .select('id')
+        .eq('order_id', input.orderId)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      paymentId = (pay as any)?.id ?? null;
     }
 
     const description =
@@ -57,8 +76,8 @@ export async function ensureCashRegisterRowForPayment(input: {
         transaction_type: 'order_payment',
         payment_method: input.paymentMethod,
         amount: input.amount,
-        reference_id: input.paymentId,
-        reference_type: 'payment_transaction',
+        reference_id: paymentId,
+        reference_type: paymentId ? 'payment_transaction' : 'order',
         description,
         order_number: input.orderNumber ?? null,
         table_name: input.tableLabel ?? null,

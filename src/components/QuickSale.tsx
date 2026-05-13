@@ -363,18 +363,14 @@ export function QuickSale() {
       if (itemsErr) throw itemsErr;
 
       // 4) payment_transactions
-      const { data: payRow, error: payErr } = await supabase
-        .from('payment_transactions')
-        .insert({
-          tenant_id: tenant.id,
-          order_id: order.id,
-          payment_method: method,
-          amount,
-          created_by: user.id,
-          ...(method === 'open_account' && customerId ? { customer_id: customerId } : {}),
-        } as any)
-        .select('id')
-        .single();
+      const { error: payErr } = await supabase.from('payment_transactions').insert({
+        tenant_id: tenant.id,
+        order_id: order.id,
+        payment_method: method,
+        amount,
+        created_by: user.id,
+        ...(method === 'open_account' && customerId ? { customer_id: customerId } : {}),
+      } as any);
       if (payErr) throw payErr;
 
       // 5) Cari ödeme: customer_transactions + bakiye güncelle
@@ -405,18 +401,16 @@ export function QuickSale() {
         payment_method: method,
       } as any).eq('id', order.id);
 
-      if (payRow?.id) {
-        void ensureCashRegisterRowForPayment({
-          tenantId: tenant.id,
-          branchId: branchId,
-          paymentId: (payRow as any).id,
-          paymentMethod: method,
-          amount,
-          createdBy: user.id,
-          tableLabel: 'Hızlı Satış',
-          orderNumber: order.order_number,
-        });
-      }
+      void ensureCashRegisterRowForPayment({
+        tenantId: tenant.id,
+        branchId: branchId,
+        orderId: order.id,
+        orderNumber: order.order_number,
+        paymentMethod: method,
+        amount,
+        createdBy: user.id,
+        tableLabel: 'Hızlı Satış',
+      });
 
       // 7) Reçetesi olmayan ürünler için products.stock_quantity düşümü
       // (recipe trigger sadece reçeteli ürünleri ingredients'tan düşer; ürün stoğu için fallback)

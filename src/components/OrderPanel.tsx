@@ -1840,7 +1840,7 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
       if (error) throw error;
       insertedPaymentId = insertedPayment?.id || null;
 
-      if (insertedPaymentId) {
+      {
         const tableLabelForCash =
           table.table_number === 0
             ? (currentOrder.order_type === 'takeaway'
@@ -1853,6 +1853,7 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
           tenantId: tenant.id,
           branchId: currentOrder.branch_id ?? activeBranch?.id ?? null,
           paymentId: insertedPaymentId,
+          orderId: currentOrder.id,
           paymentMethod: method,
           amount,
           createdBy: user.id,
