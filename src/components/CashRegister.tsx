@@ -155,9 +155,9 @@ export function CashRegister({ onClose }: CashRegisterProps) {
     if (!tenant) return;
     setLoading(true);
 
-    let query = supabase
+    let query = (supabase as any)
       .from('cash_register_transactions')
-      .select('*, profiles(full_name)')
+      .select('*')
       .eq('tenant_id', tenant.id)
       .order('created_at', { ascending: false });
 
@@ -179,8 +179,30 @@ export function CashRegister({ onClose }: CashRegisterProps) {
       query = query.gte('created_at', range.start.toISOString()).lte('created_at', range.end.toISOString());
     }
 
-    const { data } = await query;
-    if (data) setCashTransactions(data as CashTransaction[]);
+    const { data, error } = await query;
+    if (error) {
+      console.error('[CashRegister] loadCashTransactions error:', error);
+      alert('Kasa yüklenirken hata: ' + (error.message || JSON.stringify(error)));
+      setCashTransactions([]);
+      setLoading(false);
+      return;
+    }
+
+    const rows = (data ?? []) as CashTransaction[];
+    const userIds = Array.from(new Set(rows.map(r => r.created_by).filter(Boolean) as string[]));
+    let profileMap: Record<string, { full_name: string }> = {};
+    if (userIds.length > 0) {
+      const { data: profs } = await (supabase as any)
+        .from('profiles')
+        .select('id, full_name')
+        .in('id', userIds);
+      profileMap = Object.fromEntries(((profs as any[]) ?? []).map((p: any) => [p.id, { full_name: p.full_name }]));
+    }
+    const withProfiles = rows.map(r => ({
+      ...r,
+      profiles: r.created_by ? (profileMap[r.created_by] ?? null) : null,
+    }));
+    setCashTransactions(withProfiles);
     setLoading(false);
   };
 
