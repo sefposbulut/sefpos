@@ -115,7 +115,24 @@ export async function callGetir(payload: GetirActionPayload): Promise<GetirActio
 
         if (typeof data === 'object' && data !== null && 'ok' in data) {
           const out = data as GetirActionResult;
+          if (!out.ok) {
+            console.warn('[getir-api] action başarısız', {
+              action: payload.action,
+              platformId: payload.platformId,
+              orderId: payload.orderId,
+              status: resp.status,
+              body: data,
+            });
+          }
           return { ...out, status: out.status ?? resp.status };
+        }
+        if (!resp.ok) {
+          console.warn('[getir-api] HTTP hata', {
+            action: payload.action,
+            platformId: payload.platformId,
+            status: resp.status,
+            body: data || raw,
+          });
         }
         return { ok: resp.ok, status: resp.status, data, error: resp.ok ? undefined : `HTTP ${resp.status}` };
       }
