@@ -90,7 +90,7 @@ export function buildWhatsAppReceiptText(input: WhatsAppReceiptInput): string {
     const pctLabel = input.discountPercent && input.discountPercent > 0
       ? ` (%${input.discountPercent})`
       : '';
-    lines.push(`İndirim${pctLabel}: -${fmtTry(input.discountAmount)} ₺`);
+    lines.push(`İskonto${pctLabel}: -${fmtTry(input.discountAmount)} ₺`);
   }
   if (input.taxAmount && input.taxAmount > 0) {
     lines.push(`KDV: ${fmtTry(input.taxAmount)} ₺`);
@@ -155,38 +155,46 @@ export function buildWhatsAppReceiptHtml(input: WhatsAppReceiptInput): string {
   const timeStr = date.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
 
   const css = `
-    .wfis { width: 360px; box-sizing: border-box; background: #ffffff; color: #111; padding: 18px 16px 22px 16px;
-            font-family: 'Courier New', ui-monospace, Menlo, Consolas, monospace; font-size: 13px; line-height: 1.45; }
+    .wfis { width: 384px; box-sizing: border-box; background: #ffffff; color: #0f172a;
+            padding: 20px 18px 24px 18px;
+            font-family: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            font-size: 14px; line-height: 1.5; letter-spacing: 0; }
     .wfis * { box-sizing: border-box; }
     .wfis .center { text-align: center; }
-    .wfis .bold { font-weight: 800; }
-    .wfis .shop { font-size: 22px; font-weight: 900; letter-spacing: 0.5px; }
-    .wfis .sub  { font-size: 11px; color: #444; margin-top: 2px; }
-    .wfis .meta { font-size: 12px; color: #222; }
-    .wfis .row  { display: flex; justify-content: space-between; gap: 8px; }
-    .wfis .row  > span:last-child { white-space: nowrap; }
-    .wfis .hr-solid  { border-top: 2px solid #111; margin: 8px 0; }
-    .wfis .hr-dash   { border-top: 1px dashed #333; margin: 6px 0; }
-    .wfis .hr-thin   { border-top: 1px dashed #bbb; margin: 5px 0; }
-    .wfis .col-head  { display: flex; justify-content: space-between; font-weight: 800;
-                       font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
-    .wfis .item-name { font-weight: 700; font-size: 13px; }
-    .wfis .item-line { display: flex; justify-content: space-between; font-size: 12px; color: #333; }
-    .wfis .item-note { font-size: 11px; color: #555; padding-left: 10px; }
-    .wfis .total-row { display: flex; justify-content: space-between; align-items: baseline;
-                       padding: 6px 8px; background: #111; color: #fff; border-radius: 4px;
-                       font-size: 16px; font-weight: 900; margin: 6px 0; }
-    .wfis .footer    { text-align: center; margin-top: 8px; font-size: 12px; font-style: italic; }
-    .wfis .disclaim  { text-align: center; margin-top: 10px; font-size: 10px; color: #666; letter-spacing: 0.5px; }
-    .wfis .badge     { display: inline-block; padding: 2px 8px; border: 1px solid #111;
-                       border-radius: 999px; font-size: 11px; font-weight: 700; }
-    .wfis .muted     { color: #777; font-weight: 400; font-size: 11px; }
-    .wfis .discount  { color: #b45309; font-weight: 700; }
-    .wfis .balance-box { border: 1.5px solid #111; border-radius: 6px; padding: 8px 10px; margin-top: 6px; background: #fafafa; }
-    .wfis .balance-title { font-weight: 900; font-size: 11px; letter-spacing: 1px;
-                           text-align: center; margin-bottom: 4px; color: #111; }
-    .wfis .balance-new { font-weight: 900; font-size: 14px; color: #b91c1c;
-                         border-top: 1px dashed #aaa; padding-top: 4px; margin-top: 4px; }
+    .wfis .bold { font-weight: 700; }
+    .wfis .shop { font-size: 22px; font-weight: 800; letter-spacing: 0.2px; color: #0f172a; }
+    .wfis .sub  { font-size: 12px; color: #475569; margin-top: 3px; }
+    .wfis .meta { font-size: 13px; color: #1e293b; }
+    .wfis .row  { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 1px 0; }
+    .wfis .row  > span:first-child  { color: #475569; }
+    .wfis .row  > span:last-child   { white-space: nowrap; color: #0f172a; font-weight: 600; }
+    .wfis .hr-solid { border-top: 2px solid #0f172a; margin: 10px 0; }
+    .wfis .hr-dash  { border-top: 1px dashed #94a3b8; margin: 8px 0; }
+    .wfis .hr-thin  { border-top: 1px dashed #e2e8f0; margin: 6px 0; }
+    .wfis .col-head { display: flex; justify-content: space-between; font-weight: 700; font-size: 11px;
+                      text-transform: uppercase; letter-spacing: 1px; color: #64748b; }
+    .wfis .item     { padding: 2px 0; }
+    .wfis .item-name { font-weight: 600; font-size: 14px; color: #0f172a; }
+    .wfis .item-line { display: flex; justify-content: space-between; font-size: 12px; color: #475569; margin-top: 1px; }
+    .wfis .item-line > span:last-child { font-weight: 700; color: #0f172a; }
+    .wfis .item-note { font-size: 11px; color: #64748b; font-style: italic; padding-left: 4px; margin-top: 2px; }
+    .wfis .total-row { display: flex; justify-content: space-between; align-items: center;
+                       padding: 10px 12px; background: #0f172a; color: #ffffff; border-radius: 6px;
+                       font-size: 17px; font-weight: 800; margin: 8px 0 6px 0; letter-spacing: 0.3px; }
+    .wfis .footer   { text-align: center; margin-top: 10px; font-size: 12px; color: #475569; font-style: italic; }
+    .wfis .disclaim { text-align: center; margin-top: 10px; font-size: 10px; color: #94a3b8;
+                      letter-spacing: 0.3px; text-transform: uppercase; }
+    .wfis .muted    { color: #94a3b8; font-weight: 500; font-size: 12px; }
+    .wfis .discount > span:first-child { color: #b45309; font-weight: 700; }
+    .wfis .discount > span:last-child  { color: #b45309; font-weight: 700; }
+    .wfis .pay-method { font-weight: 700; color: #0f172a; }
+    .wfis .balance-box   { border: 1px solid #0f172a; border-radius: 8px; padding: 10px 12px;
+                           margin-top: 8px; background: #f8fafc; }
+    .wfis .balance-title { font-weight: 700; font-size: 11px; letter-spacing: 1.5px;
+                           text-align: center; margin-bottom: 6px; color: #0f172a; text-transform: uppercase; }
+    .wfis .balance-new   { font-weight: 800; font-size: 15px; color: #b91c1c;
+                           border-top: 1px dashed #cbd5e1; padding-top: 6px; margin-top: 6px; }
+    .wfis .balance-new > span:last-child { color: #b91c1c; }
   `;
 
   const fmt = (n: number) => fmtTry(n);
@@ -216,11 +224,11 @@ export function buildWhatsAppReceiptHtml(input: WhatsAppReceiptInput): string {
   const items = Array.isArray(input.items) ? input.items : [];
   items.forEach((it, idx) => {
     const name = it.variantName ? `${it.productName} (${it.variantName})` : it.productName;
-    html += `<div>
+    html += `<div class="item">
       <div class="item-name">${esc(name)}</div>
       <div class="item-line">
         <span>${it.quantity} × ${fmt(it.unitPrice)} ₺</span>
-        <span class="bold">${fmt(it.totalAmount)} ₺</span>
+        <span>${fmt(it.totalAmount)} ₺</span>
       </div>
       ${it.notes ? `<div class="item-note">Not: ${esc(it.notes)}</div>` : ''}
     </div>`;
@@ -235,13 +243,13 @@ export function buildWhatsAppReceiptHtml(input: WhatsAppReceiptInput): string {
     const pctLabel = input.discountPercent && input.discountPercent > 0
       ? ` <span class="muted">(%${input.discountPercent})</span>`
       : '';
-    html += `<div class="row discount"><span>İndirim${pctLabel}</span><span>-${fmt(input.discountAmount)} ₺</span></div>`;
+    html += `<div class="row discount"><span>İskonto${pctLabel}</span><span>-${fmt(input.discountAmount)} ₺</span></div>`;
   }
   if (input.taxAmount && input.taxAmount > 0) {
     html += `<div class="row"><span>KDV</span><span>${fmt(input.taxAmount)} ₺</span></div>`;
   }
   html += `<div class="total-row"><span>TOPLAM</span><span>${fmt(input.total)} ₺</span></div>`;
-  html += `<div class="row"><span>Ödeme</span><span class="badge">${esc(methodLabel(input.paymentMethod))}</span></div>`;
+  html += `<div class="row"><span>Ödeme</span><span class="pay-method">${esc(methodLabel(input.paymentMethod))}</span></div>`;
 
   // Cari (açık hesap) bakiye kutusu — sadece open_account ödemelerinde gösterilir.
   if (
