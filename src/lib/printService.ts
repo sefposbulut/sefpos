@@ -1605,3 +1605,41 @@ export async function printKitchenReceipts(opts: {
     }
   }
 }
+
+/**
+ * Online sipariş (Getir / Yemeksepeti / vb.) mutfak fişi.
+ * Verify / onay kullanıcıda kalsa da ürünler mutfağa düşer; Getir API çağrısı yapmaz.
+ */
+export async function printOnlineOrderKitchenTicket(opts: {
+  settings: PrintSettings;
+  restaurantName: string;
+  platformLabel: string;
+  orderNumber: string;
+  customerName?: string;
+  customerAddress?: string;
+  verificationCode?: string | null;
+  items: Array<{ platform_product_name: string; quantity: number; notes?: string | null }>;
+}): Promise<void> {
+  const kitchenItems: KitchenPrintItem[] = (opts.items || []).map((it) => ({
+    productName: (it.platform_product_name || 'Ürün').trim() || 'Ürün',
+    quantity: Math.max(1, Math.floor(Number(it.quantity) || 1)),
+    notes: it.notes || null,
+  }));
+  if (kitchenItems.length === 0) {
+    kitchenItems.push({ productName: '(Ürün listesi boş — panelden kontrol edin)', quantity: 1 });
+  }
+  const noteParts = [
+    `Platform: ${opts.platformLabel}`,
+    opts.customerName ? `Müşteri: ${opts.customerName}` : '',
+    opts.customerAddress ? `Adres: ${opts.customerAddress}` : '',
+    opts.verificationCode ? `Doğrulama: ${String(opts.verificationCode).toUpperCase()}` : '',
+  ].filter(Boolean);
+  await printKitchenReceipts({
+    settings: opts.settings,
+    restaurantName: opts.restaurantName,
+    tableLabel: `ONLINE • ${opts.platformLabel}`,
+    orderNumber: opts.orderNumber,
+    items: kitchenItems,
+    note: noteParts.join('\n'),
+  });
+}

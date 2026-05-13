@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, Fragment } from 'react';
+import { useState, useEffect, useRef, useCallback, Fragment, useMemo } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { Database } from '../lib/supabase';
@@ -14,6 +14,7 @@ import {
 } from '../lib/notification';
 import { callGetir, eligibleCancelReasons, getGetirNextStepHint, getGetirUiPhase, getirStatusLabel } from '../lib/getirApi';
 import { PlatformLogo } from './PlatformLogo';
+import { loadPrintSettings, printOnlineOrderKitchenTicket } from '../lib/printService';
 
 type OnlineOrder = Database['public']['Tables']['online_orders']['Row'];
 type OnlineOrderItem = Database['public']['Tables']['online_order_items']['Row'];
@@ -36,6 +37,43 @@ const REJECT_REASONS: { value: string; label: string }[] = [
   { value: 'MOV_NOT_REACHED', label: 'Minimum sipariş tutarı karşılanmadı' },
   { value: 'ADDRESS_INCOMPLETE_MISSTATED', label: 'Adres eksik/hatalı' },
 ];
+
+const FILTER_GROUPS: Record<'all' | 'new' | 'active' | 'on_the_way' | 'done', string[] | null> = {
+  new: ['new', 'scheduled_new', 'verified', 'accepted'],
+  active: ['preparing', 'ready', 'scheduled_accepted'],
+  on_the_way: ['handed_over', 'on_the_way', 'arrived'],
+  done: ['delivered', 'cancelled'],
+  all: null,
+};
+
+function kitchenPrintedSessionKey(tenantId: string): string {
+  return `sefpos_kitchen_online_printed:${tenantId}`;
+}
+
+function wasKitchenPrintedThisSession(tenantId: string, orderId: string): boolean {
+  try {
+    const raw = sessionStorage.getItem(kitchenPrintedSessionKey(tenantId));
+    const arr: string[] = raw ? JSON.parse(raw) : [];
+    return arr.includes(orderId);
+  } catch {
+    return false;
+  }
+}
+
+function markKitchenPrintedThisSession(tenantId: string, orderId: string): void {
+  try {
+    const key = kitchenPrintedSessionKey(tenantId);
+    const raw = sessionStorage.getItem(key);
+    const arr: string[] = raw ? JSON.parse(raw) : [];
+    if (!arr.includes(orderId)) {
+      arr.push(orderId);
+      while (arr.length > 250) arr.shift();
+      sessionStorage.setItem(key, JSON.stringify(arr));
+    }
+  } catch {
+    /* ignore */
+  }
+}
 
 export function OnlineOrders() {
   const { tenant, user } = useAuth();
@@ -61,10 +99,45 @@ export function OnlineOrders() {
   const seenOrderIds = useRef<Set<string>>(new Set());
   const firstLoadDone = useRef<boolean>(false);
 
-  const filterRef = useRef(filter);
-  filterRef.current = filter;
   const soundEnabledRef = useRef(soundEnabled);
   soundEnabledRef.current = soundEnabled;
+
+  const kitchenPrintInFlight = useRef<Set<string>>(new Set());
+
+  const scheduleKitchenPrint = useCallback(
+    async (o: OrderWithDetails) => {
+      if (!tenant?.id) return;
+      if (kitchenPrintInFlight.current.has(o.id)) return;
+      if (wasKitchenPrintedThisSession(tenant.id, o.id)) return;
+      kitchenPrintInFlight.current.add(o.id);
+      try {
+        const settings = loadPrintSettings();
+        await printOnlineOrderKitchenTicket({
+          settings,
+          restaurantName: (settings.restaurantName || tenant?.name || 'ŞefPOS').trim(),
+          platformLabel:
+            o.online_order_platforms?.platform_name ||
+            o.online_order_platforms?.platform_code ||
+            'Online',
+          orderNumber: String(o.platform_order_number || (o.platform_order_id || '').slice(0, 12)),
+          customerName: o.customer_name || undefined,
+          customerAddress: o.customer_address || undefined,
+          verificationCode: o.getir_verification_code || null,
+          items: (o.items || []).map((it) => ({
+            platform_product_name: it.platform_product_name || '',
+            quantity: it.quantity,
+            notes: it.notes || null,
+          })),
+        });
+        markKitchenPrintedThisSession(tenant.id, o.id);
+      } catch (e) {
+        console.warn('[OnlineOrders] Mutfak fişi yazdırılamadı:', e);
+      } finally {
+        kitchenPrintInFlight.current.delete(o.id);
+      }
+    },
+    [tenant?.id, tenant?.name],
+  );
 
   const loadOrders = useCallback(async (showLoading = false) => {
     if (!tenant) return;
@@ -78,69 +151,52 @@ export function OnlineOrders() {
         .order('created_at', { ascending: false })
         .limit(100);
 
-      // Filter gruplamasi:
-      //   new        → 'new' / 'scheduled_new' / 'verified' / 'accepted'
-      //                (mutfaga henuz baslamadi — kullanici icin hepsi YENI)
-      //                Getir: 325=new, 400=verified, ŞefPOS: accepted
-      //   active     → 'preparing' / 'ready' / 'scheduled_accepted'
-      //                (hazirlikta veya hazir, kuryeyi bekliyor)
-      //   on_the_way → 'handed_over' / 'on_the_way' / 'arrived'
-      //   done       → 'delivered' / 'cancelled'
-      //   all        → tumu
-      const filterGroups: Record<string, string[]> = {
-        new: ['new', 'scheduled_new', 'verified', 'accepted'],
-        active: ['preparing', 'ready', 'scheduled_accepted'],
-        on_the_way: ['handed_over', 'on_the_way', 'arrived'],
-        done: ['delivered', 'cancelled'],
-      };
-      const allowedStatuses = filterGroups[filterRef.current];
-      if (allowedStatuses) {
-        query = query.in('status', allowedStatuses);
-      }
-
+      // Sekme filtresi SQL'de UYGULANMAZ — aksi halde "Mutfakta" sekmesindeyken
+      // yeni sipariş realtime/poll ile listede hiç görünmez ve alarm/fiş tetiklenmez.
       const { data, error } = await query;
       if (error) throw error;
 
       const newOrders = (data as any[]) || [];
 
       // ────────────────────────────────────────────────────────────────
-      // SURESLI ALARM MANTIGI
+      // SURESLI ALARM + mutfak fişi
       // "Yeni" durum gruplari: mutfak henuz baslamadi.
-      //   - new / scheduled_new  → Getir 325 (verify bekleniyor)
-      //   - verified             → Getir 400 (onaylandi, prepare bekleniyor)
-      //                            Test panelinden direkt 400 ile gelir.
-      //   - accepted             → ŞefPOS dahili (Yemeksepeti accept sonrasi)
-      // 1) İlk yüklemede: bu durumdaki tum siparişler icin alarm baslat.
-      // 2) Sonraki yüklemelerde: yeni gelen ve bu durumlarda olanlar
-      //    için alarm baslat; artik bu durumda olmayanlar icin alarm durdur.
+      // 1) İlk yüklemede: bu durumdaki tum siparişler icin alarm (ses açıksa).
+      // 2) Sonraki yüklemelerde: yeni id için alarm + mutfak fişi (ses'ten bağımsız).
+      // Mutfak fişi: verify/onay sizde kalsa da sipariş DB'ye düşer düşmez bir kez
+      // basılır — sessionStorage ile mükerrer önlenir.
       // ────────────────────────────────────────────────────────────────
       const newishStatuses = new Set(['new', 'scheduled_new', 'verified', 'accepted']);
       const currentNewOrderIds = new Set(
         newOrders.filter((o) => newishStatuses.has(o.status)).map((o) => o.id),
       );
 
+      const FRESH_ORDER_MAX_AGE_MS = 15 * 60 * 1000;
+
       if (!firstLoadDone.current) {
         for (const o of newOrders) seenOrderIds.current.add(o.id);
         firstLoadDone.current = true;
-        // İlk açılışta zaten new sipariş varsa onlar için alarm başlat
-        if (soundEnabledRef.current) {
-          for (const o of newOrders) {
-            if (newishStatuses.has(o.status)) {
-              const label = o.online_order_platforms?.platform_name || 'Online';
-              startContinuousAlert(o.id, label);
-            }
+        for (const o of newOrders) {
+          if (!newishStatuses.has(o.status)) continue;
+          if (soundEnabledRef.current) {
+            const label = o.online_order_platforms?.platform_name || 'Online';
+            startContinuousAlert(o.id, label);
+          }
+          const ageMs = Date.now() - new Date(o.created_at || Date.now()).getTime();
+          if (ageMs <= FRESH_ORDER_MAX_AGE_MS) {
+            void scheduleKitchenPrint(o as OrderWithDetails);
           }
         }
-      } else if (soundEnabledRef.current) {
-        // Yeni eklenen siparişler için alarm başlat
+      } else {
         for (const o of newOrders) {
-          if (!seenOrderIds.current.has(o.id)) {
-            seenOrderIds.current.add(o.id);
-            if (newishStatuses.has(o.status)) {
-              const label = o.online_order_platforms?.platform_name || 'Online';
-              startContinuousAlert(o.id, label);
-            }
+          if (seenOrderIds.current.has(o.id)) continue;
+          seenOrderIds.current.add(o.id);
+          if (!newishStatuses.has(o.status)) continue;
+          if (soundEnabledRef.current) {
+            const label = o.online_order_platforms?.platform_name || 'Online';
+            startContinuousAlert(o.id, label);
           }
+          void scheduleKitchenPrint(o as OrderWithDetails);
         }
       }
 
@@ -157,7 +213,13 @@ export function OnlineOrders() {
     } finally {
       if (showLoading) setLoading(false);
     }
-  }, [tenant]);
+  }, [tenant, scheduleKitchenPrint]);
+
+  useEffect(() => {
+    firstLoadDone.current = false;
+    seenOrderIds.current = new Set();
+    previousOrderCount.current = 0;
+  }, [tenant?.id]);
 
   useEffect(() => {
     if (!tenant) return;
@@ -215,7 +277,7 @@ export function OnlineOrders() {
       }
     };
 
-    const firstId = window.setTimeout(tick, 8000);
+    const firstId = window.setTimeout(tick, 1500);
     const intervalId = window.setInterval(tick, 90_000);
     return () => {
       stopped = true;
@@ -585,7 +647,11 @@ export function OnlineOrders() {
     );
   };
 
-  const filteredOrders = orders;
+  const filteredOrders = useMemo(() => {
+    const allowed = FILTER_GROUPS[filter];
+    if (!allowed) return orders;
+    return orders.filter((o) => allowed.includes(o.status));
+  }, [orders, filter]);
 
   const activeAlertCount = orders.filter(
     (o) =>

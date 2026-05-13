@@ -5,7 +5,16 @@
  * Diğer platformlar: kurumsal renkli tipografik badge (asset yoksa).
  * Boyut: 'sm' / 'md' (varsayılan). 'sm' bildirim toast için, 'md' OnlineOrders
  * tablosunda kullanılır.
+ *
+ * Electron `loadFile(dist/index.html)` ile `base: './'` kullanıldığında kök
+ * `/platforms/...` yanlış çözülür; `import.meta.env.BASE_URL` ile göreli yol.
  */
+
+function publicAssetUrl(relativePath: string): string {
+  const base = (import.meta.env.BASE_URL || './').replace(/\/$/, '');
+  const path = relativePath.replace(/^\//, '');
+  return base ? `${base}/${path}` : `./${path}`;
+}
 
 interface PlatformLogoProps {
   code: string;
@@ -25,7 +34,7 @@ export function PlatformLogo({ code, name, size = 'md' }: PlatformLogoProps) {
   if (c.includes('getir')) {
     return (
       <img
-        src="/platforms/getir.svg"
+        src={publicAssetUrl('platforms/getir.svg')}
         alt="Getir"
         className={isSm ? 'h-7 w-auto' : 'h-9 w-auto'}
         draggable={false}

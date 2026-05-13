@@ -147,7 +147,9 @@ function App() {
   // ve sonrasinda display:none ile saklanir. POS sicak yolu (tables) en bastan
   // mount edilir; nadir sayfalar (Products, OnlineOrders, vs.) baslangic
   // maliyetine eklenmez. Bu hook'lar Rules of Hooks geregi en uste konulmuştur.
-  const mountedPagesRef = useRef<Set<string>>(new Set(['tables']));
+  // online-orders: sayfa görünür olmasa da mount kalsın — Getir poll + realtime
+  // ve mutfak fişi tetikleri masadayken de çalışsın.
+  const mountedPagesRef = useRef<Set<string>>(new Set(['tables', 'online-orders']));
   const [, setMountedPagesVersion] = useState(0);
   if (currentPage && !mountedPagesRef.current.has(currentPage)) {
     mountedPagesRef.current.add(currentPage);
