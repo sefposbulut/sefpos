@@ -518,12 +518,41 @@ Deno.serve(async (req) => {
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
   const supabaseService = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+  // Supabase yeni API key sistemi (sb_publishable_*) ile SUPABASE_ANON_KEY env
+  // her zaman set olur. Bazı eski projelerde fallback olarak service-role var.
+  const supabaseAnon = Deno.env.get("SUPABASE_ANON_KEY") || supabaseService;
   const admin = createClient(supabaseUrl, supabaseService);
 
-  // 2) JWT'yi manuel dogrula (verify_jwt=false oldugu icin gateway yapmiyor).
-  const { data: userInfo, error: userErr } = await admin.auth.getUser(accessToken);
+  // 2) JWT'yi resmi "user client" pattern'i ile dogrula (anon key + Authorization header).
+  //    Eski yöntem `admin.auth.getUser(token)` bazı `sb_publishable_*` / yeni
+  //    API-key konfigürasyonlarında "Gecersiz oturum" üretiyordu.
+  const userClient = createClient(supabaseUrl, supabaseAnon, {
+    global: { headers: { Authorization: authHeader } },
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+  });
+  let { data: userInfo, error: userErr } = await userClient.auth.getUser();
+  if ((userErr || !userInfo?.user) && supabaseService) {
+    // Fallback: service-role + token. Bazı bölgelerde anon-key tabanlı
+    // doğrulama 401 dönerse service-role direkt çalışıyor.
+    const tryAdmin = await admin.auth.getUser(accessToken);
+    if (!tryAdmin.error && tryAdmin.data?.user) {
+      userInfo = tryAdmin.data as any;
+      userErr = null as any;
+    }
+  }
   if (userErr || !userInfo?.user) {
-    return jsonResponse({ ok: false, error: "Gecersiz oturum" }, 401);
+    console.warn("[getir-api] auth fail:", {
+      tokenLen: accessToken.length,
+      hasAnon: !!Deno.env.get("SUPABASE_ANON_KEY"),
+      hasService: !!supabaseService,
+      msg: (userErr as any)?.message,
+      status: (userErr as any)?.status,
+    });
+    return jsonResponse({
+      ok: false,
+      error: "Gecersiz oturum",
+      reason: (userErr as any)?.message || "auth.getUser failed",
+    }, 401);
   }
   const userId = userInfo.user.id;
 

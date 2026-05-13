@@ -68,25 +68,53 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
+ * JWT expiresAt yakınsa (60s) önceden refresh dener.
+ * Refresh başarısızsa mevcut session ile devam eder.
+ */
+async function ensureFreshSession(): Promise<{ access_token: string } | null> {
+  try {
+    const { data } = await supabase.auth.getSession();
+    let session = data.session;
+    if (!session) {
+      // Belki refresh-only state — refreshSession dener
+      const { data: r } = await supabase.auth.refreshSession();
+      session = r.session ?? null;
+    } else if (session.expires_at) {
+      const msLeft = session.expires_at * 1000 - Date.now();
+      if (msLeft < 60_000) {
+        const { data: r } = await supabase.auth.refreshSession();
+        if (r.session) session = r.session;
+      }
+    }
+    return session ? { access_token: session.access_token } : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Genel Getir Edge Function caller'i. Supabase JWT'yi otomatik ekler.
  * - Tum cagrilar tek sira (mutex) ile seri calisir → burst 429 azalir.
  * - HTTP 429 alinirsa exponential backoff ile birkaç kez yeniden dener.
+ * - HTTP 401 alinirsa session refresh + tek seferlik retry yapilir
+ *   (uzun süre açık kalmış Electron uygulamasında stale token sorunu).
  */
 export async function callGetir(payload: GetirActionPayload): Promise<GetirActionResult> {
   const run = async (): Promise<GetirActionResult> => {
     try {
-      const { data: { session } } = await supabase.auth.getSession();
+      let session = await ensureFreshSession();
       if (!session) return { ok: false, error: 'Oturum bulunamadi' };
 
       const baseUrl = (import.meta.env.VITE_SUPABASE_URL || 'https://xdfnozfuuzctubijbnds.supabase.co').replace(/\/$/, '');
       const url = `${baseUrl}/functions/v1/getir-api`;
-      const headers = {
-        'Authorization': `Bearer ${session.access_token}`,
+      const buildHeaders = (tok: string): Record<string, string> => ({
+        'Authorization': `Bearer ${tok}`,
         'Content-Type': 'application/json',
         'apikey': (import.meta.env.VITE_SUPABASE_ANON_KEY as string) || '',
-      };
+      });
 
       const maxAttempts = 5;
+      let triedRefreshOn401 = false;
       for (let attempt = 0; attempt < maxAttempts; attempt++) {
         if (attempt > 0) {
           const backoff = Math.min(12_000, 900 * 2 ** (attempt - 1)) + Math.floor(Math.random() * 400);
@@ -95,7 +123,7 @@ export async function callGetir(payload: GetirActionPayload): Promise<GetirActio
 
         const resp = await fetch(url, {
           method: 'POST',
-          headers,
+          headers: buildHeaders(session.access_token),
           body: JSON.stringify(payload),
         });
 
@@ -111,6 +139,20 @@ export async function callGetir(payload: GetirActionPayload): Promise<GetirActio
 
         if (resp.status === 429 && attempt < maxAttempts - 1) {
           continue;
+        }
+
+        // 401 → bir kez session zorla refresh + tekrar dene (stale JWT senaryosu)
+        if (resp.status === 401 && !triedRefreshOn401) {
+          triedRefreshOn401 = true;
+          try {
+            const { data: r } = await supabase.auth.refreshSession();
+            if (r.session?.access_token) {
+              session = { access_token: r.session.access_token };
+              continue;
+            }
+          } catch (e) {
+            console.warn('[getir-api] 401 sonrası refreshSession başarısız:', e);
+          }
         }
 
         if (typeof data === 'object' && data !== null && 'ok' in data) {
