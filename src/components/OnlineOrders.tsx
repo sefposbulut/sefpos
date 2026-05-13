@@ -371,6 +371,32 @@ export function OnlineOrders() {
    * Pre-action inquiry KALDIRILDI — her tiklamada 2x istek 429 (Too Many Requests)
    * uretiyordu. Senkron ihtiyaci: yalnizca "invalid status" hatasinda inquiry.
    */
+  /**
+   * Tek bir Getir siparişi için inquiry çağırarak DB'yi Getir'in gerçek
+   * durumuyla senkronize eder. Webhook'ta durum boş gelmişse veya bizim
+   * sistemle Getir paneli arasında uyumsuzluk varsa kullanıcı bunu tek
+   * tıkla düzeltebilir.
+   */
+  const refreshGetirOrder = async (order: OrderWithDetails): Promise<void> => {
+    setBusyOrderId(order.id);
+    try {
+      const res = await callGetir({
+        platformId: order.platform_id,
+        action: 'inquiry',
+        orderId: order.platform_order_id,
+      });
+      if (!res.ok) {
+        alert(`Getir senkronizasyonu başarısız: ${(res as any)?.data?.message || res.error || 'bilinmeyen'}`);
+      } else {
+        await loadOrders();
+      }
+    } catch (err: any) {
+      alert(`Senkron hatası: ${err?.message || err}`);
+    } finally {
+      setBusyOrderId(null);
+    }
+  };
+
   const doGetirAction = async (
     order: OrderWithDetails,
     action: 'verify' | 'verify-scheduled' | 'prepare' | 'handover' | 'deliver' | 'cancel',
@@ -1067,7 +1093,26 @@ export function OnlineOrders() {
                           400      → prepare → 410 (preparing)
                           410      → handover → 700 (on_the_way)
                           700      → deliver → 900 (delivered) [sadece Restoran Kuryesi]
+
+                          Eger Getir paneliyle bizim durum farkliysa kullanici
+                          "Durumu Yenile" ile tek tikla senkronize edebilir.
                       */}
+                      {order.online_order_platforms.platform_code === 'getir' &&
+                        order.status !== 'delivered' &&
+                        order.status !== 'cancelled' && (
+                          <div className="flex justify-end -mt-1">
+                            <button
+                              onClick={() => refreshGetirOrder(order)}
+                              disabled={busyOrderId === order.id}
+                              title="Getir panelindeki gerçek durumu sorgula"
+                              className="text-[11px] font-bold text-purple-700 hover:text-purple-900 hover:underline disabled:opacity-50 flex items-center gap-1"
+                            >
+                              <RefreshCw className={`w-3 h-3 ${busyOrderId === order.id ? 'animate-spin' : ''}`} />
+                              {busyOrderId === order.id ? 'Sorguluyor…' : 'Getir ile durumu eşle'}
+                            </button>
+                          </div>
+                        )}
+
                       {order.online_order_platforms.platform_code === 'getir' && (
                         <>
                           {/* 1️⃣  YENI / SCHEDULED_NEW — REDDET + ONAYLA */}

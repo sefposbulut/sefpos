@@ -258,7 +258,14 @@ Deno.serve(async (req) => {
   const subtotal = Number(order.totalPrice ?? 0);
   const discounted = Number(order.totalDiscountedPrice ?? order.totalPrice ?? 0);
   const totalDiscount = Math.max(0, subtotal - discounted);
-  const statusCode = Number(order.status ?? 400);
+  // Default status: Getir webhook bize sipariş gonderdiyse genelde "yeni" demektir.
+  // Ileri tarihli ise 350 (scheduled_new), aksi halde 325 (new — verify bekleniyor).
+  // ESKI kod default=400 atiyordu → bu yuzden sipariş bizim sistemde "onayli"
+  // gozukurken Getir panelinde hala "Onayla" bekliyordu.
+  const isScheduled = !!order.isScheduled;
+  const rawStatus = order.status;
+  const hasStatus = rawStatus != null && !isNaN(Number(rawStatus));
+  const statusCode = hasStatus ? Number(rawStatus) : (isScheduled ? 350 : 325);
   const normalized = normalizeStatus(statusCode);
 
   const row: Record<string, any> = {

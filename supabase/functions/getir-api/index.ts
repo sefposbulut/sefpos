@@ -368,7 +368,16 @@ async function upsertGetirOrder(
   //   800 = Arrived (teslim noktasinda)
   //   900 = Delivered (teslim edildi)
   //   1500/1600 = Cancelled
-  const statusCode = Number(order.status ?? 0);
+  // Getir resmi status kodlari — status alani gelmezse varsayilan olarak
+  // "new (325)" kabul edelim. isScheduled=true ise scheduled_new (350).
+  // Polling/inquiry'da Getir genelde status alanini doldurur ama webhook
+  // payload'inda nadiren bos gelebilir; ESKI kod default 0 olunca status
+  // yine "new"e dusuyordu, ama herhangi bir baska yan etki olmasin diye
+  // burada da net davranis ile garanti edelim.
+  const rawStatusVal = (order as any).status;
+  const hasStatusVal = rawStatusVal != null && !isNaN(Number(rawStatusVal));
+  const isSched = !!(order as any).isScheduled;
+  const statusCode = hasStatusVal ? Number(rawStatusVal) : (isSched ? 350 : 325);
   let normalizedStatus: string = "new";
   switch (statusCode) {
     case 325: normalizedStatus = "new"; break;
