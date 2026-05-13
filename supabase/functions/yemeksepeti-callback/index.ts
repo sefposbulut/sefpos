@@ -161,7 +161,6 @@ Deno.serve(async (req: Request) => {
     let newStatus: string | null = null;
     let updateData: Record<string, unknown> = {};
     let middlewareResult: { ok: boolean; status: number; body: string } | null = null;
-    let preparationCompletedResult: { ok: boolean; status: number; body: string } | null = null;
 
     if (action === "accept") {
       newStatus = "accepted";
@@ -175,71 +174,96 @@ Deno.serve(async (req: Request) => {
     } else if (action === "picked_up") {
       newStatus = "delivered";
       updateData = { status: "delivered", delivered_at: now };
+    } else {
+      return new Response(
+        JSON.stringify({ error: `Unknown action: ${action}` }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
     }
 
+    // 1) Once middleware'e bildirelim (varsa). Boylece middleware reject ederse
+    //    DB'yi update ETMEYIZ -> inconsistent state olusmaz.
+    let middlewareCalled = false;
+    let middlewareSkippedReason: string | null = null;
+
+    if (middlewareBaseUrl && orderToken) {
+      const token = await getMiddlewareToken(supabase, platform);
+      if (!token) {
+        return new Response(
+          JSON.stringify({
+            error: "Platform middleware login failed",
+            details: "Yemeksepeti/middleware bilgileri (kullanıcı adı/şifre/URL) ile token alınamadı. Lütfen Ayarlar > Online Platformlar üzerinden kontrol edin.",
+          }),
+          { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
+      if (action === "accept") {
+        const defaultAcceptanceTime = acceptanceTime || new Date(Date.now() + 20 * 60 * 1000).toISOString();
+        middlewareResult = await callMiddlewareApi(
+          `${middlewareBaseUrl}/v2/order/status/${orderToken}`,
+          {
+            status: "order_accepted",
+            acceptanceTime: defaultAcceptanceTime,
+            remoteOrderId: order.remote_order_id || order.id,
+          },
+          token,
+        );
+      } else if (action === "reject") {
+        middlewareResult = await callMiddlewareApi(
+          `${middlewareBaseUrl}/v2/order/status/${orderToken}`,
+          {
+            status: "order_rejected",
+            reason: rejectReason || "TOO_BUSY",
+            message: rejectMessage || "",
+          },
+          token,
+        );
+      } else if (action === "prepared") {
+        middlewareResult = await callMiddlewareApi(
+          `${middlewareBaseUrl}/v2/orders/${orderToken}/preparation-completed`,
+          null,
+          token,
+        );
+      } else if (action === "picked_up") {
+        middlewareResult = await callMiddlewareApi(
+          `${middlewareBaseUrl}/v2/order/status/${orderToken}`,
+          { status: "order_picked_up" },
+          token,
+        );
+      }
+      middlewareCalled = true;
+
+      if (middlewareResult && !middlewareResult.ok) {
+        return new Response(
+          JSON.stringify({
+            error: "Platform middleware reddetti",
+            details: `HTTP ${middlewareResult.status}: ${middlewareResult.body?.slice(0, 500)}`,
+            middlewareResult,
+          }),
+          { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+    } else if (!middlewareBaseUrl) {
+      middlewareSkippedReason = "Platform middleware URL'i tanımlı değil (lokal-only mod).";
+    } else if (!orderToken) {
+      middlewareSkippedReason = "Bu siparişe ait dh_order_token bulunamadı, platforma bildirilemedi.";
+    }
+
+    // 2) Middleware OK ise (veya yoksa) DB'yi update et
     const { error: updateError } = await supabase
       .from("online_orders")
       .update(updateData)
       .eq("id", orderId);
-
     if (updateError) throw updateError;
-
-    if (middlewareBaseUrl && orderToken) {
-      const token = await getMiddlewareToken(supabase, platform);
-
-      if (token) {
-        if (action === "accept") {
-          const defaultAcceptanceTime = acceptanceTime || new Date(Date.now() + 20 * 60 * 1000).toISOString();
-          const body: Record<string, unknown> = {
-            status: "order_accepted",
-            acceptanceTime: defaultAcceptanceTime,
-            remoteOrderId: order.remote_order_id || order.id,
-          };
-          middlewareResult = await callMiddlewareApi(
-            `${middlewareBaseUrl}/v2/order/status/${orderToken}`,
-            body,
-            token
-          );
-
-        } else if (action === "reject") {
-          const body: Record<string, unknown> = {
-            status: "order_rejected",
-            reason: rejectReason || "TOO_BUSY",
-            message: rejectMessage || "",
-          };
-          middlewareResult = await callMiddlewareApi(
-            `${middlewareBaseUrl}/v2/order/status/${orderToken}`,
-            body,
-            token
-          );
-
-        } else if (action === "prepared") {
-          middlewareResult = await callMiddlewareApi(
-            `${middlewareBaseUrl}/v2/orders/${orderToken}/preparation-completed`,
-            null,
-            token
-          );
-
-        } else if (action === "picked_up") {
-          const body: Record<string, unknown> = {
-            status: "order_picked_up",
-          };
-          middlewareResult = await callMiddlewareApi(
-            `${middlewareBaseUrl}/v2/order/status/${orderToken}`,
-            body,
-            token
-          );
-        }
-      }
-    }
 
     return new Response(
       JSON.stringify({
         success: true,
         newStatus,
-        middlewareApiCalled: !!middlewareResult,
+        middlewareApiCalled: middlewareCalled,
         middlewareResult,
-        preparationCompletedResult,
+        middlewareSkippedReason,
       }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );

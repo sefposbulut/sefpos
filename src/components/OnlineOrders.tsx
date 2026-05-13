@@ -45,6 +45,8 @@ export function OnlineOrders() {
   const [getirCancelReasonId, setGetirCancelReasonId] = useState<string>('');
   const [getirCancelNote, setGetirCancelNote] = useState<string>('');
   const [busyOrderId, setBusyOrderId] = useState<string | null>(null);
+  const busyOrderIdRef = useRef<string | null>(null);
+  busyOrderIdRef.current = busyOrderId;
   const [filter, setFilter] = useState<'all' | 'new' | 'active' | 'on_the_way' | 'done'>('new');
   const [soundEnabled, setSoundEnabled] = useState(() => {
     const saved = localStorage.getItem('notification_sound_enabled');
@@ -177,16 +179,15 @@ export function OnlineOrders() {
     };
   }, []);
 
-  // Otomatik polling: webhook tanimi yapilmamis olsa bile, ekran acikken
-  // her 25 sn'de aktif Getir platformlarini sorgular. Yeni siparis varsa
-  // backend online_orders'a insert eder; realtime channel onu yakalar ve
-  // sayfa kendiliginden yenilenir (sesli uyari + otomatik mutfak fisi).
+  // Otomatik polling — aralik uzun tutuldu (429 riski). Kullanici Getir
+  // aksiyonu calistirirken poll atlanir.
   useEffect(() => {
     if (!tenant) return;
     let stopped = false;
 
     const tick = async () => {
       if (stopped || document.visibilityState !== 'visible') return;
+      if (busyOrderIdRef.current) return;
       try {
         const { data: platforms } = await supabase
           .from('online_order_platforms')
@@ -195,7 +196,7 @@ export function OnlineOrders() {
           .eq('is_active', true)
           .eq('platform_code', 'getir');
         for (const p of platforms || []) {
-          if (stopped) break;
+          if (stopped || busyOrderIdRef.current) break;
           await callGetir({ platformId: p.id, action: 'poll-active' });
         }
       } catch (e) {
@@ -203,10 +204,8 @@ export function OnlineOrders() {
       }
     };
 
-    // Ilk tick'i 5 sn sonra at (sayfa acilir acilmaz aniden cagri olmasin),
-    // sonra her 25 sn'de bir tekrarla.
-    const firstId = window.setTimeout(tick, 5000);
-    const intervalId = window.setInterval(tick, 25000);
+    const firstId = window.setTimeout(tick, 8000);
+    const intervalId = window.setInterval(tick, 90_000);
     return () => {
       stopped = true;
       window.clearTimeout(firstId);
@@ -234,49 +233,84 @@ export function OnlineOrders() {
     stopAllAlerts();
   };
 
+  /**
+   * Yemeksepeti/Trendyol/Migros gibi DH-tabanli platformlar icin sipariş statu
+   * gecisi. Eger `dhAction` verilirse `yemeksepeti-callback` Edge Function'i
+   * cagirir (middleware'e duruma gore preparation-completed / order_picked_up /
+   * order_accepted / order_rejected gonderir). Aksi halde sadece local DB'ye
+   * yazar (preparing gibi internal status'ler icin).
+   *
+   * Hata olursa local state geri alinir ve kullaniciya bilgi verilir.
+   */
   const updateOrderStatus = async (
     orderId: string,
     status: string,
     dhAction?: 'accept' | 'reject' | 'prepared' | 'picked_up',
-    rejectReason?: string
+    rejectReason?: string,
   ) => {
     if (!tenant) return;
 
+    const order = orders.find((o) => o.id === orderId);
+    const prevStatus = order?.status;
+
+    const baseURL = (import.meta.env.VITE_SUPABASE_URL || 'https://xdfnozfuuzctubijbnds.supabase.co').replace(/\/$/, '');
     const now = new Date().toISOString();
-    const updateData: any = { status };
+    const updateData: Record<string, any> = { status };
     if (status === 'accepted') updateData.accepted_at = now;
     else if (status === 'ready') updateData.ready_at = now;
     else if (status === 'cancelled') updateData.cancelled_at = now;
     else if (status === 'delivered') updateData.delivered_at = now;
 
-    setOrders(prev => prev.map(o => o.id === orderId ? { ...o, ...updateData } : o));
+    setOrders((prev) => prev.map((o) => (o.id === orderId ? { ...o, ...updateData } : o)));
+    setBusyOrderId(orderId);
 
-    if (dhAction) {
-      try {
+    try {
+      if (dhAction) {
         const { data: { session } } = await supabase.auth.getSession();
-        if (session) {
-          await fetch(
-            `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/yemeksepeti-callback`,
-            {
-              method: 'POST',
-              headers: {
-                'Authorization': `Bearer ${session.access_token}`,
-                'Content-Type': 'application/json',
-              },
-              body: JSON.stringify({ orderId, action: dhAction, rejectReason }),
-            }
-          );
+        if (!session) throw new Error('Oturum bulunamadı, lütfen yeniden giriş yapın.');
+
+        const resp = await fetch(`${baseURL}/functions/v1/yemeksepeti-callback`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${session.access_token}`,
+            'Content-Type': 'application/json',
+            apikey: (import.meta.env.VITE_SUPABASE_ANON_KEY as string) || '',
+          },
+          body: JSON.stringify({ orderId, action: dhAction, rejectReason }),
+        });
+
+        const raw = await resp.text();
+        let data: any = {};
+        try { data = raw ? JSON.parse(raw) : {}; } catch { data = { raw }; }
+
+        if (!resp.ok || data?.error) {
+          throw new Error(data?.error || data?.details || raw || `HTTP ${resp.status}`);
         }
-      } catch (err) {
-        console.error('DH callback error:', err);
+        // Edge function DB'yi de update ediyor; local state zaten dogru.
+        await loadOrders();
+      } else {
+        const { error } = await supabase
+          .from('online_orders')
+          .update(updateData)
+          .eq('id', orderId);
+        if (error) throw error;
       }
-    } else {
-      const { error } = await supabase.from('online_orders').update(updateData).eq('id', orderId);
-      if (error) {
-        console.error('Error updating order:', error);
-        alert('Sipariş güncellenirken hata: ' + error.message);
-        loadOrders();
+    } catch (err: any) {
+      // Rollback local state
+      if (prevStatus) {
+        setOrders((prev) =>
+          prev.map((o) => (o.id === orderId ? { ...o, status: prevStatus } : o)),
+        );
       }
+      console.error('[OnlineOrders] updateOrderStatus error:', err);
+      alert(
+        `Sipariş ${status === 'cancelled' ? 'reddedilemedi' : 'güncellenemedi'}: ` +
+          (err?.message || 'Bilinmeyen hata') +
+          '\n\nPlatform middleware bilgileri (kullanıcı adı/şifre/URL) doğru mu kontrol edin.',
+      );
+      await loadOrders();
+    } finally {
+      setBusyOrderId(null);
     }
   };
 
@@ -316,19 +350,16 @@ export function OnlineOrders() {
     if (t.includes('unauthorized') || t.includes('authentication')) {
       return 'Getir oturumu reddedildi. Lütfen Ayarlar > Online Platformlar > Getir → bilgileri kontrol edin.';
     }
+    if (t.includes('429') || t.includes('too many')) {
+      return 'İstek limiti aşıldı. Bir dakika bekleyip tekrar deneyin.';
+    }
     return `Getir hata mesajı (${action}): ${raw}`;
   };
 
   /**
    * Getir'e bir aksiyon (verify/prepare/handover/deliver/cancel) gonderir.
-   *
-   * Akilli senkron stratejisi:
-   *   1) Action'dan ONCE inquiry yapilir — Getir'deki gercek status DB'ye yansir.
-   *      Boylece "invalid status" hatasinin buyuk cogunlugu basta engellenir.
-   *   2) Inquiry sonucu DB'de status guncellendiyse, action gerekli mi diye
-   *      kontrol edilir. Aksiyon zaten yapilmissa atlanir (no-op).
-   *   3) Action yine de fail ederse: time-limit ise otomatik retry, invalid
-   *      status ise sessizce inquiry + UI yenileme + kullaniciya bilgi.
+   * Pre-action inquiry KALDIRILDI — her tiklamada 2x istek 429 (Too Many Requests)
+   * uretiyordu. Senkron ihtiyaci: yalnizca "invalid status" hatasinda inquiry.
    */
   const doGetirAction = async (
     order: OrderWithDetails,
@@ -338,20 +369,6 @@ export function OnlineOrders() {
   ): Promise<void> => {
     setBusyOrderId(order.id);
     try {
-      // ── 1) ON-FLIGHT INQUIRY ── Getir'deki gercek statusu DB'ye yansit
-      // (sadece ilk denemede; retry'larda yapma — sonsuz dongu olmasin)
-      if (retryCount === 0 && action !== 'cancel') {
-        try {
-          await callGetir({
-            platformId: order.platform_id,
-            action: 'inquiry',
-            orderId: order.platform_order_id,
-          });
-        } catch (e) {
-          console.warn('[Getir] pre-action inquiry hatasi (devam ediliyor):', e);
-        }
-      }
-
       const res = await callGetir({
         platformId: order.platform_id,
         action,
@@ -363,9 +380,18 @@ export function OnlineOrders() {
       if (!res.ok) {
         const raw = (res as any)?.data?.message || res.error || 'bilinmeyen hata';
         const lower = String(raw).toLowerCase();
+        const is429 = res.status === 429 || lower.includes('429') || lower.includes('too many');
         const isTimeLimit = lower.includes('time limit') || lower.includes('prepared time');
         const isInvalidStatus =
           lower.includes('status is invalid') || lower.includes('invalid status');
+
+        if (is429) {
+          alert(
+            'Çok sık istek gönderildi (geçici limit). Bir dakika bekleyip "Siparişleri Yenile" veya aynı butona tekrar deneyin.',
+          );
+          await loadOrders();
+          return;
+        }
 
         // Time-limit hatalari icin otomatik retry (max 3, 12 sn ara ile)
         if (isTimeLimit && retryCount < 3) {
@@ -376,10 +402,9 @@ export function OnlineOrders() {
           return;
         }
 
-        // "Invalid status" hatasi → DB resync (already ran above but maybe stale)
-        // Sessizce UI'yi yenile, kullaniciya gore guncel butonu sunsun.
+        // "Invalid status" hatasi → tek inquiry ile DB resync
         if (isInvalidStatus && retryCount === 0) {
-          console.log(`[Getir] ${action} invalid status → ek inquiry + UI refresh`);
+          console.log(`[Getir] ${action} invalid status → inquiry + UI refresh`);
           try {
             await callGetir({
               platformId: order.platform_id,
@@ -1143,7 +1168,7 @@ export function OnlineOrders() {
                               setSelectedRejectReason('TOO_BUSY');
                               setRejectingOrderId(order.id);
                             }}
-                            disabled={loading}
+                            disabled={loading || busyOrderId === order.id}
                             className="flex-1 bg-red-600 hover:bg-red-700 text-white font-black py-3 rounded-xl transition-all active:scale-95 disabled:opacity-50 flex items-center justify-center gap-2"
                           >
                             <X className="w-5 h-5" />
@@ -1151,11 +1176,11 @@ export function OnlineOrders() {
                           </button>
                           <button
                             onClick={() => updateOrderStatus(order.id, 'accepted', 'accept')}
-                            disabled={loading}
+                            disabled={loading || busyOrderId === order.id}
                             className="flex-1 bg-green-600 hover:bg-green-700 text-white font-black py-3 rounded-xl transition-all active:scale-95 disabled:opacity-50 flex items-center justify-center gap-2"
                           >
-                            <Check className="w-5 h-5" />
-                            ONAYLA
+                            <Check className={`w-5 h-5 ${busyOrderId === order.id ? 'animate-spin' : ''}`} />
+                            {busyOrderId === order.id ? 'İşleniyor…' : 'ONAYLA'}
                           </button>
                         </div>
                       )}
@@ -1163,22 +1188,33 @@ export function OnlineOrders() {
                       {order.online_order_platforms.platform_code !== 'getir' && order.status === 'accepted' && (
                         <button
                           onClick={() => updateOrderStatus(order.id, 'preparing')}
-                          disabled={loading}
+                          disabled={loading || busyOrderId === order.id}
                           className="w-full bg-yellow-600 hover:bg-yellow-700 text-white font-black py-3 rounded-xl transition-all active:scale-95 disabled:opacity-50 flex items-center justify-center gap-2"
                         >
-                          <Package className="w-5 h-5" />
-                          HAZIRLANIYOR
+                          <Package className={`w-5 h-5 ${busyOrderId === order.id ? 'animate-spin' : ''}`} />
+                          {busyOrderId === order.id ? 'İşleniyor…' : 'HAZIRLANMAYA BAŞLA'}
                         </button>
                       )}
 
                       {order.online_order_platforms.platform_code !== 'getir' && order.status === 'preparing' && (
                         <button
                           onClick={() => updateOrderStatus(order.id, 'ready', 'prepared')}
-                          disabled={loading}
+                          disabled={loading || busyOrderId === order.id}
                           className="w-full bg-green-600 hover:bg-green-700 text-white font-black py-3 rounded-xl transition-all active:scale-95 disabled:opacity-50 flex items-center justify-center gap-2"
                         >
-                          <Bike className="w-5 h-5" />
-                          HAZIR
+                          <Bike className={`w-5 h-5 ${busyOrderId === order.id ? 'animate-spin' : ''}`} />
+                          {busyOrderId === order.id ? 'Platforma bildiriliyor…' : 'HAZIR — KURYEYE HAZIR'}
+                        </button>
+                      )}
+
+                      {order.online_order_platforms.platform_code !== 'getir' && order.status === 'ready' && (
+                        <button
+                          onClick={() => updateOrderStatus(order.id, 'delivered', 'picked_up')}
+                          disabled={loading || busyOrderId === order.id}
+                          className="w-full bg-blue-600 hover:bg-blue-700 text-white font-black py-3 rounded-xl transition-all active:scale-95 disabled:opacity-50 flex items-center justify-center gap-2"
+                        >
+                          <Check className={`w-5 h-5 ${busyOrderId === order.id ? 'animate-spin' : ''}`} />
+                          {busyOrderId === order.id ? 'Platforma bildiriliyor…' : 'KURYE ALDI / TESLİM EDİLDİ'}
                         </button>
                       )}
                               </div>

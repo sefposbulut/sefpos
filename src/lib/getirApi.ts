@@ -18,6 +18,7 @@ export interface GetirActionPayload {
     | 'poll-active'
     | 'poll-unapproved'
     | 'poll-cancelled'
+    | 'inquiry'
     | 'verify'
     | 'verify-scheduled'
     | 'prepare'
@@ -54,46 +55,74 @@ export interface GetirActionResult {
   isFirstTime?: boolean;
 }
 
+/** Ayni anda birden fazla getir-api istegi 429 uretir; sirayla gonder. */
+let getirApiChain: Promise<unknown> = Promise.resolve();
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
 /**
  * Genel Getir Edge Function caller'i. Supabase JWT'yi otomatik ekler.
- * Hata durumunda functions.invoke body'yi okumaz; biz fetch ile manuel cagirip
- * gercek error mesajini UI'a tasiyoruz.
+ * - Tum cagrilar tek sira (mutex) ile seri calisir → burst 429 azalir.
+ * - HTTP 429 alinirsa exponential backoff ile birkaç kez yeniden dener.
  */
 export async function callGetir(payload: GetirActionPayload): Promise<GetirActionResult> {
-  try {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session) return { ok: false, error: 'Oturum bulunamadi' };
+  const run = async (): Promise<GetirActionResult> => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) return { ok: false, error: 'Oturum bulunamadi' };
 
-    const baseUrl = (import.meta.env.VITE_SUPABASE_URL || 'https://xdfnozfuuzctubijbnds.supabase.co').replace(/\/$/, '');
-    const resp = await fetch(`${baseUrl}/functions/v1/getir-api`, {
-      method: 'POST',
-      headers: {
+      const baseUrl = (import.meta.env.VITE_SUPABASE_URL || 'https://xdfnozfuuzctubijbnds.supabase.co').replace(/\/$/, '');
+      const url = `${baseUrl}/functions/v1/getir-api`;
+      const headers = {
         'Authorization': `Bearer ${session.access_token}`,
         'Content-Type': 'application/json',
         'apikey': (import.meta.env.VITE_SUPABASE_ANON_KEY as string) || '',
-      },
-      body: JSON.stringify(payload),
-    });
+      };
 
-    let raw = '';
-    let data: any = {};
-    try {
-      raw = await resp.text();
-      data = raw ? JSON.parse(raw) : {};
-    } catch {
-      // raw JSON degilse oldugu gibi error'a koy
-      return { ok: false, error: raw || `HTTP ${resp.status}` };
-    }
+      const maxAttempts = 5;
+      for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        if (attempt > 0) {
+          const backoff = Math.min(12_000, 900 * 2 ** (attempt - 1)) + Math.floor(Math.random() * 400);
+          await sleep(backoff);
+        }
 
-    // Backend her zaman { ok, error?, ... } dondurur
-    if (typeof data === 'object' && data !== null && 'ok' in data) {
-      return data as GetirActionResult;
+        const resp = await fetch(url, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(payload),
+        });
+
+        let raw = '';
+        let data: any = {};
+        try {
+          raw = await resp.text();
+          data = raw ? JSON.parse(raw) : {};
+        } catch {
+          if (resp.status === 429 && attempt < maxAttempts - 1) continue;
+          return { ok: false, status: resp.status, error: raw || `HTTP ${resp.status}` };
+        }
+
+        if (resp.status === 429 && attempt < maxAttempts - 1) {
+          continue;
+        }
+
+        if (typeof data === 'object' && data !== null && 'ok' in data) {
+          const out = data as GetirActionResult;
+          return { ...out, status: out.status ?? resp.status };
+        }
+        return { ok: resp.ok, status: resp.status, data, error: resp.ok ? undefined : `HTTP ${resp.status}` };
+      }
+      return { ok: false, status: 429, error: 'Getir sunucusu meşgul (429). Bir süre sonra tekrar deneyin.' };
+    } catch (err: any) {
+      return { ok: false, error: err?.message || 'getir-api beklenmedik hata' };
     }
-    // Backend baska bir sema dondurduyse durumu kullaniciya ilet
-    return { ok: resp.ok, status: resp.status, data, error: resp.ok ? undefined : `HTTP ${resp.status}` };
-  } catch (err: any) {
-    return { ok: false, error: err?.message || 'getir-api beklenmedik hata' };
-  }
+  };
+
+  const p = getirApiChain.then(run, run) as Promise<GetirActionResult>;
+  getirApiChain = p.then(() => undefined, () => undefined);
+  return p;
 }
 
 /**
