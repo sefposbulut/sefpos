@@ -635,6 +635,33 @@ export function OnlineOrders() {
    * uretiyordu. Senkron ihtiyaci: yalnizca "invalid status" hatasinda inquiry.
    */
   /**
+   * "YEMEK HAZIR" lokal işaretlemesi — Getir'e bir aksiyon gönderilmez.
+   * Sadece DB'de `ready_at` set edilir; UI bir sonraki adıma (KURYE YOLA ÇIKTI / handover)
+   * geçer. Getir Food API'sinde "hazır" durumu yok (sadece prepare → handover); bu yüzden
+   * paketleme bitti + kurye bekleniyor ara adımı lokal olarak yönetiliyor.
+   */
+  const markGetirOrderReadyLocal = async (order: OrderWithDetails): Promise<void> => {
+    setBusyOrderId(order.id);
+    try {
+      const nowIso = new Date().toISOString();
+      const { error } = await supabase
+        .from('online_orders')
+        .update({ ready_at: nowIso } as any)
+        .eq('id', order.id)
+        .is('ready_at', null);
+      if (error) throw error;
+      await loadOrders();
+      console.info(
+        `[Getir] Sipariş #${order.platform_order_number || order.platform_order_id} lokal olarak "Hazır" işaretlendi. Sıradaki adım: kurye gelince "KURYE YOLA ÇIKTI" (handover).`,
+      );
+    } catch (err: any) {
+      alert(`Yemek Hazır işaretlemesi başarısız: ${err?.message || err}`);
+    } finally {
+      setBusyOrderId(null);
+    }
+  };
+
+  /**
    * Tek bir Getir siparişi için inquiry çağırarak DB'yi Getir'in gerçek
    * durumuyla senkronize eder. Webhook'ta durum boş gelmişse veya bizim
    * sistemle Getir paneli arasında uyumsuzluk varsa kullanıcı bunu tek
@@ -1571,24 +1598,16 @@ export function OnlineOrders() {
                             </button>
                           )}
 
-                          {getirPhase === 'preparing_wait' && (
-                            <div className="w-full space-y-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-950">
-                              <p className="font-bold">Hazırlanıyor — kuryeye teslim henüz aktif değil</p>
-                              <p className="text-xs leading-relaxed">
-                                {getGetirNextStepHint(
-                                  typeof order.getir_status_code === 'number' ? order.getir_status_code : 410,
-                                  order.getir_delivery_type,
-                                )}
-                              </p>
-                              <button
-                                type="button"
-                                onClick={() => refreshGetirOrder(order)}
-                                disabled={busyOrderId === order.id}
-                                className="w-full rounded-lg bg-amber-600 py-2 text-xs font-black text-white hover:bg-amber-700 disabled:opacity-50"
-                              >
-                                Durumu Getir’den yenile
-                              </button>
-                            </div>
+                          {getirPhase === 'ready_local' && (
+                            <button
+                              onClick={() => markGetirOrderReadyLocal(order)}
+                              disabled={busyOrderId === order.id}
+                              className="w-full bg-teal-600 hover:bg-teal-700 text-white font-black py-3 rounded-xl transition-all active:scale-95 disabled:opacity-50 flex items-center justify-center gap-2"
+                              title="Yemek paketlendi, kurye bekleniyor. Getir'e bir şey gönderilmez."
+                            >
+                              <Check className={`w-5 h-5 ${busyOrderId === order.id ? 'animate-spin' : ''}`} />
+                              {busyOrderId === order.id ? 'İşleniyor…' : 'YEMEK HAZIR'}
+                            </button>
                           )}
 
                           {getirPhase === 'handover' && (
