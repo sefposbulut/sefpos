@@ -75,14 +75,17 @@ export function OnlineOrders() {
         .limit(100);
 
       // Filter gruplamasi:
-      //   new     → 'new' veya 'scheduled_new' (henuz onaylanmadi)
-      //   active  → 'verified' / 'preparing' / 'ready' / 'scheduled_accepted'
+      //   new        → 'new' / 'scheduled_new' / 'verified' / 'accepted'
+      //                (mutfaga henuz baslamadi — kullanici icin hepsi YENI)
+      //                Getir: 325=new, 400=verified, ŞefPOS: accepted
+      //   active     → 'preparing' / 'ready' / 'scheduled_accepted'
+      //                (hazirlikta veya hazir, kuryeyi bekliyor)
       //   on_the_way → 'handed_over' / 'on_the_way' / 'arrived'
-      //   done    → 'delivered' / 'cancelled'
-      //   all     → tumu
+      //   done       → 'delivered' / 'cancelled'
+      //   all        → tumu
       const filterGroups: Record<string, string[]> = {
-        new: ['new', 'scheduled_new'],
-        active: ['verified', 'preparing', 'ready', 'scheduled_accepted', 'accepted'],
+        new: ['new', 'scheduled_new', 'verified', 'accepted'],
+        active: ['preparing', 'ready', 'scheduled_accepted'],
         on_the_way: ['handed_over', 'on_the_way', 'arrived'],
         done: ['delivered', 'cancelled'],
       };
@@ -98,12 +101,16 @@ export function OnlineOrders() {
 
       // ────────────────────────────────────────────────────────────────
       // SURESLI ALARM MANTIGI
-      // 1) İlk yüklemede: "new"/"scheduled_new" durumundaki sipariş varsa
-      //    onlar zaten onaylanmamış demektir → her biri için alarm baslat.
-      // 2) Sonraki yüklemelerde: yeni gelen ve "new" status'unda olanlar
-      //    için alarm başlat; artık "new" olmayanlar için alarm durdur.
+      // "Yeni" durum gruplari: mutfak henuz baslamadi.
+      //   - new / scheduled_new  → Getir 325 (verify bekleniyor)
+      //   - verified             → Getir 400 (onaylandi, prepare bekleniyor)
+      //                            Test panelinden direkt 400 ile gelir.
+      //   - accepted             → ŞefPOS dahili (Yemeksepeti accept sonrasi)
+      // 1) İlk yüklemede: bu durumdaki tum siparişler icin alarm baslat.
+      // 2) Sonraki yüklemelerde: yeni gelen ve bu durumlarda olanlar
+      //    için alarm baslat; artik bu durumda olmayanlar icin alarm durdur.
       // ────────────────────────────────────────────────────────────────
-      const newishStatuses = new Set(['new', 'scheduled_new']);
+      const newishStatuses = new Set(['new', 'scheduled_new', 'verified', 'accepted']);
       const currentNewOrderIds = new Set(
         newOrders.filter((o) => newishStatuses.has(o.status)).map((o) => o.id),
       );
@@ -603,7 +610,11 @@ export function OnlineOrders() {
   const filteredOrders = orders;
 
   const activeAlertCount = orders.filter(
-    (o) => o.status === 'new' || o.status === 'scheduled_new',
+    (o) =>
+      o.status === 'new' ||
+      o.status === 'scheduled_new' ||
+      o.status === 'verified' ||
+      o.status === 'accepted',
   ).length;
 
   return (
