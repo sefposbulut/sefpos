@@ -286,12 +286,15 @@ export type GetirUiPhase =
 
 export function getGetirUiPhase(order: {
   status: string;
+  /** ŞefPOS'ta «Onayla» ile set — yokken Getir kodu 400+ olsa bile önce onay adımı gösterilir. */
+  accepted_at?: string | null;
   getir_status_code?: number | null;
   getir_is_scheduled?: boolean | null;
   getir_delivery_type?: number | null;
 }): GetirUiPhase {
   const code = typeof order.getir_status_code === 'number' ? order.getir_status_code : null;
   const dt = order.getir_delivery_type ?? 0;
+  const noPosAck = !order.accepted_at;
 
   if (order.status === 'delivered' || code === 900) return 'done';
   if (
@@ -304,6 +307,31 @@ export function getGetirUiPhase(order: {
     return 'done';
   }
   if (order.status === 'scheduled_accepted') return 'scheduled_accepted_wait';
+
+  /** DB'de status ileri aşamada kalsa bile accepted_at yoksa önce kasa onayı. */
+  const POS_VERIFY_FIRST = new Set([
+    'verified',
+    'accepted',
+    'preparing',
+    'ready',
+    'handed_over',
+    'on_the_way',
+    'arrived',
+  ]);
+  if (noPosAck && POS_VERIFY_FIRST.has(order.status)) {
+    return 'verify';
+  }
+
+  // Getir kodu ileri aşamada olsa bile, kasada onay (accepted_at) yoksa önce ONAYLA.
+  if (
+    noPosAck &&
+    code !== null &&
+    code !== 900 &&
+    code !== 1500 &&
+    code !== 1600
+  ) {
+    return 'verify';
+  }
 
   if (code !== null) {
     if (code === 325 || code === 350) return 'verify';

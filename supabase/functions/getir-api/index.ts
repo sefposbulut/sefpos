@@ -31,7 +31,7 @@
 // deno-lint-ignore-file no-explicit-any
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
-import { extractGetirCourier, resolveFromNumeric, resolveFromPlatformEnum } from "../_shared/getirOrderStatus.ts";
+import { extractGetirCourier, resolveFromNumeric, resolveFromPlatformEnum, clampGetirStatusUntilPosAck } from "../_shared/getirOrderStatus.ts";
 
 const corsHeaders: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -324,6 +324,7 @@ async function upsertGetirOrder(
   admin: any,
   platform: PlatformRow,
   order: any,
+  opts?: { skipAckClamp?: boolean },
 ): Promise<{ id: string; isNew: boolean; statusCode: number | null; normalizedStatus: string } | null> {
   const platformOrderId = String(order.id || order._id || order.orderId || "");
   if (!platformOrderId) return null;
@@ -374,6 +375,24 @@ async function upsertGetirOrder(
   const courier = extractGetirCourier(order);
   const nowIso = new Date().toISOString();
 
+  const { data: existing } = await admin
+    .from("online_orders")
+    .select("id, status, tenant_id, accepted_at")
+    .eq("tenant_id", platform.tenant_id)
+    .eq("platform_id", platform.id)
+    .eq("platform_order_id", platformOrderId)
+    .maybeSingle();
+  const isNew = !existing?.id;
+
+  const skipClamp = !!opts?.skipAckClamp;
+  const effectiveStatus = skipClamp
+    ? normalizedStatus
+    : clampGetirStatusUntilPosAck({
+      acceptedAt: existing?.accepted_at,
+      mappedStatus: normalizedStatus,
+      isScheduled: isSched,
+    });
+
   // Getir resmi status kodlari (Food API doc):
   //   325 = New order (verify bekleniyor)
   //   350 = New scheduled order
@@ -399,7 +418,7 @@ async function upsertGetirOrder(
     delivery_fee: deliveryFee,
     discount_amount: totalDiscount,
     total_amount: discounted || subtotal,
-    status: normalizedStatus,
+    status: effectiveStatus,
     payment_status: "paid",
     platform_created_at: order.createdAt ? new Date(order.createdAt).toISOString() : null,
     getir_status_code: statusCode,
@@ -418,16 +437,7 @@ async function upsertGetirOrder(
     getir_courier_pickup_at: courier.pickupAt,
   };
 
-  applyLifecycleTimestampsPoll(baseRow, normalizedStatus, nowIso);
-
-  const { data: existing } = await admin
-    .from("online_orders")
-    .select("id, status, tenant_id")
-    .eq("tenant_id", platform.tenant_id)
-    .eq("platform_id", platform.id)
-    .eq("platform_order_id", platformOrderId)
-    .maybeSingle();
-  const isNew = !existing?.id;
+  applyLifecycleTimestampsPoll(baseRow, effectiveStatus, nowIso);
 
   let { data: upserted, error: upErr } = await admin
     .from("online_orders")
@@ -452,16 +462,20 @@ async function upsertGetirOrder(
   if (!onlineOrderId) return null;
 
   const prevStatus = existing?.status ?? null;
-  if (prevStatus !== normalizedStatus && upserted?.tenant_id) {
-    const dk = `poll:${onlineOrderId}:${prevStatus ?? "null"}:${normalizedStatus}:${statusCode ?? "null"}`;
+  if (prevStatus !== effectiveStatus && upserted?.tenant_id) {
+    const dk = `poll:${onlineOrderId}:${prevStatus ?? "null"}:${effectiveStatus}:${statusCode ?? "null"}`;
     await appendPollStatusEvent(admin, {
       tenantId: upserted.tenant_id,
       onlineOrderId,
       fromStatus: prevStatus,
-      toStatus: normalizedStatus,
+      toStatus: effectiveStatus,
       platformEnum,
       numericCode: statusCode,
-      payload: { source: "getir-api upsertGetirOrder", getirOrderId: platformOrderId },
+      payload: {
+        source: "getir-api upsertGetirOrder",
+        getirOrderId: platformOrderId,
+        getirMappedStatus: normalizedStatus,
+      },
       dedupeKey: dk,
     });
   }
@@ -485,7 +499,7 @@ async function upsertGetirOrder(
     await admin.from("online_order_items").insert(itemsRows);
   }
 
-  return { id: onlineOrderId, isNew, statusCode, normalizedStatus };
+  return { id: onlineOrderId, isNew, statusCode, normalizedStatus: effectiveStatus };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -692,13 +706,15 @@ Deno.serve(async (req) => {
         if (!body.orderId) return badRequest("orderId zorunlu");
         const path = `/food-orders/${encodeURIComponent(body.orderId)}/${body.action}`;
         const res = await callGetir(admin, platform as PlatformRow, "POST", path, body.payload || {});
+        let responseOk = res.ok;
+        let httpStatus = res.ok ? 200 : res.status;
         if (res.ok) {
           const embedded = extractOrderFromGetirActionResponse(res.data);
           if (embedded) {
             // Getir'in dondugu gercek siparis nesnesiyle DB'yi guncelle —
             // sabit status patch'i (ozellikle handover sonrasi 550 vs 700)
             // ile Getir paneli arasinda sapma olmasin.
-            await upsertGetirOrder(admin, platform as PlatformRow, embedded);
+            await upsertGetirOrder(admin, platform as PlatformRow, embedded, { skipAckClamp: true });
           } else {
             // Cevapta siparis yoksa eski tahminci patch (yedek)
             const nextStatus: Record<
@@ -723,8 +739,34 @@ Deno.serve(async (req) => {
               .eq("platform_id", platform.id)
               .eq("platform_order_id", body.orderId);
           }
+        } else if (body.action === "verify" || body.action === "verify-scheduled") {
+          // Getir bazen zaten 400+ iken verify reddeder; yine de kasa onayını tamamla.
+          const inq = await callGetir(admin, platform as PlatformRow, "GET", `/food-orders/${encodeURIComponent(body.orderId)}`);
+          if (inq.ok) {
+            const ord = inq.data?.data || inq.data;
+            if (ord && typeof ord === "object") {
+              const rawSt = (ord as any).status;
+              const c = typeof rawSt === "number" ? rawSt : Number(rawSt);
+              if (Number.isFinite(c) && c >= 400 && c < 1500) {
+                const nowIso = new Date().toISOString();
+                const st = body.action === "verify-scheduled" ? "scheduled_accepted" : "verified";
+                await admin
+                  .from("online_orders")
+                  .update({
+                    accepted_at: nowIso,
+                    status: st,
+                    getir_status_code: c,
+                  })
+                  .eq("platform_id", platform.id)
+                  .eq("platform_order_id", body.orderId);
+                await upsertGetirOrder(admin, platform as PlatformRow, ord, { skipAckClamp: true });
+                responseOk = true;
+                httpStatus = 200;
+              }
+            }
+          }
         }
-        return jsonResponse({ ok: res.ok, status: res.status, data: res.data });
+        return jsonResponse({ ok: responseOk, status: res.status, data: res.data }, httpStatus);
       }
 
       case "cancel": {

@@ -123,6 +123,30 @@ export function resolveFromNumeric(
   return { internalStatus: u.internalStatus, numericCode: code, labelTr: u.labelTr };
 }
 
+/**
+ * Getir tarafı 400+ (veya CONFIRMED enum) dönse bile, restoran ŞefPOS'ta
+ * «Onayla» demeden `online_orders.accepted_at` yazılmamalı ve `status`
+ * yeni/onay bekleyen olarak kalmalı. Böylece mutfak fişi ve hazırlık akışı
+ * yalnızca kasadaki onaydan sonra başlar.
+ */
+export function clampGetirStatusUntilPosAck(opts: {
+  acceptedAt: string | null | undefined;
+  mappedStatus: string;
+  isScheduled: boolean;
+}): string {
+  const { acceptedAt, mappedStatus, isScheduled } = opts;
+  if (acceptedAt) return mappedStatus;
+  if (
+    mappedStatus === "cancelled" ||
+    mappedStatus === "rejected" ||
+    mappedStatus === INTERNAL_UNKNOWN_STATUS
+  ) {
+    return mappedStatus;
+  }
+  if (mappedStatus === "new" || mappedStatus === "scheduled_new") return mappedStatus;
+  return isScheduled ? "scheduled_new" : "new";
+}
+
 export function internalStatusRank(s: string): number {
   const R: Record<string, number> = {
     [INTERNAL_UNKNOWN_STATUS]: 11,

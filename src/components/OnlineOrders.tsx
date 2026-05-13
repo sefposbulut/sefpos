@@ -234,9 +234,9 @@ export function OnlineOrders() {
       // ALARM + MUTFAK FİŞİ politikası
       //
       // Sipariş sisteme DÜŞTÜĞÜNDE   → alarm + toast (FİŞ ÇIKMAZ)
-      // Kullanıcı ONAYLA bastığında  → status: verified/accepted → MUTFAK FİŞİ
-      //   • Getir: verify (400) veya verify-scheduled (475/scheduled_accepted)
-      //   • Yemeksepeti / dahili: 'accepted'
+      // Kullanıcı ONAYLA bastığında  → status: verified/accepted + accepted_at (Getir) → MUTFAK FİŞİ
+      //   • Getir: `accepted_at` dolmadan mutfak fişi basılmaz (Getir kodu 400+ olsa bile).
+      //   • Yemeksepeti / dahili: 'accepted' (accepted_at opsiyonel)
       // Onaylanmış (verified/accepted/preparing) ama henüz fişi basılmamış
       // bir sipariş ilk açılışta da yakalanır (kasa kapalıyken onaylanmış olabilir).
       // ────────────────────────────────────────────────────────────────
@@ -259,9 +259,14 @@ export function OnlineOrders() {
         // 2) Onaylanmış statü → fiş. Geçiş veya ilk görüşte (eski kayıt)
         //    olduğu farketmez; localStorage mükerrer engelliyor.
         if (KITCHEN_READY_STATUSES.has(o.status)) {
+          const isGetir = o.online_order_platforms?.platform_code === 'getir';
           const justApproved =
             prevStatus !== undefined && PENDING_APPROVAL_STATUSES.has(prevStatus);
-          if (justApproved || isFirstSighting) {
+          const hasLocalAck = !!o.accepted_at;
+          let triggerPrint = justApproved;
+          if (!isGetir && isFirstSighting) triggerPrint = true;
+          if (isGetir && hasLocalAck && (justApproved || isFirstSighting)) triggerPrint = true;
+          if (triggerPrint) {
             void scheduleKitchenPrint(o as OrderWithDetails);
           }
         }

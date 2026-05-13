@@ -12,6 +12,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
 import {
   canTransitionGetir,
+  clampGetirStatusUntilPosAck,
   extractGetirCourier,
   resolveWebhookTargetStatus,
   sha256DedupeKeyPart,
@@ -345,14 +346,21 @@ Deno.serve(async (req) => {
 
   const { data: existing } = await admin
     .from("online_orders")
-    .select("id, status, tenant_id, getir_status_code")
+    .select("id, status, tenant_id, getir_status_code, accepted_at")
     .eq("platform_id", platform.id)
     .eq("platform_order_id", platformOrderId)
     .maybeSingle();
 
+  const storageStatus = clampGetirStatusUntilPosAck({
+    acceptedAt: (existing as any)?.accepted_at,
+    mappedStatus: target.internalStatus,
+    isScheduled: !!order.isScheduled,
+  });
+
   if (!existing) {
     const row = buildOrderRow(platform as PlatformRow, order, target);
-    applyLifecycleTimestamps(row, target.internalStatus, nowIso);
+    row.status = storageStatus;
+    applyLifecycleTimestamps(row, storageStatus, nowIso);
     let { data: ins, error: upErr } = await admin
       .from("online_orders")
       .upsert(row, { onConflict: "tenant_id,platform_id,platform_order_id" })
@@ -375,7 +383,7 @@ Deno.serve(async (req) => {
         tenantId: ins.tenant_id,
         onlineOrderId: ins.id,
         fromStatus: null,
-        toStatus: target.internalStatus,
+        toStatus: storageStatus,
         platformEnum: target.platformEnum,
         numericCode: target.numericCode,
         source: "webhook",
@@ -386,27 +394,29 @@ Deno.serve(async (req) => {
     return ok({ ok: true, type: "new", created: true, platformOrderId });
   }
 
-  const tr = canTransitionGetir(existing.status, target.internalStatus);
-  if (!tr.ok) {
-    console.warn(
-      "[getir-webhook] transition blocked:",
-      existing.status,
-      "->",
-      target.internalStatus,
-      tr.reason,
-    );
-    return ok({
-      ok: true,
-      skipped: tr.reason,
-      from: existing.status,
-      to: target.internalStatus,
-      platformOrderId,
-    });
+  if ((existing as any).accepted_at) {
+    const tr = canTransitionGetir(existing.status, storageStatus);
+    if (!tr.ok) {
+      console.warn(
+        "[getir-webhook] transition blocked:",
+        existing.status,
+        "->",
+        storageStatus,
+        tr.reason,
+      );
+      return ok({
+        ok: true,
+        skipped: tr.reason,
+        from: existing.status,
+        to: storageStatus,
+        platformOrderId,
+      });
+    }
   }
 
   const courier = extractGetirCourier(order);
   const patch: Record<string, any> = {
-    status: target.internalStatus,
+    status: storageStatus,
     getir_status_code: target.numericCode,
     getir_platform_order_status: target.platformEnum,
     getir_raw_payload: order,
@@ -415,7 +425,7 @@ Deno.serve(async (req) => {
   if (courier.name) patch.getir_courier_name = courier.name;
   if (courier.phone) patch.getir_courier_phone = courier.phone;
   if (courier.pickupAt) patch.getir_courier_pickup_at = courier.pickupAt;
-  applyLifecycleTimestamps(patch, target.internalStatus, nowIso);
+  applyLifecycleTimestamps(patch, storageStatus, nowIso);
 
   let { error: uErr } = await admin
     .from("online_orders")
@@ -437,7 +447,7 @@ Deno.serve(async (req) => {
     tenantId: existing.tenant_id,
     onlineOrderId: existing.id,
     fromStatus: existing.status,
-    toStatus: target.internalStatus,
+    toStatus: storageStatus,
     platformEnum: target.platformEnum,
     numericCode: target.numericCode,
     source: "webhook",
