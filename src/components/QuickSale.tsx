@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Search, Plus, Minus, Trash2, ShoppingCart, Zap, RefreshCw, Receipt, Check,
-  ScanBarcode, Camera, ChevronUp, X, PackagePlus,
+  ScanBarcode, Camera, ChevronUp, X, PackagePlus, MessageCircle,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
@@ -15,6 +15,8 @@ import { sendSaleToHugin } from '../lib/huginTps';
 import { BarcodeScannerModal } from './BarcodeScannerModal';
 import { playScanSuccess, playScanError, primeAudio } from '../lib/beep';
 import { ensureCashRegisterRowForPayment } from '../lib/cashRegisterFallback';
+import { WhatsAppReceiptModal } from './WhatsAppReceiptModal';
+import type { WhatsAppReceiptInput } from '../lib/whatsappReceipt';
 
 interface Category {
   id: string;
@@ -62,6 +64,9 @@ export function QuickSale() {
     method: string;
   } | null>(null);
   const lastReceiptTimerRef = useRef<number | null>(null);
+  const [lastReceiptData, setLastReceiptData] = useState<WhatsAppReceiptInput | null>(null);
+  const [lastReceiptDefaultPhone, setLastReceiptDefaultPhone] = useState<string | null>(null);
+  const [showWaModal, setShowWaModal] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
   const [scanFlash, setScanFlash] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   const scanFlashTimerRef = useRef<number | null>(null);
@@ -501,8 +506,39 @@ export function QuickSale() {
         total: totalNow,
         method,
       });
+      setLastReceiptData({
+        restaurantName: printSettings.restaurantName || (tenant as any)?.name || 'ŞefPOS',
+        restaurantPhone: printSettings.restaurantPhone,
+        restaurantAddress: printSettings.restaurantAddress,
+        tableLabel: 'Hızlı Satış',
+        orderNumber: order.order_number,
+        items: cart.map((l) => ({
+          productName: l.product.name,
+          variantName: null,
+          quantity: l.quantity,
+          unitPrice: Number(l.product.price),
+          totalAmount: Number(l.product.price) * l.quantity,
+          notes: null,
+        })),
+        subtotal: subtotalNow,
+        taxAmount: 0,
+        discountAmount: discountNow,
+        total: totalNow,
+        paymentMethod: method,
+        footer: printSettings.receiptFooter,
+      });
+      if (method === 'open_account' && customerId) {
+        const { data: cust } = await supabase
+          .from('customers')
+          .select('phone')
+          .eq('id', customerId)
+          .maybeSingle();
+        setLastReceiptDefaultPhone((cust as any)?.phone || null);
+      } else {
+        setLastReceiptDefaultPhone(null);
+      }
       if (lastReceiptTimerRef.current) window.clearTimeout(lastReceiptTimerRef.current);
-      lastReceiptTimerRef.current = window.setTimeout(() => setLastReceiptInfo(null), 4500);
+      lastReceiptTimerRef.current = window.setTimeout(() => setLastReceiptInfo(null), 9000);
 
       clearCart();
       setShowPayment(false);
@@ -531,6 +567,17 @@ export function QuickSale() {
           </div>
         </div>
         <div className="flex items-center gap-2">
+          {lastReceiptData && (
+            <button
+              type="button"
+              onClick={() => setShowWaModal(true)}
+              title="Son satışın fişini WhatsApp ile gönder"
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-br from-emerald-500 to-green-600 hover:brightness-110 active:scale-95 text-white rounded-xl shadow border border-emerald-700/30"
+            >
+              <MessageCircle className="w-4 h-4" />
+              <span className="text-xs font-black hidden sm:inline">WhatsApp'a Gönder</span>
+            </button>
+          )}
           {lastReceiptInfo && (
             <div className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 border border-emerald-200 rounded-xl">
               <Check className="w-4 h-4 text-emerald-600" />
@@ -944,6 +991,14 @@ export function QuickSale() {
         <BarcodeScannerModal
           onDetected={(code) => { void handleBarcodeCode(code, { fromCamera: true }); }}
           onClose={() => setShowScanner(false)}
+        />
+      )}
+
+      {showWaModal && lastReceiptData && (
+        <WhatsAppReceiptModal
+          receipt={lastReceiptData}
+          defaultPhone={lastReceiptDefaultPhone}
+          onClose={() => setShowWaModal(false)}
         />
       )}
 
