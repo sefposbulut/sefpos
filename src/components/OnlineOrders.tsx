@@ -326,7 +326,7 @@ export function OnlineOrders() {
 
   // Getir API auto-poll — hem onay bekleyenler (poll-unapproved) hem aktifler
   // (poll-active). Webhook gecikir veya kaybolursa bu sayede sipariş yine düşer.
-  // 429 limitlerini asmamak icin 90 sn aralik + her tick'te bir Getir cagrisi.
+  // 429 limitlerini asmamak icin 45 sn aralik + her tick'te bir Getir cagrisi.
   useEffect(() => {
     if (!tenant) return;
     let stopped = false;
@@ -345,7 +345,19 @@ export function OnlineOrders() {
         for (const p of (platforms || []) as OnlinePlatformListRow[]) {
           if (stopped || busyOrderIdRef.current) break;
           const action = alternate ? 'poll-unapproved' : 'poll-active';
-          await callGetir({ platformId: p.id, action });
+          const res = await callGetir({ platformId: p.id, action });
+          if (!res.ok) {
+            const dataObj = (res.data && typeof res.data === 'object') ? (res.data as Record<string, unknown>) : {};
+            const detail =
+              (dataObj.error as string | undefined) ||
+              (dataObj.message as string | undefined) ||
+              ((dataObj.data as any)?.message as string | undefined) ||
+              res.error ||
+              `HTTP ${res.status ?? '???'}`;
+            setGetirPollIssue(detail);
+          } else {
+            setGetirPollIssue(null);
+          }
         }
         alternate = !alternate;
       } catch (e) {
@@ -701,7 +713,14 @@ export function OnlineOrders() {
           totalSaved += res.saved || 0;
           messages.push(`Getir: ${res.saved ?? 0}/${res.fetched ?? 0}`);
         } else {
-          messages.push(`Getir hata: ${res.error || 'bilinmeyen'}`);
+          const dataObj = (res.data && typeof res.data === 'object') ? (res.data as Record<string, unknown>) : {};
+          const detail =
+            (dataObj.error as string | undefined) ||
+            (dataObj.message as string | undefined) ||
+            ((dataObj.data as any)?.message as string | undefined) ||
+            res.error ||
+            `HTTP ${res.status ?? '???'}`;
+          messages.push(`Getir hata: ${detail}`);
         }
       }
 
@@ -803,6 +822,11 @@ export function OnlineOrders() {
   ).length;
 
   const [audioBlocked, setAudioBlocked] = useState(false);
+  /**
+   * Getir poll'u 4xx döndürüyorsa kullanıcının görmesi için kalıcı banner.
+   * Tipik nedenler: credential eksik, POS pasif (200), restoran kapalı, restaurantId boş.
+   */
+  const [getirPollIssue, setGetirPollIssue] = useState<string | null>(null);
   // Sayfa acildiginda audio context'i unlock dene; engellendiyse banner goster.
   useEffect(() => {
     unlockAudio();
@@ -902,6 +926,35 @@ export function OnlineOrders() {
               className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg font-bold text-xs shrink-0 transition active:scale-95"
             >
               ZİLİ ETKİNLEŞTİR
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ─────────── GETIR POLL HATA BANNER ─────────── */}
+      {getirPollIssue && (
+        <div className="bg-rose-50 border-b-2 border-rose-200 shrink-0">
+          <div className="max-w-7xl mx-auto px-4 md:px-6 py-2 flex items-start gap-3">
+            <AlertTriangle className="w-5 h-5 shrink-0 text-rose-700 mt-0.5" />
+            <div className="flex-1 text-xs md:text-sm text-rose-800">
+              <div className="font-bold">GetirYemek bağlantı hatası — siparişler düşmüyor</div>
+              <div className="mt-0.5 font-mono break-words">{getirPollIssue}</div>
+              <div className="mt-1 text-rose-700/80">
+                {(/secret|credential|tanimli/i.test(getirPollIssue))
+                  ? 'Çözüm: Ayarlar → Online Sipariş Ayarları → Getir → appSecretKey / restaurantSecretKey / restaurantId değerlerini girip Bağlantı Testi yapın.'
+                  : /pos|pasif|inactive/i.test(getirPollIssue)
+                    ? 'Çözüm: Ayarlar → Online Sipariş Ayarları → Getir → POS durumunu AÇIK (100) yapın.'
+                    : /restaurant.*clos|kapal/i.test(getirPollIssue)
+                      ? 'Çözüm: Getir paneline veya Ayarlar → Getir → "Restoran Aç" ile restoranı açın.'
+                      : 'Detaylı sebep için F12 → Console; `[getir-api]` satırına bakın.'}
+              </div>
+            </div>
+            <button
+              onClick={() => setGetirPollIssue(null)}
+              className="text-rose-700 hover:text-rose-900 font-bold text-xs"
+              title="Banner'ı geçici olarak kapat"
+            >
+              ✕
             </button>
           </div>
         </div>
