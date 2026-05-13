@@ -12,7 +12,7 @@ import {
   getAudioState,
 } from '../lib/notification';
 import { callGetir, eligibleCancelReasons, getGetirNextStepHint, getGetirUiPhase, getirStatusLabel } from '../lib/getirApi';
-import { internalStatusLabelTr } from '@getir-order-status';
+import { internalStatusLabelTr } from '../../supabase/functions/_shared/getirOrderStatus';
 import { PlatformLogo } from './PlatformLogo';
 import { loadPrintSettings, printOnlineOrderKitchenTicket } from '../lib/printService';
 

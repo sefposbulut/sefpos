@@ -8,7 +8,11 @@
 //   const res = await callGetir({ platformId, action: 'pos-status-set', status: 100 });
 
 import { supabase } from './supabase';
-import { GETIR_NUMERIC_STATUS_MAP, INTERNAL_UNKNOWN_STATUS, mapUnknownNumeric } from '@getir-order-status';
+import {
+  GETIR_NUMERIC_STATUS_MAP,
+  INTERNAL_UNKNOWN_STATUS,
+  mapUnknownNumeric,
+} from '../../supabase/functions/_shared/getirOrderStatus';
 
 export interface GetirActionPayload {
   platformId: string;
