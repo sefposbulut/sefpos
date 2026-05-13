@@ -3,10 +3,10 @@ import { X, Send, MessageCircle, Phone, Copy, Check, ImageIcon, Loader2, Downloa
 import {
   type WhatsAppReceiptInput,
   buildWhatsAppReceiptText,
+  buildWhatsAppReceiptHtml,
   formatPhoneForWhatsApp,
   openWhatsAppWithReceipt,
 } from '../lib/whatsappReceipt';
-import { buildReceiptHtml, loadPrintSettings } from '../lib/printService';
 
 interface Props {
   receipt: WhatsAppReceiptInput;
@@ -36,31 +36,7 @@ export function WhatsAppReceiptModal({ receipt, defaultPhone, onClose }: Props) 
   const offscreenRef = useRef<HTMLDivElement | null>(null);
   const previewRef = useRef<HTMLDivElement | null>(null);
 
-  const receiptHtml = useMemo(() => {
-    const printSettings = (() => { try { return loadPrintSettings(); } catch { return null as any; } })();
-    return buildReceiptHtml({
-      restaurantName: receipt.restaurantName,
-      restaurantPhone: receipt.restaurantPhone || undefined,
-      restaurantAddress: receipt.restaurantAddress || undefined,
-      tableLabel: receipt.tableLabel || 'Hızlı Satış',
-      orderNumber: receipt.orderNumber,
-      items: receipt.items.map((it) => ({
-        productName: it.productName,
-        variantName: it.variantName || null,
-        quantity: it.quantity,
-        unitPrice: it.unitPrice,
-        totalAmount: it.totalAmount,
-        notes: it.notes || null,
-      })),
-      subtotal: receipt.subtotal,
-      taxAmount: receipt.taxAmount || 0,
-      discountAmount: receipt.discountAmount || 0,
-      total: receipt.total,
-      paymentMethod: receipt.paymentMethod,
-      footer: receipt.footer || undefined,
-      printStyle: printSettings?.printStyle,
-    });
-  }, [receipt]);
+  const receiptHtml = useMemo(() => buildWhatsAppReceiptHtml(receipt), [receipt]);
 
   // Önizleme ve offscreen render hedefine HTML'i bas
   useEffect(() => {
@@ -201,8 +177,11 @@ export function WhatsAppReceiptModal({ receipt, defaultPhone, onClose }: Props) 
           {/* Sol: Fiş önizleme (gerçek görüntüsü) */}
           <div>
             <label className="block text-xs font-bold text-slate-700 mb-1">Fiş görseli</label>
-            <div className="border-2 border-dashed border-slate-200 rounded-xl p-3 bg-slate-50 max-h-[60vh] overflow-auto">
-              <div className="bg-white rounded-lg shadow-sm p-3 mx-auto" style={{ width: 320 }}>
+            <div className="border-2 border-dashed border-slate-200 rounded-xl p-3 bg-slate-50 max-h-[60vh] overflow-auto flex justify-center">
+              <div
+                className="bg-white rounded-lg shadow-lg overflow-hidden"
+                style={{ boxShadow: '0 6px 24px rgba(0,0,0,0.15)' }}
+              >
                 <div ref={previewRef} />
               </div>
             </div>
@@ -293,10 +272,10 @@ export function WhatsAppReceiptModal({ receipt, defaultPhone, onClose }: Props) 
           </button>
         </div>
 
-        {/* html2canvas için offscreen, beyaz arkaplanlı, sabit genişlikli render hedefi */}
+        {/* html2canvas için offscreen render hedefi. Fiş kendi genişliğini taşıyor (360px). */}
         <div
           aria-hidden="true"
-          style={{ position: 'fixed', left: '-10000px', top: 0, width: 384, background: '#fff', padding: 12 }}
+          style={{ position: 'fixed', left: '-10000px', top: 0, background: '#ffffff' }}
         >
           <div ref={offscreenRef} />
         </div>
