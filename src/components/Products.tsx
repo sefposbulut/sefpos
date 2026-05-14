@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { Plus, CreditCard as Edit2, Trash2, Search, Printer, Ban, Save, X, Download, Barcode, Upload, CheckCircle, AlertCircle, FileSpreadsheet, ArrowDownCircle, ArrowRightLeft, History, ChevronDown, MoreVertical } from 'lucide-react';
+import { Plus, CreditCard as Edit2, Trash2, Search, Printer, Ban, Save, X, Download, Barcode, Upload, CheckCircle, AlertCircle, FileSpreadsheet, ArrowDownCircle, ArrowRightLeft, History, ChevronDown, MoreVertical, ClipboardList } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { loadPrintSettings, savePrintSettings } from '../lib/printService';
@@ -240,7 +240,7 @@ export function Products() {
   const [movementRows, setMovementRows] = useState<StockMovementRow[]>([]);
   const [movementLoading, setMovementLoading] = useState(false);
   const [movementAutoExpanded, setMovementAutoExpanded] = useState(false);
-  const [movementTypeFilter, setMovementTypeFilter] = useState<'all' | 'in' | 'out' | 'transfer' | 'sale'>('all');
+  const [movementTypeFilter, setMovementTypeFilter] = useState<'all' | 'in' | 'out' | 'transfer' | 'sale' | 'count'>('all');
   const [movementBranchFilter, setMovementBranchFilter] = useState<string>('all');
   const [movementDateFrom, setMovementDateFrom] = useState('');
   const [movementDateTo, setMovementDateTo] = useState('');
@@ -480,6 +480,7 @@ export function Products() {
     if (movementTypeFilter === 'out') query = query.eq('movement_type', 'out');
     if (movementTypeFilter === 'transfer') query = query.eq('reference_type', 'branch_transfer');
     if (movementTypeFilter === 'sale') query = query.eq('reference_type', 'sale_order');
+    if (movementTypeFilter === 'count') query = query.eq('reference_type', 'stock_count');
     if (movementBranchFilter !== 'all') {
       query = query.or(`source_branch_id.eq.${movementBranchFilter},target_branch_id.eq.${movementBranchFilter}`);
     }
@@ -1210,6 +1211,22 @@ export function Products() {
             >
               <ArrowRightLeft size={15} />
               <span className="hidden md:inline text-sm">Stok Transfer</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                try {
+                  sessionStorage.setItem('sefpos_inventory_tab', 'product-count');
+                } catch {
+                  /* ignore */
+                }
+                window.dispatchEvent(new CustomEvent('sefpos-navigate', { detail: { page: 'inventory' } }));
+              }}
+              className="px-3 py-2 md:px-4 md:py-3 bg-white border-2 border-amber-200 text-amber-800 rounded-lg md:rounded-xl hover:shadow-lg hover:border-amber-300 transition-all active:scale-95 text-sm md:text-base flex items-center gap-1.5"
+              title="Stok / Reçete ekranında ürün sayımı"
+            >
+              <ClipboardList size={15} />
+              <span className="hidden md:inline text-sm">Sayım</span>
             </button>
             <button
               onClick={() => setShowAddProduct(true)}
@@ -2603,6 +2620,7 @@ export function Products() {
                 <option value="out">Sadece Cikis</option>
                 <option value="transfer">Transferler</option>
                 <option value="sale">Satis Cikislari</option>
+                <option value="count">Sayim</option>
               </select>
               <select
                 value={movementBranchFilter}
@@ -2673,11 +2691,13 @@ export function Products() {
                       const targetBranch = branches.find(b => b.id === row.target_branch_id)?.name || '-';
                       const opLabel = row.reference_type === 'branch_transfer'
                         ? 'Transfer Cikis'
-                        : row.movement_type === 'in'
-                          ? 'Stok Girisi'
-                          : row.movement_type === 'out'
-                            ? 'Stok Cikisi'
-                            : 'Duzeltme';
+                        : row.reference_type === 'stock_count'
+                          ? 'Sayim'
+                          : row.movement_type === 'in'
+                            ? 'Stok Girisi'
+                            : row.movement_type === 'out'
+                              ? 'Stok Cikisi'
+                              : 'Duzeltme';
                       const branchLabel = row.reference_type === 'branch_transfer'
                         ? `${sourceBranch} -> ${targetBranch}`
                         : targetBranch !== '-' ? targetBranch : sourceBranch;

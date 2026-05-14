@@ -345,6 +345,15 @@ function App() {
     setCurrentPage(page);
   }, []);
 
+  useEffect(() => {
+    const onSefposNavigate = (e: Event) => {
+      const detail = (e as CustomEvent<{ page?: string }>).detail;
+      if (detail?.page) handleNavigate(detail.page);
+    };
+    window.addEventListener('sefpos-navigate', onSefposNavigate as EventListener);
+    return () => window.removeEventListener('sefpos-navigate', onSefposNavigate as EventListener);
+  }, [handleNavigate]);
+
   const handleDbModeSelect = async (mode: 'cloud' | 'sqlserver' | 'terminal') => {
     if (mode === 'terminal') {
       localStorage.setItem('shefpos_pending_terminal', 'true');

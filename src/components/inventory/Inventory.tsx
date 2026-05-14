@@ -1,22 +1,36 @@
-import { useState } from 'react';
-import { Boxes, Truck, ChefHat, FileText, AlertTriangle } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { Boxes, Truck, ChefHat, FileText, AlertTriangle, ClipboardList } from 'lucide-react';
 import { Ingredients } from './Ingredients';
 import { Suppliers } from './Suppliers';
 import { Recipes } from './Recipes';
 import { PurchaseInvoices } from './PurchaseInvoices';
+import { ProductStockCount } from './ProductStockCount';
 import { useCriticalStockCount } from './useCriticalStockCount';
 
-type Tab = 'ingredients' | 'suppliers' | 'recipes' | 'purchases';
+type Tab = 'ingredients' | 'suppliers' | 'recipes' | 'purchases' | 'product-count';
 
 export function Inventory() {
   const [tab, setTab] = useState<Tab>('ingredients');
   const criticalCount = useCriticalStockCount();
+
+  useEffect(() => {
+    try {
+      const v = sessionStorage.getItem('sefpos_inventory_tab');
+      if (v === 'product-count') {
+        setTab('product-count');
+        sessionStorage.removeItem('sefpos_inventory_tab');
+      }
+    } catch {
+      /* ignore */
+    }
+  }, []);
 
   const tabs: { id: Tab; label: string; icon: any; badge?: number }[] = [
     { id: 'ingredients', label: 'Hammadde', icon: Boxes, badge: criticalCount },
     { id: 'suppliers', label: 'Tedarikçi', icon: Truck },
     { id: 'recipes', label: 'Reçete', icon: ChefHat },
     { id: 'purchases', label: 'Alış Faturası', icon: FileText },
+    { id: 'product-count', label: 'Ürün sayımı', icon: ClipboardList },
   ];
 
   return (
@@ -30,7 +44,7 @@ export function Inventory() {
             <div>
               <h1 className="text-lg md:text-xl font-black text-slate-800">Stok / Reçete Yönetimi</h1>
               <div className="text-[11px] md:text-xs text-slate-500 font-semibold">
-                Hammadde, tedarikçi, reçete, alış faturası
+                Hammadde, tedarikçi, reçete, alış faturası, ürün sayımı
               </div>
             </div>
           </div>
@@ -77,6 +91,7 @@ export function Inventory() {
         {tab === 'suppliers' && <Suppliers />}
         {tab === 'recipes' && <Recipes />}
         {tab === 'purchases' && <PurchaseInvoices />}
+        {tab === 'product-count' && <ProductStockCount />}
       </div>
     </div>
   );
