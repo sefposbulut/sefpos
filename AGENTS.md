@@ -24,7 +24,7 @@ This file is the permanent project memory for this repository.
 - Supabase migration workflow: `.github/workflows/supabase-migrations.yml`
 - Supabase weekly backup workflow: `.github/workflows/supabase-backup.yml`
 - Electron auto-release workflow: `.github/workflows/electron-release.yml`
-- **Web (www.sefpos.com.tr):** Cloudflare Pages projesi **`sefposadisyon`** (domain burada; üstteki `sefpos` yalnızca `sefpos.pages.dev`). Build komutu **`npm run build:pages`**. GitHub deploy: `.github/workflows/cloudflare-pages-deploy.yml` + `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` (isteğe bağlı `CLOUDFLARE_PAGES_PROJECT_NAME` ile başka projeye yönlendirme).
+- **Web (www.sefpos.com.tr):** Cloudflare Pages projesi **`sefposadisyon`** (domain burada; üstteki `sefpos` yalnızca `sefpos.pages.dev`). Build komutu **`npm run build:pages`**. GitHub deploy: `.github/workflows/cloudflare-pages-deploy.yml` + `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` (isteğe bağlı `CLOUDFLARE_PAGES_PROJECT_NAME` ile başka projeye yönlendirme). Yinelenen boş **`sefpos`** Pages projesini silmek: yerelde `npm run cf:pages:delete-legacy-sefpos` (Wrangler token gerekir) veya Cloudflare panelinden proje silme.
 - Dependency automation: `.github/dependabot.yml`
 
 ## Otomatik sürüm yayınlama (ZORUNLU akış)

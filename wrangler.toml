@@ -9,7 +9,11 @@
 # Dashboard ornek: npm ci && npm run build:pages
 # Üretim domain (www.sefpos.com.tr) bu Pages projesine bağlıdır. GitHub Actions
 # wrangler pages deploy hedefi varsayılan olarak aynı addır (sefposadisyon).
-# Üstteki "sefpos" projesi yalnızca sefpos.pages.dev — domain bağlı değil.
+#
+# Eski yinelenen proje "sefpos" (yalnızca sefpos.pages.dev, domain yok) silinmek için
+# yerelde bir kez: CLOUDFLARE_API_TOKEN (+ CLOUDFLARE_ACCOUNT_ID) ile
+#   npm run cf:pages:delete-legacy-sefpos
+# veya Cloudflare Dashboard → Workers & Pages → sefpos → Sil.
 #
 name = "sefposadisyon"
 compatibility_date = "2024-11-01"

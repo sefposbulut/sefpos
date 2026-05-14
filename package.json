@@ -1,7 +1,7 @@
 {
   "name": "shefpos",
   "private": true,
-  "version": "1.0.116",
+  "version": "1.0.117",
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
@@ -26,7 +26,8 @@
     "edge:deploy:create-user": "npx supabase functions deploy create-user",
     "edge:deploy:update-user": "npx supabase functions deploy update-user",
     "edge:deploy:all": "npx supabase functions deploy create-user update-user create-waiter-auth send-sms-otp verify-sms-otp send-sms-welcome send-sms-custom",
-    "test:edge-sms": "node scripts/test-edge-sms-otp.mjs"
+    "test:edge-sms": "node scripts/test-edge-sms-otp.mjs",
+    "cf:pages:delete-legacy-sefpos": "npx wrangler pages project delete sefpos --yes"
   },
   "build": {
     "appId": "com.sefpos.app",
