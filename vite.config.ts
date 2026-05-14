@@ -267,10 +267,27 @@ export default defineConfig(({ mode, command }) => {
     );
   }
 
+  // Cloudflare Pages: kök URL (/). Electron file:// yüklemesi CF_PAGES olmadan ./ kalır.
+  const useRootAssetBase =
+    process.env.CF_PAGES === '1' ||
+    String(process.env.CF_PAGES || '').toLowerCase() === 'true' ||
+    String(process.env.VITE_WEB_ROOT_BASE || '').trim() === '1';
+
+  /** Web kökünde derleme: derin path'te yanlışlıkla SPA açılırsa ./manifest ve ./assets yine köke çözülsün. */
+  if (useRootAssetBase) {
+    plugins.push({
+      name: 'sefpos-pages-html-base',
+      enforce: 'post',
+      transformIndexHtml(html: string) {
+        return html.replace('<base href="./" />', '<base href="/" />');
+      },
+    });
+  }
+
   return {
     define,
     plugins,
-    base: './',
+    base: useRootAssetBase ? '/' : './',
     server: {
       port: SEFPOS_DEV_PORT,
       strictPort: true,
