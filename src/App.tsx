@@ -41,7 +41,6 @@ import { queryCache } from './lib/queryCache';
 import { SystemNotificationContainer } from './components/SystemNotificationBanner';
 import { OnlineOrderToast } from './components/OnlineOrderToast';
 import { PrintStatusToast } from './components/PrintStatusToast';
-import { ElectronDesktopShell } from './components/ElectronDesktopShell';
 import { TerminalLogin, TerminalApp, isTerminalMode, exitTerminalMode } from './components/TerminalMode';
 import { isCapacitorNative } from './lib/capacitorPlatform';
 
@@ -95,9 +94,8 @@ const isCourierMode = () => {
   return params.has('courier') || !!localStorage.getItem('shefpos_courier_session');
 };
 
-// UpdateBanner kaldırıldı — ElectronDesktopShell hem dinamik pencere başlığı
-// (ŞefPOS — Tenant — Şube — Kullanıcı) hem de auto-update bildirimi (turuncu
-// tema, "Yeniden başlat" butonu) işlevini birlikte yapıyor.
+// UpdateBanner kaldırıldı — ElectronDesktopShell (main.tsx, AuthProvider altinda)
+// dinamik pencere başlığı + auto-update bildirimi işlevini yapıyor.
 
 function App() {
   const [courierMode, setCourierMode] = useState(isCourierMode);
@@ -702,7 +700,6 @@ function App() {
         currentPage={currentPage}
       />
       <PrintStatusToast />
-      <ElectronDesktopShell />
     </div>
   );
 }

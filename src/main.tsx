@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import App from './App.tsx';
 import './index.css';
 import { AuthProvider } from './contexts/AuthContext';
+import { ElectronDesktopShell } from './components/ElectronDesktopShell';
 import { PublicMenu } from './components/PublicMenu';
 
 /**
@@ -158,6 +159,7 @@ if (menuBranchId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{1
       <AppErrorBoundary>
         <AuthProvider>
           <App />
+          <ElectronDesktopShell />
         </AuthProvider>
       </AppErrorBoundary>
     </StrictMode>
