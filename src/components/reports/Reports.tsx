@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { BarChart3, Package, Building2, Users } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { supabase } from '../../lib/supabase';
+import { REPORTS_INITIAL_TAB_STORAGE_KEY, REPORTS_MENU_LAST_KEY } from '../../lib/reportsNav';
 import { SalesReport } from './SalesReport';
 import { ProductReport } from './ProductReport';
 import { BranchReport } from './BranchReport';
@@ -34,6 +35,30 @@ export function Reports() {
       if (data) setBranches(data as Branch[]);
     })();
   }, [tenant]);
+
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem(REPORTS_INITIAL_TAB_STORAGE_KEY);
+      if (raw === 'sales' || raw === 'products' || raw === 'branches' || raw === 'staff') {
+        if (raw === 'branches' && !isOwnerOrAdmin) {
+          sessionStorage.removeItem(REPORTS_INITIAL_TAB_STORAGE_KEY);
+          return;
+        }
+        setActiveTab(raw);
+      }
+      sessionStorage.removeItem(REPORTS_INITIAL_TAB_STORAGE_KEY);
+    } catch {
+      /* ignore */
+    }
+  }, [isOwnerOrAdmin]);
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(REPORTS_MENU_LAST_KEY, activeTab === 'sales' ? 'sales' : 'genel');
+    } catch {
+      /* ignore */
+    }
+  }, [activeTab]);
 
   const tabs: { key: ReportTab; label: string; icon: typeof BarChart3; ownerOnly?: boolean }[] = [
     { key: 'sales', label: 'Satış Raporu', icon: BarChart3 },

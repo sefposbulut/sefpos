@@ -1,8 +1,9 @@
-import { Package, Users, TrendingUp, Wallet, Clock, Grid3x3, Menu, X, UserCog, ShoppingBag, ShoppingCart, Ban, Settings, Lock, Zap, Boxes, Layers, ChevronDown, ClipboardList } from 'lucide-react';
+import { Package, Users, TrendingUp, Wallet, Clock, Grid3x3, Menu, X, UserCog, ShoppingBag, ShoppingCart, Ban, Settings, Lock, Zap, Boxes, Layers, ChevronDown, ClipboardList, BarChart3 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useUiPrefs } from '../lib/uiPrefs';
 import { isModuleEnabled } from '../lib/modules';
+import { REPORTS_INITIAL_TAB_STORAGE_KEY, REPORTS_MENU_LAST_KEY } from '../lib/reportsNav';
 
 interface MainMenuProps {
   onNavigate: (page: string) => void;
@@ -236,46 +237,71 @@ export function MainMenu({ onNavigate, currentPage, onOpenSettings, onLockScreen
               {availableItems.map((item) => {
                 if (item.id === 'reports') {
                   const Icon = item.icon;
-                  const reportsSectionActive =
-                    currentPage === 'reports' || currentPage === 'reports-stock-count';
+                  let reportMenuLast: 'sales' | 'genel' = 'sales';
+                  try {
+                    const r = sessionStorage.getItem(REPORTS_MENU_LAST_KEY);
+                    if (r === 'genel') reportMenuLast = 'genel';
+                  } catch {
+                    /* ignore */
+                  }
+                  const salesActive = currentPage === 'reports' && reportMenuLast === 'sales';
+                  const genelActive = currentPage === 'reports' && reportMenuLast === 'genel';
+                  const stockActive = currentPage === 'reports-stock-count';
                   return (
                     <div key="reports-nav" className="col-span-2 sm:col-span-3 lg:col-span-4">
-                      <button
-                        type="button"
-                        onClick={() => setReportsExpanded((e) => !e)}
-                        className={`w-full flex items-center justify-between gap-3 px-3 py-3 rounded-2xl transition-all active:scale-95 ${
-                          reportsSectionActive
-                            ? 'bg-white text-orange-600 shadow-xl font-black'
-                            : 'text-white bg-white/10 hover:bg-white/20 border border-white/15'
-                        }`}
-                      >
-                        <span className="flex items-center gap-2 md:gap-3 min-w-0">
-                          <Icon size={22} className="md:w-7 md:h-7 shrink-0" />
-                          <span className="text-xs md:text-sm font-bold text-left leading-tight truncate">
-                            {item.label}
+                      <p className="text-[10px] md:text-xs font-bold text-white/80 uppercase tracking-wide mb-2">
+                        Raporlar
+                      </p>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 md:gap-4">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            try {
+                              sessionStorage.setItem(REPORTS_INITIAL_TAB_STORAGE_KEY, 'sales');
+                              sessionStorage.setItem(REPORTS_MENU_LAST_KEY, 'sales');
+                            } catch {
+                              /* ignore */
+                            }
+                            onNavigate('reports');
+                            setMenuOpen(false);
+                          }}
+                          className={`w-full min-h-[140px] md:min-h-[168px] flex flex-col items-center justify-center gap-2 md:gap-3 px-4 py-4 rounded-2xl transition-all active:scale-[0.98] border ${
+                            salesActive
+                              ? 'bg-white text-orange-600 shadow-xl font-black border-white'
+                              : 'text-white bg-white/10 hover:bg-white/20 border-white/15'
+                          }`}
+                        >
+                          <BarChart3 size={28} className="md:w-9 md:h-9 shrink-0" />
+                          <span className="text-sm md:text-base font-black text-center leading-tight">
+                            Satış raporu
                           </span>
-                        </span>
-                        <ChevronDown
-                          size={18}
-                          className={`shrink-0 transition-transform ${reportsExpanded ? 'rotate-180' : ''}`}
-                        />
-                      </button>
-                      {reportsExpanded && (
-                        <div className="mt-2 grid grid-cols-2 gap-2">
+                        </button>
+                        <div className="flex flex-col gap-3 md:gap-4 min-h-[140px] md:min-h-[168px]">
                           <button
                             type="button"
                             onClick={() => {
+                            try {
+                              sessionStorage.setItem(REPORTS_INITIAL_TAB_STORAGE_KEY, 'products');
+                              sessionStorage.setItem(REPORTS_MENU_LAST_KEY, 'genel');
+                            } catch {
+                                /* ignore */
+                              }
                               onNavigate('reports');
                               setMenuOpen(false);
                             }}
-                            className={`min-h-[72px] flex flex-col items-center justify-center gap-1 px-2 py-2 rounded-xl text-xs font-bold transition active:scale-95 ${
-                              currentPage === 'reports'
-                                ? 'bg-white text-orange-600 shadow-lg'
-                                : 'text-white bg-white/10 hover:bg-white/20 border border-white/15'
+                            className={`flex-1 min-h-0 flex flex-col items-center justify-center gap-1.5 px-3 py-3 rounded-2xl transition-all active:scale-[0.98] border ${
+                              genelActive
+                                ? 'bg-white text-orange-600 shadow-lg font-black border-white'
+                                : 'text-white bg-white/10 hover:bg-white/20 border-white/15'
                             }`}
                           >
-                            <TrendingUp size={20} />
-                            Genel raporlar
+                            <Icon size={22} className="md:w-7 md:h-7 shrink-0" />
+                            <span className="text-xs md:text-sm font-bold text-center leading-tight">
+                              Genel raporlar
+                            </span>
+                            <span className="text-[10px] font-semibold text-center opacity-80 leading-tight">
+                              Ürün · şube · personel
+                            </span>
                           </button>
                           <button
                             type="button"
@@ -283,17 +309,19 @@ export function MainMenu({ onNavigate, currentPage, onOpenSettings, onLockScreen
                               onNavigate('reports-stock-count');
                               setMenuOpen(false);
                             }}
-                            className={`min-h-[72px] flex flex-col items-center justify-center gap-1 px-2 py-2 rounded-xl text-xs font-bold transition active:scale-95 ${
-                              currentPage === 'reports-stock-count'
-                                ? 'bg-white text-orange-600 shadow-lg'
-                                : 'text-white bg-white/10 hover:bg-white/20 border border-white/15'
+                            className={`flex-1 min-h-0 flex flex-col items-center justify-center gap-1.5 px-3 py-3 rounded-2xl transition-all active:scale-[0.98] border ${
+                              stockActive
+                                ? 'bg-white text-orange-600 shadow-lg font-black border-white'
+                                : 'text-white bg-white/10 hover:bg-white/20 border-white/15'
                             }`}
                           >
-                            <ClipboardList size={20} />
-                            Sayım raporu
+                            <ClipboardList size={22} className="md:w-7 md:h-7 shrink-0" />
+                            <span className="text-xs md:text-sm font-bold text-center leading-tight">
+                              Sayım raporu
+                            </span>
                           </button>
                         </div>
-                      )}
+                      </div>
                     </div>
                   );
                 }
