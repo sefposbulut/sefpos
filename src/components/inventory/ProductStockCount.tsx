@@ -12,6 +12,7 @@ type ProductRow = {
   barcode: string | null;
   stock_quantity: number;
   cost: number;
+  price: number;
 };
 
 type SessionReportRow = {
@@ -20,6 +21,7 @@ type SessionReportRow = {
   sys: number;
   counted: number;
   delta: number;
+  /** Birim satış fiyatı × adet farkı (₺). */
   tutarSigned: number;
 };
 
@@ -32,7 +34,9 @@ type SessionReport = {
   totals: {
     plusQty: number;
     minusQty: number;
+    /** Fazla adetlerde satış tutarı toplamı. */
     plusTutar: number;
+    /** Eksik adetlerde satış tutarı toplamı (pozitif sayı). */
     minusTutar: number;
   };
   /** false ise veritabanında SAYIM-XXXXX RPC yok; zaman damgalı SYM- referans kullanıldı */
@@ -138,7 +142,7 @@ export function ProductStockCount() {
     if (!tenant?.id) return;
     const { data, error } = await supabase
       .from('products')
-      .select('id, name, unit, category_id, barcode, stock_quantity, cost')
+      .select('id, name, unit, category_id, barcode, stock_quantity, cost, price')
       .eq('tenant_id', tenant.id)
       .eq('is_active', true)
       .order('name', { ascending: true });
@@ -273,6 +277,9 @@ export function ProductStockCount() {
       alert('Açılır pencere engellendi; yazdırmak için izin verin.');
       return;
     }
+    const netTutarPrint = rep.totals.plusTutar - rep.totals.minusTutar;
+    const netSignPrint = netTutarPrint >= 0 ? '+' : '';
+    const netClsPrint = netTutarPrint >= 0 ? 'pos' : 'neg';
     w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Sayım — ${escapeHtml(rep.referenceNo)}</title>
       <style>
         body{font-family:system-ui,sans-serif;padding:24px;color:#1e293b}
@@ -287,13 +294,19 @@ export function ProductStockCount() {
       </style></head><body>
       <h1>Sayım fark raporu</h1>
       <div class="meta">Belge: <b>${escapeHtml(rep.referenceNo)}</b> · ${escapeHtml(rep.branchName)} · ${escapeHtml(rep.createdAtLabel)}</div>
-      ${!rep.usedSequentialDoc ? '<p style="font-size:12px;color:#b45309;margin:8px 0 0">Not: Geçici SYM referansı. Sıralı SAYIM için: Supabase migration (stock_count_batches) + üretim build&apos;inde VITE_STOCK_COUNT_BATCH_RPC=true.</p>' : ''}
-      <table><thead><tr><th>Ürün</th><th>Sistem</th><th>Sayım</th><th>Fark (adet)</th><th>± Maliyet (₺)</th></tr></thead>
-      <tbody>${rowsHtml}</tbody></table>
+      ${!rep.usedSequentialDoc ? '<p style="font-size:11px;color:#b45309;margin:8px 0 0">Geçici SYM belge no. Sıralı SAYIM için migration + üretimde VITE_STOCK_COUNT_BATCH_RPC=true.</p>' : ''}
+      <table><thead><tr><th>Ürün</th><th>Sistem</th><th>Sayım</th><th>Fark (adet)</th><th>± Satış (₺)</th></tr></thead>
+      <tbody>${rowsHtml}</tbody>
+      <tfoot>
+        <tr style="background:#f1f5f9;font-weight:800">
+          <td colspan="4" style="text-align:right;padding:10px 8px">Satış farkı toplamı (net)</td>
+          <td class="r ${netClsPrint}" style="padding:10px 8px;font-size:15px">${netSignPrint}${moneyTR(netTutarPrint)}</td>
+        </tr>
+      </tfoot></table>
       <div class="sum">
-        Giriş (fazla): +${rep.totals.plusQty.toFixed(2)} adet → maliyet ${moneyTR(rep.totals.plusTutar)}<br>
-        Çıkış (eksik): −${rep.totals.minusQty.toFixed(2)} adet → maliyet ${moneyTR(rep.totals.minusTutar)}<br>
-        <b>Net maliyet etkisi:</b> ${moneyTR(rep.totals.plusTutar - rep.totals.minusTutar)}
+        Fazla (adet): +${rep.totals.plusQty.toFixed(2)} → satış ${moneyTR(rep.totals.plusTutar)}<br>
+        Eksik (adet): −${rep.totals.minusQty.toFixed(2)} → satış ${moneyTR(rep.totals.minusTutar)}<br>
+        <b>Net (satış üzerinden):</b> ${moneyTR(rep.totals.plusTutar - rep.totals.minusTutar)}
       </div>
       <p style="margin-top:24px;font-size:11px;color:#94a3b8">ŞefPOS — ürün sayımı</p>
       <script>window.onload=function(){window.print();}</script>
@@ -407,9 +420,9 @@ export function ProductStockCount() {
       clearCounts();
 
       const reportRows: SessionReportRow[] = linesToApply.map(({ product, counted, sys, delta }) => {
-        const uc = Number(product.cost);
-        const c = Number.isFinite(uc) && uc > 0 ? uc : 0;
-        const tutarSigned = delta * c;
+        const up = Number(product.price);
+        const saleUnit = Number.isFinite(up) && up > 0 ? up : 0;
+        const tutarSigned = delta * saleUnit;
         return {
           productName: product.name,
           unit: product.unit || 'adet',
@@ -453,6 +466,11 @@ export function ProductStockCount() {
     return <div className="p-6 text-slate-600 text-sm">Oturum gerekli.</div>;
   }
 
+  const raporNetSatış =
+    sessionReport != null
+      ? sessionReport.totals.plusTutar - sessionReport.totals.minusTutar
+      : 0;
+
   return (
     <div className="p-3 md:p-6 max-w-6xl mx-auto space-y-4">
       {sessionReport && (
@@ -488,38 +506,32 @@ export function ProductStockCount() {
             </div>
             <div className="p-4 overflow-y-auto flex-1 space-y-4">
               {!sessionReport.usedSequentialDoc && (
-                <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-950 leading-relaxed">
-                  <strong>SAYIM-00001</strong> kullanılmadı; geçici <span className="font-mono font-bold">SYM-…</span>{' '}
-                  referansı yazıldı. Sıralı belge için: (1) Supabase&apos;te migration{' '}
-                  <span className="font-mono">20260514193000_stock_count_batches</span>, (2) üretim build&apos;inde ortam
-                  değişkeni <span className="font-mono">VITE_STOCK_COUNT_BATCH_RPC=true</span> (Electron release / CI
-                  zaten açar). RPC daha önce 404 verdiyse bu ekranda:{' '}
-                  <span className="font-mono whitespace-nowrap">
-                    sessionStorage.removeItem(&apos;sefpos_skip_create_stock_count_batch&apos;)
-                  </span>
-                </div>
+                <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-950">
+                  Geçici <span className="font-mono font-bold">SYM-…</span> belge no. kullanıldı. Sıralı SAYIM için
+                  sunucuda migration ve üretimde{' '}
+                  <span className="font-mono">VITE_STOCK_COUNT_BATCH_RPC=true</span> olmalıdır.
+                </p>
               )}
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center">
                 <div className="rounded-xl bg-emerald-50 border border-emerald-100 px-2 py-3">
                   <div className="text-[10px] font-bold text-emerald-800 uppercase">Fazla (adet)</div>
                   <div className="text-sm font-black text-emerald-900">+{sessionReport.totals.plusQty.toFixed(2)}</div>
-                  <div className="text-[10px] font-semibold text-emerald-800/90 mt-0.5">Maliyet</div>
+                  <div className="text-[10px] font-semibold text-emerald-800/90 mt-0.5">Satış tutarı</div>
                   <div className="text-xs text-emerald-700 font-semibold">{moneyTR(sessionReport.totals.plusTutar)}</div>
                 </div>
                 <div className="rounded-xl bg-rose-50 border border-rose-100 px-2 py-3">
                   <div className="text-[10px] font-bold text-rose-800 uppercase">Eksik (adet)</div>
                   <div className="text-sm font-black text-rose-900">−{sessionReport.totals.minusQty.toFixed(2)}</div>
-                  <div className="text-[10px] font-semibold text-rose-800/90 mt-0.5">Maliyet</div>
+                  <div className="text-[10px] font-semibold text-rose-800/90 mt-0.5">Satış tutarı</div>
                   <div className="text-xs text-rose-700 font-semibold">{moneyTR(sessionReport.totals.minusTutar)}</div>
                 </div>
                 <div className="rounded-xl bg-slate-50 border border-slate-200 px-2 py-3 col-span-2">
-                  <div className="text-[10px] font-bold text-slate-600 uppercase">Net maliyet (tahmini)</div>
-                  <div className="text-lg font-black text-slate-900">
-                    {moneyTR(sessionReport.totals.plusTutar - sessionReport.totals.minusTutar)}
-                  </div>
-                  <div className="text-[10px] text-slate-500 mt-1">Birim maliyet × adet farkı · satış fiyatı değil</div>
+                  <div className="text-[10px] font-bold text-slate-600 uppercase">Net (satış üzerinden)</div>
+                  <div className="text-lg font-black text-slate-900">{moneyTR(raporNetSatış)}</div>
+                  <div className="text-[10px] text-slate-500 mt-1">Birim satış fiyatı × adet farkı</div>
                 </div>
               </div>
+              <p className="text-xs font-semibold text-slate-600">Sayım yapılan ürünler (satır bazında)</p>
               <div className="rounded-xl border border-slate-200 overflow-hidden">
                 <table className="w-full text-sm">
                   <thead className="bg-slate-50 text-left text-xs font-bold text-slate-600 uppercase">
@@ -528,7 +540,7 @@ export function ProductStockCount() {
                       <th className="p-2 text-right">Sistem</th>
                       <th className="p-2 text-right">Sayım</th>
                       <th className="p-2 text-right">Fark</th>
-                      <th className="p-2 text-right">± Maliyet (₺)</th>
+                      <th className="p-2 text-right">± Satış (₺)</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -555,6 +567,21 @@ export function ProductStockCount() {
                       </tr>
                     ))}
                   </tbody>
+                  <tfoot className="bg-slate-100 border-t-2 border-slate-300">
+                    <tr>
+                      <td colSpan={4} className="p-3 text-right text-sm font-black text-slate-800">
+                        Satış farkı toplamı (net)
+                      </td>
+                      <td
+                        className={`p-3 text-right font-mono text-base font-black ${
+                          raporNetSatış >= 0 ? 'text-emerald-700' : 'text-red-600'
+                        }`}
+                      >
+                        {raporNetSatış >= 0 ? '+' : ''}
+                        {moneyTR(raporNetSatış)}
+                      </td>
+                    </tr>
+                  </tfoot>
                 </table>
               </div>
               <p className="text-xs text-slate-500">
@@ -575,9 +602,11 @@ export function ProductStockCount() {
           <div>
             <h2 className="text-lg md:text-xl font-black text-slate-800">Ürün sayımı</h2>
             <p className="text-xs md:text-sm text-slate-600 mt-0.5 leading-relaxed max-w-2xl">
-              <strong className="text-slate-700">Fark</strong> = sayım − sistem (adet). Sağdaki <strong className="text-slate-700">± Maliyet</strong>{' '}
-              sütunu ürün kartındaki <strong className="text-slate-700">birim maliyet</strong> × farktır; satış fiyatı
-              kullanılmaz. Maliyet girilmemiş üründe ₺ gösterilmez.
+              <strong className="text-slate-700">Fark</strong> = sayım − sistem (adet). Sağdaki{' '}
+              <strong className="text-slate-700">± Satış</strong> sütunu ürün kartındaki{' '}
+              <strong className="text-slate-700">birim satış fiyatı</strong> × farktır (restoran için stok farkının
+              satış değeri). Satış fiyatı yoksa ₺ gösterilmez. Stok hareketinde maliyet alanı ayrıca ürün maliyetine göre
+              kaydedilir.
             </p>
           </div>
         </div>
@@ -662,13 +691,13 @@ export function ProductStockCount() {
                 <th className="px-3 py-2 w-20">Birim</th>
                 <th className="px-3 py-2 w-24 text-right">Sistem</th>
                 <th className="px-3 py-2 w-28">Sayım</th>
-                      <th className="px-3 py-2 w-24 text-right">Fark</th>
-                      <th
-                        className="px-3 py-2 w-28 text-right"
-                        title="Ürün kartındaki birim maliyet × adet farkı (satış fiyatı değil)"
-                      >
-                        ± Maliyet
-                      </th>
+                <th className="px-3 py-2 w-24 text-right">Fark</th>
+                <th
+                  className="px-3 py-2 w-28 text-right"
+                  title="Birim satış fiyatı × adet farkı"
+                >
+                  ± Satış
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -698,16 +727,16 @@ export function ProductStockCount() {
                       : diff > 0
                         ? 'text-emerald-700 font-bold'
                         : 'text-red-600 font-bold';
-                  const unitCost = Number(p.cost);
-                  const hasCost = Number.isFinite(unitCost) && unitCost > 0;
-                  const costPreview =
-                    diff != null && Number.isFinite(diff) && Math.abs(diff) >= 0.0001 && hasCost ? diff * unitCost : null;
-                  const costCls =
-                    costPreview == null
+                  const unitPrice = Number(p.price);
+                  const hasPrice = Number.isFinite(unitPrice) && unitPrice > 0;
+                  const salePreview =
+                    diff != null && Number.isFinite(diff) && Math.abs(diff) >= 0.0001 && hasPrice ? diff * unitPrice : null;
+                  const saleCls =
+                    salePreview == null
                       ? 'text-slate-400'
-                      : costPreview > 0
+                      : salePreview > 0
                         ? 'text-emerald-700 font-bold'
-                        : costPreview < 0
+                        : salePreview < 0
                           ? 'text-red-600 font-bold'
                           : 'text-slate-500';
                   return (
@@ -732,17 +761,17 @@ export function ProductStockCount() {
                       <td className={`px-3 py-2 text-right font-mono ${diffCls}`}>
                         {diff == null || !Number.isFinite(diff) ? '—' : diff.toFixed(2)}
                       </td>
-                      <td className={`px-3 py-2 text-right font-mono text-xs ${costCls}`}>
+                      <td className={`px-3 py-2 text-right font-mono text-xs ${saleCls}`}>
                         {diff == null || !Number.isFinite(diff) || Math.abs(diff) < 0.0001 ? (
                           '—'
-                        ) : !hasCost ? (
-                          <span className="text-slate-400 font-normal" title="Ürün kartında maliyet girilmemiş">
+                        ) : !hasPrice ? (
+                          <span className="text-slate-400 font-normal" title="Ürün kartında satış fiyatı yok">
                             —
                           </span>
                         ) : (
                           <>
-                            {costPreview! >= 0 ? '+' : ''}
-                            {moneyTR(costPreview!)}
+                            {(salePreview as number) >= 0 ? '+' : ''}
+                            {moneyTR(salePreview as number)}
                           </>
                         )}
                       </td>
@@ -758,7 +787,7 @@ export function ProductStockCount() {
       {linesToApply.length > 0 && (
         <div className="flex items-center gap-2 text-xs text-slate-600">
           <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-          {linesToApply.length} satırda adet farkı var; uygulayınca stok güncellenir ve maliyet özeti açılır.
+          {linesToApply.length} satırda adet farkı var; uygulayınca stok güncellenir ve satış tutarı özeti açılır.
         </div>
       )}
     </div>
