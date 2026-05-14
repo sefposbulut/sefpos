@@ -573,12 +573,7 @@ export function ProductStockCount() {
           <div>
             <h2 className="text-lg md:text-xl font-black text-slate-800">Ürün sayımı</h2>
             <p className="text-xs md:text-sm text-slate-600 mt-0.5 leading-relaxed max-w-xl">
-              Şubedeki gerçek miktarı girin; sistem stoku ile farkı hesaplar. Onayda stok güncellenir; varsayılan olarak
-              zaman damgalı <span className="font-mono text-slate-700">SYM-…</span> referansı ile hareket kaydı oluşur.
-              Sıralı <span className="font-mono text-slate-700">SAYIM-00001</span> için hem Supabase migration (
-              <span className="font-mono text-xs">20260514193000_stock_count_batches</span>) hem build ortamında{' '}
-              <span className="font-mono text-xs">VITE_STOCK_COUNT_BATCH_RPC=true</span> gerekir. Ardından fark raporu
-              gösterilir.
+              Sayım sütununa şubedeki gerçek miktarı yazın; onayda stok farka göre güncellenir.
             </p>
           </div>
         </div>
