@@ -1461,9 +1461,33 @@ export function AdminPanel({ onExit }: AdminPanelProps) {
   };
 
   const handleImpersonateTenant = async (tenantId: string) => {
-    localStorage.setItem('shefpos_admin_tenant_impersonation', tenantId);
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session?.user?.id) {
+      alert('Oturum bulunamadı. Lütfen yeniden giriş yapın.');
+      return;
+    }
+    const { error } = await supabase.from('admin_tenant_impersonation' as any).upsert(
+      {
+        user_id: session.user.id,
+        target_tenant_id: tenantId,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: 'user_id' },
+    );
+    if (error) {
+      alert(
+        `Müşteri oturumu başlatılamadı: ${error.message}\n` +
+          'Supabase’de migration uygulandığından emin olun (admin_tenant_impersonation).',
+      );
+      return;
+    }
+    try {
+      localStorage.setItem('shefpos_admin_tenant_impersonation', tenantId);
+    } catch {
+      /* private mode */
+    }
     await refreshProfile();
-    onExit();
+    window.location.assign('/');
   };
 
   const handleApplyPlan = async (plan: 'trial' | 'starter' | 'professional' | 'enterprise', durationDays: number) => {

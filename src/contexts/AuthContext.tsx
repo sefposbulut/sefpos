@@ -134,6 +134,9 @@ interface AuthContextType {
   refreshProfile: () => Promise<void>;
   refreshBranches: () => Promise<void>;
   setActiveBranch: (branch: Branch) => void;
+  /** Süper-admin müşteri görünümü: hedef tenant (RLS ile uyumlu); yoksa null */
+  impersonationTenantId: string | null;
+  clearTenantImpersonation: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -200,12 +203,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [permissions, setPermissions] = useState<UserPermissions>(DEFAULT_WAITER_PERMISSIONS);
   const [loading, setLoading] = useState(true);
   const [profileLoadFailed, setProfileLoadFailed] = useState(false);
+  const [impersonationTenantId, setImpersonationTenantId] = useState<string | null>(null);
 
   const isProfileBlocked = (p: any) => p?.is_active === false;
 
   const forceSignOutForBlockedProfile = async () => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const uid = session?.user?.id;
+      if (uid) {
+        try {
+          await supabase.from('admin_tenant_impersonation' as any).delete().eq('user_id', uid);
+        } catch {
+          /* tablo yok / RLS */
+        }
+      }
+    } catch {
+      /* */
+    }
     await supabase.auth.signOut();
     localStorage.removeItem('shefpos_admin_tenant_impersonation');
+    setImpersonationTenantId(null);
     setUser(null);
     setProfile(null);
     setTenant(null);
@@ -423,10 +441,64 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setProfileLoadFailed(true);
         return;
       }
-      const impersonatedTenantId = localStorage.getItem('shefpos_admin_tenant_impersonation');
-      const effectiveTenantId = (prof as any).is_super_admin && impersonatedTenantId
-        ? impersonatedTenantId
-        : prof.tenant_id;
+      const isSuperAdmin = (prof as any).is_super_admin === true;
+      let impersonationTarget: string | null = null;
+
+      if (isSuperAdmin) {
+        try {
+          const { data: impRow, error: impErr } = await supabase
+            .from('admin_tenant_impersonation' as any)
+            .select('target_tenant_id')
+            .eq('user_id', userId)
+            .maybeSingle();
+          if (!impErr && impRow && (impRow as { target_tenant_id?: string }).target_tenant_id) {
+            impersonationTarget = String((impRow as { target_tenant_id: string }).target_tenant_id);
+          }
+        } catch {
+          /* migration henüz yok / ağ */
+        }
+        if (!impersonationTarget) {
+          try {
+            const ls = localStorage.getItem('shefpos_admin_tenant_impersonation');
+            const uuidRe =
+              /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+            if (ls && uuidRe.test(ls)) {
+              impersonationTarget = ls;
+              const nowIso = new Date().toISOString();
+              void supabase.from('admin_tenant_impersonation' as any).upsert(
+                { user_id: userId, target_tenant_id: ls, updated_at: nowIso },
+                { onConflict: 'user_id' },
+              );
+            }
+          } catch {
+            /* storage */
+          }
+        }
+        setImpersonationTenantId(impersonationTarget);
+        if (impersonationTarget) {
+          try {
+            localStorage.setItem('shefpos_admin_tenant_impersonation', impersonationTarget);
+          } catch {
+            /* private mode */
+          }
+        } else {
+          try {
+            localStorage.removeItem('shefpos_admin_tenant_impersonation');
+          } catch {
+            /* */
+          }
+        }
+      } else {
+        setImpersonationTenantId(null);
+        try {
+          localStorage.removeItem('shefpos_admin_tenant_impersonation');
+        } catch {
+          /* */
+        }
+      }
+
+      const effectiveTenantId =
+        isSuperAdmin && impersonationTarget ? impersonationTarget : prof.tenant_id;
       const effectiveProfile = {
         ...(prof as any),
         tenant_id: effectiveTenantId,
@@ -641,6 +713,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const signOut = async () => {
     try {
+      const uid = user?.id;
+      if (uid) {
+        try {
+          await supabase.from('admin_tenant_impersonation' as any).delete().eq('user_id', uid);
+        } catch {
+          /* tablo yok / RLS */
+        }
+      }
       await supabase.auth.signOut();
     } catch (e) {
       console.error('Logout error:', e);
@@ -656,11 +736,28 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
     localStorage.removeItem('device_binding_checked');
     localStorage.removeItem('shefpos_admin_tenant_impersonation');
+    setImpersonationTenantId(null);
     setUser(null);
     setProfile(null);
     setTenant(null);
     setBranches([]);
     setActiveBranchState(null);
+  };
+
+  const clearTenantImpersonation = async () => {
+    if (!user?.id) return;
+    try {
+      await supabase.from('admin_tenant_impersonation' as any).delete().eq('user_id', user.id);
+    } catch {
+      /* */
+    }
+    try {
+      localStorage.removeItem('shefpos_admin_tenant_impersonation');
+    } catch {
+      /* */
+    }
+    setImpersonationTenantId(null);
+    await loadProfile(user.id);
   };
 
   const refreshProfile = async () => {
@@ -972,6 +1069,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       refreshProfile,
       refreshBranches,
       setActiveBranch,
+      impersonationTenantId,
+      clearTenantImpersonation,
     }}>
       {children}
     </AuthContext.Provider>

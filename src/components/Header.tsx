@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { LogOut, User, Settings, ChevronDown, MapPin, Check, Building2, Zap, ZoomIn, ZoomOut, Bell, Headphones as HeadphonesIcon, X, Send, Sparkles, Phone, Mail, ArrowLeft, LayoutGrid, PlayCircle, Lock, Minimize2 } from 'lucide-react';
+import { LogOut, User, Settings, ChevronDown, MapPin, Check, Building2, Zap, ZoomIn, ZoomOut, Bell, Headphones as HeadphonesIcon, X, Send, Sparkles, Phone, Mail, ArrowLeft, LayoutGrid, PlayCircle, Lock, Minimize2, UserCheck } from 'lucide-react';
 import { WaiterCallBell } from './WaiterCallBell';
 import { supabase } from '../lib/supabase';
 import { getTrialInfo, formatTrialRemaining } from '../lib/tenantTrial';
@@ -74,7 +74,20 @@ const PAGE_LABELS: Record<string, string> = {
 };
 
 export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackToTables, onOpenShifts }: HeaderProps) {
-  const { profile, tenant, user, signOut, activeBranch, branches, setActiveBranch, shiftsEnabled, permissions, businessDayStartHour } = useAuth();
+  const {
+    profile,
+    tenant,
+    user,
+    signOut,
+    activeBranch,
+    branches,
+    setActiveBranch,
+    shiftsEnabled,
+    permissions,
+    businessDayStartHour,
+    impersonationTenantId,
+    clearTenantImpersonation,
+  } = useAuth();
   const canUseShifts = !!permissions?.can_use_shifts;
   const { activeShift, todayClosure } = useActiveShift({
     tenantId: tenant?.id || null,
@@ -263,6 +276,22 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
             </div>
 
             <div className="flex items-center space-x-1.5 md:space-x-2">
+              {impersonationTenantId && (
+                <div
+                  className="flex items-center gap-1.5 max-w-[min(100%,14rem)] sm:max-w-xs rounded-lg border border-amber-200 bg-amber-50 px-2 py-1 text-[10px] sm:text-xs font-bold text-amber-950"
+                  title="Lisans panelinden açılan müşteri kiracısı görünümü"
+                >
+                  <UserCheck className="w-3.5 h-3.5 flex-shrink-0 text-amber-700" aria-hidden />
+                  <span className="truncate hidden sm:inline">{tenant?.name || 'Müşteri'}</span>
+                  <button
+                    type="button"
+                    onClick={() => void clearTenantImpersonation()}
+                    className="flex-shrink-0 px-1.5 py-0.5 rounded-md bg-white border border-amber-300 text-amber-900 hover:bg-amber-100 font-black"
+                  >
+                    Çık
+                  </button>
+                </div>
+              )}
               {showTrialBadge && (
                 <button
                   type="button"
