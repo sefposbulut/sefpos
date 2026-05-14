@@ -7,7 +7,8 @@
 #   CLOUDFLARE_ACCOUNT_ID  — Dashboard sağ üst profil → "Account ID"
 #
 # İsteğe bağlı:
-#   CLOUDFLARE_PAGES_PROJECT_NAME — Cloudflare Pages proje adı (varsayılan: sefpos, wrangler.toml name ile aynı)
+#   CLOUDFLARE_PAGES_PROJECT_NAME — İsteğe bağlı; yoksa www’nin bağlı olduğu **sefposadisyon** kullanılır.
+#   (Dashboard’da üstteki "sefpos" = sefpos.pages.dev; domain’li proje altta "sefposadisyon".)
 #
 # Not: Cloudflare Pages'te ayrıca "Git bağlantısı" ile otomatik build açıksa, aynı projeye
 # iki kaynaktan deploy çakışabilir; tek kaynak kullanın (ya CF Git ya da bu workflow).
@@ -65,4 +66,4 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy dist --project-name=${{ secrets.CLOUDFLARE_PAGES_PROJECT_NAME || 'sefpos' }}
+          command: pages deploy dist --project-name=${{ secrets.CLOUDFLARE_PAGES_PROJECT_NAME || 'sefposadisyon' }}
