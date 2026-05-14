@@ -6,8 +6,11 @@ import { Recipes } from './Recipes';
 import { PurchaseInvoices } from './PurchaseInvoices';
 import { ProductStockCount } from './ProductStockCount';
 import { useCriticalStockCount } from './useCriticalStockCount';
+import { INVENTORY_TAB_STORAGE_KEY } from '../../lib/inventoryNav';
 
 type Tab = 'ingredients' | 'suppliers' | 'recipes' | 'purchases' | 'product-count';
+
+const INVENTORY_SESSION_TABS: Tab[] = ['product-count', 'recipes', 'ingredients', 'suppliers', 'purchases'];
 
 export function Inventory() {
   const [tab, setTab] = useState<Tab>('product-count');
@@ -15,15 +18,25 @@ export function Inventory() {
 
   useEffect(() => {
     try {
-      const v = sessionStorage.getItem('sefpos_inventory_tab');
-      if (v === 'product-count') {
-        setTab('product-count');
-        sessionStorage.removeItem('sefpos_inventory_tab');
+      const v = sessionStorage.getItem(INVENTORY_TAB_STORAGE_KEY);
+      if (v && INVENTORY_SESSION_TABS.includes(v as Tab)) {
+        setTab(v as Tab);
+      } else if (!v) {
+        sessionStorage.setItem(INVENTORY_TAB_STORAGE_KEY, 'product-count');
       }
     } catch {
       /* ignore */
     }
   }, []);
+
+  const selectTab = (id: Tab) => {
+    setTab(id);
+    try {
+      sessionStorage.setItem(INVENTORY_TAB_STORAGE_KEY, id);
+    } catch {
+      /* ignore */
+    }
+  };
 
   const tabs: { id: Tab; label: string; icon: any; badge?: number }[] = [
     { id: 'product-count', label: 'Ürün sayımı', icon: ClipboardList },
@@ -64,7 +77,7 @@ export function Inventory() {
             return (
               <button
                 key={t.id}
-                onClick={() => setTab(t.id)}
+                onClick={() => selectTab(t.id)}
                 className={`px-3 md:px-4 py-2 rounded-xl flex items-center gap-1.5 text-sm font-bold whitespace-nowrap shrink-0 transition-all active:scale-95 ${
                   active
                     ? 'bg-emerald-600 text-white shadow'

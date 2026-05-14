@@ -1,9 +1,10 @@
-import { Package, Users, TrendingUp, Wallet, Clock, Grid3x3, Menu, X, UserCog, ShoppingBag, ShoppingCart, Ban, Settings, Lock, Zap, Boxes, Layers, ChevronDown, ClipboardList, BarChart3 } from 'lucide-react';
+import { Package, Users, TrendingUp, Wallet, Clock, Grid3x3, Menu, X, UserCog, ShoppingBag, ShoppingCart, Ban, Settings, Lock, Zap, Boxes, Layers, ChevronDown, ClipboardList, BarChart3, ChefHat } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useUiPrefs } from '../lib/uiPrefs';
 import { isModuleEnabled } from '../lib/modules';
 import { REPORTS_INITIAL_TAB_STORAGE_KEY, REPORTS_MENU_LAST_KEY } from '../lib/reportsNav';
+import { INVENTORY_TAB_STORAGE_KEY } from '../lib/inventoryNav';
 
 interface MainMenuProps {
   onNavigate: (page: string) => void;
@@ -16,12 +17,19 @@ export function MainMenu({ onNavigate, currentPage, onOpenSettings, onLockScreen
   const { tenant, permissions, shiftsEnabled } = useAuth();
   const [menuOpen, setMenuOpen] = useState(false);
   const [reportsExpanded, setReportsExpanded] = useState(false);
+  const [stockMgmtExpanded, setStockMgmtExpanded] = useState(false);
   const isElectron = !!(window as any).electronAPI;
   const { headerHidden } = useUiPrefs();
 
   useEffect(() => {
     if (currentPage === 'reports' || currentPage === 'reports-stock-count') {
       setReportsExpanded(true);
+    }
+  }, [currentPage]);
+
+  useEffect(() => {
+    if (currentPage === 'products' || currentPage === 'inventory') {
+      setStockMgmtExpanded(true);
     }
   }, [currentPage]);
 
@@ -38,13 +46,27 @@ export function MainMenu({ onNavigate, currentPage, onOpenSettings, onLockScreen
   // ile birleştiriyoruz. `users` ve `settings` her zaman görünür (admin yolu).
   const mod = (code: string) => isModuleEnabled(code, tenant as any);
 
+  const showStockProducts = permissions.can_manage_products && mod('products');
+  const showStockInventory = permissions.can_manage_products && mod('inventory');
+
+  let inventoryTabForMenu: string | null = null;
+  try {
+    inventoryTabForMenu = sessionStorage.getItem(INVENTORY_TAB_STORAGE_KEY);
+  } catch {
+    inventoryTabForMenu = null;
+  }
+
   const menuItems = [
     { id: 'tables', label: 'Masalar', icon: Grid3x3, show: permissions.can_view_tables && mod('tables') },
     { id: 'quick-sale', label: 'Hızlı Satış', icon: Zap, show: permissions.can_take_orders && permissions.can_process_payments && mod('quick-sale') },
     { id: 'takeaway', label: 'Paket Servis', icon: ShoppingCart, show: (permissions.can_take_orders || permissions.can_view_tables) && mod('takeaway') },
     { id: 'online-orders', label: 'Online Siparişler', icon: ShoppingBag, show: (permissions.can_take_orders || permissions.can_view_tables) && mod('online-orders') },
-    { id: 'products', label: 'Ürünler', icon: Package, show: permissions.can_manage_products && mod('products') },
-    { id: 'inventory', label: 'Stok yönetimi', icon: Boxes, show: permissions.can_manage_products && mod('inventory') },
+    {
+      id: 'stock-management',
+      label: 'Stok yönetimi',
+      icon: Boxes,
+      show: showStockProducts || showStockInventory,
+    },
     { id: 'users', label: 'Kullanıcı Yönetimi', icon: UserCog, show: permissions.can_manage_users },
     { id: 'customers', label: 'Cari Hesaplar', icon: Users, show: (permissions.can_process_payments || permissions.can_manage_products) && mod('customers') },
     { id: 'reports', label: 'Raporlar', icon: TrendingUp, show: permissions.can_view_reports && mod('reports') },
@@ -138,6 +160,101 @@ export function MainMenu({ onNavigate, currentPage, onOpenSettings, onLockScreen
                             <ClipboardList size={16} className="shrink-0 opacity-90" />
                             Sayım raporu
                           </button>
+                        </div>
+                      )}
+                    </div>
+                  );
+                }
+                if (item.id === 'stock-management') {
+                  const Icon = item.icon;
+                  const stockSectionActive = currentPage === 'products' || currentPage === 'inventory';
+                  const countActive =
+                    currentPage === 'inventory' && inventoryTabForMenu === 'product-count';
+                  const recipesActive =
+                    currentPage === 'inventory' && inventoryTabForMenu === 'recipes';
+                  return (
+                    <div key="stock-mgmt-nav">
+                      <button
+                        type="button"
+                        onClick={() => setStockMgmtExpanded((e) => !e)}
+                        className={`w-full flex items-center justify-between gap-3 md:gap-4 px-4 md:px-6 py-3 md:py-4 rounded-lg md:rounded-xl transition-all active:scale-95 ${
+                          stockSectionActive
+                            ? 'bg-white text-orange-600 shadow-lg font-bold'
+                            : 'text-white hover:bg-white/10'
+                        }`}
+                      >
+                        <span className="flex items-center gap-3 md:gap-4 min-w-0">
+                          <Icon size={20} className="md:w-6 md:h-6 shrink-0" />
+                          <span className="text-sm md:text-lg font-medium truncate">{item.label}</span>
+                        </span>
+                        <ChevronDown
+                          size={18}
+                          className={`shrink-0 transition-transform opacity-90 ${stockMgmtExpanded ? 'rotate-180' : ''}`}
+                        />
+                      </button>
+                      {stockMgmtExpanded && (
+                        <div className="mt-1 ml-3 md:ml-4 pl-3 md:pl-4 border-l-2 border-white/40 space-y-1">
+                          {showStockProducts && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                onNavigate('products');
+                                setMenuOpen(false);
+                              }}
+                              className={`w-full flex items-center gap-2 px-3 py-2.5 rounded-lg text-sm font-semibold transition ${
+                                currentPage === 'products'
+                                  ? 'bg-white text-orange-600'
+                                  : 'text-white/95 hover:bg-white/10'
+                              }`}
+                            >
+                              <Package size={16} className="shrink-0 opacity-90" />
+                              Ürünler
+                            </button>
+                          )}
+                          {showStockInventory && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                try {
+                                  sessionStorage.setItem(INVENTORY_TAB_STORAGE_KEY, 'product-count');
+                                } catch {
+                                  /* ignore */
+                                }
+                                onNavigate('inventory');
+                                setMenuOpen(false);
+                              }}
+                              className={`w-full flex items-center gap-2 px-3 py-2.5 rounded-lg text-sm font-semibold transition ${
+                                countActive
+                                  ? 'bg-white text-orange-600'
+                                  : 'text-white/95 hover:bg-white/10'
+                              }`}
+                            >
+                              <ClipboardList size={16} className="shrink-0 opacity-90" />
+                              Ürün sayımı
+                            </button>
+                          )}
+                          {showStockInventory && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                try {
+                                  sessionStorage.setItem(INVENTORY_TAB_STORAGE_KEY, 'recipes');
+                                } catch {
+                                  /* ignore */
+                                }
+                                onNavigate('inventory');
+                                setMenuOpen(false);
+                              }}
+                              className={`w-full flex items-center gap-2 px-3 py-2.5 rounded-lg text-sm font-semibold transition ${
+                                recipesActive
+                                  ? 'bg-white text-orange-600'
+                                  : 'text-white/95 hover:bg-white/10'
+                              }`}
+                            >
+                              <ChefHat size={16} className="shrink-0 opacity-90" />
+                              Reçete
+                            </button>
+                          )}
                         </div>
                       )}
                     </div>
@@ -321,6 +438,93 @@ export function MainMenu({ onNavigate, currentPage, onOpenSettings, onLockScreen
                             </span>
                           </button>
                         </div>
+                      </div>
+                    </div>
+                  );
+                }
+                if (item.id === 'stock-management') {
+                  const productsActive = currentPage === 'products';
+                  const countActive =
+                    currentPage === 'inventory' && inventoryTabForMenu === 'product-count';
+                  const recipesActive =
+                    currentPage === 'inventory' && inventoryTabForMenu === 'recipes';
+                  const stockCols =
+                    (showStockProducts ? 1 : 0) + (showStockInventory ? 2 : 0);
+                  const stockGridClass =
+                    stockCols >= 3
+                      ? 'grid-cols-1 sm:grid-cols-3'
+                      : stockCols === 2
+                        ? 'grid-cols-1 sm:grid-cols-2'
+                        : 'grid-cols-1';
+                  return (
+                    <div key="stock-mgmt-nav" className="col-span-2 sm:col-span-3 lg:col-span-4">
+                      <p className="text-[10px] md:text-xs font-bold text-white/80 uppercase tracking-wide mb-2">
+                        Stok yönetimi
+                      </p>
+                      <div className={`grid ${stockGridClass} gap-3 md:gap-4`}>
+                        {showStockProducts && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              onNavigate('products');
+                              setMenuOpen(false);
+                            }}
+                            className={`w-full min-h-[98px] md:min-h-[118px] flex flex-col items-center justify-center gap-2 md:gap-3 px-3 py-3 rounded-2xl transition-all active:scale-[0.98] border ${
+                              productsActive
+                                ? 'bg-white text-orange-600 shadow-xl font-black border-white'
+                                : 'text-white bg-white/10 hover:bg-white/20 border-white/15'
+                            }`}
+                          >
+                            <Package size={22} className="md:w-7 md:h-7 shrink-0" />
+                            <span className="text-xs md:text-sm font-bold text-center leading-tight">Ürünler</span>
+                          </button>
+                        )}
+                        {showStockInventory && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              try {
+                                sessionStorage.setItem(INVENTORY_TAB_STORAGE_KEY, 'product-count');
+                              } catch {
+                                /* ignore */
+                              }
+                              onNavigate('inventory');
+                              setMenuOpen(false);
+                            }}
+                            className={`w-full min-h-[98px] md:min-h-[118px] flex flex-col items-center justify-center gap-2 md:gap-3 px-3 py-3 rounded-2xl transition-all active:scale-[0.98] border ${
+                              countActive
+                                ? 'bg-white text-orange-600 shadow-xl font-black border-white'
+                                : 'text-white bg-white/10 hover:bg-white/20 border-white/15'
+                            }`}
+                          >
+                            <ClipboardList size={22} className="md:w-7 md:h-7 shrink-0" />
+                            <span className="text-xs md:text-sm font-bold text-center leading-tight">
+                              Ürün sayımı
+                            </span>
+                          </button>
+                        )}
+                        {showStockInventory && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              try {
+                                sessionStorage.setItem(INVENTORY_TAB_STORAGE_KEY, 'recipes');
+                              } catch {
+                                /* ignore */
+                              }
+                              onNavigate('inventory');
+                              setMenuOpen(false);
+                            }}
+                            className={`w-full min-h-[98px] md:min-h-[118px] flex flex-col items-center justify-center gap-2 md:gap-3 px-3 py-3 rounded-2xl transition-all active:scale-[0.98] border ${
+                              recipesActive
+                                ? 'bg-white text-orange-600 shadow-xl font-black border-white'
+                                : 'text-white bg-white/10 hover:bg-white/20 border-white/15'
+                            }`}
+                          >
+                            <ChefHat size={22} className="md:w-7 md:h-7 shrink-0" />
+                            <span className="text-xs md:text-sm font-bold text-center leading-tight">Reçete</span>
+                          </button>
+                        )}
                       </div>
                     </div>
                   );

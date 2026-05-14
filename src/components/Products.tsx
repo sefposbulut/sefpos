@@ -4,6 +4,7 @@ import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { loadPrintSettings, savePrintSettings } from '../lib/printService';
 import { queryCache } from '../lib/queryCache';
+import { INVENTORY_TAB_STORAGE_KEY } from '../lib/inventoryNav';
 import * as XLSX from 'xlsx';
 
 /** Bu tenant’ta `branch_product_stocks` yok (404) — React StrictMode çift mount’ta tekrar GET atılmaz. */
@@ -1146,7 +1147,7 @@ export function Products() {
 
   const goToProductStockCount = useCallback(() => {
     try {
-      sessionStorage.setItem('sefpos_inventory_tab', 'product-count');
+      sessionStorage.setItem(INVENTORY_TAB_STORAGE_KEY, 'product-count');
     } catch {
       /* ignore */
     }
