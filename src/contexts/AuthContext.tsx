@@ -647,7 +647,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
     localStorage.removeItem('shefpos_sql_session');
     localStorage.removeItem('shefpos_active_branch');
-    localStorage.removeItem('shefpos_remembered_login');
+    // Beni hatırla ile saklanan telefon/e-posta/kullanıcı adı kalsın (Electron + web giriş ekranı).
+    // Kayıtlı şifre güvenlik için çıkışta silinir; tekrar girişte yazılması gerekir.
+    try {
+      localStorage.removeItem('shefpos_remembered_password');
+    } catch {
+      /* private mode */
+    }
     localStorage.removeItem('device_binding_checked');
     localStorage.removeItem('shefpos_admin_tenant_impersonation');
     setUser(null);
