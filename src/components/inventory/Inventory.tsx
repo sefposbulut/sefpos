@@ -27,10 +27,10 @@ export function Inventory() {
 
   const tabs: { id: Tab; label: string; icon: any; badge?: number }[] = [
     { id: 'ingredients', label: 'Hammadde', icon: Boxes, badge: criticalCount },
+    { id: 'product-count', label: 'Ürün sayımı', icon: ClipboardList },
     { id: 'suppliers', label: 'Tedarikçi', icon: Truck },
     { id: 'recipes', label: 'Reçete', icon: ChefHat },
     { id: 'purchases', label: 'Alış Faturası', icon: FileText },
-    { id: 'product-count', label: 'Ürün sayımı', icon: ClipboardList },
   ];
 
   return (
