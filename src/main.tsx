@@ -133,12 +133,14 @@ if (import.meta.env.PROD && typeof navigator !== 'undefined' && 'serviceWorker' 
 }
 
 /**
- * Public QR menü modu — `?menu=BRANCH_UUID`
+ * Public QR menü modu — `?menu=BRANCH_UUID` ve isteğe bağlı `masa=` / `table=`.
  * Login/Auth bypass: AuthProvider yok; doğrudan PublicMenu render edilir.
  * RLS anon policy'leri sayesinde sadece aktif + menüde görünür kayıtlar gelir.
  */
 const params = new URLSearchParams(window.location.search);
 const menuBranchId = params.get('menu');
+/** QR'da sabit masa / bölüm etiketi (?masa= veya ?table=) */
+const qrTableHint = (params.get('masa') || params.get('table') || '').trim();
 
 const root = createRoot(document.getElementById('root')!);
 
@@ -146,7 +148,7 @@ if (menuBranchId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{1
   root.render(
     <StrictMode>
       <AppErrorBoundary>
-        <PublicMenu branchId={menuBranchId} />
+        <PublicMenu branchId={menuBranchId} qrTableHint={qrTableHint} />
       </AppErrorBoundary>
     </StrictMode>
   );

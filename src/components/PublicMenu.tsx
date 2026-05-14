@@ -20,14 +20,28 @@ import {
   PublicMenuError,
   PublicProduct,
   MenuTheme,
+  buildQrMenuPlaceholderImageUrl,
+  isQrMenuAiPlaceholderEnabled,
 } from '../lib/publicMenuData';
 
 const PRIMARY_DEFAULT = '#0F172A';
 const ACCENT_DEFAULT = '#F97316';
 const TABLE_LS_KEY = 'sefpos_qr_last_table';
 
+function decodeQrTableHint(raw: string): string {
+  const t = (raw || '').trim();
+  if (!t) return '';
+  try {
+    return decodeURIComponent(t).trim();
+  } catch {
+    return t;
+  }
+}
+
 interface Props {
   branchId: string;
+  /** QR URL'deki ?masa= / ?table= (şube QR'ında sabitlenen masa veya bölüm adı) */
+  qrTableHint?: string;
 }
 
 interface ResolvedTheme {
@@ -40,7 +54,7 @@ interface ResolvedTheme {
   showCategoryImages: boolean;
 }
 
-export function PublicMenu({ branchId }: Props) {
+export function PublicMenu({ branchId, qrTableHint = '' }: Props) {
   const [data, setData] = useState<PublicMenuData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -340,6 +354,7 @@ export function PublicMenu({ branchId }: Props) {
                       product={p}
                       accent={theme.accent}
                       isDark={isDark}
+                      useAiPlaceholder={isQrMenuAiPlaceholderEnabled()}
                     />
                   ))}
                 </div>
@@ -377,6 +392,7 @@ export function PublicMenu({ branchId }: Props) {
           key={waiterModalKey}
           tenantId={tenant.id}
           branchId={branch.id}
+          qrTableHint={qrTableHint}
           accent={theme.accent}
           isDark={isDark}
           onClose={() => setWaiterOpen(false)}
@@ -434,10 +450,12 @@ function ProductCard({
   product,
   accent,
   isDark,
+  useAiPlaceholder,
 }: {
   product: PublicProduct;
   accent: string;
   isDark: boolean;
+  useAiPlaceholder: boolean;
 }) {
   const variants = product.variants || [];
   const hasVariants = variants.length > 0;
@@ -445,17 +463,36 @@ function ProductCard({
     ? Math.min(product.price, ...variants.map(v => product.price + Number(v.price_modifier || 0)))
     : product.price;
 
+  const imgSrc =
+    product.image_url?.trim() ||
+    (useAiPlaceholder ? buildQrMenuPlaceholderImageUrl(product.name, product.description) : '');
+
   return (
     <div className={`rounded-2xl overflow-hidden border shadow-sm hover:shadow-md transition-all flex flex-col ${
       isDark ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'
     }`}>
-      {product.image_url && (
+      {imgSrc && (
         <div className="relative aspect-[16/10] overflow-hidden bg-slate-100">
           <img
-            src={product.image_url}
+            src={imgSrc}
             alt={product.name}
             loading="lazy"
+            decoding="async"
             className="w-full h-full object-cover hover:scale-[1.04] transition-transform duration-500"
+            onError={(e) => {
+              const el = e.currentTarget;
+              const tried = el.dataset.imgErr || '';
+              if (tried === '1') {
+                el.style.display = 'none';
+                return;
+              }
+              el.dataset.imgErr = '1';
+              if (useAiPlaceholder && product.image_url?.trim()) {
+                el.src = buildQrMenuPlaceholderImageUrl(product.name, product.description);
+              } else {
+                el.style.display = 'none';
+              }
+            }}
           />
           {hasVariants && (
             <div
@@ -534,25 +571,37 @@ function ProductCard({
 function WaiterCallModal({
   tenantId,
   branchId,
+  qrTableHint = '',
   accent,
   isDark,
   onClose,
 }: {
   tenantId: string;
   branchId: string;
+  /** QR linkindeki ?masa= — müşteri masayı yazmadan çağrı yapabilir */
+  qrTableHint?: string;
   accent: string;
   isDark: boolean;
   onClose: () => void;
 }) {
   const [tableLabel, setTableLabel] = useState<string>(() => {
+    const fromQr = decodeQrTableHint(qrTableHint);
+    if (fromQr) return fromQr;
     try {
       return localStorage.getItem(TABLE_LS_KEY) || '';
     } catch {
       return '';
     }
   });
-  // İlk açılışta masa zaten kayıtlıysa direkt çağrı seçimine git
-  const [step, setStep] = useState<'table' | 'pick'>(tableLabel.trim() ? 'pick' : 'table');
+  // QR'dan veya LS'den masa bilgisi varsa doğrudan çağrı tiplerine geç
+  const [step, setStep] = useState<'table' | 'pick'>(() => {
+    const fromQr = decodeQrTableHint(qrTableHint);
+    let ls = '';
+    try {
+      ls = localStorage.getItem(TABLE_LS_KEY) || '';
+    } catch { /* ignore */ }
+    return (fromQr || ls).trim() ? 'pick' : 'table';
+  });
   const [submittingType, setSubmittingType] = useState<string | null>(null);
   const [done, setDone] = useState<{ type: string } | null>(null);
   const [err, setErr] = useState<string | null>(null);

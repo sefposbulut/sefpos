@@ -58,7 +58,6 @@ export function WaiterCallBell() {
   const [toast, setToast] = useState<WaiterCall | null>(null);
 
   const audioCtxRef = useRef<AudioContext | null>(null);
-  const seenIdsRef = useRef<Set<string>>(new Set());
   const toastTimerRef = useRef<number | null>(null);
   const callsRef = useRef<WaiterCall[]>([]);
   const mutedRef = useRef(muted);
@@ -104,7 +103,6 @@ export function WaiterCallBell() {
     const prevActiveIds = new Set(
       prev.filter(x => x.status === 'pending' || x.status === 'seen').map(x => x.id),
     );
-    for (const c of list) seenIdsRef.current.add(c.id);
     setCalls(list);
 
     const notifyNew = opts?.notifyNew === true && initialPullDoneRef.current;
@@ -123,7 +121,6 @@ export function WaiterCallBell() {
   useEffect(() => {
     if (!tenant?.id) {
       setCalls([]);
-      seenIdsRef.current.clear();
       initialPullDoneRef.current = false;
       return;
     }
@@ -163,15 +160,22 @@ export function WaiterCallBell() {
         { event: 'INSERT', schema: 'public', table: 'waiter_calls', filter: `tenant_id=eq.${tenant.id}` },
         (payload) => {
           const c = payload.new as WaiterCall;
-          if (!c?.id || seenIdsRef.current.has(c.id)) return;
-          seenIdsRef.current.add(c.id);
-          setCalls(prev => [c, ...prev].slice(0, HISTORY_LIMIT));
-          if (!mutedRef.current) playBeep();
-          showSystemNotification(c);
-          vibrate();
-          setToast(c);
-          if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
-          toastTimerRef.current = window.setTimeout(() => setToast(null), 3500);
+          if (!c?.id) return;
+          const hadRow = callsRef.current.some(x => x.id === c.id);
+          setCalls(prev => {
+            if (prev.some(x => x.id === c.id)) {
+              return prev.map(x => (x.id === c.id ? c : x));
+            }
+            return [c, ...prev].slice(0, HISTORY_LIMIT);
+          });
+          if (!hadRow && !mutedRef.current) {
+            playBeep();
+            showSystemNotification(c);
+            vibrate();
+            setToast(c);
+            if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
+            toastTimerRef.current = window.setTimeout(() => setToast(null), 3500);
+          }
         }
       )
       .on(

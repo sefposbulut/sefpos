@@ -223,10 +223,36 @@ export async function loadPublicMenu(branchId: string): Promise<PublicMenuData> 
   };
 }
 
-/** URL üretici — ?menu=BRANCH_ID formatında (origin baz alınır). */
-export function buildMenuUrl(branchId: string, origin?: string): string {
+/**
+ * URL üretici — `?menu=BRANCH_UUID` (+ isteğe bağlı `masa=` / `table=`).
+ * Masa etiketi QR'da sabitlenirse müşteri "Garson çağır"da tekrar yazmak zorunda kalmaz.
+ */
+export function buildMenuUrl(branchId: string, origin?: string, tableHint?: string): string {
   const base = (origin || (typeof window !== 'undefined' ? window.location.origin : '')).replace(/\/$/, '');
-  return `${base}/?menu=${branchId}`;
+  const hint = (tableHint || '').trim();
+  const q = new URLSearchParams({ menu: branchId });
+  if (hint) q.set('masa', hint);
+  return `${base}/?${q.toString()}`;
+}
+
+/** Ürün görseli yokken QR menüde gösterilecek yapay görsel (Pollinations; API anahtarı gerekmez). */
+export function buildQrMenuPlaceholderImageUrl(productName: string, shortDescription?: string | null): string {
+  const name = (productName || 'Yemek').slice(0, 80).replace(/["<>]/g, '');
+  const desc = (shortDescription || '').slice(0, 80).replace(/["<>]/g, '');
+  const prompt = [
+    'Professional appetizing restaurant food photograph',
+    name,
+    desc ? `, ${desc}` : '',
+    ', on ceramic plate, shallow depth of field, warm lighting, no text, no letters, no watermark',
+  ].join('');
+  const seed = String(name.split('').reduce((a, ch) => ((a << 5) - a + ch.charCodeAt(0)) | 0, 7));
+  return `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=640&height=400&nologo=true&seed=${encodeURIComponent(seed)}`;
+}
+
+export function isQrMenuAiPlaceholderEnabled(): boolean {
+  const v = String(import.meta.env.VITE_QR_MENU_AI_PLACEHOLDER_IMAGES ?? '').trim().toLowerCase();
+  if (v === '0' || v === 'false' || v === 'off') return false;
+  return true;
 }
 
 /**

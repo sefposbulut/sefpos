@@ -41,6 +41,8 @@ const FONT_OPTIONS: Array<{ id: 'modern' | 'elegant' | 'casual'; label: string; 
 export function QrMenuManager() {
   const { tenant, refreshProfile } = useAuth();
   const [branches, setBranches] = useState<BranchRow[]>([]);
+  /** Şube QR linkine ?masa= eklemek için (tarayıcıda kalıcı) */
+  const [branchQrMasa, setBranchQrMasa] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [overrideOrigin, setOverrideOrigin] = useState<string>(() => {
     try {
@@ -113,6 +115,37 @@ export function QrMenuManager() {
     try {
       if (val.trim()) localStorage.setItem('sefpos_qr_origin_override', val.trim());
       else localStorage.removeItem('sefpos_qr_origin_override');
+    } catch { /* ignore */ }
+  };
+
+  useEffect(() => {
+    setBranchQrMasa({});
+  }, [tenant?.id]);
+
+  useEffect(() => {
+    if (!tenant?.id || !branches.length) return;
+    setBranchQrMasa(prev => {
+      const out = { ...prev };
+      for (const b of branches) {
+        if (out[b.id] !== undefined) continue;
+        try {
+          const k = `sefpos_qr_branch_masa:${tenant.id}:${b.id}`;
+          out[b.id] = localStorage.getItem(k) || '';
+        } catch {
+          out[b.id] = '';
+        }
+      }
+      return out;
+    });
+  }, [tenant?.id, branches]);
+
+  const persistBranchMasa = (branchId: string, v: string) => {
+    setBranchQrMasa(prev => ({ ...prev, [branchId]: v }));
+    if (!tenant?.id) return;
+    try {
+      const k = `sefpos_qr_branch_masa:${tenant.id}:${branchId}`;
+      if (v.trim()) localStorage.setItem(k, v.trim());
+      else localStorage.removeItem(k);
     } catch { /* ignore */ }
   };
 
@@ -439,13 +472,16 @@ export function QrMenuManager() {
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           {branches.map(b => {
-            const url = buildMenuUrl(b.id, baseOrigin);
+            const masaVal = branchQrMasa[b.id] ?? '';
+            const url = buildMenuUrl(b.id, baseOrigin, masaVal);
             const enabled = b.menu_enabled ?? true;
             return (
               <BranchQrCard
                 key={b.id}
                 branch={b}
                 url={url}
+                masaValue={masaVal}
+                onMasaChange={(v) => persistBranchMasa(b.id, v)}
                 enabled={enabled}
                 tenantName={tenant?.name || 'Restoran'}
                 logoUrl={logoUrl}
@@ -801,6 +837,8 @@ function ThemePreview({
 function BranchQrCard({
   branch,
   url,
+  masaValue,
+  onMasaChange,
   enabled,
   tenantName,
   logoUrl,
@@ -812,6 +850,8 @@ function BranchQrCard({
 }: {
   branch: BranchRow;
   url: string;
+  masaValue: string;
+  onMasaChange: (v: string) => void;
   enabled: boolean;
   tenantName: string;
   logoUrl: string | null;
@@ -947,6 +987,22 @@ function BranchQrCard({
           />
           <span className="font-semibold text-slate-700">{enabled ? 'Açık' : 'Kapalı'}</span>
         </label>
+      </div>
+
+      <div className="mb-3">
+        <label className="block text-[11px] font-bold text-slate-600 mb-1">
+          QR&apos;da sabit masa / bölüm (isteğe bağlı)
+        </label>
+        <input
+          type="text"
+          value={masaValue}
+          onChange={e => onMasaChange(e.target.value)}
+          placeholder="Örn: Masa 5 veya Bahçe-B3 — boşsa müşteri yazar"
+          className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:border-blue-500 focus:outline-none"
+        />
+        <p className="text-[10px] text-slate-400 mt-1">
+          Doluysa link <code className="bg-slate-100 px-1 rounded text-[10px]">?masa=…</code> içerir; garson çağırda otomatik gelir. Her masa için ayrı QR basabilirsiniz.
+        </p>
       </div>
 
       <div className="flex flex-col sm:flex-row gap-4 items-center sm:items-start">
