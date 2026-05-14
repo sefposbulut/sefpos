@@ -1,5 +1,11 @@
 # Cloudflare Pages — Git build (minimal geçerli wrangler).
 # https://developers.cloudflare.com/pages/functions/wrangler-configuration
+#
+# Bu dosyada pages_build_output_dir varsa Functions + wrangler yolu etkin olur;
+# Cloudflare hesabinda Build image V2+ olmali (V1'de build sik kirilir):
+# https://developers.cloudflare.com/pages/configuration/build-image/
+# Dashboard build komutu ornegi: npm ci && npm run build:pages
+#
 name = "sefpos"
 compatibility_date = "2024-11-01"
 pages_build_output_dir = "dist"

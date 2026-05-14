@@ -1,12 +1,13 @@
 {
   "name": "shefpos",
   "private": true,
-  "version": "1.0.106",
+  "version": "1.0.107",
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:pages": "cross-env CF_PAGES=1 NODE_OPTIONS=--max-old-space-size=6144 vite build",
     "lint": "eslint .",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.app.json",

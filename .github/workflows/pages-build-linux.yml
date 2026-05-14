@@ -1,0 +1,31 @@
+# Cloudflare Pages ile ayni ortama yakin: Ubuntu + Node 20 + CF_PAGES derlemesi.
+# Linux'ta npm ci / vite kirilirsa burada gorunur; Dashboard log ile kiyaslanabilir.
+
+name: Pages build (Linux)
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+
+jobs:
+  pages-parity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: ".nvmrc"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Vite build (Cloudflare Pages parity)
+        run: npm run build:pages
