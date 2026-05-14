@@ -45,6 +45,7 @@ Panelden (repo dosyası bağlamaz; Cloudflare hesabında yapılır):
 
 **Not:** Eski üstteki **`sefpos`** projesi silindiyse GitHub push artık oraya gitmez; tek üretim Pages projesi **`sefposadisyon`** olmalıdır.
 - Dependency automation: `.github/dependabot.yml`
+- **Manuel dağıtım — `dist/`:** Operatör web veya paketlenecek ön yüzü **elle** (ör. kendi sunucusuna / özel süreçle) yüklüyorsa, agent anlamlı `src/` veya Vite yapılandırması değişikliğinden sonra **`npm run build`** çalıştırıp güncellenen **`dist/`** dosyalarını **commit + `master` push** ile repoya ekler; böylece repo her zaman son üretim ön yüzünü taşır. (Cloudflare Pages üretim komutu `build:pages` olduğundan CF Git deploy ile karıştırma; bu madde özellikle `dist`’i repodan çeken manuel akış içindir.)
 
 ## Otomatik sürüm yayınlama (ZORUNLU akış)
 
