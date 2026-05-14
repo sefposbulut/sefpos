@@ -25,6 +25,7 @@ import { WaiterManagement } from './WaiterManagement';
 import { ScaleCalibration } from './ScaleCalibration';
 import { QrMenuManager } from './QrMenuManager';
 import { callGetir, generateGetirApiKey } from '../lib/getirApi';
+import { publicPartnerEdgeUrl } from '../lib/publicWebhookBaseUrl';
 
 type TableGroup = Database['public']['Tables']['table_groups']['Row'];
 
@@ -1840,7 +1841,7 @@ export function Settings({ onClose }: SettingsProps) {
                             <input
                               type="text"
                               readOnly
-                              value={`${(import.meta.env.VITE_SUPABASE_URL || 'https://xdfnozfuuzctubijbnds.supabase.co').replace(/\/$/, '')}/functions/v1/yemeksepeti-webhook/${platformRestaurantId || '<VENDOR_CODE>'}`}
+                              value={publicPartnerEdgeUrl(`yemeksepeti-webhook/${platformRestaurantId || '<VENDOR_CODE>'}`)}
                               className="flex-1 px-2 py-1.5 rounded-lg border border-pink-300 bg-white font-mono text-[11px] text-gray-700"
                               onFocus={(e) => e.currentTarget.select()}
                             />
@@ -1851,7 +1852,7 @@ export function Settings({ onClose }: SettingsProps) {
                                   alert("Önce 'Platform Restaurant ID' (Vendor Code) alanını doldurun.");
                                   return;
                                 }
-                                const url = `${(import.meta.env.VITE_SUPABASE_URL || 'https://xdfnozfuuzctubijbnds.supabase.co').replace(/\/$/, '')}/functions/v1/yemeksepeti-webhook/${platformRestaurantId}`;
+                                const url = publicPartnerEdgeUrl(`yemeksepeti-webhook/${platformRestaurantId}`);
                                 try { await navigator.clipboard.writeText(url); alert('Webhook URL panoya kopyalandı!'); } catch { prompt('URL:', url); }
                               }}
                               className="px-3 py-1.5 bg-pink-600 hover:bg-pink-700 text-white rounded-lg font-bold text-xs"
@@ -1892,14 +1893,14 @@ export function Settings({ onClose }: SettingsProps) {
                               <input
                                 type="text"
                                 readOnly
-                                value={`${(import.meta.env.VITE_SUPABASE_URL || 'https://xdfnozfuuzctubijbnds.supabase.co').replace(/\/$/, '')}/functions/v1/getir-webhook?type=new`}
+                                value={publicPartnerEdgeUrl('getir-webhook?type=new')}
                                 className="flex-1 px-2 py-1.5 rounded-lg border border-amber-300 bg-white font-mono text-[11px] text-gray-700"
                                 onFocus={(e) => e.currentTarget.select()}
                               />
                               <button
                                 type="button"
                                 onClick={async () => {
-                                  const url = `${(import.meta.env.VITE_SUPABASE_URL || 'https://xdfnozfuuzctubijbnds.supabase.co').replace(/\/$/, '')}/functions/v1/getir-webhook?type=new`;
+                                  const url = publicPartnerEdgeUrl('getir-webhook?type=new');
                                   try { await navigator.clipboard.writeText(url); alert('Yeni Sipariş URL panoya kopyalandı!'); } catch { prompt('URL:', url); }
                                 }}
                                 className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg font-bold text-xs"
@@ -1915,14 +1916,14 @@ export function Settings({ onClose }: SettingsProps) {
                               <input
                                 type="text"
                                 readOnly
-                                value={`${(import.meta.env.VITE_SUPABASE_URL || 'https://xdfnozfuuzctubijbnds.supabase.co').replace(/\/$/, '')}/functions/v1/getir-webhook?type=updated`}
+                                value={publicPartnerEdgeUrl('getir-webhook?type=updated')}
                                 className="flex-1 px-2 py-1.5 rounded-lg border border-amber-300 bg-white font-mono text-[11px] text-gray-700"
                                 onFocus={(e) => e.currentTarget.select()}
                               />
                               <button
                                 type="button"
                                 onClick={async () => {
-                                  const url = `${(import.meta.env.VITE_SUPABASE_URL || 'https://xdfnozfuuzctubijbnds.supabase.co').replace(/\/$/, '')}/functions/v1/getir-webhook?type=updated`;
+                                  const url = publicPartnerEdgeUrl('getir-webhook?type=updated');
                                   try { await navigator.clipboard.writeText(url); alert('Status Değişikliği URL panoya kopyalandı!'); } catch { prompt('URL:', url); }
                                 }}
                                 className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg font-bold text-xs"
@@ -2348,14 +2349,14 @@ export function Settings({ onClose }: SettingsProps) {
                     <input
                       type="text"
                       readOnly
-                      value={`${(import.meta.env.VITE_SUPABASE_URL || 'https://xdfnozfuuzctubijbnds.supabase.co').replace(/\/$/, '')}/functions/v1/online-order-webhook`}
+                      value={publicPartnerEdgeUrl('online-order-webhook')}
                       className="flex-1 bg-white rounded-lg p-2.5 font-mono text-xs break-all border border-blue-300"
                       onFocus={(e) => e.currentTarget.select()}
                     />
                     <button
                       type="button"
                       onClick={async () => {
-                        const url = `${(import.meta.env.VITE_SUPABASE_URL || 'https://xdfnozfuuzctubijbnds.supabase.co').replace(/\/$/, '')}/functions/v1/online-order-webhook`;
+                        const url = publicPartnerEdgeUrl('online-order-webhook');
                         try {
                           await navigator.clipboard.writeText(url);
                           alert('URL panoya kopyalandı!');
@@ -2387,14 +2388,14 @@ export function Settings({ onClose }: SettingsProps) {
                       <input
                         type="text"
                         readOnly
-                        value={`${(import.meta.env.VITE_SUPABASE_URL || 'https://xdfnozfuuzctubijbnds.supabase.co').replace(/\/$/, '')}/functions/v1/getir-webhook?type=new`}
+                        value={publicPartnerEdgeUrl('getir-webhook?type=new')}
                         className="flex-1 bg-white rounded-lg p-2 font-mono text-[11px] break-all border border-amber-300"
                         onFocus={(e) => e.currentTarget.select()}
                       />
                       <button
                         type="button"
                         onClick={async () => {
-                          const url = `${(import.meta.env.VITE_SUPABASE_URL || 'https://xdfnozfuuzctubijbnds.supabase.co').replace(/\/$/, '')}/functions/v1/getir-webhook?type=new`;
+                          const url = publicPartnerEdgeUrl('getir-webhook?type=new');
                           try { await navigator.clipboard.writeText(url); alert('Yeni Sipariş URL panoya kopyalandı!'); } catch { prompt('URL:', url); }
                         }}
                         className="px-3 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg font-bold text-xs"
@@ -2410,14 +2411,14 @@ export function Settings({ onClose }: SettingsProps) {
                       <input
                         type="text"
                         readOnly
-                        value={`${(import.meta.env.VITE_SUPABASE_URL || 'https://xdfnozfuuzctubijbnds.supabase.co').replace(/\/$/, '')}/functions/v1/getir-webhook?type=updated`}
+                        value={publicPartnerEdgeUrl('getir-webhook?type=updated')}
                         className="flex-1 bg-white rounded-lg p-2 font-mono text-[11px] break-all border border-amber-300"
                         onFocus={(e) => e.currentTarget.select()}
                       />
                       <button
                         type="button"
                         onClick={async () => {
-                          const url = `${(import.meta.env.VITE_SUPABASE_URL || 'https://xdfnozfuuzctubijbnds.supabase.co').replace(/\/$/, '')}/functions/v1/getir-webhook?type=updated`;
+                          const url = publicPartnerEdgeUrl('getir-webhook?type=updated');
                           try { await navigator.clipboard.writeText(url); alert('Status Değişikliği URL panoya kopyalandı!'); } catch { prompt('URL:', url); }
                         }}
                         className="px-3 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg font-bold text-xs"
@@ -4147,10 +4148,8 @@ function GetirPlatformControls({ platform, onChanged }: GetirPlatformControlsPro
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [section, setSection] = useState<'controls' | 'webhooks' | 'help' | null>('controls');
 
-  const baseUrl = (import.meta.env.VITE_SUPABASE_URL || 'https://xdfnozfuuzctubijbnds.supabase.co')
-    .replace(/\/$/, '');
-  const newOrderUrl = `${baseUrl}/functions/v1/getir-webhook?type=new`;
-  const cancelUrl = `${baseUrl}/functions/v1/getir-webhook?type=cancel`;
+  const newOrderUrl = publicPartnerEdgeUrl('getir-webhook?type=new');
+  const cancelUrl = publicPartnerEdgeUrl('getir-webhook?type=cancel');
   const xApiKey: string = platform.getir_x_api_key || '';
 
   const toggleSection = (s: 'controls' | 'webhooks' | 'help') => {
