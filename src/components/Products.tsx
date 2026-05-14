@@ -1156,23 +1156,9 @@ export function Products() {
   return (
     <div className="h-full min-h-0 bg-gradient-to-br from-slate-50 to-slate-100 p-3 md:p-6 flex flex-col overflow-hidden">
       <div className="max-w-7xl mx-auto w-full flex flex-col flex-1 min-h-0">
-        <div className="flex flex-col gap-3 sm:flex-row sm:justify-between sm:items-start mb-3 md:mb-6 shrink-0">
-          <div className="min-w-0">
-            <h1 className="text-xl md:text-3xl font-bold text-slate-800">Stok Yönetimi</h1>
-            <p className="text-sm text-slate-600 mt-1 max-w-xl leading-snug">
-              Ürün sayımı: sol menüden <strong className="text-slate-800">Reçete / Sayım</strong> →{' '}
-              <strong className="text-slate-800">Ürün sayımı</strong> sekmesi (ikinci sekme) veya{' '}
-              <button
-                type="button"
-                onClick={goToProductStockCount}
-                className="text-amber-800 font-semibold underline decoration-amber-600/70 underline-offset-2 hover:text-amber-950"
-              >
-                Sayıma git
-              </button>
-              .
-            </p>
-          </div>
-          <div className="flex gap-2 md:gap-3 flex-wrap justify-end shrink-0">
+        <div className="flex justify-between items-center mb-3 md:mb-6 shrink-0">
+          <h1 className="text-xl md:text-3xl font-bold text-slate-800">Stok Yönetimi</h1>
+          <div className="flex gap-2 md:gap-3 flex-wrap justify-end">
             <input
               ref={fileInputRef}
               type="file"

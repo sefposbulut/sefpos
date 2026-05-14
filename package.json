@@ -1,7 +1,7 @@
 {
   "name": "shefpos",
   "private": true,
-  "version": "1.0.118",
+  "version": "1.0.119",
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
