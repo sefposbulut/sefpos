@@ -25,4 +25,6 @@ jobs:
         run: npm ci
 
       - name: Build app
+        env:
+          VITE_STOCK_COUNT_BATCH_RPC: "true"
         run: npm run build

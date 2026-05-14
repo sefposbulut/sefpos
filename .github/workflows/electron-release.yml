@@ -49,6 +49,8 @@ jobs:
       # installer + latest.yml + blockmap yazar. Bu sayede build hatalari ile
       # publish hatalari birbirine karismaz, logda hangisi fail oldu netlesir.
       - name: Build Electron Windows installer
+        env:
+          VITE_STOCK_COUNT_BATCH_RPC: "true"
         run: |
           npm run build
           npx electron-builder --win --publish never

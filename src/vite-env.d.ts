@@ -5,6 +5,8 @@ interface ImportMetaEnv {
   readonly VITE_SUPABASE_ANON_KEY?: string;
   readonly VITE_DB_MODE?: string;
   readonly VITE_PHONE_AUTH_EMAIL_DOMAIN?: string;
+  /** `true` iken sayım belgesi RPC (SAYIM-00001); yoksa SYM- (POST/404 yok). */
+  readonly VITE_STOCK_COUNT_BATCH_RPC?: string;
 }
 
 interface ImportMeta {

@@ -50,6 +50,9 @@ function symRefNo(): string {
   return `SYM-${y}${m}${d}-${hh}${mm}${ss}`;
 }
 
+/** `true` iken `create_stock_count_batch` RPC çağrılır (SAYIM-00001). Varsayılan kapalı → POST/404 yok. */
+const STOCK_COUNT_BATCH_RPC_ENABLED = import.meta.env.VITE_STOCK_COUNT_BATCH_RPC === 'true';
+
 function isMissingStockCountBatchRpc(err: any | null): boolean {
   if (!err) return false;
   const status = Number(err.status ?? err.statusCode ?? 0);
@@ -284,7 +287,7 @@ export function ProductStockCount() {
       </style></head><body>
       <h1>Sayım fark raporu</h1>
       <div class="meta">Belge: <b>${escapeHtml(rep.referenceNo)}</b> · ${escapeHtml(rep.branchName)} · ${escapeHtml(rep.createdAtLabel)}</div>
-      ${!rep.usedSequentialDoc ? '<p style="font-size:12px;color:#b45309;margin:8px 0 0">Not: Geçici SYM referansı kullanıldı. Sıralı SAYIM-XXXXX için Supabase migration (stock_count_batches) uygulanmalı.</p>' : ''}
+      ${!rep.usedSequentialDoc ? '<p style="font-size:12px;color:#b45309;margin:8px 0 0">Not: Geçici SYM referansı. Sıralı SAYIM için: Supabase migration (stock_count_batches) + üretim build&apos;inde VITE_STOCK_COUNT_BATCH_RPC=true.</p>' : ''}
       <table><thead><tr><th>Ürün</th><th>Sistem</th><th>Sayım</th><th>Fark</th><th>Tutar (±)</th></tr></thead>
       <tbody>${rowsHtml}</tbody></table>
       <div class="sum">
@@ -324,7 +327,11 @@ export function ProductStockCount() {
     let usedSequentialDoc = true;
 
     try {
-      if (readSkipStockCountRpcSession()) {
+      if (!STOCK_COUNT_BATCH_RPC_ENABLED) {
+        refNo = symRefNo();
+        seqNum = null;
+        usedSequentialDoc = false;
+      } else if (readSkipStockCountRpcSession()) {
         refNo = symRefNo();
         seqNum = null;
         usedSequentialDoc = false;
@@ -482,15 +489,14 @@ export function ProductStockCount() {
             <div className="p-4 overflow-y-auto flex-1 space-y-4">
               {!sessionReport.usedSequentialDoc && (
                 <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-950 leading-relaxed">
-                  <strong>Sıralı belge (SAYIM-00001)</strong> veritabanında henüz yok; bu kayıt için geçici{' '}
-                  <span className="font-mono font-bold">SYM-…</span> referansı kullanıldı. Kalıcı çözüm: Supabase
-                  projesinde migration <span className="font-mono">20260514193000_stock_count_batches</span> dosyasını
-                  uygulayın (Dashboard → SQL veya <code className="text-[10px]">supabase db push</code> / CI migration
-                  iş akışı). Migration sonrası bu sekmede RPC&apos;nin tekrar denenmesi için konsola:{' '}
+                  <strong>SAYIM-00001</strong> kullanılmadı; geçici <span className="font-mono font-bold">SYM-…</span>{' '}
+                  referansı yazıldı. Sıralı belge için: (1) Supabase&apos;te migration{' '}
+                  <span className="font-mono">20260514193000_stock_count_batches</span>, (2) üretim build&apos;inde ortam
+                  değişkeni <span className="font-mono">VITE_STOCK_COUNT_BATCH_RPC=true</span> (Electron release / CI
+                  zaten açar). RPC daha önce 404 verdiyse bu sekmede:{' '}
                   <span className="font-mono whitespace-nowrap">
                     sessionStorage.removeItem(&apos;sefpos_skip_create_stock_count_batch&apos;)
-                  </span>{' '}
-                  yazıp Enter (veya sekmeyi kapatıp yeniden açın).
+                  </span>
                 </div>
               )}
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center">
@@ -567,9 +573,12 @@ export function ProductStockCount() {
           <div>
             <h2 className="text-lg md:text-xl font-black text-slate-800">Ürün sayımı</h2>
             <p className="text-xs md:text-sm text-slate-600 mt-0.5 leading-relaxed max-w-xl">
-              Şubedeki gerçek miktarı girin; sistem stoku ile farkı hesaplar. Onayda stok güncellenir, artan belge
-              numarası (<span className="font-mono text-slate-700">SAYIM-00001</span> vb.) ile hareket kaydı oluşur;
-              ardından fark raporu gösterilir.
+              Şubedeki gerçek miktarı girin; sistem stoku ile farkı hesaplar. Onayda stok güncellenir; varsayılan olarak
+              zaman damgalı <span className="font-mono text-slate-700">SYM-…</span> referansı ile hareket kaydı oluşur.
+              Sıralı <span className="font-mono text-slate-700">SAYIM-00001</span> için hem Supabase migration (
+              <span className="font-mono text-xs">20260514193000_stock_count_batches</span>) hem build ortamında{' '}
+              <span className="font-mono text-xs">VITE_STOCK_COUNT_BATCH_RPC=true</span> gerekir. Ardından fark raporu
+              gösterilir.
             </p>
           </div>
         </div>

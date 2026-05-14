@@ -46,6 +46,7 @@ Panelden (repo dosyası bağlamaz; Cloudflare hesabında yapılır):
 **Not:** Eski üstteki **`sefpos`** projesi silindiyse GitHub push artık oraya gitmez; tek üretim Pages projesi **`sefposadisyon`** olmalıdır.
 - Dependency automation: `.github/dependabot.yml`
 - **Manuel dağıtım — `dist/`:** Operatör web veya paketlenecek ön yüzü **elle** (ör. kendi sunucusuna / özel süreçle) yüklüyorsa, agent anlamlı `src/` veya Vite yapılandırması değişikliğinden sonra **`npm run build`** çalıştırıp güncellenen **`dist/`** dosyalarını **commit + `master` push** ile repoya ekler; böylece repo her zaman son üretim ön yüzünü taşır. (Cloudflare Pages üretim komutu `build:pages` olduğundan CF Git deploy ile karıştırma; bu madde özellikle `dist`’i repodan çeken manuel akış içindir.)
+- **Sayım belgesi (`SAYIM-00001`):** `create_stock_count_batch` RPC **yalnızca** `VITE_STOCK_COUNT_BATCH_RPC=true` ile yapılan Vite build’lerde çağrılır (aksi halde `SYM-…` ve **POST /rpc/… çağrılmaz**). `.github/workflows/ci.yml` ve `electron-release.yml` build adımında bu env **açık**; yerelde `dist` üretip manuel yüklüyorsanız SAYIM için aynı env’i build öncesi verin (bkz. `.env.example`). Supabase’te migration `20260514193000_stock_count_batches` uygulanmış olmalı. Agent’ın repoya commit ettiği `dist`’te de SAYIM isteniyorsa build komutu: `VITE_STOCK_COUNT_BATCH_RPC=true npm run build` (Windows PowerShell: `$env:VITE_STOCK_COUNT_BATCH_RPC='true'; npm run build`).
 
 ## Otomatik sürüm yayınlama (ZORUNLU akış)
 
