@@ -1225,7 +1225,7 @@ export function Products() {
               type="button"
               onClick={goToProductStockCount}
               className="px-3 py-2 md:px-4 md:py-3 bg-white border-2 border-amber-200 text-amber-800 rounded-lg md:rounded-xl hover:shadow-lg hover:border-amber-300 transition-all active:scale-95 text-sm md:text-base flex items-center gap-1.5"
-              title="Reçete / Sayım ekranında ürün sayımı"
+              title="Stok yönetimi ekranında ürün sayımı"
             >
               <ClipboardList size={15} />
               <span className="hidden md:inline text-sm">Sayım</span>

@@ -45,7 +45,7 @@ export const TOGGLEABLE_MODULES: ToggleableModuleMeta[] = [
   { code: 'takeaway',     label: 'Paket Servis',      description: 'Paket sipariş paneli ve kurye ataması' },
   { code: 'online-orders',label: 'Online Siparişler', description: 'Yemeksepeti / Getir / Trendyol entegrasyonları' },
   { code: 'products',     label: 'Ürünler',           description: 'Ürün/kategori/varyant yönetimi' },
-  { code: 'inventory',    label: 'Reçete / Sayım',    description: 'Reçete, ürün sayımı, hammadde, tedarikçi, alış faturaları' },
+  { code: 'inventory',    label: 'Stok yönetimi',     description: 'Ürün sayımı, reçete, hammadde, tedarikçi, alış faturaları' },
   { code: 'customers',    label: 'Cari Hesaplar',     description: 'Müşteri kartları, açık hesap takibi' },
   { code: 'reports',      label: 'Raporlar',          description: 'Satış / şube / personel / ürün raporları' },
   { code: 'cashier',      label: 'Kasa Yönetimi',     description: 'Kasa giriş/çıkış işlemleri' },

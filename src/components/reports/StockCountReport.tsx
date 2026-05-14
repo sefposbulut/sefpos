@@ -318,7 +318,7 @@ export function StockCountReport() {
           </div>
         ) : batches.length === 0 ? (
           <div className="text-center py-16 text-slate-500 bg-white rounded-xl border border-slate-200">
-            Bu aralıkta sayım kaydı yok. Ürün sayımını <strong>Reçete / Sayım</strong> ekranından uyguladığınızda burada
+            Bu aralıkta sayım kaydı yok. Ürün sayımını <strong>Stok yönetimi</strong> ekranından uyguladığınızda burada
             listelenir.
           </div>
         ) : (

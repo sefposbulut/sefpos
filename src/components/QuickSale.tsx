@@ -1116,7 +1116,7 @@ export function QuickSale() {
                 </div>
               </div>
               <div className="text-[11px] text-slate-500 leading-relaxed">
-                Ürün anında ürün listenize eklenir, kaydedilen barkod bir sonraki taramada doğrudan sepete iner. Detayları sonra "Reçete / Sayım" veya "Ürünler" ekranından düzenleyebilirsiniz.
+                Ürün anında ürün listenize eklenir, kaydedilen barkod bir sonraki taramada doğrudan sepete iner. Detayları sonra "Stok yönetimi" veya "Ürünler" ekranından düzenleyebilirsiniz.
               </div>
             </div>
             <div className="border-t border-slate-100 p-3 flex gap-2 bg-slate-50">

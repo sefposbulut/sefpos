@@ -44,7 +44,7 @@ export function MainMenu({ onNavigate, currentPage, onOpenSettings, onLockScreen
     { id: 'takeaway', label: 'Paket Servis', icon: ShoppingCart, show: (permissions.can_take_orders || permissions.can_view_tables) && mod('takeaway') },
     { id: 'online-orders', label: 'Online Siparişler', icon: ShoppingBag, show: (permissions.can_take_orders || permissions.can_view_tables) && mod('online-orders') },
     { id: 'products', label: 'Ürünler', icon: Package, show: permissions.can_manage_products && mod('products') },
-    { id: 'inventory', label: 'Reçete / Sayım', icon: Boxes, show: permissions.can_manage_products && mod('inventory') },
+    { id: 'inventory', label: 'Stok yönetimi', icon: Boxes, show: permissions.can_manage_products && mod('inventory') },
     { id: 'users', label: 'Kullanıcı Yönetimi', icon: UserCog, show: permissions.can_manage_users },
     { id: 'customers', label: 'Cari Hesaplar', icon: Users, show: (permissions.can_process_payments || permissions.can_manage_products) && mod('customers') },
     { id: 'reports', label: 'Raporlar', icon: TrendingUp, show: permissions.can_view_reports && mod('reports') },

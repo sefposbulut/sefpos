@@ -10,7 +10,7 @@ import { useCriticalStockCount } from './useCriticalStockCount';
 type Tab = 'ingredients' | 'suppliers' | 'recipes' | 'purchases' | 'product-count';
 
 export function Inventory() {
-  const [tab, setTab] = useState<Tab>('ingredients');
+  const [tab, setTab] = useState<Tab>('product-count');
   const criticalCount = useCriticalStockCount();
 
   useEffect(() => {
@@ -26,11 +26,11 @@ export function Inventory() {
   }, []);
 
   const tabs: { id: Tab; label: string; icon: any; badge?: number }[] = [
-    { id: 'ingredients', label: 'Hammadde', icon: Boxes, badge: criticalCount },
     { id: 'product-count', label: 'Ürün sayımı', icon: ClipboardList },
-    { id: 'suppliers', label: 'Tedarikçi', icon: Truck },
     { id: 'recipes', label: 'Reçete', icon: ChefHat },
-    { id: 'purchases', label: 'Alış Faturası', icon: FileText },
+    { id: 'ingredients', label: 'Hammadde', icon: Boxes, badge: criticalCount },
+    { id: 'suppliers', label: 'Tedarikçi', icon: Truck },
+    { id: 'purchases', label: 'Alış faturası', icon: FileText },
   ];
 
   return (
@@ -42,9 +42,9 @@ export function Inventory() {
               <Boxes className="w-5 h-5 text-white" />
             </div>
             <div>
-              <h1 className="text-lg md:text-xl font-black text-slate-800">Reçete / Sayım</h1>
+              <h1 className="text-lg md:text-xl font-black text-slate-800">Stok yönetimi</h1>
               <div className="text-[11px] md:text-xs text-slate-500 font-semibold">
-                Reçete, ürün sayımı, hammadde, tedarikçi, alış faturası
+                Ürün sayımı, reçete, hammadde, tedarikçi, alış faturası
               </div>
             </div>
           </div>
@@ -57,7 +57,7 @@ export function Inventory() {
             </div>
           )}
         </div>
-        <div className="flex gap-1.5 overflow-x-auto -mx-3 md:-mx-6 px-3 md:px-6 pb-1">
+        <div className="flex flex-wrap gap-1.5 -mx-3 md:-mx-6 px-3 md:px-6 pb-1">
           {tabs.map((t) => {
             const Icon = t.icon;
             const active = tab === t.id;
