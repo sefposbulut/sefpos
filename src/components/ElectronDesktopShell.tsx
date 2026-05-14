@@ -153,6 +153,29 @@ export function ElectronDesktopShell() {
     const api = (window as any).electronAPI;
     if (!api?.onUpdateAvailable) return;
 
+    const applyDownloaded = (info: UpdatePayload) => {
+      setToastDismissed(false);
+      const version = info?.version || '';
+      const releaseNotes = tidyReleaseNotes(info?.releaseNotes);
+      const releaseName = info?.releaseName || '';
+      setUpdateState({ kind: 'ready', version, releaseNotes, releaseName });
+
+      try {
+        localStorage.setItem(PENDING_RELEASE_VERSION_KEY, version);
+        localStorage.setItem(PENDING_RELEASE_NOTES_KEY, releaseNotes);
+      } catch {}
+
+      if (userLoggedInRef.current) {
+        setConfirmReady({ version, releaseNotes, releaseName });
+      } else {
+        setTimeout(() => {
+          try {
+            api.installUpdate?.();
+          } catch {}
+        }, 1200);
+      }
+    };
+
     api.onUpdateAvailable((info: UpdatePayload) => {
       setToastDismissed(false);
       setUpdateState({ kind: 'available', version: info?.version || '' });
@@ -166,39 +189,36 @@ export function ElectronDesktopShell() {
       }));
     });
     api.onUpdateDownloaded?.((info: UpdatePayload) => {
-      setToastDismissed(false);
-      const version = info?.version || '';
-      const releaseNotes = tidyReleaseNotes(info?.releaseNotes);
-      const releaseName = info?.releaseName || '';
-      setUpdateState({ kind: 'ready', version, releaseNotes, releaseName });
-
-      // "Yenilikler" sayfasında bir sonraki açılışta göstermek için
-      // pending storage'a kaydet.
-      try {
-        localStorage.setItem(PENDING_RELEASE_VERSION_KEY, version);
-        localStorage.setItem(PENDING_RELEASE_NOTES_KEY, releaseNotes);
-      } catch {}
-
-      // Kullanıcı oturum açık → onay modali göster.
-      // Kullanıcı oturumda değil → otomatik kur (müşteriye soru sormadan).
-      // Auth ekranındayken müşteriler genellikle servise başlamamıştır.
-      if (userLoggedInRef.current) {
-        setConfirmReady({ version, releaseNotes, releaseName });
-      } else {
-        // Auth ekranındayken otomatik yükle; küçük gecikme ile başlat ki
-        // ekran fade-out görünebilsin.
-        setTimeout(() => {
-          try { api.installUpdate?.(); } catch {}
-        }, 1200);
-      }
+      applyDownloaded(info);
     });
     api.onUpdateError?.((info: { message?: string }) => {
       setToastDismissed(false);
       setUpdateState({ kind: 'error', message: String(info?.message || 'unknown') });
     });
 
+    void (async () => {
+      try {
+        const pend = await api.getUpdaterPending?.();
+        if (pend?.downloaded && String(pend.downloaded.version || '').trim()) {
+          applyDownloaded(pend.downloaded as UpdatePayload);
+        } else if (pend?.available && String(pend.available.version || '').trim()) {
+          setToastDismissed(false);
+          setUpdateState({ kind: 'available', version: String(pend.available.version || '') });
+        }
+      } catch {
+        /* yoksay */
+      }
+      try {
+        await api.updaterListenersReady?.();
+      } catch {
+        /* yoksay */
+      }
+    })();
+
     return () => {
-      try { api.removeUpdateListeners?.(); } catch (_) {}
+      try {
+        api.removeUpdateListeners?.();
+      } catch (_) {}
     };
   }, [isElectron]);
 
@@ -214,12 +234,21 @@ export function ElectronDesktopShell() {
 
   const installNow = async () => {
     const api = (window as any).electronAPI;
+    try {
+      await api.clearUpdaterDownloadedPending?.();
+    } catch (_) {}
     if (api?.installUpdate) {
-      try { await api.installUpdate(); } catch (_) {}
+      try {
+        await api.installUpdate();
+      } catch (_) {}
     }
   };
 
-  const installLater = () => {
+  const installLater = async () => {
+    const api = (window as any).electronAPI;
+    try {
+      await api.clearUpdaterDownloadedPending?.();
+    } catch (_) {}
     // Kullanıcı "Sonra" dedi → modali kapat, toast'ta hatırlatma kalsın.
     // electron-updater varsayılan olarak autoInstallOnAppQuit=true, kullanıcı
     // uygulamayı kapatınca güncelleme otomatik kurulur.
@@ -387,7 +416,12 @@ export function ElectronDesktopShell() {
                       Şimdi yeniden başlat
                     </button>
                     <button
-                      onClick={() => setToastDismissed(true)}
+                      onClick={async () => {
+                        setToastDismissed(true);
+                        try {
+                          await (window as any).electronAPI?.clearUpdaterDownloadedPending?.();
+                        } catch (_) {}
+                      }}
                       className="px-2 py-1.5 rounded-lg text-xs font-medium text-slate-500 hover:bg-slate-100"
                     >
                       Sonra

@@ -67,6 +67,40 @@ try {
  */
 let _manualUpdateCheckInFlight = false;
 
+/** React mount olmadan gelen güncelleme olayları kaybolmasın diye son yük (IPC ile replay). */
+let _pendingUpdateAvailablePayload = null;
+let _pendingUpdateDownloadedPayload = null;
+let _updaterPeriodicHandle = null;
+let _firstUpdaterCheckDone = false;
+/** `updater-listeners-ready` ile planlanan ilk kontrol zamanlayıcısı (çift planlamayı önler). */
+let _rendererReadyTimer = null;
+/** Pencere odağı / geri dönüş ile yapılan ek kontroller (çift istek önleme). */
+let _lastUserActivityUpdateCheckAt = 0;
+const USER_ACTIVITY_UPDATE_CHECK_MS = 18 * 60 * 1000;
+/** Periyodik arka plan kontrolü (4 saat → daha sık: açık kalan eski sürümler yeni release'i yakalasın). */
+const UPDATER_PERIODIC_MS = 90 * 60 * 1000;
+
+function maybeCheckUpdatesOnUserActivity() {
+  if (!autoUpdater || process.env.NODE_ENV === 'development') return;
+  const now = Date.now();
+  if (now - _lastUserActivityUpdateCheckAt < USER_ACTIVITY_UPDATE_CHECK_MS) return;
+  _lastUserActivityUpdateCheckAt = now;
+  autoUpdater.checkForUpdatesAndNotify().catch(() => {});
+}
+
+function runFirstUpdaterCheckOnce() {
+  if (!autoUpdater || process.env.NODE_ENV === 'development') return;
+  if (_firstUpdaterCheckDone) return;
+  _firstUpdaterCheckDone = true;
+  _lastUserActivityUpdateCheckAt = Date.now();
+  autoUpdater.checkForUpdatesAndNotify().catch(() => {});
+  if (!_updaterPeriodicHandle) {
+    _updaterPeriodicHandle = setInterval(() => {
+      autoUpdater.checkForUpdatesAndNotify().catch(() => {});
+    }, UPDATER_PERIODIC_MS);
+  }
+}
+
 /**
  * `update-available/-downloaded` event'lerinde renderer'a release notes da
  * göndermek için kullanılan yardımcı. electron-updater notları string veya
@@ -101,19 +135,33 @@ function setupAutoUpdater() {
   // production ortamında stable kanalı kullanmak için açıkça false bırakılır.
   autoUpdater.allowPrerelease = false;
 
+  // package.json publish ile aynı kaynak; gömülü app-update.yml saparsa bile doğru repo.
+  try {
+    autoUpdater.setFeedURL({
+      provider: 'github',
+      owner: 'sefposbulut',
+      repo: 'sefpos-releases',
+      releaseType: 'release',
+    });
+  } catch (e) {
+    paLog('warn', '[updater] setFeedURL atlanıyor', { message: e?.message || String(e) });
+  }
+
   autoUpdater.on('checking-for-update', () => {
     paLog('info', '[updater] Güncelleme kontrol ediliyor...');
   });
 
   autoUpdater.on('update-available', (info) => {
     paLog('info', '[updater] Güncelleme mevcut', { version: info?.version });
+    const payload = {
+      version: info?.version || '',
+      releaseDate: info?.releaseDate || null,
+      releaseName: info?.releaseName || '',
+      releaseNotes: normalizeReleaseNotes(info?.releaseNotes),
+    };
+    _pendingUpdateAvailablePayload = payload;
     if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('update-available', {
-        version: info?.version || '',
-        releaseDate: info?.releaseDate || null,
-        releaseName: info?.releaseName || '',
-        releaseNotes: normalizeReleaseNotes(info?.releaseNotes),
-      });
+      mainWindow.webContents.send('update-available', payload);
     }
   });
 
@@ -137,13 +185,16 @@ function setupAutoUpdater() {
 
   autoUpdater.on('update-downloaded', (info) => {
     paLog('info', '[updater] Güncelleme indirildi', { version: info?.version });
+    const payload = {
+      version: info?.version || '',
+      releaseDate: info?.releaseDate || null,
+      releaseName: info?.releaseName || '',
+      releaseNotes: normalizeReleaseNotes(info?.releaseNotes),
+    };
+    _pendingUpdateDownloadedPayload = payload;
+    _pendingUpdateAvailablePayload = null;
     if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('update-downloaded', {
-        version: info?.version || '',
-        releaseDate: info?.releaseDate || null,
-        releaseName: info?.releaseName || '',
-        releaseNotes: normalizeReleaseNotes(info?.releaseNotes),
-      });
+      mainWindow.webContents.send('update-downloaded', payload);
     }
   });
 
@@ -159,14 +210,11 @@ function setupAutoUpdater() {
     }
   });
 
-  // İlk kontrol 8 saniye sonra; üzerinden 4 saatte bir tekrar dene.
-  // (Restoranlar genelde gün boyu açık kalır; saatlik kontrol gereksiz trafik.)
+  // İlk kontrol: renderer `updater-listeners-ready` dedikten ~4 sn sonra (IPC aboneliği kaçırılmasın).
+  // Arayüz hiç hazır olmazsa en geç 90 sn sonra yine bir kez dene; sonra UPDATER_PERIODIC_MS.
   setTimeout(() => {
-    autoUpdater.checkForUpdatesAndNotify().catch(() => {});
-    setInterval(() => {
-      autoUpdater.checkForUpdatesAndNotify().catch(() => {});
-    }, 4 * 60 * 60 * 1000);
-  }, 8000);
+    runFirstUpdaterCheckOnce();
+  }, 90 * 1000);
 }
 
 let bcryptjs = null;
@@ -1594,6 +1642,13 @@ function createWindow() {
     console.warn('[permissions] handler set failed:', e?.message || e);
   }
 
+  // Production: kullanıcı ŞefPOS penceresine geri döndüğünde güncelleme kontrolünü seyrek tekrarla.
+  if (!isDev) {
+    mainWindow.on('focus', () => {
+      maybeCheckUpdatesOnUserActivity();
+    });
+  }
+
   mainWindow.once('ready-to-show', () => {
     if (settings.zoomFactor) {
       mainWindow.webContents.setZoomFactor(settings.zoomFactor);
@@ -2389,6 +2444,27 @@ ipcMain.handle('check-for-updates', async () => {
     // Olay sırasında error event'i de aksın diye küçük bir gecikme bırak.
     setTimeout(() => { _manualUpdateCheckInFlight = false; }, 1500);
   }
+});
+
+/** Renderer IPC dinleyicileri bağlandı → ilk otomatik kontrolü güvenli gecikmeyle planla. */
+ipcMain.handle('updater-listeners-ready', async () => {
+  if (!autoUpdater || process.env.NODE_ENV === 'development') return false;
+  if (_rendererReadyTimer != null) return true;
+  _rendererReadyTimer = setTimeout(() => {
+    runFirstUpdaterCheckOnce();
+  }, 4000);
+  return true;
+});
+
+/** Mount öncesi kaçan `update-available` / `update-downloaded` olaylarını tekrar oynat. */
+ipcMain.handle('get-updater-pending', async () => ({
+  available: _pendingUpdateAvailablePayload,
+  downloaded: _pendingUpdateDownloadedPayload,
+}));
+
+ipcMain.handle('clear-updater-downloaded-pending', async () => {
+  _pendingUpdateDownloadedPayload = null;
+  return true;
 });
 
 /**
