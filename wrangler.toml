@@ -1,0 +1,4 @@
+# Cloudflare Pages — Git build: çıktı dist, functions/ repo kökünde kalır.
+# Dashboard'da SPA "Not found" tüm path'lere index veriyorsa _routes.json ile /api/* Functions'a gider.
+compatibility_date = "2024-11-01"
+pages_build_output_dir = "dist"
