@@ -50,18 +50,52 @@ function symRefNo(): string {
   return `SYM-${y}${m}${d}-${hh}${mm}${ss}`;
 }
 
-function isMissingStockCountBatchRpc(err: { message?: string; code?: string } | null): boolean {
+function isMissingStockCountBatchRpc(err: any | null): boolean {
   if (!err) return false;
-  const c = String(err.code || '');
-  const m = String(err.message || '').toLowerCase();
-  if (c === '42883' || c === 'PGRST202') return true;
-  if (!m.includes('create_stock_count_batch')) return false;
+  const status = Number(err.status ?? err.statusCode ?? 0);
+  if (status === 404) return true;
+  const code = String(err.code ?? '').toUpperCase();
+  if (['42883', 'PGRST202', 'PGRST301', 'PGRST116'].includes(code)) return true;
+  const msg = String(err.message ?? '').toLowerCase();
+  const details = String(err.details ?? '').toLowerCase();
+  const blob = `${msg} ${details}`;
+  if (blob.includes('could not find the function')) return true;
+  if (blob.includes('not found') && (blob.includes('rpc') || blob.includes('function') || blob.includes('procedure')))
+    return true;
+  if (!blob.includes('create_stock_count_batch')) return false;
   return (
-    m.includes('does not exist') ||
-    m.includes('unknown function') ||
-    m.includes('could not find') ||
-    m.includes('schema cache')
+    blob.includes('does not exist') ||
+    blob.includes('unknown function') ||
+    blob.includes('could not find') ||
+    blob.includes('schema cache') ||
+    blob.includes('not found')
   );
+}
+
+const SKIP_STOCK_COUNT_RPC_SS = 'sefpos_skip_create_stock_count_batch';
+
+function readSkipStockCountRpcSession(): boolean {
+  try {
+    return sessionStorage.getItem(SKIP_STOCK_COUNT_RPC_SS) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function writeSkipStockCountRpcSession() {
+  try {
+    sessionStorage.setItem(SKIP_STOCK_COUNT_RPC_SS, '1');
+  } catch {
+    /* noop */
+  }
+}
+
+function clearSkipStockCountRpcSession() {
+  try {
+    sessionStorage.removeItem(SKIP_STOCK_COUNT_RPC_SS);
+  } catch {
+    /* noop */
+  }
 }
 
 function moneyTR(n: number) {
@@ -290,27 +324,36 @@ export function ProductStockCount() {
     let usedSequentialDoc = true;
 
     try {
-      const { data: batchRows, error: batchErr } = await supabase.rpc('create_stock_count_batch', {
-        p_tenant_id: tenant.id,
-        p_branch_id: branchId,
-      } as any);
-
-      if (batchErr) {
-        if (isMissingStockCountBatchRpc(batchErr)) {
-          refNo = symRefNo();
-          seqNum = null;
-          usedSequentialDoc = false;
-        } else {
-          throw new Error(batchErr.message || 'Belge numarası oluşturulamadı.');
-        }
+      if (readSkipStockCountRpcSession()) {
+        refNo = symRefNo();
+        seqNum = null;
+        usedSequentialDoc = false;
       } else {
-        const br = Array.isArray(batchRows) ? batchRows[0] : batchRows;
-        refNo = String((br as any)?.reference_no || '').trim();
-        seqNum = typeof (br as any)?.seq === 'number' ? (br as any).seq : null;
-        if (!refNo) {
-          refNo = symRefNo();
-          seqNum = null;
-          usedSequentialDoc = false;
+        const { data: batchRows, error: batchErr } = await supabase.rpc('create_stock_count_batch', {
+          p_tenant_id: tenant.id,
+          p_branch_id: branchId,
+        } as any);
+
+        if (batchErr) {
+          if (isMissingStockCountBatchRpc(batchErr)) {
+            writeSkipStockCountRpcSession();
+            refNo = symRefNo();
+            seqNum = null;
+            usedSequentialDoc = false;
+          } else {
+            throw new Error(batchErr.message || 'Belge numarası oluşturulamadı.');
+          }
+        } else {
+          const br = Array.isArray(batchRows) ? batchRows[0] : batchRows;
+          refNo = String((br as any)?.reference_no || '').trim();
+          seqNum = typeof (br as any)?.seq === 'number' ? (br as any).seq : null;
+          if (!refNo) {
+            refNo = symRefNo();
+            seqNum = null;
+            usedSequentialDoc = false;
+          } else {
+            clearSkipStockCountRpcSession();
+          }
         }
       }
 
@@ -443,7 +486,11 @@ export function ProductStockCount() {
                   <span className="font-mono font-bold">SYM-…</span> referansı kullanıldı. Kalıcı çözüm: Supabase
                   projesinde migration <span className="font-mono">20260514193000_stock_count_batches</span> dosyasını
                   uygulayın (Dashboard → SQL veya <code className="text-[10px]">supabase db push</code> / CI migration
-                  iş akışı).
+                  iş akışı). Migration sonrası bu sekmede RPC&apos;nin tekrar denenmesi için konsola:{' '}
+                  <span className="font-mono whitespace-nowrap">
+                    sessionStorage.removeItem(&apos;sefpos_skip_create_stock_count_batch&apos;)
+                  </span>{' '}
+                  yazıp Enter (veya sekmeyi kapatıp yeniden açın).
                 </div>
               )}
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center">
