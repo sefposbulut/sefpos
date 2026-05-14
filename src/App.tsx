@@ -30,6 +30,7 @@ import { StockCountReport } from './components/reports/StockCountReport';
 import { CancelLogs } from './components/CancelLogs';
 import { PinLockScreen } from './components/PinLockScreen';
 import { Inventory } from './components/inventory/Inventory';
+import { ProductStockCount } from './components/inventory/ProductStockCount';
 import { QuickSale } from './components/QuickSale';
 import { ShiftManager } from './components/ShiftManager';
 import { ShiftAutoStartPrompt } from './components/ShiftAutoStartPrompt';
@@ -643,6 +644,15 @@ function App() {
       {wasMounted('products') && (
         <div style={{ display: show('products') ? undefined : 'none' }} className="fixed inset-0 top-14 md:top-20 overflow-hidden">
           <Products />
+        </div>
+      )}
+
+      {wasMounted('product-stock-count') && (
+        <div
+          style={{ display: show('product-stock-count') ? undefined : 'none' }}
+          className="fixed inset-0 top-14 md:top-20 bg-gradient-to-br from-slate-50 to-slate-100 overflow-y-auto min-h-0"
+        >
+          <ProductStockCount />
         </div>
       )}
 

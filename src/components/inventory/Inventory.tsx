@@ -1,19 +1,18 @@
 import { useState, useEffect } from 'react';
-import { Boxes, Truck, ChefHat, FileText, AlertTriangle, ClipboardList } from 'lucide-react';
+import { Boxes, Truck, ChefHat, FileText, AlertTriangle } from 'lucide-react';
 import { Ingredients } from './Ingredients';
 import { Suppliers } from './Suppliers';
 import { Recipes } from './Recipes';
 import { PurchaseInvoices } from './PurchaseInvoices';
-import { ProductStockCount } from './ProductStockCount';
 import { useCriticalStockCount } from './useCriticalStockCount';
 import { INVENTORY_TAB_STORAGE_KEY } from '../../lib/inventoryNav';
 
-type Tab = 'ingredients' | 'suppliers' | 'recipes' | 'purchases' | 'product-count';
+type Tab = 'ingredients' | 'suppliers' | 'recipes' | 'purchases';
 
-const INVENTORY_SESSION_TABS: Tab[] = ['product-count', 'recipes', 'ingredients', 'suppliers', 'purchases'];
+const INVENTORY_SESSION_TABS: Tab[] = ['recipes', 'ingredients', 'suppliers', 'purchases'];
 
 export function Inventory() {
-  const [tab, setTab] = useState<Tab>('product-count');
+  const [tab, setTab] = useState<Tab>('recipes');
   const criticalCount = useCriticalStockCount();
 
   useEffect(() => {
@@ -21,8 +20,8 @@ export function Inventory() {
       const v = sessionStorage.getItem(INVENTORY_TAB_STORAGE_KEY);
       if (v && INVENTORY_SESSION_TABS.includes(v as Tab)) {
         setTab(v as Tab);
-      } else if (!v) {
-        sessionStorage.setItem(INVENTORY_TAB_STORAGE_KEY, 'product-count');
+      } else if (v === 'product-count') {
+        sessionStorage.removeItem(INVENTORY_TAB_STORAGE_KEY);
       }
     } catch {
       /* ignore */
@@ -39,7 +38,6 @@ export function Inventory() {
   };
 
   const tabs: { id: Tab; label: string; icon: any; badge?: number }[] = [
-    { id: 'product-count', label: 'Ürün sayımı', icon: ClipboardList },
     { id: 'recipes', label: 'Reçete', icon: ChefHat },
     { id: 'ingredients', label: 'Hammadde', icon: Boxes, badge: criticalCount },
     { id: 'suppliers', label: 'Tedarikçi', icon: Truck },
@@ -57,7 +55,7 @@ export function Inventory() {
             <div>
               <h1 className="text-lg md:text-xl font-black text-slate-800">Stok yönetimi</h1>
               <div className="text-[11px] md:text-xs text-slate-500 font-semibold">
-                Ürün sayımı, reçete, hammadde, tedarikçi, alış faturası
+                Reçete, hammadde, tedarikçi, alış faturası
               </div>
             </div>
           </div>
@@ -104,7 +102,6 @@ export function Inventory() {
         {tab === 'suppliers' && <Suppliers />}
         {tab === 'recipes' && <Recipes />}
         {tab === 'purchases' && <PurchaseInvoices />}
-        {tab === 'product-count' && <ProductStockCount />}
       </div>
     </div>
   );

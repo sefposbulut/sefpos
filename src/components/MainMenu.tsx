@@ -28,7 +28,7 @@ export function MainMenu({ onNavigate, currentPage, onOpenSettings, onLockScreen
   }, [currentPage]);
 
   useEffect(() => {
-    if (currentPage === 'products' || currentPage === 'inventory') {
+    if (currentPage === 'products' || currentPage === 'inventory' || currentPage === 'product-stock-count') {
       setStockMgmtExpanded(true);
     }
   }, [currentPage]);
@@ -167,9 +167,11 @@ export function MainMenu({ onNavigate, currentPage, onOpenSettings, onLockScreen
                 }
                 if (item.id === 'stock-management') {
                   const Icon = item.icon;
-                  const stockSectionActive = currentPage === 'products' || currentPage === 'inventory';
-                  const countActive =
-                    currentPage === 'inventory' && inventoryTabForMenu === 'product-count';
+                  const stockSectionActive =
+                    currentPage === 'products' ||
+                    currentPage === 'inventory' ||
+                    currentPage === 'product-stock-count';
+                  const countActive = currentPage === 'product-stock-count';
                   const recipesActive =
                     currentPage === 'inventory' && inventoryTabForMenu === 'recipes';
                   return (
@@ -215,12 +217,7 @@ export function MainMenu({ onNavigate, currentPage, onOpenSettings, onLockScreen
                             <button
                               type="button"
                               onClick={() => {
-                                try {
-                                  sessionStorage.setItem(INVENTORY_TAB_STORAGE_KEY, 'product-count');
-                                } catch {
-                                  /* ignore */
-                                }
-                                onNavigate('inventory');
+                                onNavigate('product-stock-count');
                                 setMenuOpen(false);
                               }}
                               className={`w-full flex items-center gap-2 px-3 py-2.5 rounded-lg text-sm font-semibold transition ${
@@ -444,8 +441,7 @@ export function MainMenu({ onNavigate, currentPage, onOpenSettings, onLockScreen
                 }
                 if (item.id === 'stock-management') {
                   const productsActive = currentPage === 'products';
-                  const countActive =
-                    currentPage === 'inventory' && inventoryTabForMenu === 'product-count';
+                  const countActive = currentPage === 'product-stock-count';
                   const recipesActive =
                     currentPage === 'inventory' && inventoryTabForMenu === 'recipes';
                   const stockCols =
@@ -483,12 +479,7 @@ export function MainMenu({ onNavigate, currentPage, onOpenSettings, onLockScreen
                           <button
                             type="button"
                             onClick={() => {
-                              try {
-                                sessionStorage.setItem(INVENTORY_TAB_STORAGE_KEY, 'product-count');
-                              } catch {
-                                /* ignore */
-                              }
-                              onNavigate('inventory');
+                              onNavigate('product-stock-count');
                               setMenuOpen(false);
                             }}
                             className={`w-full min-h-[98px] md:min-h-[118px] flex flex-col items-center justify-center gap-2 md:gap-3 px-3 py-3 rounded-2xl transition-all active:scale-[0.98] border ${

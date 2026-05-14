@@ -493,7 +493,7 @@ export function ProductStockCount() {
                   referansı yazıldı. Sıralı belge için: (1) Supabase&apos;te migration{' '}
                   <span className="font-mono">20260514193000_stock_count_batches</span>, (2) üretim build&apos;inde ortam
                   değişkeni <span className="font-mono">VITE_STOCK_COUNT_BATCH_RPC=true</span> (Electron release / CI
-                  zaten açar). RPC daha önce 404 verdiyse bu sekmede:{' '}
+                  zaten açar). RPC daha önce 404 verdiyse bu ekranda:{' '}
                   <span className="font-mono whitespace-nowrap">
                     sessionStorage.removeItem(&apos;sefpos_skip_create_stock_count_batch&apos;)
                   </span>

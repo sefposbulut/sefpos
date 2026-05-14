@@ -61,6 +61,7 @@ const PAGE_LABELS: Record<string, string> = {
   'online-orders': 'Online Siparişler',
   'quick-sale': 'Hızlı Satış',
   products: 'Ürünler',
+  'product-stock-count': 'Ürün sayımı',
   customers: 'Müşteriler',
   users: 'Kullanıcılar',
   reports: 'Raporlar',
