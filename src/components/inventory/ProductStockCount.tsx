@@ -35,7 +35,34 @@ type SessionReport = {
     plusTutar: number;
     minusTutar: number;
   };
+  /** false ise veritabanında SAYIM-XXXXX RPC yok; zaman damgalı SYM- referans kullanıldı */
+  usedSequentialDoc: boolean;
 };
+
+function symRefNo(): string {
+  const t = new Date();
+  const y = t.getFullYear();
+  const m = String(t.getMonth() + 1).padStart(2, '0');
+  const d = String(t.getDate()).padStart(2, '0');
+  const hh = String(t.getHours()).padStart(2, '0');
+  const mm = String(t.getMinutes()).padStart(2, '0');
+  const ss = String(t.getSeconds()).padStart(2, '0');
+  return `SYM-${y}${m}${d}-${hh}${mm}${ss}`;
+}
+
+function isMissingStockCountBatchRpc(err: { message?: string; code?: string } | null): boolean {
+  if (!err) return false;
+  const c = String(err.code || '');
+  const m = String(err.message || '').toLowerCase();
+  if (c === '42883' || c === 'PGRST202') return true;
+  if (!m.includes('create_stock_count_batch')) return false;
+  return (
+    m.includes('does not exist') ||
+    m.includes('unknown function') ||
+    m.includes('could not find') ||
+    m.includes('schema cache')
+  );
+}
 
 function moneyTR(n: number) {
   const v = Number.isFinite(n) ? n : 0;
@@ -223,6 +250,7 @@ export function ProductStockCount() {
       </style></head><body>
       <h1>Sayım fark raporu</h1>
       <div class="meta">Belge: <b>${escapeHtml(rep.referenceNo)}</b> · ${escapeHtml(rep.branchName)} · ${escapeHtml(rep.createdAtLabel)}</div>
+      ${!rep.usedSequentialDoc ? '<p style="font-size:12px;color:#b45309;margin:8px 0 0">Not: Geçici SYM referansı kullanıldı. Sıralı SAYIM-XXXXX için Supabase migration (stock_count_batches) uygulanmalı.</p>' : ''}
       <table><thead><tr><th>Ürün</th><th>Sistem</th><th>Sayım</th><th>Fark</th><th>Tutar (±)</th></tr></thead>
       <tbody>${rowsHtml}</tbody></table>
       <div class="sum">
@@ -259,23 +287,32 @@ export function ProductStockCount() {
 
     let refNo = '';
     let seqNum: number | null = null;
+    let usedSequentialDoc = true;
 
     try {
       const { data: batchRows, error: batchErr } = await supabase.rpc('create_stock_count_batch', {
         p_tenant_id: tenant.id,
         p_branch_id: branchId,
       } as any);
+
       if (batchErr) {
-        throw new Error(
-          batchErr.message?.includes('function') || batchErr.code === '42883'
-            ? 'Sayım belge numarası oluşturulamadı. Supabase migration (stock_count_batches) uygulanmış olmalı.'
-            : batchErr.message,
-        );
+        if (isMissingStockCountBatchRpc(batchErr)) {
+          refNo = symRefNo();
+          seqNum = null;
+          usedSequentialDoc = false;
+        } else {
+          throw new Error(batchErr.message || 'Belge numarası oluşturulamadı.');
+        }
+      } else {
+        const br = Array.isArray(batchRows) ? batchRows[0] : batchRows;
+        refNo = String((br as any)?.reference_no || '').trim();
+        seqNum = typeof (br as any)?.seq === 'number' ? (br as any).seq : null;
+        if (!refNo) {
+          refNo = symRefNo();
+          seqNum = null;
+          usedSequentialDoc = false;
+        }
       }
-      const br = Array.isArray(batchRows) ? batchRows[0] : batchRows;
-      refNo = String((br as any)?.reference_no || '').trim();
-      seqNum = typeof (br as any)?.seq === 'number' ? (br as any).seq : null;
-      if (!refNo) throw new Error('Belge numarası alınamadı.');
 
       for (const line of linesToApply) {
         const { product, counted, sys, delta } = line;
@@ -353,6 +390,7 @@ export function ProductStockCount() {
         createdAtLabel,
         rows: reportRows,
         totals: { plusQty, minusQty, plusTutar, minusTutar },
+        usedSequentialDoc,
       });
     } catch (e: any) {
       alert(e?.message || String(e));
@@ -399,6 +437,15 @@ export function ProductStockCount() {
               </div>
             </div>
             <div className="p-4 overflow-y-auto flex-1 space-y-4">
+              {!sessionReport.usedSequentialDoc && (
+                <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-950 leading-relaxed">
+                  <strong>Sıralı belge (SAYIM-00001)</strong> veritabanında henüz yok; bu kayıt için geçici{' '}
+                  <span className="font-mono font-bold">SYM-…</span> referansı kullanıldı. Kalıcı çözüm: Supabase
+                  projesinde migration <span className="font-mono">20260514193000_stock_count_batches</span> dosyasını
+                  uygulayın (Dashboard → SQL veya <code className="text-[10px]">supabase db push</code> / CI migration
+                  iş akışı).
+                </div>
+              )}
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center">
                 <div className="rounded-xl bg-emerald-50 border border-emerald-100 px-2 py-3">
                   <div className="text-[10px] font-bold text-emerald-800 uppercase">Giriş (fazla)</div>
