@@ -79,13 +79,14 @@ let _lastUserActivityUpdateCheckAt = 0;
 const USER_ACTIVITY_UPDATE_CHECK_MS = 18 * 60 * 1000;
 /** Periyodik arka plan kontrolü (4 saat → daha sık: açık kalan eski sürümler yeni release'i yakalasın). */
 const UPDATER_PERIODIC_MS = 90 * 60 * 1000;
+/** `checkForUpdatesAndNotify` Windows'ta İngilizce yerel bildirim açar; yalnız `checkForUpdates` + olaylar → renderer Türkçe UI. */
 
 function maybeCheckUpdatesOnUserActivity() {
   if (!autoUpdater || process.env.NODE_ENV === 'development') return;
   const now = Date.now();
   if (now - _lastUserActivityUpdateCheckAt < USER_ACTIVITY_UPDATE_CHECK_MS) return;
   _lastUserActivityUpdateCheckAt = now;
-  autoUpdater.checkForUpdatesAndNotify().catch(() => {});
+  autoUpdater.checkForUpdates().catch(() => {});
 }
 
 function runFirstUpdaterCheckOnce() {
@@ -93,10 +94,10 @@ function runFirstUpdaterCheckOnce() {
   if (_firstUpdaterCheckDone) return;
   _firstUpdaterCheckDone = true;
   _lastUserActivityUpdateCheckAt = Date.now();
-  autoUpdater.checkForUpdatesAndNotify().catch(() => {});
+  autoUpdater.checkForUpdates().catch(() => {});
   if (!_updaterPeriodicHandle) {
     _updaterPeriodicHandle = setInterval(() => {
-      autoUpdater.checkForUpdatesAndNotify().catch(() => {});
+      autoUpdater.checkForUpdates().catch(() => {});
     }, UPDATER_PERIODIC_MS);
   }
 }
