@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   BellRing, Bell, BellOff, X, Check, Receipt, Droplets, HelpCircle, Clock,
   CheckCircle2, History, Trash2,
@@ -44,10 +44,11 @@ const HISTORY_LIMIT = 60;
  * - BellRing (concierge zili) ikonu, bekleyen çağrı varsa pulsasyonlu turuncu badge.
  * - Tıklayınca dropdown: Aktif + Geçmiş sekmeli çağrı listesi.
  * - Yeni çağrı geldiğinde: ses + titreşim + 3.5sn toast popup (sağ üstte).
- * - Realtime: tüm POS cihazlarında aynı anda güncellenir.
+ * - Realtime + SUBSCRIBED sonrası HTTP ile tam senkron; 12 sn yedek poll; sekme/odak/online yenileme.
  */
 export function WaiterCallBell() {
   const { tenant, activeBranch } = useAuth();
+
   const [calls, setCalls] = useState<WaiterCall[]>([]);
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<'active' | 'history'>('active');
@@ -59,39 +60,102 @@ export function WaiterCallBell() {
   const audioCtxRef = useRef<AudioContext | null>(null);
   const seenIdsRef = useRef<Set<string>>(new Set());
   const toastTimerRef = useRef<number | null>(null);
+  const callsRef = useRef<WaiterCall[]>([]);
+  const mutedRef = useRef(muted);
+  /** İlk HTTP liste tamamlanmadan SUBSCRIBED/poll ile toast yağmurunu engelle */
+  const initialPullDoneRef = useRef(false);
+  const tenantIdRef = useRef<string | undefined>(undefined);
+  tenantIdRef.current = tenant?.id;
 
-  // İlk yükleme: aktif + geçmiş
+  useEffect(() => {
+    mutedRef.current = muted;
+  }, [muted]);
+
+  useEffect(() => {
+    callsRef.current = calls;
+  }, [calls]);
+
+  const notifyNewCall = (c: WaiterCall) => {
+    if (!c?.id || mutedRef.current) return;
+    playBeep();
+    showSystemNotification(c);
+    vibrate();
+    setToast(c);
+    if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = window.setTimeout(() => setToast(null), 3500);
+  };
+
+  /** Sunucudan çek; Realtime kaçırsa veya socket geç bağlansa yine de liste güncellenir. */
+  const pullLatest = useCallback(async (opts?: { notifyNew?: boolean }) => {
+    const tid = tenantIdRef.current;
+    if (!tid) return;
+    const { data, error } = await supabase
+      .from('waiter_calls')
+      .select('*')
+      .eq('tenant_id', tid)
+      .order('created_at', { ascending: false })
+      .limit(HISTORY_LIMIT);
+    if (error) {
+      console.error('[ŞefPOS] waiter_calls liste:', error);
+      return;
+    }
+    const list = (data || []) as WaiterCall[];
+    const prev = callsRef.current;
+    const prevActiveIds = new Set(
+      prev.filter(x => x.status === 'pending' || x.status === 'seen').map(x => x.id),
+    );
+    for (const c of list) seenIdsRef.current.add(c.id);
+    setCalls(list);
+
+    const notifyNew = opts?.notifyNew === true && initialPullDoneRef.current;
+    if (notifyNew) {
+      const freshActive = list.filter(
+        c => (c.status === 'pending' || c.status === 'seen') && !prevActiveIds.has(c.id),
+      );
+      if (freshActive.length > 0) {
+        freshActive.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+        notifyNewCall(freshActive[0]);
+      }
+    }
+  }, []);
+
+  // İlk yükleme: aktif + geçmiş (toast yok)
   useEffect(() => {
     if (!tenant?.id) {
       setCalls([]);
       seenIdsRef.current.clear();
+      initialPullDoneRef.current = false;
       return;
     }
     let cancel = false;
+    initialPullDoneRef.current = false;
     (async () => {
-      const { data, error } = await supabase
-        .from('waiter_calls')
-        .select('*')
-        .eq('tenant_id', tenant.id)
-        .order('created_at', { ascending: false })
-        .limit(HISTORY_LIMIT);
-      if (!cancel) {
-        if (error) {
-          console.error('[ŞefPOS] waiter_calls liste:', error);
-          setCalls([]);
-        } else {
-          const list = (data || []) as WaiterCall[];
-          for (const c of list) seenIdsRef.current.add(c.id);
-          setCalls(list);
-        }
-      }
+      await pullLatest({ notifyNew: false });
+      if (!cancel) initialPullDoneRef.current = true;
     })();
-    return () => { cancel = true; };
-  }, [tenant?.id]);
+    return () => {
+      cancel = true;
+    };
+  }, [tenant?.id, pullLatest]);
 
-  // Realtime
+  // Realtime + SUBSCRIBED sonrası tam senkron + periyodik yedek + sekme uyanınca yenile
   useEffect(() => {
     if (!tenant?.id) return;
+
+    const POLL_MS = 12_000;
+    const pollTimer = window.setInterval(() => {
+      void pullLatest({ notifyNew: true });
+    }, POLL_MS);
+
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void pullLatest({ notifyNew: true });
+    };
+    const onOnline = () => void pullLatest({ notifyNew: true });
+    const onFocus = () => void pullLatest({ notifyNew: true });
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('online', onOnline);
+    window.addEventListener('focus', onFocus);
+
     const channel = supabase
       .channel(`waiter-calls-${tenant.id}`)
       .on(
@@ -102,7 +166,7 @@ export function WaiterCallBell() {
           if (!c?.id || seenIdsRef.current.has(c.id)) return;
           seenIdsRef.current.add(c.id);
           setCalls(prev => [c, ...prev].slice(0, HISTORY_LIMIT));
-          if (!muted) playBeep();
+          if (!mutedRef.current) playBeep();
           showSystemNotification(c);
           vibrate();
           setToast(c);
@@ -126,13 +190,22 @@ export function WaiterCallBell() {
           setCalls(prev => prev.filter(x => x.id !== c.id));
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+          // WebSocket geç bağlandıysa INSERT kaçmış olabilir — DB ile eşle (toast yalnız ilk liste sonrası)
+          void pullLatest({ notifyNew: initialPullDoneRef.current });
+        }
+      });
+
     return () => {
+      window.clearInterval(pollTimer);
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('online', onOnline);
+      window.removeEventListener('focus', onFocus);
       supabase.removeChannel(channel);
       if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tenant?.id, muted]);
+  }, [tenant?.id, pullLatest]);
 
   const playBeep = () => {
     try {
