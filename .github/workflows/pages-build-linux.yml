@@ -29,3 +29,6 @@ jobs:
 
       - name: Vite build (Cloudflare Pages parity)
         run: npm run build:pages
+
+      - name: Verify web dist paths (www root)
+        run: node scripts/assert-web-pages-dist.mjs

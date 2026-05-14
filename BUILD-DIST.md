@@ -26,13 +26,21 @@ npm run lint
 
 ---
 
-## 1) Sadece web (Vite)
+## 1) Sadece web (Vite) — **Cloudflare Pages / www kökü**
+
+**`npm run build` kullanmayın** (çıktı `./assets/` üretir; www’de eski/bozuk yükleme riski).
 
 ```powershell
-npm run build
+npm run build:pages
 ```
 
-Çıktı: `dist/` (statik dosyalar)
+Çıktı: `dist/` (kök URL için `/assets/…`, `<base href="/">`)
+
+Doğrulama:
+
+```powershell
+node scripts/assert-web-pages-dist.mjs
+```
 
 Yerel önizleme:
 

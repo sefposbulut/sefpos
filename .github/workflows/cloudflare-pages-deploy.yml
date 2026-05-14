@@ -32,6 +32,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Cloudflare kimlik bilgisi kontrolü
+        shell: bash
+        env:
+          CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -z "$CF_TOKEN" ] || [ -z "$CF_ACCOUNT" ]; then
+            echo "::error::www güncellenmiyor: GitHub repo → Settings → Secrets and variables → Actions içinde"
+            echo "::error::CLOUDFLARE_API_TOKEN ve CLOUDFLARE_ACCOUNT_ID tanımlı değil."
+            echo "::error::Alternatif (yalnızca Cloudflare): Pages → Build settings → Build command = npm run build:pages → Output = dist"
+            exit 1
+          fi
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
@@ -43,6 +56,9 @@ jobs:
 
       - name: Build (Vite Pages / CF_PAGES)
         run: npm run build:pages
+
+      - name: dist kök yolu doğrulama (./assets deploy engeli)
+        run: node scripts/assert-web-pages-dist.mjs
 
       - name: Deploy to Cloudflare Pages
         uses: cloudflare/wrangler-action@v3

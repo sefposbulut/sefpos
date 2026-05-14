@@ -4,7 +4,9 @@
 # Bu dosyada pages_build_output_dir varsa Functions + wrangler yolu etkin olur;
 # Cloudflare hesabinda Build image V2+ olmali (V1'de build sik kirilir):
 # https://developers.cloudflare.com/pages/configuration/build-image/
-# Dashboard build komutu ornegi: npm ci && npm run build:pages
+# ZORUNLU (www kökü): Build command = npm run build:pages (CF_PAGES=1 → /assets/, <base href="/">).
+# "npm run build" ./ yolları üretir; www.sefpos.com.tr eski arayüzde kalır.
+# Dashboard ornek: npm ci && npm run build:pages
 #
 name = "sefpos"
 compatibility_date = "2024-11-01"
