@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ChefHat,
   MapPin,
@@ -47,21 +47,24 @@ export function PublicMenu({ branchId }: Props) {
   const [activeCategory, setActiveCategory] = useState<string>('all');
   const [search, setSearch] = useState('');
   const [waiterOpen, setWaiterOpen] = useState(false);
+  /** Her FAB açılışında modalı sıfırdan mount eder (tek seferlik takılma / state kalıntısı). */
+  const [waiterModalKey, setWaiterModalKey] = useState(0);
   const sectionsRef = useRef<Record<string, HTMLElement | null>>({});
+  /** Aynı anda birden fazla loadPublicMenu yarışmasın (bfcache / şube değişimi). */
+  const menuLoadSeq = useRef(0);
 
-  useEffect(() => {
-    let cancelled = false;
+  const startMenuLoad = useCallback(() => {
+    const seq = ++menuLoadSeq.current;
     setLoading(true);
     setError(null);
     loadPublicMenu(branchId)
       .then(d => {
-        if (!cancelled) {
-          setData(d);
-          document.title = `${d.tenant.name} · Menü`;
-        }
+        if (seq !== menuLoadSeq.current) return;
+        setData(d);
+        document.title = `${d.tenant.name} · Menü`;
       })
       .catch((e: PublicMenuError | Error) => {
-        if (cancelled) return;
+        if (seq !== menuLoadSeq.current) return;
         if (e instanceof PublicMenuError) {
           if (e.code === 'NOT_FOUND') setError('Bu menüye ulaşılamıyor.');
           else if (e.code === 'DISABLED') setError('Bu menü şu an kapalı.');
@@ -71,12 +74,28 @@ export function PublicMenu({ branchId }: Props) {
         }
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (seq !== menuLoadSeq.current) return;
+        setLoading(false);
       });
-    return () => {
-      cancelled = true;
-    };
   }, [branchId]);
+
+  useEffect(() => {
+    startMenuLoad();
+    return () => {
+      menuLoadSeq.current += 1;
+    };
+  }, [branchId, startMenuLoad]);
+
+  /** bfcache (geri dönüş) sonrası menü + garson çağır tekrar canlı kalsın */
+  useEffect(() => {
+    const onPageShow = (e: PageTransitionEvent) => {
+      if (!e.persisted) return;
+      setWaiterOpen(false);
+      startMenuLoad();
+    };
+    window.addEventListener('pageshow', onPageShow);
+    return () => window.removeEventListener('pageshow', onPageShow);
+  }, [startMenuLoad]);
 
   const theme = useMemo<ResolvedTheme>(() => resolveTheme(data?.tenant.menu_theme || null), [data]);
 
@@ -332,8 +351,12 @@ export function PublicMenu({ branchId }: Props) {
 
       {/* GARSON ÇAĞIR — Floating */}
       <button
-        onClick={() => setWaiterOpen(true)}
-        className="fixed z-40 bottom-5 right-5 sm:bottom-7 sm:right-7 inline-flex items-center gap-2.5 pl-4 pr-5 py-3.5 rounded-full font-bold shadow-2xl transition-all hover:scale-[1.03] active:scale-95 text-white"
+        type="button"
+        onClick={() => {
+          setWaiterModalKey(k => k + 1);
+          setWaiterOpen(true);
+        }}
+        className="fixed z-40 bottom-5 right-5 sm:bottom-7 sm:right-7 inline-flex items-center gap-2.5 pl-4 pr-5 py-3.5 rounded-full font-bold shadow-2xl transition-all hover:scale-[1.03] active:scale-95 text-white touch-manipulation"
         style={{
           background: `linear-gradient(135deg, ${theme.accent}, ${shade(theme.accent, -15)})`,
           boxShadow: `0 10px 30px -8px ${theme.accent}99`,
@@ -351,6 +374,7 @@ export function PublicMenu({ branchId }: Props) {
 
       {waiterOpen && (
         <WaiterCallModal
+          key={waiterModalKey}
           tenantId={tenant.id}
           branchId={branch.id}
           accent={theme.accent}
@@ -390,6 +414,7 @@ function CategoryPill({
 }) {
   return (
     <button
+      type="button"
       onClick={onClick}
       className={`flex-shrink-0 px-4 py-2 rounded-full text-sm font-semibold whitespace-nowrap transition-all ${
         active
@@ -533,6 +558,16 @@ function WaiterCallModal({
   const [err, setErr] = useState<string | null>(null);
   const [showNote, setShowNote] = useState(false);
   const [message, setMessage] = useState('');
+  const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (closeTimerRef.current != null) {
+        clearTimeout(closeTimerRef.current);
+        closeTimerRef.current = null;
+      }
+    };
+  }, []);
 
   const types: { id: 'service' | 'bill' | 'water' | 'help'; label: string; icon: any; gradient: string }[] = [
     { id: 'service', label: 'Garson', icon: Bell, gradient: 'from-orange-500 to-amber-500' },
@@ -562,7 +597,11 @@ function WaiterCallModal({
       setDone({ type: callType });
       setMessage('');
       setShowNote(false);
-      setTimeout(onClose, 900);
+      if (closeTimerRef.current != null) clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = setTimeout(() => {
+        closeTimerRef.current = null;
+        onClose();
+      }, 900);
     } catch (e: any) {
       setErr(e?.message || 'Çağrı gönderilemedi.');
     } finally {
@@ -611,6 +650,7 @@ function WaiterCallModal({
                 )}
               </div>
               <button
+                type="button"
                 onClick={onClose}
                 className={`p-1.5 rounded-lg flex-shrink-0 ${
                   isDark ? 'hover:bg-slate-800 text-slate-400' : 'hover:bg-slate-100 text-slate-500'
@@ -656,6 +696,7 @@ function WaiterCallModal({
                   </div>
                 )}
                 <button
+                  type="button"
                   onClick={() => tableValid && setStep('pick')}
                   disabled={!tableValid}
                   className="w-full py-3 rounded-xl font-bold text-white shadow-md disabled:opacity-50 disabled:cursor-not-allowed transition"
@@ -673,6 +714,7 @@ function WaiterCallModal({
                     const isDisabled = !!submittingType && !isLoading;
                     return (
                       <button
+                        type="button"
                         key={t.id}
                         onClick={() => sendCall(t.id)}
                         disabled={isDisabled}
@@ -691,6 +733,7 @@ function WaiterCallModal({
 
                 {!showNote ? (
                   <button
+                    type="button"
                     onClick={() => setShowNote(true)}
                     className={`text-xs font-semibold text-center w-full py-1.5 rounded-lg ${
                       isDark
@@ -727,6 +770,7 @@ function WaiterCallModal({
                 )}
 
                 <button
+                  type="button"
                   onClick={() => setStep('table')}
                   className={`text-[11px] font-semibold text-center w-full py-1 rounded ${
                     isDark ? 'text-slate-500 hover:text-slate-300' : 'text-slate-400 hover:text-slate-600'

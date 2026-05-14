@@ -8,9 +8,18 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
  * isteklerinin `authenticated` rolüyle gitmesine neden olur ve `waiter_calls` için
  * yalnızca `anon`'a tanımlı INSERT RLS policy'si fail eder (403).
  *
- * Bu client `persistSession:false` + ayrı `storageKey` ile yalnızca anon key
- * gönderir, JWT eklemez. POS girişini etkilemez.
+ * Bu client `persistSession:false` + **bellek içi auth storage** ile POS ile
+ * aynı origin'de asla localStorage oturumu paylaşmaz; böylece QR istekleri
+ * yanlışlıkla `authenticated` rolüyle gitmez (`waiter_calls` anon INSERT 403).
+ *
+ * Ayrı `storageKey` yedek olarak kalır; asıl izolasyon `storage` ile sağlanır.
  */
+const memoryAuthStorage = {
+  getItem: (_key: string) => null as string | null,
+  setItem: (_key: string, _value: string) => {},
+  removeItem: (_key: string) => {},
+};
+
 let publicClient: SupabaseClient | null = null;
 function getPublicClient(): SupabaseClient {
   if (publicClient) return publicClient;
@@ -28,6 +37,7 @@ function getPublicClient(): SupabaseClient {
       persistSession: false,
       autoRefreshToken: false,
       detectSessionInUrl: false,
+      storage: memoryAuthStorage,
       storageKey: 'sefpos-public-menu-anon',
     },
     global: {
