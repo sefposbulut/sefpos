@@ -42,9 +42,9 @@ export function Inventory() {
               <Boxes className="w-5 h-5 text-white" />
             </div>
             <div>
-              <h1 className="text-lg md:text-xl font-black text-slate-800">Stok / Reçete Yönetimi</h1>
+              <h1 className="text-lg md:text-xl font-black text-slate-800">Reçete / Sayım</h1>
               <div className="text-[11px] md:text-xs text-slate-500 font-semibold">
-                Hammadde, tedarikçi, reçete, alış faturası, ürün sayımı
+                Reçete, ürün sayımı, hammadde, tedarikçi, alış faturası
               </div>
             </div>
           </div>

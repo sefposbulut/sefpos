@@ -1160,7 +1160,7 @@ export function Products() {
           <div className="min-w-0">
             <h1 className="text-xl md:text-3xl font-bold text-slate-800">Stok Yönetimi</h1>
             <p className="text-sm text-slate-600 mt-1 max-w-xl leading-snug">
-              Ürün sayımı: sol menüden <strong className="text-slate-800">Stok / Reçete</strong> →{' '}
+              Ürün sayımı: sol menüden <strong className="text-slate-800">Reçete / Sayım</strong> →{' '}
               <strong className="text-slate-800">Ürün sayımı</strong> sekmesi (ikinci sekme) veya{' '}
               <button
                 type="button"
@@ -1239,7 +1239,7 @@ export function Products() {
               type="button"
               onClick={goToProductStockCount}
               className="px-3 py-2 md:px-4 md:py-3 bg-white border-2 border-amber-200 text-amber-800 rounded-lg md:rounded-xl hover:shadow-lg hover:border-amber-300 transition-all active:scale-95 text-sm md:text-base flex items-center gap-1.5"
-              title="Stok / Reçete ekranında ürün sayımı"
+              title="Reçete / Sayım ekranında ürün sayımı"
             >
               <ClipboardList size={15} />
               <span className="hidden md:inline text-sm">Sayım</span>
