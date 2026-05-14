@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ClipboardList, Search, CheckCircle2, Loader2, AlertTriangle, X, Printer } from 'lucide-react';
+import { ClipboardList, Search, CheckCircle2, Loader2, AlertTriangle, X, Printer, FileSpreadsheet, FileText } from 'lucide-react';
+import * as XLSX from 'xlsx';
+import { jsPDF } from 'jspdf';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../contexts/AuthContext';
 
@@ -123,6 +125,13 @@ export function ProductStockCount() {
   const [loading, setLoading] = useState(true);
   const [applying, setApplying] = useState(false);
   const [sessionReport, setSessionReport] = useState<SessionReport | null>(null);
+
+  const splitReportRows = useMemo(() => {
+    if (!sessionReport) return { plus: [] as SessionReportRow[], minus: [] as SessionReportRow[] };
+    const plus = sessionReport.rows.filter((r) => r.delta > 0.0001);
+    const minus = sessionReport.rows.filter((r) => r.delta < -0.0001);
+    return { plus, minus };
+  }, [sessionReport]);
 
   useEffect(() => {
     if (activeBranch?.id) setBranchId(activeBranch.id);
@@ -260,18 +269,18 @@ export function ProductStockCount() {
   };
 
   const printSessionReport = (rep: SessionReport) => {
-    const rowsHtml = rep.rows
-      .map(
-        (r) => `
+    const rowTr = (r: SessionReportRow) => `
       <tr>
-        <td>${escapeHtml(r.productName)}</td>
+        <td>${escapeHtml(r.productName)} <span style="color:#94a3b8">(${escapeHtml(r.unit)})</span></td>
         <td class="r">${r.sys.toFixed(2)}</td>
         <td class="r">${r.counted.toFixed(2)}</td>
         <td class="r ${r.delta >= 0 ? 'pos' : 'neg'}">${r.delta >= 0 ? '+' : ''}${r.delta.toFixed(2)}</td>
         <td class="r ${r.tutarSigned >= 0 ? 'pos' : 'neg'}">${r.tutarSigned >= 0 ? '+' : ''}${moneyTR(r.tutarSigned)}</td>
-      </tr>`,
-      )
-      .join('');
+      </tr>`;
+    const plusRows = rep.rows.filter((r) => r.delta > 0.0001);
+    const minusRows = rep.rows.filter((r) => r.delta < -0.0001);
+    const plusHtml = plusRows.map(rowTr).join('') || '<tr><td colspan="5">—</td></tr>';
+    const minusHtml = minusRows.map(rowTr).join('') || '<tr><td colspan="5">—</td></tr>';
     const w = window.open('', '_blank', 'width=900,height=700');
     if (!w) {
       alert('Açılır pencere engellendi; yazdırmak için izin verin.');
@@ -282,36 +291,117 @@ export function ProductStockCount() {
     const netClsPrint = netTutarPrint >= 0 ? 'pos' : 'neg';
     w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Sayım — ${escapeHtml(rep.referenceNo)}</title>
       <style>
-        body{font-family:system-ui,sans-serif;padding:24px;color:#1e293b}
-        h1{font-size:20px;margin:0 0 8px}
-        .meta{font-size:13px;color:#64748b;margin-bottom:20px}
-        table{width:100%;border-collapse:collapse;font-size:13px}
-        th,td{border:1px solid #e2e8f0;padding:8px;text-align:left}
+        @page { size: A4; margin: 12mm; }
+        body{font-family:system-ui,sans-serif;padding:16px;color:#1e293b;font-size:12px}
+        h1{font-size:18px;margin:0 0 8px}
+        h2{font-size:14px;margin:16px 0 8px;color:#0f172a}
+        .meta{font-size:12px;color:#64748b;margin-bottom:12px}
+        table{width:100%;border-collapse:collapse;font-size:11px;margin-bottom:8px}
+        th,td{border:1px solid #e2e8f0;padding:6px 8px;text-align:left}
         th{background:#f8fafc;font-weight:700}
         .r{text-align:right;font-variant-numeric:tabular-nums}
         .pos{color:#047857}.neg{color:#b91c1c}
-        .sum{margin-top:16px;font-size:14px}
+        .sum{margin-top:12px;font-size:12px}
       </style></head><body>
       <h1>Sayım fark raporu</h1>
       <div class="meta">Belge: <b>${escapeHtml(rep.referenceNo)}</b> · ${escapeHtml(rep.branchName)} · ${escapeHtml(rep.createdAtLabel)}</div>
-      ${!rep.usedSequentialDoc ? '<p style="font-size:11px;color:#b45309;margin:8px 0 0">Geçici SYM belge no. Sıralı SAYIM için migration + üretimde VITE_STOCK_COUNT_BATCH_RPC=true.</p>' : ''}
-      <table><thead><tr><th>Ürün</th><th>Sistem</th><th>Sayım</th><th>Fark (adet)</th><th>± Satış (₺)</th></tr></thead>
-      <tbody>${rowsHtml}</tbody>
-      <tfoot>
+      ${!rep.usedSequentialDoc ? '<p style="font-size:10px;color:#b45309;margin:0 0 8px">Geçici SYM belge no. Sıralı SAYIM için migration + VITE_STOCK_COUNT_BATCH_RPC=true.</p>' : ''}
+      <p style="font-size:11px;margin:0 0 8px"><b>Fazla:</b> ${plusRows.length} ürün (sayım &gt; sistem) · <b>Eksik:</b> ${minusRows.length} ürün (sayım &lt; sistem)</p>
+      <h2>Fazla (sayım &gt; sistem)</h2>
+      <table><thead><tr><th>Ürün</th><th>Sistem</th><th>Sayım</th><th>Fark</th><th>± Satış</th></tr></thead><tbody>${plusHtml}</tbody></table>
+      <h2>Eksik (sayım &lt; sistem)</h2>
+      <table><thead><tr><th>Ürün</th><th>Sistem</th><th>Sayım</th><th>Fark</th><th>± Satış</th></tr></thead><tbody>${minusHtml}</tbody></table>
+      <table style="margin-top:12px"><tfoot>
         <tr style="background:#f1f5f9;font-weight:800">
           <td colspan="4" style="text-align:right;padding:10px 8px">Satış farkı toplamı (net)</td>
-          <td class="r ${netClsPrint}" style="padding:10px 8px;font-size:15px">${netSignPrint}${moneyTR(netTutarPrint)}</td>
+          <td class="r ${netClsPrint}" style="padding:10px 8px;font-size:14px">${netSignPrint}${moneyTR(netTutarPrint)}</td>
         </tr>
       </tfoot></table>
       <div class="sum">
-        Fazla (adet): +${rep.totals.plusQty.toFixed(2)} → satış ${moneyTR(rep.totals.plusTutar)}<br>
-        Eksik (adet): −${rep.totals.minusQty.toFixed(2)} → satış ${moneyTR(rep.totals.minusTutar)}<br>
-        <b>Net (satış üzerinden):</b> ${moneyTR(rep.totals.plusTutar - rep.totals.minusTutar)}
+        Fazla adet toplamı: +${rep.totals.plusQty.toFixed(2)} → satış ${moneyTR(rep.totals.plusTutar)}<br>
+        Eksik adet toplamı: −${rep.totals.minusQty.toFixed(2)} → satış ${moneyTR(rep.totals.minusTutar)}<br>
+        <b>Net (satış):</b> ${moneyTR(netTutarPrint)}
       </div>
-      <p style="margin-top:24px;font-size:11px;color:#94a3b8">ŞefPOS — ürün sayımı</p>
+      <p style="margin-top:20px;font-size:10px;color:#94a3b8">ŞefPOS — ürün sayımı</p>
       <script>window.onload=function(){window.print();}</script>
       </body></html>`);
     w.document.close();
+  };
+
+  const exportSessionReportExcel = (rep: SessionReport) => {
+    const plus = rep.rows.filter((r) => r.delta > 0.0001);
+    const minus = rep.rows.filter((r) => r.delta < -0.0001);
+    const aoa: (string | number)[][] = [
+      ['Belge', rep.referenceNo],
+      ['Şube', rep.branchName],
+      ['Tarih', rep.createdAtLabel],
+      [],
+      ['Özet'],
+      ['Fazla ürün adedi', plus.length],
+      ['Eksik ürün adedi', minus.length],
+      ['Fazla adet toplamı', rep.totals.plusQty],
+      ['Eksik adet toplamı', rep.totals.minusQty],
+      ['Net satış (₺)', rep.totals.plusTutar - rep.totals.minusTutar],
+      [],
+      ['FAZLA (sayım > sistem)'],
+      ['Ürün', 'Birim', 'Sistem', 'Sayım', 'Fark', '± Satış (₺)'],
+      ...plus.map((r) => [r.productName, r.unit, r.sys, r.counted, r.delta, r.tutarSigned]),
+      [],
+      ['EKSIK (sayım < sistem)'],
+      ['Ürün', 'Birim', 'Sistem', 'Sayım', 'Fark', '± Satış (₺)'],
+      ...minus.map((r) => [r.productName, r.unit, r.sys, r.counted, r.delta, r.tutarSigned]),
+    ];
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Sayim');
+    const fn = `sayim-${String(rep.referenceNo).replace(/[^a-zA-Z0-9-_]/g, '_')}.xlsx`;
+    XLSX.writeFile(wb, fn);
+  };
+
+  const exportSessionReportPdf = (rep: SessionReport) => {
+    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+    let y = 12;
+    doc.setFontSize(14);
+    doc.text(`Sayım — ${rep.referenceNo}`, 10, y);
+    y += 7;
+    doc.setFontSize(9);
+    doc.text(`${rep.branchName} · ${rep.createdAtLabel}`, 10, y);
+    y += 6;
+    const plus = rep.rows.filter((r) => r.delta > 0.0001);
+    const minus = rep.rows.filter((r) => r.delta < -0.0001);
+    doc.text(`Fazla: ${plus.length} ürün · Eksik: ${minus.length} ürün`, 10, y);
+    y += 6;
+    const addBlock = (title: string, list: SessionReportRow[]) => {
+      if (y > 250) {
+        doc.addPage();
+        y = 12;
+      }
+      doc.setFont('helvetica', 'bold');
+      doc.text(title, 10, y);
+      y += 5;
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8);
+      for (const r of list) {
+        if (y > 278) {
+          doc.addPage();
+          y = 12;
+        }
+        const line = `${(r.productName || '').slice(0, 28)}  sys ${r.sys.toFixed(1)} say ${r.counted.toFixed(1)} Δ${r.delta >= 0 ? '+' : ''}${r.delta.toFixed(1)}  ${moneyTR(r.tutarSigned)}`;
+        doc.text(line, 10, y);
+        y += 4;
+      }
+      y += 3;
+      doc.setFontSize(9);
+    };
+    addBlock('Fazla (sayim > sistem)', plus);
+    addBlock('Eksik (sayim < sistem)', minus);
+    doc.setFont('helvetica', 'bold');
+    doc.text(
+      `Net satis: ${moneyTR(rep.totals.plusTutar - rep.totals.minusTutar)}`,
+      10,
+      y + 4,
+    );
+    doc.save(`sayim-${String(rep.referenceNo).replace(/[^a-zA-Z0-9-_]/g, '_')}.pdf`);
   };
 
   const apply = async () => {
@@ -485,14 +575,30 @@ export function ProductStockCount() {
                 </p>
                 <p className="text-xs text-slate-400 mt-0.5">{sessionReport.createdAtLabel}</p>
               </div>
-              <div className="flex items-center gap-2 shrink-0">
+              <div className="flex flex-wrap items-center justify-end gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => exportSessionReportExcel(sessionReport)}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-slate-200 text-sm font-bold text-slate-700 hover:bg-slate-50"
+                >
+                  <FileSpreadsheet className="w-4 h-4" />
+                  Excel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => exportSessionReportPdf(sessionReport)}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-slate-200 text-sm font-bold text-slate-700 hover:bg-slate-50"
+                >
+                  <FileText className="w-4 h-4" />
+                  PDF
+                </button>
                 <button
                   type="button"
                   onClick={() => printSessionReport(sessionReport)}
                   className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-slate-200 text-sm font-bold text-slate-700 hover:bg-slate-50"
                 >
                   <Printer className="w-4 h-4" />
-                  Yazdır
+                  A4 yazdır
                 </button>
                 <button
                   type="button"
@@ -515,12 +621,14 @@ export function ProductStockCount() {
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center">
                 <div className="rounded-xl bg-emerald-50 border border-emerald-100 px-2 py-3">
                   <div className="text-[10px] font-bold text-emerald-800 uppercase">Fazla (adet)</div>
+                  <div className="text-[10px] text-emerald-800/90 font-semibold">{splitReportRows.plus.length} ürün</div>
                   <div className="text-sm font-black text-emerald-900">+{sessionReport.totals.plusQty.toFixed(2)}</div>
                   <div className="text-[10px] font-semibold text-emerald-800/90 mt-0.5">Satış tutarı</div>
                   <div className="text-xs text-emerald-700 font-semibold">{moneyTR(sessionReport.totals.plusTutar)}</div>
                 </div>
                 <div className="rounded-xl bg-rose-50 border border-rose-100 px-2 py-3">
                   <div className="text-[10px] font-bold text-rose-800 uppercase">Eksik (adet)</div>
+                  <div className="text-[10px] text-rose-800/90 font-semibold">{splitReportRows.minus.length} ürün</div>
                   <div className="text-sm font-black text-rose-900">−{sessionReport.totals.minusQty.toFixed(2)}</div>
                   <div className="text-[10px] font-semibold text-rose-800/90 mt-0.5">Satış tutarı</div>
                   <div className="text-xs text-rose-700 font-semibold">{moneyTR(sessionReport.totals.minusTutar)}</div>
@@ -531,8 +639,15 @@ export function ProductStockCount() {
                   <div className="text-[10px] text-slate-500 mt-1">Birim satış fiyatı × adet farkı</div>
                 </div>
               </div>
-              <p className="text-xs font-semibold text-slate-600">Sayım yapılan ürünler (satır bazında)</p>
-              <div className="rounded-xl border border-slate-200 overflow-hidden">
+              <p className="text-xs text-slate-600">
+                <strong className="text-emerald-800">Fazla:</strong> {splitReportRows.plus.length} ürün (sayım &gt;
+                sistem) · <strong className="text-rose-800">Eksik:</strong> {splitReportRows.minus.length} ürün (sayım
+                &lt; sistem)
+              </p>
+              <div className="rounded-xl border border-emerald-200 overflow-hidden">
+                <div className="bg-emerald-50 px-3 py-1.5 text-xs font-black text-emerald-900 uppercase">
+                  Fazla (sayım &gt; sistem)
+                </div>
                 <table className="w-full text-sm">
                   <thead className="bg-slate-50 text-left text-xs font-bold text-slate-600 uppercase">
                     <tr>
@@ -540,49 +655,81 @@ export function ProductStockCount() {
                       <th className="p-2 text-right">Sistem</th>
                       <th className="p-2 text-right">Sayım</th>
                       <th className="p-2 text-right">Fark</th>
-                      <th className="p-2 text-right">± Satış (₺)</th>
+                      <th className="p-2 text-right">± Satış</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {sessionReport.rows.map((r, i) => (
-                      <tr key={i} className="border-t border-slate-100">
-                        <td className="p-2 font-medium text-slate-800">
-                          {r.productName}
-                          <span className="text-slate-400 font-normal text-xs ml-1">({r.unit})</span>
-                        </td>
-                        <td className="p-2 text-right font-mono">{r.sys.toFixed(2)}</td>
-                        <td className="p-2 text-right font-mono">{r.counted.toFixed(2)}</td>
-                        <td
-                          className={`p-2 text-right font-mono font-bold ${r.delta >= 0 ? 'text-emerald-700' : 'text-red-600'}`}
-                        >
-                          {r.delta >= 0 ? '+' : ''}
-                          {r.delta.toFixed(2)}
-                        </td>
-                        <td
-                          className={`p-2 text-right font-mono text-xs ${r.tutarSigned >= 0 ? 'text-emerald-700' : 'text-red-600'}`}
-                        >
-                          {r.tutarSigned >= 0 ? '+' : ''}
-                          {moneyTR(r.tutarSigned)}
+                    {splitReportRows.plus.length === 0 ? (
+                      <tr>
+                        <td colSpan={5} className="p-3 text-center text-slate-400 text-sm">
+                          Yok
                         </td>
                       </tr>
-                    ))}
+                    ) : (
+                      splitReportRows.plus.map((r, i) => (
+                        <tr key={`p-${i}`} className="border-t border-slate-100">
+                          <td className="p-2 font-medium text-slate-800">
+                            {r.productName}
+                            <span className="text-slate-400 font-normal text-xs ml-1">({r.unit})</span>
+                          </td>
+                          <td className="p-2 text-right font-mono">{r.sys.toFixed(2)}</td>
+                          <td className="p-2 text-right font-mono">{r.counted.toFixed(2)}</td>
+                          <td className="p-2 text-right font-mono font-bold text-emerald-700">+{r.delta.toFixed(2)}</td>
+                          <td className="p-2 text-right font-mono text-xs text-emerald-700 font-bold">
+                            +{moneyTR(r.tutarSigned)}
+                          </td>
+                        </tr>
+                      ))
+                    )}
                   </tbody>
-                  <tfoot className="bg-slate-100 border-t-2 border-slate-300">
-                    <tr>
-                      <td colSpan={4} className="p-3 text-right text-sm font-black text-slate-800">
-                        Satış farkı toplamı (net)
-                      </td>
-                      <td
-                        className={`p-3 text-right font-mono text-base font-black ${
-                          raporNetSatış >= 0 ? 'text-emerald-700' : 'text-red-600'
-                        }`}
-                      >
-                        {raporNetSatış >= 0 ? '+' : ''}
-                        {moneyTR(raporNetSatış)}
-                      </td>
-                    </tr>
-                  </tfoot>
                 </table>
+              </div>
+              <div className="rounded-xl border border-rose-200 overflow-hidden">
+                <div className="bg-rose-50 px-3 py-1.5 text-xs font-black text-rose-900 uppercase">
+                  Eksik (sayım &lt; sistem)
+                </div>
+                <table className="w-full text-sm">
+                  <thead className="bg-slate-50 text-left text-xs font-bold text-slate-600 uppercase">
+                    <tr>
+                      <th className="p-2">Ürün</th>
+                      <th className="p-2 text-right">Sistem</th>
+                      <th className="p-2 text-right">Sayım</th>
+                      <th className="p-2 text-right">Fark</th>
+                      <th className="p-2 text-right">± Satış</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {splitReportRows.minus.length === 0 ? (
+                      <tr>
+                        <td colSpan={5} className="p-3 text-center text-slate-400 text-sm">
+                          Yok
+                        </td>
+                      </tr>
+                    ) : (
+                      splitReportRows.minus.map((r, i) => (
+                        <tr key={`m-${i}`} className="border-t border-slate-100">
+                          <td className="p-2 font-medium text-slate-800">
+                            {r.productName}
+                            <span className="text-slate-400 font-normal text-xs ml-1">({r.unit})</span>
+                          </td>
+                          <td className="p-2 text-right font-mono">{r.sys.toFixed(2)}</td>
+                          <td className="p-2 text-right font-mono">{r.counted.toFixed(2)}</td>
+                          <td className="p-2 text-right font-mono font-bold text-red-600">{r.delta.toFixed(2)}</td>
+                          <td className="p-2 text-right font-mono text-xs text-red-600 font-bold">
+                            {moneyTR(r.tutarSigned)}
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 flex flex-wrap justify-between gap-2 text-sm font-black text-slate-800">
+                <span>Satış farkı toplamı (net)</span>
+                <span className={raporNetSatış >= 0 ? 'text-emerald-700' : 'text-red-600'}>
+                  {raporNetSatış >= 0 ? '+' : ''}
+                  {moneyTR(raporNetSatış)}
+                </span>
               </div>
               <p className="text-xs text-slate-500">
                 Sayım sonrası satış, transfer ve diğer stok hareketlerini görmek için{' '}
