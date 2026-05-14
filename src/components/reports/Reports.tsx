@@ -49,7 +49,10 @@ export function Reports() {
       <div className="p-4 md:p-6 max-w-7xl mx-auto">
         <div className="mb-6">
           <h1 className="text-2xl md:text-3xl font-bold text-slate-900">Raporlar</h1>
-          <p className="text-sm text-slate-500 mt-1">Satış, ürün, şube ve personel performans raporları</p>
+          <p className="text-sm text-slate-500 mt-1">
+            Satış, ürün, şube ve personel performans raporları. Ürün sayımı geçmişi için menüden{' '}
+            <strong className="text-slate-700">Raporlar → Sayım raporu</strong>.
+          </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-3 mb-6">

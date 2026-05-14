@@ -236,7 +236,7 @@ export function ProductStockCount() {
       await loadProducts();
       await loadBranchStocks();
       clearCounts();
-      alert(`Sayım uygulandı. Referans: ${refNo}`);
+      alert(`Sayım uygulandı. Referans: ${refNo}\n\nKayıtları görmek için: Raporlar → Sayım raporu.`);
     } catch (e: any) {
       alert(e?.message || String(e));
     } finally {

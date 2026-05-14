@@ -64,6 +64,7 @@ const PAGE_LABELS: Record<string, string> = {
   customers: 'Müşteriler',
   users: 'Kullanıcılar',
   reports: 'Raporlar',
+  'reports-stock-count': 'Sayım raporu',
   endofday: 'Gün Sonu',
   'cancel-logs': 'İptal Kayıtları',
   inventory: 'Reçete / Sayım',

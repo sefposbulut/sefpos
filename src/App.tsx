@@ -26,6 +26,7 @@ import { AdminPanel } from './components/AdminPanel';
 import { Customers } from './components/customers/Customers';
 import { EndOfDay } from './components/EndOfDay';
 import { Reports } from './components/reports/Reports';
+import { StockCountReport } from './components/reports/StockCountReport';
 import { CancelLogs } from './components/CancelLogs';
 import { PinLockScreen } from './components/PinLockScreen';
 import { Inventory } from './components/inventory/Inventory';
@@ -661,6 +662,8 @@ function App() {
       )}
 
       {show('reports') && <Reports />}
+
+      {show('reports-stock-count') && <StockCountReport />}
 
       {show('endofday') && <EndOfDay />}
 
