@@ -266,16 +266,16 @@ const realSupabase = createClient(supabaseUrl, supabaseAnonKey, {
       // davranisinda kalsin). Boylece tarayici "donmus" gibi gozukmez; kullanici
       // cache/snapshot uzerinden cogu UI'i gorur.
       const isAuth = href.includes('/auth/v1/');
+      const isAuthToken = href.includes('/auth/v1/token');
       const isRealtime = href.includes('/realtime/');
       const fetchOptions: RequestInit = init ? { ...(init as RequestInit) } : {};
 
-      // Auth (özellikle getSession / token refresh) offline veya yavaş bağlantıda
-      // sonsuza kadar bekliyordu → "Oturum kontrol ediliyor..." ekranı kilitleniyordu.
-      // 10 sn içinde dönmeyen auth çağrılarını AbortError ile keseriz; AuthContext
-      // .catch() içinde loading=false yapacak ve kullanıcı login ekranına düşecek.
-      if (isAuth && typeof AbortController !== 'undefined' && !fetchOptions.signal) {
+      // Auth: refresh_token (`/auth/v1/token`) yarım kesilirse istemci bazen oturumu
+      // düşürüyor; bu yüzden token isteğinde Abort kullanmıyoruz. Diğer auth uçları
+      // için uzun ama sınırlı timeout (eski 10 sn çok agresifti → yanlış çıkış).
+      if (isAuth && !isAuthToken && typeof AbortController !== 'undefined' && !fetchOptions.signal) {
         const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 10000);
+        const timer = setTimeout(() => controller.abort(), 45000);
         fetchOptions.signal = controller.signal;
         return nativeFetch(input as RequestInfo, fetchOptions)
           .then(async (res) => {

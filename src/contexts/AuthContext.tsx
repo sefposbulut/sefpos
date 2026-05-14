@@ -496,15 +496,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     }, 8000);
 
-    void supabase.auth
-      .getSession()
-      .then(({ data: { session } }) => applySession(session))
-      .catch(() => {
-        if (!cancelled) setLoading(false);
-      })
-      .finally(() => {
+    void (async () => {
+      try {
+        for (let attempt = 0; attempt < 3 && !cancelled; attempt++) {
+          try {
+            const { data: { session } } = await supabase.auth.getSession();
+            await applySession(session);
+            break;
+          } catch {
+            if (cancelled) return;
+            await new Promise((r) => setTimeout(r, 350 * (attempt + 1)));
+          }
+        }
+      } finally {
         window.clearTimeout(safetyTimer);
-      });
+        if (!cancelled) setLoading(false);
+      }
+    })();
 
     const {
       data: { subscription },
@@ -513,6 +521,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // TOKEN_REFRESHED + ayni user icin profile reload gerekmez (UX kritik).
       // SIGNED_IN ayni user.id ile gelirse de skip olacak (applySession icindeki id kontrolu).
       if (event === 'INITIAL_SESSION') return;
+      // Gecici ag / yarim token yenileme: GoTrue bazen SIGNED_OUT yayinlar; storage'da
+      // gecerli oturum varsa bir kez getSession ile toparla. Gercek cikista session yoktur.
+      if (event === 'SIGNED_OUT') {
+        void (async () => {
+          if (cancelled) return;
+          await new Promise((r) => setTimeout(r, 200));
+          try {
+            const { data: { session: recovered } } = await supabase.auth.getSession();
+            if (cancelled) return;
+            if (recovered?.user) {
+              await applySession(recovered, { force: false });
+            } else {
+              await applySession(null);
+            }
+          } catch {
+            if (!cancelled) await applySession(null);
+          }
+        })();
+        return;
+      }
       // USER_UPDATED metadata degisikligi anlamina gelir → profile yeniden yuklenir.
       const force = event === 'USER_UPDATED';
       void applySession(session, { force });
@@ -813,6 +841,30 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       cancelled = true;
       stop();
       document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [user?.id]);
+
+  // Bulut: uzun süre açık kasada token yenileme sekmesi uyku/arka planda gecikince
+  // oturum düşmesin diye görünürken periyodik refresh + sekmeye dönüşte bir kez.
+  useEffect(() => {
+    if (!user?.id || isLocalMode() || isSqlServerMode()) return;
+    let cancelled = false;
+    const bump = () => {
+      if (cancelled || document.visibilityState !== 'visible') return;
+      void supabase.auth.refreshSession().catch(() => {});
+    };
+    const onVis = () => {
+      if (document.visibilityState === 'visible') bump();
+    };
+    document.addEventListener('visibilitychange', onVis);
+    window.addEventListener('focus', bump);
+    const iv = window.setInterval(bump, 20 * 60 * 1000);
+    if (document.visibilityState === 'visible') bump();
+    return () => {
+      cancelled = true;
+      window.clearInterval(iv);
+      document.removeEventListener('visibilitychange', onVis);
+      window.removeEventListener('focus', bump);
     };
   }, [user?.id]);
 

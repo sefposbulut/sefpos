@@ -530,7 +530,7 @@ function RoleEditModal({ role, onClose, onSave }: RoleEditModalProps) {
 }
 
 export function UserManagement() {
-  const { tenant, profile } = useAuth();
+  const { tenant, profile, user, signOut } = useAuth();
   const [users, setUsers] = useState<ProfileWithRole[]>([]);
   const [roles, setRoles] = useState<Role[]>([]);
   const [branches, setBranches] = useState<Branch[]>([]);
@@ -869,6 +869,10 @@ export function UserManagement() {
     try {
       await callUpdateUser({ target_user_id: userId, new_password: password });
       alert('Şifre başarıyla güncellendi');
+      // Kendi şifresi değiştiyse: tüm oturumları kapat (güvenlik); diğer kullanıcıda sunucu refresh'leri geçersiz kılar.
+      if (user?.id && userId === user.id) {
+        await signOut();
+      }
     } catch (err) {
       alert('Şifre değiştirilemedi: ' + (err as Error).message);
     }
