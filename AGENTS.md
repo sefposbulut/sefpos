@@ -24,7 +24,26 @@ This file is the permanent project memory for this repository.
 - Supabase migration workflow: `.github/workflows/supabase-migrations.yml`
 - Supabase weekly backup workflow: `.github/workflows/supabase-backup.yml`
 - Electron auto-release workflow: `.github/workflows/electron-release.yml`
-- **Web (www.sefpos.com.tr):** Cloudflare Pages projesi **`sefposadisyon`** (domain burada; üstteki `sefpos` yalnızca `sefpos.pages.dev`). Build komutu **`npm run build:pages`**. GitHub deploy: `.github/workflows/cloudflare-pages-deploy.yml` + `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` (isteğe bağlı `CLOUDFLARE_PAGES_PROJECT_NAME` ile başka projeye yönlendirme). Yinelenen boş **`sefpos`** Pages projesini silmek: yerelde `npm run cf:pages:delete-legacy-sefpos` (Wrangler token gerekir) veya Cloudflare panelinden proje silme.
+- **Web (www.sefpos.com.tr):** Cloudflare Pages projesi **`sefposadisyon`**. Üretim build **`npm run build:pages`** (köke `/assets/`). İki otomatik yol mümkün: (1) Cloudflare’de bu projeye **Git bağlantısı** (aşağıdaki adımlar), (2) GitHub Actions **`.github/workflows/cloudflare-pages-deploy.yml`** + `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID`. İkisi birden **aynı projeye** tetiklenirse çift deploy olur; tercihen **birini** kullanın (CF Git açıksa Actions işini `workflow_dispatch` ile sadece elle bırakabilirsiniz).
+- Yinelenen **`sefpos`** Pages projesi silindi; yerelde bir kerelik: `npm run cf:pages:delete-legacy-sefpos` (artık gerekmez).
+
+### Cloudflare Pages `sefposadisyon` → GitHub (`sefposbulut/sefpos`)
+
+Panelden (repo dosyası bağlamaz; Cloudflare hesabında yapılır):
+
+1. **Cloudflare Dashboard** → **Workers & Pages** → **`sefposadisyon`** projesini açın.
+2. **Git** / **Connect to Git** / **Set up builds** (arayüz metni sürüme göre değişebilir) ile GitHub bağlantısını başlatın.
+3. **Cloudflare GitHub App** yetkisinde organizasyon **`sefposbulut`**, repository **`sefpos`** seçilsin (yalnızca bu repo önerilir).
+4. **Production branch:** `master` (projede varsayılan ana dal buysa).
+5. **Build ayarları:**
+   - **Root directory:** `/` (boş veya `/`).
+   - **Build command:** `npm ci && npm run build:pages`  
+     (`npm run build` kullanmayın; `./assets` üretir, www kökünde yanlış çözülür.)
+   - **Build output directory:** `dist`
+6. İlk kayıttan sonra **Save** / **Deploy** ile bir dağıtım tetikleyin; **Deployments** sekmesinde log kırılmadan yeşil olduğunu doğrulayın.
+7. (İsteğe bağlı) Cloudflare **Environment variables** içinde yerel `.env` ile aynı `VITE_*` değişkenleri tanımlanabilir; tanımlanmazsa istemci yine `src/lib/supabase.ts` içindeki birincil proje yedekleriyle açılır.
+
+**Not:** Eski üstteki **`sefpos`** projesi silindiyse GitHub push artık oraya gitmez; tek üretim Pages projesi **`sefposadisyon`** olmalıdır.
 - Dependency automation: `.github/dependabot.yml`
 
 ## Otomatik sürüm yayınlama (ZORUNLU akış)
