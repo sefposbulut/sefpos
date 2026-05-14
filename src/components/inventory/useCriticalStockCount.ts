@@ -5,6 +5,9 @@ import { useAuth } from '../../contexts/AuthContext';
 /**
  * Tenant'a ait aktif hammaddelerden current_stock <= min_stock olanların sayısını
  * verir. ingredients tablosunda realtime aboneliği ile anında günceller.
+ *
+ * Not: PostgREST iki sütunu `current_stock=lte.min_stock` ile kıyaslayamaz; bu yüzden
+ * satırlar çekilip istemcide filtrelenir.
  */
 export function useCriticalStockCount(): number {
   const { tenant } = useAuth();
@@ -18,27 +21,20 @@ export function useCriticalStockCount(): number {
     let mounted = true;
 
     const refresh = async () => {
-      const { data, error } = await supabase
-        .from('ingredients')
-        .select('id', { count: 'exact', head: false })
-        .eq('tenant_id', tenant.id)
-        .eq('is_active', true)
-        .filter('current_stock', 'lte', 'min_stock' as any);
-      // PostgREST `.filter('a','lte','b')` will treat 'min_stock' literally; bunun yerine
-      // tüm aktifleri çekip JS'te filtreleyelim.
-      if (error) return;
-      if (!data) return;
-      // fallback: re-query
-      const { data: full } = await supabase
+      const { data: rows, error } = await supabase
         .from('ingredients')
         .select('current_stock, min_stock')
         .eq('tenant_id', tenant.id)
         .eq('is_active', true);
       if (!mounted) return;
-      if (full) {
-        const c = (full as any[]).filter((r) => Number(r.current_stock) <= Number(r.min_stock || 0)).length;
-        setCount(c);
+      if (error) {
+        setCount(0);
+        return;
       }
+      const c = (rows || []).filter(
+        (r) => Number(r.current_stock) <= Number(r.min_stock ?? 0),
+      ).length;
+      setCount(c);
     };
 
     void refresh();
@@ -48,15 +44,23 @@ export function useCriticalStockCount(): number {
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'ingredients', filter: `tenant_id=eq.${tenant.id}` },
-        () => { void refresh(); },
+        () => {
+          void refresh();
+        },
       )
       .subscribe();
 
-    const timer = setInterval(() => { void refresh(); }, 60_000);
+    const timer = setInterval(() => {
+      void refresh();
+    }, 60_000);
 
     return () => {
       mounted = false;
-      try { supabase.removeChannel(ch); } catch { /* noop */ }
+      try {
+        supabase.removeChannel(ch);
+      } catch {
+        /* noop */
+      }
       clearInterval(timer);
     };
   }, [tenant?.id]);
