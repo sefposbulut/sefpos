@@ -57,11 +57,17 @@ jobs:
 
       - name: Build (Vite Pages / CF_PAGES + www webhook proxy URL)
         env:
-          VITE_PUBLIC_SUPABASE_FN_PROXY_BASE_URL: https://www.sefpos.com.tr/api/supabase-fn
+          VITE_PUBLIC_SUPABASE_FN_PROXY_BASE_URL: https://www.sefpos.com.tr/api
         run: npm run build:pages
 
       - name: dist kök yolu doğrulama (./assets deploy engeli)
         run: node scripts/assert-web-pages-dist.mjs
+
+      - name: Pages Functions dosyaları
+        run: |
+          test -f functions/api/getir-webhook.ts
+          test -f functions/api/supabase-fn/[[path]].ts
+          test -f dist/_routes.json
 
       - name: Deploy to Cloudflare Pages
         uses: cloudflare/wrangler-action@v3
@@ -69,3 +75,16 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: pages deploy dist --project-name=${{ secrets.CLOUDFLARE_PAGES_PROJECT_NAME || 'sefposadisyon' }}
+
+      - name: Getir webhook proxy canlı kontrol (www)
+        run: |
+          body=$(curl -sS "https://www.sefpos.com.tr/api/getir-webhook?type=new")
+          echo "$body" | head -c 400
+          echo ""
+          if echo "$body" | grep -qi "Sistem hazirlaniyor"; then
+            echo "::error::/api/getir-webhook hâlâ SPA dönüyor. Cloudflare → sefposadisyon → SEFPOS_SUPABASE_URL ve Functions deploy kontrol edin."
+            exit 1
+          fi
+          if ! echo "$body" | grep -qi "sefpos-getir-webhook-proxy"; then
+            echo "::warning::Beklenen JSON yanıt yok; yine de devam (yanıt: ${body:0:120})"
+          fi

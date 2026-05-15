@@ -1,12 +1,13 @@
 /**
  * Partnerlere verilen Edge (webhook) URL'lerinin tabanı.
  * Cloudflare Pages'te `functions/api/supabase-fn` proxy kullanıyorsanız build ortamında:
- *   VITE_PUBLIC_SUPABASE_FN_PROXY_BASE_URL=https://www.sefpos.com.tr/api/supabase-fn
+ *   VITE_PUBLIC_SUPABASE_FN_PROXY_BASE_URL=https://www.sefpos.com.tr/api
  * Boşsa doğrudan Supabase proje URL'si + /functions/v1 kullanılır.
  */
 const PRIMARY_SUPABASE = 'https://xdfnozfuuzctubijbnds.supabase.co';
 
-const WWW_WEBHOOK_PROXY_BASE = 'https://www.sefpos.com.tr/api/supabase-fn';
+/** Kurumsal www üzerinden Edge proxy (Cloudflare Pages `functions/api/`). */
+const WWW_WEBHOOK_PROXY_BASE = 'https://www.sefpos.com.tr/api';
 
 export function getPublicEdgeFunctionsBaseUrl(): string {
   const proxy = (import.meta.env.VITE_PUBLIC_SUPABASE_FN_PROXY_BASE_URL as string | undefined)?.trim().replace(/\/$/, '');
@@ -15,7 +16,7 @@ export function getPublicEdgeFunctionsBaseUrl(): string {
   if (typeof window !== 'undefined') {
     const host = window.location.hostname.toLowerCase();
     if (host === 'www.sefpos.com.tr' || host === 'sefpos.com.tr') {
-      return `${window.location.origin}/api/supabase-fn`;
+      return `${window.location.origin}/api`;
     }
   }
 
