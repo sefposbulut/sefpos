@@ -77,7 +77,7 @@ jobs:
       # publish'inin aksine yutmaz. Sadece tag push'larda calisir.
       - name: Publish to sefpos-releases
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           repository: sefposbulut/sefpos-releases
           token: ${{ secrets.RELEASE_REPO_TOKEN }}
