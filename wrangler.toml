@@ -7,8 +7,9 @@
 # ZORUNLU (www kökü): Build command = npm run build:pages (CF_PAGES=1 → /assets/, <base href="/">).
 # "npm run build" ./ yolları üretir; www.sefpos.com.tr eski arayüzde kalır.
 # Dashboard ornek: npm ci && npm run build:pages
-# public/_routes.json kullanilmaz (sürükle-bırak / bazi yukleme yollari "not supported");
-# /api/supabase-fn yalnizca functions/api/supabase-fn/ dosya rotasiyla gelir.
+# public/_routes.json → dist: /api/* SPA yerine Pages Functions (Getir webhook proxy).
+# Cloudflare → sefposadisyon → Settings → Environment variables (Production):
+#   SEFPOS_SUPABASE_URL = https://xdfnozfuuzctubijbnds.supabase.co
 # Üretim domain (www.sefpos.com.tr) bu Pages projesine bağlıdır. GitHub Actions
 # wrangler pages deploy hedefi varsayılan olarak aynı addır (sefposadisyon).
 #

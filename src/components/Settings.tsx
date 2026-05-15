@@ -4149,7 +4149,7 @@ function GetirPlatformControls({ platform, onChanged }: GetirPlatformControlsPro
   const [section, setSection] = useState<'controls' | 'webhooks' | 'help' | null>('controls');
 
   const newOrderUrl = publicPartnerEdgeUrl('getir-webhook?type=new');
-  const cancelUrl = publicPartnerEdgeUrl('getir-webhook?type=cancel');
+  const statusUrl = publicPartnerEdgeUrl('getir-webhook?type=updated');
   const xApiKey: string = platform.getir_x_api_key || '';
 
   const toggleSection = (s: 'controls' | 'webhooks' | 'help') => {
@@ -4439,17 +4439,17 @@ function GetirPlatformControls({ platform, onChanged }: GetirPlatformControlsPro
 
             <div>
               <div className="flex items-center justify-between mb-1">
-                <span className="text-[10px] uppercase font-bold text-slate-500">İptal Webhook</span>
+                <span className="text-[10px] uppercase font-bold text-slate-500">Durum / İptal Webhook</span>
                 <button
                   type="button"
-                  onClick={() => copy('cancel', cancelUrl)}
+                  onClick={() => copy('status', statusUrl)}
                   className="text-[10px] font-bold text-purple-700 hover:text-purple-900"
                 >
-                  {copiedKey === 'cancel' ? '✓ Kopyalandı' : 'Kopyala'}
+                  {copiedKey === 'status' ? '✓ Kopyalandı' : 'Kopyala'}
                 </button>
               </div>
               <code className="block bg-slate-50 border border-slate-200 rounded p-2 text-[11px] font-mono break-all">
-                {cancelUrl}
+                {statusUrl}
               </code>
             </div>
 

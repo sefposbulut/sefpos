@@ -55,7 +55,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build (Vite Pages / CF_PAGES)
+      - name: Build (Vite Pages / CF_PAGES + www webhook proxy URL)
+        env:
+          VITE_PUBLIC_SUPABASE_FN_PROXY_BASE_URL: https://www.sefpos.com.tr/api/supabase-fn
         run: npm run build:pages
 
       - name: dist kök yolu doğrulama (./assets deploy engeli)

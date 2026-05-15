@@ -1,13 +1,13 @@
 {
   "name": "shefpos",
   "private": true,
-  "version": "1.0.138",
+  "version": "1.0.139",
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "build:pages": "cross-env CF_PAGES=1 NODE_OPTIONS=--max-old-space-size=6144 vite build",
+    "build:pages": "cross-env CF_PAGES=1 VITE_PUBLIC_SUPABASE_FN_PROXY_BASE_URL=https://www.sefpos.com.tr/api/supabase-fn NODE_OPTIONS=--max-old-space-size=6144 vite build",
     "lint": "eslint .",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.app.json",

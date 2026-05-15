@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "description": "Cloudflare Pages: /api/* → functions/api (Getir webhook proxy vb.); geri kalan SPA.",
+  "include": ["/api/*"],
+  "exclude": ["/assets/*", "/platforms/*"]
+}
