@@ -1,6 +1,34 @@
 // deno-lint-ignore-file no-explicit-any
 import type { HemenyoldaAction } from "./hemenyoldaWebhook.ts";
 
+/** HemenYolda örnek formatı: YYYY-MM-DD HH:mm:ss (Türkiye saati). */
+export function formatHemenYoldaLocalDateTime(date: Date = new Date()): string {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Europe/Istanbul",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).formatToParts(date);
+  const get = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((p) => p.type === type)?.value ?? "00";
+  const [day, month, year] = [get("day"), get("month"), get("year")];
+  return `${year}-${month}-${day} ${get("hour")}:${get("minute")}:${get("second")}`;
+}
+
+/** Sertifikasyon/test gönderiminde createdAt (ve varsa scheduledAt) bugün olur. */
+export function applyTodayDatesToHemenYoldaTestOrder(order: Record<string, unknown>): void {
+  const now = formatHemenYoldaLocalDateTime();
+  order.createdAt = now;
+  if (order.scheduledAt != null) {
+    const plusHour = new Date(Date.now() + 60 * 60 * 1000);
+    order.scheduledAt = formatHemenYoldaLocalDateTime(plusHour);
+  }
+}
+
 /** HemenYolda sertifikasyon örnekleri (dokümantasyon ile uyumlu). */
 export const HEMENYOLDA_TEST_SAMPLES: Record<
   string,

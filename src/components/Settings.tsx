@@ -3,8 +3,8 @@ import { supabase } from '../lib/supabase';
 import { createClient } from '@supabase/supabase-js';
 import { useAuth } from '../contexts/AuthContext';
 import { Database } from '../lib/supabase';
-import { X, Plus, Trash2, Settings as SettingsIcon, Building2, ToggleLeft, ToggleRight, Printer, AlertCircle, MapPin, Phone, Save, CreditCard as Edit2, User, Store, CheckCircle, Wifi, WifiOff, Globe, RefreshCw, Lock, ShieldCheck, Eye, EyeOff, Package, CheckSquare, Square, Database as DatabaseIcon, Receipt, Pencil, Scale, Loader, QrCode, PhoneIncoming, FlaskConical, Clock, Download, Sparkles, ChevronDown, ChevronUp, HelpCircle, Info, Percent, Link2 } from 'lucide-react';
-import PartnerIntegrationSettings from './PartnerIntegrationSettings';
+import { X, Plus, Trash2, Settings as SettingsIcon, Building2, ToggleLeft, ToggleRight, Printer, AlertCircle, MapPin, Phone, Save, CreditCard as Edit2, User, Store, CheckCircle, Wifi, WifiOff, Globe, RefreshCw, Lock, ShieldCheck, Eye, EyeOff, Package, CheckSquare, Square, Database as DatabaseIcon, Receipt, Pencil, Scale, Loader, QrCode, PhoneIncoming, FlaskConical, Clock, Download, Sparkles, ChevronDown, ChevronUp, HelpCircle, Info, Percent, Puzzle } from 'lucide-react';
+import IntegrationsSettings from './IntegrationsSettings';
 import {
   isCallerIdAvailable,
   startCallerId,
@@ -36,7 +36,7 @@ interface SettingsProps {
 
 export function Settings({ onClose }: SettingsProps) {
   const { tenant, profile, activeBranch, refreshProfile, refreshBranches } = useAuth();
-  const [activeTab, setActiveTab] = useState<'tables' | 'products' | 'manage' | 'platforms' | 'partner-api' | 'branches' | 'printers' | 'account' | 'system' | 'security' | 'branch-products' | 'database' | 'hugin' | 'devices' | 'waiters' | 'scale' | 'qr-menu' | 'caller-id'>('branches');
+  const [activeTab, setActiveTab] = useState<'tables' | 'products' | 'manage' | 'platforms' | 'integrations' | 'partner-api' | 'branches' | 'printers' | 'account' | 'system' | 'security' | 'branch-products' | 'database' | 'hugin' | 'devices' | 'waiters' | 'scale' | 'qr-menu' | 'caller-id'>('branches');
   const [groups, setGroups] = useState<TableGroup[]>([]);
   const [showGroupForm, setShowGroupForm] = useState(false);
   const [groupName, setGroupName] = useState('');
@@ -426,7 +426,7 @@ export function Settings({ onClose }: SettingsProps) {
       if (activeTab === 'platforms') {
         loadPlatforms();
       }
-      if (activeTab === 'partner-api' || activeTab === 'branches') {
+      if (activeTab === 'integrations' || activeTab === 'partner-api' || activeTab === 'branches') {
         loadBranches();
       }
       if (activeTab === 'branch-products') {
@@ -1055,7 +1055,7 @@ export function Settings({ onClose }: SettingsProps) {
     { id: 'tables', label: 'Masa Grupları', icon: Store, group: 'Masalar' },
     { id: 'manage', label: 'Masa Düzenle', icon: SettingsIcon, group: 'Masalar' },
     { id: 'platforms', label: 'Online Platformlar', icon: Globe, group: 'Siparişler' },
-    { id: 'partner-api', label: 'Dış Partner API', icon: Link2, group: 'Siparişler' },
+    { id: 'integrations', label: 'Entegrasyonlarımız', icon: Puzzle, group: 'Siparişler' },
     { id: 'printers', label: 'Yazıcılar', icon: Printer, group: 'Sistem' },
     { id: 'hugin', label: 'Yazarkasa (Hugin)', icon: Receipt, group: 'Sistem' },
     { id: 'scale', label: 'Terazi Testi', icon: Scale, group: 'Sistem' },
@@ -2501,9 +2501,9 @@ export function Settings({ onClose }: SettingsProps) {
               </>
               )}
             </div>
-          ) : activeTab === 'partner-api' ? (
+          ) : activeTab === 'integrations' || activeTab === 'partner-api' ? (
             tenant ? (
-              <PartnerIntegrationSettings
+              <IntegrationsSettings
                 tenantId={tenant.id}
                 branches={branches.map((b) => ({ id: b.id, name: b.name }))}
                 activeBranchId={activeBranch?.id ?? null}

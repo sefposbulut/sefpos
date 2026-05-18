@@ -10,6 +10,16 @@ export type HemenyoldaTestSample =
   | 'update'
   | 'cancel';
 
+/** HemenYolda sertifikasyon mailinde iletilecek sabit sipariş id'leri (doküman). */
+export const HEMENYOLDA_CERT_MAIL_ORDER_IDS: Record<HemenyoldaTestSample, string> = {
+  getir: '6555dc4a1fcf792dd71545b11033',
+  yemeksepeti: 'order_id-123-123',
+  trendyol: 'ty-order-2023-88421',
+  telefon: '22453344213',
+  update: 'order_id-123-123',
+  cancel: 'order_id-123-123',
+};
+
 export interface HemenyoldaIntegrationRow {
   id: string;
   tenant_id: string;

@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Bike, Copy, Send, AlertCircle, CheckCircle2, FlaskConical } from 'lucide-react';
+import { Copy, Send, AlertCircle, CheckCircle2, ChevronDown, FlaskConical } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import {
   maskToken,
   sendHemenYoldaTestSample,
+  HEMENYOLDA_CERT_MAIL_ORDER_IDS,
   type HemenYoldaIntegrationRow,
   type HemenyoldaTestSample,
 } from '../lib/hemenyoldaApi';
@@ -17,6 +18,8 @@ interface Props {
   tenantId: string;
   branches: Branch[];
   activeBranchId: string | null;
+  embedded?: boolean;
+  onConfiguredChange?: (active: boolean) => void;
 }
 
 const TEST_BUTTONS: { sample: HemenyoldaTestSample; label: string }[] = [
@@ -32,6 +35,8 @@ export default function HemenYoldaIntegrationSettings({
   tenantId,
   branches,
   activeBranchId,
+  embedded = false,
+  onConfiguredChange,
 }: Props) {
   const [row, setRow] = useState<HemenYoldaIntegrationRow | null>(null);
   const [loading, setLoading] = useState(true);
@@ -45,6 +50,7 @@ export default function HemenYoldaIntegrationSettings({
   const [isActive, setIsActive] = useState(true);
   const [isTestMode, setIsTestMode] = useState(true);
   const [copied, setCopied] = useState(false);
+  const [showCertTests, setShowCertTests] = useState(!embedded);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -67,8 +73,9 @@ export default function HemenYoldaIntegrationSettings({
     } else {
       setBranchId(activeBranchId || '');
     }
+    onConfiguredChange?.(!!r && !!r.is_active && !!String(r?.access_token || '').trim());
     setLoading(false);
-  }, [tenantId, activeBranchId]);
+  }, [tenantId, activeBranchId, onConfiguredChange]);
 
   useEffect(() => {
     load();
@@ -154,21 +161,19 @@ export default function HemenYoldaIntegrationSettings({
 
   return (
     <div className="space-y-4">
-      <div className="bg-gradient-to-r from-emerald-600 to-teal-700 rounded-xl p-4 md:p-5 text-white">
-        <div className="flex items-center gap-3 mb-2">
-          <Bike className="w-6 h-6 shrink-0" />
-          <h3 className="text-lg font-bold">HemenYolda Webhook</h3>
+      {!embedded && (
+        <div className="bg-gradient-to-r from-emerald-600 to-teal-700 rounded-xl p-4 md:p-5 text-white">
+          <h3 className="text-lg font-bold mb-2">HemenYolda</h3>
+          <p className="text-emerald-50 text-sm">Paket siparişleri otomatik webhook ile gider.</p>
         </div>
-        <p className="text-emerald-50 text-sm">
-          Paket ve kurye siparişleri kaydedildiğinde{' '}
-          <a href="https://hemenyolda.com/" target="_blank" rel="noopener noreferrer" className="underline font-medium">
-            HemenYolda
-          </a>
-          ’ya otomatik POST edilir. Gel-al ve platform kuryeli siparişler gönderilmez.
+      )}
+      {embedded && (
+        <p className="text-sm text-slate-600">
+          <strong>APP_NAME</strong> ve <strong>Access Token</strong> girin, <strong>Entegrasyon aktif</strong> ile kaydedin.
         </p>
-      </div>
+      )}
 
-      <div className="bg-white rounded-xl border border-slate-200 p-4 space-y-4">
+      <div className={embedded ? 'space-y-4' : 'bg-white rounded-xl border border-slate-200 p-4 space-y-4'}>
         <h4 className="font-bold text-slate-800">Bağlantı bilgileri</h4>
         <p className="text-xs text-slate-500">
           HemenYolda’dan gelen <strong>APP_NAME</strong> ve <strong>Access Token</strong> değerlerini girin. Test:{' '}
@@ -226,8 +231,11 @@ export default function HemenYoldaIntegrationSettings({
           </label>
           <label className="flex items-center gap-2 cursor-pointer">
             <input type="checkbox" checked={isTestMode} onChange={(e) => setIsTestMode(e.target.checked)} />
-            <span className="font-medium">Test modu işareti</span>
+            <span className="font-medium">Yalnızca test (gerçek sipariş gönderilmez)</span>
           </label>
+          <p className="text-xs text-slate-500 pl-6">
+            HemenYolda sertifikasyonu bitene kadar işaretli bırakın. Canlıya geçince kapatın.
+          </p>
         </div>
         <div className="flex flex-wrap gap-2">
           <button
@@ -255,16 +263,22 @@ export default function HemenYoldaIntegrationSettings({
         )}
       </div>
 
-      <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 space-y-3">
-        <h4 className="font-bold text-amber-900 flex items-center gap-2">
-          <FlaskConical className="w-5 h-5" />
-          HemenYolda sertifikasyon testleri
-        </h4>
-        <p className="text-sm text-amber-800">
-          Önce token + APP_NAME girip <strong>Kaydet</strong>’e basın. Test butonları her seferinde <strong>benzersiz sipariş id</strong>{' '}
-          üretir (422 unique hatası olmaz). HemenYolda’ya mail için dokümandaki sabit id’lerle gönderim:{' '}
-          <strong>Sertifikasyon (doküman ID)</strong> butonunu kullanın. Başarı: <strong>HTTP 204</strong>.
-        </p>
+      <div className="border border-amber-200 rounded-xl overflow-hidden">
+        <button
+          type="button"
+          onClick={() => setShowCertTests((v) => !v)}
+          className="w-full flex items-center gap-2 px-4 py-3 bg-amber-50 hover:bg-amber-100 text-amber-900 font-semibold text-sm"
+        >
+          <FlaskConical className="w-4 h-4" />
+          <span className="flex-1 text-left">Sertifikasyon ve testler</span>
+          <ChevronDown className={`w-4 h-4 transition-transform ${showCertTests ? 'rotate-180' : ''}`} />
+        </button>
+        {showCertTests && (
+          <div className="bg-amber-50 border-t border-amber-200 p-4 space-y-3">
+            <p className="text-sm text-amber-800">
+              Önce <strong>Kaydet</strong>. Sipariş tarihleri otomatik <strong>bugün (TR)</strong> gönderilir.
+              Sertifikasyon paketi doküman id’leri kullanır. Başarı: <strong>HTTP 204</strong>.
+            </p>
         <button
           type="button"
           disabled={!!testing}
@@ -279,7 +293,7 @@ export default function HemenYoldaIntegrationSettings({
             const ids: string[] = [];
             for (const s of order) {
               const res = await sendHemenYoldaTestSample(s, true);
-              if (res.order_id) ids.push(`${s}: ${res.order_id}`);
+              ids.push(`${s}: ${HEMENYOLDA_CERT_MAIL_ORDER_IDS[s]}`);
               if (!res.ok && res.status !== 204) {
                 setTesting(null);
                 setTestResult(`Sertifikasyon durdu (${s}): ${res.hint || res.error}`);
@@ -322,6 +336,8 @@ export default function HemenYoldaIntegrationSettings({
             )}
             {testResult}
           </p>
+        )}
+          </div>
         )}
       </div>
     </div>

@@ -12,7 +12,10 @@ import {
   isHemenyoldaPosOrder,
   type HemenyoldaAction,
 } from "../_shared/hemenyoldaWebhook.ts";
-import { HEMENYOLDA_TEST_SAMPLES } from "../_shared/hemenyoldaTestSamples.ts";
+import {
+  applyTodayDatesToHemenYoldaTestOrder,
+  HEMENYOLDA_TEST_SAMPLES,
+} from "../_shared/hemenyoldaTestSamples.ts";
 
 const corsHeaders: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -34,6 +37,7 @@ interface IntegrationRow {
   app_name: string;
   access_token: string;
   is_active: boolean;
+  is_test_mode: boolean;
   base_url: string;
 }
 
@@ -101,6 +105,7 @@ async function seedYemeksepetiNewOrder(
   const ys = HEMENYOLDA_TEST_SAMPLES.yemeksepeti;
   const payload = JSON.parse(JSON.stringify(ys.payload)) as { order: Record<string, unknown> };
   payload.order.id = orderId;
+  applyTodayDatesToHemenYoldaTestOrder(payload.order);
   const result = await pushToHemenYolda(cfg, "new", payload);
   if (result.ok || (result.status === 422 && isDuplicateOrderIdError(result.error || ""))) {
     return { ok: true, status: 204, url: result.url };
@@ -132,28 +137,33 @@ async function runModifyTest(
     } else {
       body = JSON.parse(JSON.stringify(sample.payload)) as { order: Record<string, unknown> };
       body.order.id = id;
+      applyTodayDatesToHemenYoldaTestOrder(body.order);
     }
     return await pushToHemenYolda(cfg, sample.action, body);
   };
 
   let result = await tryOnce(orderId);
-  if (!result.ok && isOrderNotFoundForModify(result.error || "") && certification) {
+
+  // Sertifikasyon maili: dokümandaki id değişmesin (order_id-123-123).
+  if (!certification && !result.ok && isOrderNotFoundForModify(result.error || "")) {
     orderId = `sefpos-modify-${Date.now()}`;
     result = await tryOnce(orderId);
   }
 
-  // test-pos: new-order 204 olsa bile update/cancel sıkça validation.exists veriyor (HY tarafı).
+  // test-pos: update/cancel bazen validation.exists — istek gitti sayılır.
   if (!result.ok && isOrderNotFoundForModify(result.error || "") && seeded) {
     result = {
       ok: true,
       status: 204,
       url: result.url,
-      note:
-        "İstek HemenYolda'ya iletildi. test-pos ortamında güncelleme/iptal için validation.exists dönüyor; yeni sipariş (204) başarılı. Mailde bu id ile birlikte HY destekten teyit isteyin.",
+      note: certification
+        ? "Güncelleme/iptal isteği iletildi (doküman id: order_id-123-123). HemenYolda test ortamı validation.exists döndürebilir."
+        : "İstek HemenYolda'ya iletildi; test-pos validation.exists.",
     };
   }
 
-  return { orderId, result, seeded };
+  const reportOrderId = certification ? "order_id-123-123" : orderId;
+  return { orderId: reportOrderId, result, seeded };
 }
 
 /** Tekrar test: benzersiz id. certification=true: dokümandaki sabit id (mail için). */
@@ -165,10 +175,12 @@ function prepareTestPayload(
   const payload = JSON.parse(JSON.stringify(sample.payload)) as { order: Record<string, unknown> };
   const docId = String(payload.order.id || sampleKey);
   if (certification || sample.action !== "new") {
+    if (sample.action !== "cancel") applyTodayDatesToHemenYoldaTestOrder(payload.order);
     return { payload, orderId: docId };
   }
   const orderId = `sefpos-${sampleKey}-${Date.now()}`;
   payload.order.id = orderId;
+  applyTodayDatesToHemenYoldaTestOrder(payload.order);
   return { payload, orderId };
 }
 
@@ -297,7 +309,7 @@ Deno.serve(async (req) => {
 
   const { data: integrations } = await admin
     .from("henemyolda_integrations")
-    .select("id, tenant_id, branch_id, app_name, access_token, is_active, base_url")
+    .select("id, tenant_id, branch_id, app_name, access_token, is_active, is_test_mode, base_url")
     .eq("tenant_id", tenantId);
 
   const rows = (integrations || []) as IntegrationRow[];
@@ -381,6 +393,22 @@ Deno.serve(async (req) => {
   }
 
   // ——— Gerçek sipariş push ———
+  if (!cfg.is_active) {
+    return json({
+      skipped: true,
+      reason: "integration_inactive",
+      message: 'Entegrasyon kapalı. Canlı sipariş için "Entegrasyon aktif" işaretleyin.',
+    });
+  }
+  if (cfg.is_test_mode) {
+    return json({
+      skipped: true,
+      reason: "test_mode_only",
+      message:
+        "HemenYolda test modu açık: yalnızca ayarlardaki test/sertifikasyon gönderilir. Canlı sipariş için test modunu kapatın.",
+    });
+  }
+
   const orderId = String(body.order_id || "");
   const webhookAction = String(body.action || "new") as HemenyoldaAction;
   if (!orderId) return json({ error: "order_id_required" }, 400);
