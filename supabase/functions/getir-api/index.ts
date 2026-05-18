@@ -568,6 +568,7 @@ async function upsertGetirOrder(
   ) || "Getir Musteri";
   // Gelen telefon zaten maskeli olabilir (0850...). Hem maskeli hem tam yedek hicbir zaman gelmez.
   const maskedPhone = String(customer.maskedPhoneNumber || customer.phoneNumber || customer.phone || "");
+  const phoneCode = String(customer.phoneCode || order.phoneCode || "");
   const verificationCode = String(order.confirmationId || order.verificationCode || "");
 
   const addressObj = order.address || customer.address || {};
@@ -645,7 +646,7 @@ async function upsertGetirOrder(
     customer_name: customerName,
     customer_phone: maskedPhone || null,
     customer_address: address || null,
-    customer_notes: order.note || order.clientNote || null,
+    customer_notes: order.note || order.clientNote || order.clientRequest || null,
     subtotal,
     delivery_fee: deliveryFee,
     discount_amount: totalDiscount,
@@ -659,7 +660,11 @@ async function upsertGetirOrder(
     getir_scheduled_at: order.scheduledDate ? new Date(order.scheduledDate).toISOString() : null,
     getir_delivery_type: Number(order.deliveryType ?? 0) || null,
     getir_verification_code: verificationCode || null,
-    getir_masked_phone: maskedPhone || null,
+    getir_masked_phone: maskedPhone
+      ? phoneCode
+        ? `${maskedPhone} / ${phoneCode.replace(/\D/g, "").padStart(6, "0").slice(-6)}`
+        : maskedPhone
+      : null,
     getir_supplier_support_rate: supplierSupportRate || null,
     getir_total_discount: totalDiscount || null,
     getir_total_discounted_price: discounted || null,

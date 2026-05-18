@@ -130,20 +130,90 @@ function extractLocalized(val: unknown): string {
   return String(val).trim();
 }
 
-/** Getir müşteri hattı — paneldeki gibi 0850 maskeli format. */
+/** Getir müşteri hattı — kısa format (yedek). */
 export function formatGetirMaskedPhone(phone: string | null | undefined): string {
-  const t = String(phone || "").trim();
-  if (!t) return "";
-  const digits = t.replace(/\D/g, "");
-  if (digits.startsWith("0850") && digits.length >= 7) {
-    const rest = digits.slice(4);
-    return `0850 ${rest.slice(0, 3)} ${rest.slice(3, 6)} ${rest.slice(6)}`.trim();
+  return formatGetirMaskedPhonePanel(phone);
+}
+
+/**
+ * Getir restoran paneli formatı: `90 (850) 346-9382 / 000001`
+ * phoneCode = santral uzantısı (6 hane).
+ */
+export function formatGetirMaskedPhonePanel(
+  phone: string | null | undefined,
+  phoneCode?: string | null | undefined,
+): string {
+  const raw = String(phone || "").trim();
+  const extRaw = String(phoneCode || "").replace(/\D/g, "");
+  if (!raw && !extRaw) return "";
+
+  if (raw.includes("(850)") || raw.includes("(850)")) {
+    const ext = extRaw ? extRaw.padStart(6, "0").slice(-6) : "";
+    return ext && !raw.includes("/") ? `${raw} / ${ext}` : raw;
   }
-  if (digits.startsWith("850") && digits.length >= 6) {
+
+  if (raw.includes("/")) {
+    const idx = raw.indexOf("/");
+    const left = raw.slice(0, idx).trim();
+    const right = raw.slice(idx + 1).trim().replace(/\D/g, "").padStart(6, "0").slice(-6);
+    const formattedLeft = formatGetirMaskedPhonePanel(left);
+    return right ? `${formattedLeft} / ${right}` : formattedLeft;
+  }
+
+  let digits = raw.replace(/\D/g, "");
+  if (digits.startsWith("90")) digits = digits.slice(2);
+  if (digits.startsWith("0")) digits = digits.slice(1);
+
+  let ext = extRaw ? extRaw.padStart(6, "0").slice(-6) : "";
+  if (digits.startsWith("850")) {
     const rest = digits.slice(3);
-    return `0850 ${rest.slice(0, 3)} ${rest.slice(3, 6)} ${rest.slice(6)}`.trim();
+    if (!ext && rest.length > 10) {
+      ext = rest.slice(10).padStart(6, "0").slice(-6);
+    }
+    const r = rest.slice(0, 10);
+    const a = r.slice(0, 3);
+    const b = r.slice(3, 6);
+    const c = r.slice(6, 10);
+    let mid = a;
+    if (b) mid += `-${b}`;
+    if (c) mid += `-${c}`;
+    const line = `90 (850) ${mid}`.trim();
+    return ext ? `${line} / ${ext}` : line;
   }
-  return t;
+
+  return raw;
+}
+
+/** Getir sipariş notu — tüm bilinen alan adları. */
+export function extractGetirOrderNotes(
+  raw: Record<string, unknown>,
+  dbNotes?: string | null,
+): string | null {
+  const parts: string[] = [];
+  const push = (v: unknown) => {
+    const t = typeof v === "string" ? v.trim() : extractLocalized(v);
+    if (t) parts.push(t);
+  };
+
+  push(dbNotes);
+  push(raw.note);
+  push(raw.clientNote);
+  push(raw.clientRequest);
+  push(raw.orderNote);
+  push(raw.customerNote);
+  push(raw.restaurantNote);
+  push(raw.vendorNote);
+  const comments = raw.comments as Record<string, unknown> | undefined;
+  if (comments) {
+    push(comments.customerComment);
+    push(comments.vendorComment);
+  }
+  if (raw.doNotKnock === true) parts.push("Zile basmayın");
+  if (raw.dropOffAtDoor === true) parts.push("Kapıya bırakın");
+  if (raw.isEcoFriendly === true) parts.push("Çatal-bıçak istemiyor");
+
+  const uniq = [...new Set(parts)];
+  return uniq.length ? uniq.join(" • ") : null;
 }
 
 function mapGetirItemToppings(toppings: unknown): DHToppingForReceipt[] | undefined {
@@ -234,20 +304,18 @@ export function buildGetirReceiptInput(
       "",
   ).trim() || null;
 
-  const maskedPhone = formatGetirMaskedPhone(
+  const phoneCode = String(
+    customer.phoneCode || raw.phoneCode || customer.extension || raw.extension || "",
+  ).trim() || null;
+
+  const maskedPhone = formatGetirMaskedPhonePanel(
     order.getir_masked_phone ||
       order.customer_phone ||
       String(customer.maskedPhoneNumber || customer.phoneNumber || customer.phone || ""),
+    phoneCode,
   ) || null;
 
-  const customerComment = String(
-    order.customer_notes ||
-      raw.note ||
-      raw.clientNote ||
-      raw.clientRequest ||
-      raw.orderNote ||
-      "",
-  ).trim() || null;
+  const customerComment = extractGetirOrderNotes(raw, order.customer_notes);
 
   const subtotal = Number(order.subtotal ?? raw.totalPrice ?? 0);
   const discounted = Number(
@@ -390,7 +458,101 @@ function buildToppingLines(toppings: DHToppingForReceipt[] | undefined, depth = 
   return out;
 }
 
+/**
+ * Getir Yemek resmi fiş düzeni — termal yazıcı uyumlu (siyah/beyaz, flex/gradient yok).
+ * Getir sertifikasyon: logo, doğrulama kodu, 0850 hat, sipariş notu, ortak kampanya, ürünler.
+ */
+export function renderGetirThermalReceiptHtml(order: DHReceiptOrderInput): string {
+  const customerFull =
+    (order.customer?.fullName ||
+      [order.customer?.firstName, order.customer?.lastName].filter(Boolean).join(" ") ||
+      "Müşteri").trim();
+  const phoneLine = formatGetirMaskedPhonePanel(order.customer?.mobilePhone || "");
+  const verifyCode = (order.verificationCode || "").trim().toUpperCase();
+  const orderCode = (order.orderCode || "").trim();
+  const addressLines = buildAddressLines(order.delivery);
+  const subTotal = order.totals.subTotal ?? null;
+  const discount = order.totals.discountTotal ?? 0;
+  const fee = order.totals.deliveryFee ?? 0;
+  const grand = order.totals.grandTotal;
+
+  const productsHtml = (order.products || [])
+    .map((p) => {
+      const qty = Number(p.quantity) || 1;
+      const paid = Number(p.paidPrice) || 0;
+      let block =
+        `<tr><td style="font-weight:900;width:28px;vertical-align:top">${qty}x</td>` +
+        `<td style="vertical-align:top;font-weight:700">${escHtml(p.name)}</td>` +
+        `<td style="text-align:right;font-weight:900;vertical-align:top;white-space:nowrap">${fmtTL(paid)}</td></tr>`;
+      if (p.comment) {
+        block +=
+          `<tr><td></td><td colspan="2" style="font-size:11px;font-style:italic;padding:0 0 4px 0">↳ Not: ${escHtml(p.comment)}</td></tr>`;
+      }
+      const tops = buildToppingLines(p.selectedToppings);
+      if (tops) {
+        block += `<tr><td></td><td colspan="2" style="font-size:11px;padding:0 0 4px 4px">${tops}</td></tr>`;
+      }
+      return block;
+    })
+    .join("");
+
+  const W = "width:72mm;max-width:72mm;font-family:Arial,Helvetica,sans-serif;color:#000;font-size:12px;line-height:1.35;";
+  const box = "border:2px solid #000;padding:6px 4px;margin:4px 0;text-align:center;";
+  const big = "font-size:22px;font-weight:900;letter-spacing:2px;";
+
+  return `<div style="${W}">
+  <div style="${box}">
+    <div style="font-size:30px;font-weight:900;line-height:1;letter-spacing:-1px;">GETİR</div>
+    <div style="font-size:13px;font-weight:900;letter-spacing:5px;margin-top:3px;">YEMEK</div>
+  </div>
+  ${verifyCode
+    ? `<div style="${box}"><div style="font-size:11px;font-weight:900;">SİPARİŞ DOĞRULAMA KODU</div><div style="${big}margin-top:4px;">${escHtml(verifyCode)}</div></div>`
+    : ""}
+  ${phoneLine
+    ? `<div style="${box}"><div style="font-size:11px;font-weight:900;">MÜŞTERİ HATTI (MASKELİ)</div><div style="font-size:15px;font-weight:900;margin-top:4px;">${escHtml(phoneLine)}</div></div>`
+    : ""}
+  ${orderCode ? `<div style="${box}"><div style="font-size:11px;font-weight:900;">SİPARİŞ NO</div><div style="${big}margin-top:2px;">#${escHtml(orderCode)}</div></div>` : ""}
+  ${order.ortakKampanya
+    ? `<div style="${box}border:3px solid #000;"><div style="font-size:14px;font-weight:900;">ORTAK KAMPANYA</div></div>`
+    : ""}
+  ${order.customerComment
+    ? `<div style="${box}text-align:left;"><div style="font-size:12px;font-weight:900;margin-bottom:4px;">SİPARİŞ NOTU</div><div style="font-size:12px;font-weight:700;">${escHtml(order.customerComment)}</div></div>`
+    : ""}
+  ${order.courierBadge ? `<div style="text-align:center;font-size:11px;font-weight:900;margin:4px 0;border:1px solid #000;padding:3px;">${escHtml(order.courierBadge)}</div>` : ""}
+  <div style="border:1px solid #000;padding:4px 6px;margin:4px 0;">
+    <div style="font-size:10px;font-weight:900;margin-bottom:2px;">MÜŞTERİ</div>
+    <div style="font-weight:700;">${escHtml(customerFull)}</div>
+  </div>
+  ${addressLines.length > 0
+    ? `<div style="border:1px solid #000;padding:4px 6px;margin:4px 0;">
+        <div style="font-size:10px;font-weight:900;margin-bottom:2px;">TESLİMAT ADRESİ</div>
+        ${addressLines.map((l) => `<div>${escHtml(l)}</div>`).join("")}
+      </div>`
+    : ""}
+  <div style="font-size:10px;font-weight:900;margin:6px 0 2px;">SİPARİŞ DETAYI</div>
+  <table style="width:100%;border-collapse:collapse;border-top:2px solid #000;border-bottom:2px solid #000;">
+    ${productsHtml || `<tr><td colspan="3">(ürün yok)</td></tr>`}
+  </table>
+  <div style="margin-top:6px;">
+    ${subTotal != null ? `<div style="margin:2px 0;"><table style="width:100%"><tr><td>Ara Toplam</td><td style="text-align:right">${fmtTL(subTotal)}</td></tr></table></div>` : ""}
+    ${discount > 0
+      ? `<div style="margin:2px 0;"><table style="width:100%"><tr><td>${order.ortakKampanya ? "Ortak Kampanya (-)" : "İndirim (-)"}</td><td style="text-align:right">-${fmtTL(discount)}</td></tr></table></div>`
+      : ""}
+    ${fee > 0 ? `<div style="margin:2px 0;"><table style="width:100%"><tr><td>Teslimat</td><td style="text-align:right">${fmtTL(fee)}</td></tr></table></div>` : ""}
+    <div style="margin:4px 0;font-size:16px;font-weight:900;border-top:2px solid #000;padding-top:4px;">
+      <table style="width:100%"><tr><td>TOPLAM</td><td style="text-align:right">${fmtTL(grand)}</td></tr></table>
+    </div>
+  </div>
+  <div style="text-align:center;font-size:10px;margin-top:8px;">${fmtDate(order.createdAt)} • Online Ödendi</div>
+  <div style="text-align:center;font-size:10px;margin-top:4px;">GETİR YEMEK • ŞefPOS</div>
+</div>`;
+}
+
 export function renderDHOrderReceiptHtml(order: DHReceiptOrderInput): string {
+  if (/getir/i.test(order.platformLabel || "")) {
+    return renderGetirThermalReceiptHtml(order);
+  }
+
   const platformLabel = (order.platformLabel || "Online").toUpperCase();
   const customerFull =
     (order.customer?.fullName ||

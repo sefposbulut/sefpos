@@ -183,7 +183,10 @@ function buildOrderRow(
 ): Record<string, any> {
   const customer = order.client || order.customer || {};
   const customerName = extractLocalized(customer.name || customer.firstName) || "Getir Musteri";
-  const maskedPhone = String(customer.maskedPhoneNumber || customer.phoneNumber || "");
+  const maskedPhone = String(
+    customer.maskedPhoneNumber || customer.phoneNumber || customer.phone || "",
+  );
+  const phoneCode = String(customer.phoneCode || order.phoneCode || "");
   const addressObj = order.address || customer.address || {};
   const address = [
     addressObj.address,
@@ -219,7 +222,11 @@ function buildOrderRow(
     getir_scheduled_at: order.scheduledDate ? new Date(order.scheduledDate).toISOString() : null,
     getir_delivery_type: Number(order.deliveryType ?? 0) || null,
     getir_verification_code: String(order.confirmationId || ""),
-    getir_masked_phone: maskedPhone || null,
+    getir_masked_phone: maskedPhone
+      ? phoneCode
+        ? `${maskedPhone} / ${phoneCode.replace(/\D/g, "").padStart(6, "0").slice(-6)}`
+        : maskedPhone
+      : null,
     getir_supplier_support_rate: Number(order.supplierSupportRate ?? 0) || null,
     getir_total_discount: totalDiscount || null,
     getir_total_discounted_price: discounted || null,

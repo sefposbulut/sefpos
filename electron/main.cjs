@@ -995,6 +995,29 @@ function saveSettings(data) {
 }
 
 function buildFullHtml(html) {
+  const body = String(html || '');
+  // Getir / DH partner fişi — kendi genişliği ve stilleri var; .receipt sarmalayıcısı bozmasın.
+  if (body.includes('GETİR YEMEK') || body.includes('class="dh-r"') || body.includes("SİPARİŞ DOĞRULAMA KODU")) {
+    return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 72mm; max-width: 72mm; background: #fff; color: #000; }
+  @page { margin: 0; size: 72mm auto; }
+  @media print {
+    html, body { width: 72mm; }
+    * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  }
+</style>
+</head>
+<body>
+${body}
+</body>
+</html>`;
+  }
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -1093,9 +1116,12 @@ async function doPrint(html, printerName, silent) {
     await new Promise(resolve => setTimeout(resolve, 800));
 
     return new Promise((resolve) => {
+      const isPartnerReceipt =
+        typeof html === 'string' &&
+        (html.includes('GETİR YEMEK') || html.includes('SİPARİŞ DOĞRULAMA KODU') || html.includes('class="dh-r"'));
       const opts = {
         silent: silent !== false,
-        printBackground: false,
+        printBackground: isPartnerReceipt,
         color: false,
         margins: { marginType: 'none' },
         pageSize: { width: 72000, height: 2000000 },
