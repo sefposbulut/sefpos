@@ -333,9 +333,12 @@ const server = http.createServer(async (req, res) => {
   sendJson(res, 404, { success: false, error: 'Not found' });
 });
 
+const { startQueuePoller } = require('./queuePoller');
+
 server.listen(PORT, '127.0.0.1', () => {
-  console.log(`ShefPOS Print Agent calisiyor: http://127.0.0.1:${PORT}`);
-  console.log('Web tarayicinizda ShefPOS acik oldugunda otomatik yazdir.');
+  console.log(`Sefpos Print Agent calisiyor: http://127.0.0.1:${PORT}`);
+  console.log('HTTP /print + Supabase print_jobs kuyrugu (oturum: %APPDATA%/Sefpos/print-agent-session.json)');
+  startQueuePoller({ handlePrint: async (html, printerName) => handlePrint(html, printerName) });
 });
 
 server.on('error', (err) => {

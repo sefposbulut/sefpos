@@ -22,6 +22,7 @@ import {
   type CallerIdRing,
   type CallerIdStatus,
 } from '../lib/callerId';
+import { notifyHemenYolda } from '../lib/hemenyoldaApi';
 
 export interface Courier {
   id: string;
@@ -364,6 +365,14 @@ export function TakeawayOrders() {
       if (order?.courier_id) await supabase.from('couriers').update({ status: 'available' }).eq('id', order.courier_id);
     }
     await supabase.from('orders').update(updates).eq('id', orderId);
+    const order = orders.find((o) => o.id === orderId);
+    if (order?.order_subtype !== 'gel_al') {
+      if (newStatus === 'cancelled') {
+        notifyHemenYolda(orderId, 'cancel');
+      } else if (courierId || newStatus === 'on_the_way' || newStatus === 'delivered') {
+        notifyHemenYolda(orderId, 'update');
+      }
+    }
     setOrders(prev => prev.map(o => o.id === orderId ? { ...o, ...updates } : o));
     setAssigningCourierId(null);
   };
@@ -372,6 +381,10 @@ export function TakeawayOrders() {
     if (!confirm('Siparişi silmek istediğinizden emin misiniz?')) return;
     setOrders(prev => prev.filter(o => o.id !== orderId));
     await supabase.from('order_items').delete().eq('order_id', orderId);
+    const order = orders.find((o) => o.id === orderId);
+    if (order && order.order_subtype !== 'gel_al') {
+      notifyHemenYolda(orderId, 'cancel');
+    }
     await supabase.from('orders').delete().eq('id', orderId);
   };
 

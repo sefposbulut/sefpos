@@ -19,6 +19,7 @@
 //   poll-active | poll-unapproved | poll-cancelled
 //   verify | verify-scheduled
 //   prepare | handover | deliver | cancel
+//   store-status-sync | restaurant-status-get
 //   restaurant-status-open | restaurant-status-close
 //   product-status-set | option-product-set
 //   restaurant-busy
@@ -81,6 +82,63 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 function badRequest(msg: string): Response {
   return jsonResponse({ ok: false, error: msg }, 400);
+}
+
+/** POS cevabı: yalnızca `posStatus` alanı (100=açık, 200=pasif). */
+function parsePosOpenFlag(data: any): boolean | null {
+  if (!data || typeof data !== "object") return null;
+  const raw = data.posStatus ?? data.data?.posStatus;
+  if (raw == null) return null;
+  const n = Number(raw);
+  if (n === 100) return true;
+  if (n === 200) return false;
+  return null;
+}
+
+/**
+ * Restoran müşteri uygulaması açık/kapalı — `status: 200` HTTP/enum ile karıştırılmaz
+ * (aksi halde açık API cevabı yanlışlıkla kapalı yazılıyordu).
+ */
+function parseRestaurantOpenFlag(data: any): boolean | null {
+  if (!data || typeof data !== "object") return null;
+  const candidates = [
+    data.restaurantOpen,
+    data.isOpen,
+    data.isRestaurantOpen,
+    data.restaurantStatus,
+    data.storeStatus,
+    data.isRestaurantAvailable,
+    data.data?.restaurantOpen,
+    data.data?.isOpen,
+    data.data?.restaurantStatus,
+    data.data?.storeStatus,
+  ];
+  for (const c of candidates) {
+    if (typeof c === "boolean") return c;
+    if (typeof c === "string") {
+      const s = c.toLowerCase();
+      if (s === "open" || s === "opened" || s === "active" || s === "available") return true;
+      if (s === "close" || s === "closed" || s === "inactive" || s === "unavailable") return false;
+    }
+    if (c === 100 || c === "100") return true;
+    if (c === 200 || c === "200") return false;
+  }
+  return null;
+}
+
+function messageImpliesRestaurantClosed(raw: string): boolean {
+  const m = raw.toLowerCase();
+  return (
+    m.includes("restaurant is closed") ||
+    m.includes("restaurant closed") ||
+    m.includes("store is closed") ||
+    m.includes("kapalı") ||
+    m.includes("kapali") ||
+    m.includes("restoran kapalı") ||
+    m.includes("restoran kapali") ||
+    m.includes("not open") ||
+    m.includes("is not active")
+  );
 }
 
 function serverError(msg: string, extra?: Record<string, unknown>): Response {
@@ -806,12 +864,59 @@ Deno.serve(async (req) => {
         try { data = raw ? JSON.parse(raw) : {}; } catch { data = { raw }; }
         if (resp.ok) {
           const posStatus = Number(data?.posStatus ?? data?.data?.posStatus ?? 200);
-          await admin
-            .from("online_order_platforms")
-            .update({ getir_pos_status: posStatus })
-            .eq("id", platform.id);
+          const patch: Record<string, unknown> = { getir_pos_status: posStatus };
+          const fromRestaurant = parseRestaurantOpenFlag(data);
+          const fromPos = parsePosOpenFlag(data);
+          if (fromRestaurant !== null) {
+            patch.getir_restaurant_open = fromRestaurant;
+          } else if (fromPos !== null) {
+            patch.getir_restaurant_open = fromPos;
+          }
+          await admin.from("online_order_platforms").update(patch).eq("id", platform.id);
+          data = { ...data, posStatus, restaurantOpen: patch.getir_restaurant_open ?? null };
         }
         return jsonResponse({ ok: resp.ok, status: resp.status, data });
+      }
+
+      case "store-status-sync":
+      case "restaurant-status-get": {
+        let posStatus = 200;
+        let restaurantOpen: boolean | null = null;
+
+        const posResp = await fetch(`${baseUrl}/restaurants/pos-status`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            appSecretKey: creds.appSecretKey,
+            restaurantSecretKey: creds.restaurantSecretKey,
+          }),
+        });
+        const posRaw = await posResp.text();
+        let posData: any = {};
+        try { posData = posRaw ? JSON.parse(posRaw) : {}; } catch { posData = { raw: posRaw }; }
+        if (posResp.ok) {
+          posStatus = Number(posData?.posStatus ?? posData?.data?.posStatus ?? 200);
+          const fromPos = parsePosOpenFlag(posData);
+          if (fromPos !== null) restaurantOpen = fromPos;
+        }
+
+        const tr = await ensureToken(admin, platform as PlatformRow, false);
+        if (!("error" in tr)) {
+          const stRes = await callGetir(admin, platform as PlatformRow, "GET", "/restaurants/status");
+          if (stRes.ok) {
+            const fromStatus = parseRestaurantOpenFlag(stRes.data);
+            if (fromStatus !== null) restaurantOpen = fromStatus;
+          }
+        }
+
+        const patch: Record<string, unknown> = { getir_pos_status: posStatus };
+        if (restaurantOpen !== null) patch.getir_restaurant_open = restaurantOpen;
+        await admin.from("online_order_platforms").update(patch).eq("id", platform.id);
+
+        return jsonResponse({
+          ok: true,
+          data: { posStatus, restaurantOpen, posOk: posResp.ok },
+        });
       }
 
       case "pos-status-set": {
@@ -829,10 +934,30 @@ Deno.serve(async (req) => {
         let data: any = {};
         try { data = raw ? JSON.parse(raw) : {}; } catch { data = { raw }; }
         if (resp.ok) {
-          await admin
-            .from("online_order_platforms")
-            .update({ getir_pos_status: target, is_active: target === 100 })
-            .eq("id", platform.id);
+          const patch: Record<string, unknown> = {
+            getir_pos_status: target,
+            is_active: target === 100,
+          };
+          // POS AÇ = sipariş hattı; müşteri uygulamasında görünürlük ayrı — POS açılınca restoranı da aç.
+          if (target === 100) {
+            const openRes = await callGetir(
+              admin,
+              platform as PlatformRow,
+              "PUT",
+              "/restaurants/status/open",
+            );
+            if (openRes.ok) {
+              patch.getir_restaurant_open = true;
+              data = { ...data, restaurantOpened: true };
+            } else {
+              data = {
+                ...data,
+                restaurantOpened: false,
+                restaurantOpenError: openRes.data,
+              };
+            }
+          }
+          await admin.from("online_order_platforms").update(patch).eq("id", platform.id);
         }
         return jsonResponse({ ok: resp.ok, status: resp.status, data });
       }
@@ -862,7 +987,23 @@ Deno.serve(async (req) => {
               ? "/food-orders/periodic/unapproved"
               : "/food-orders/periodic/cancelled";
         const res = await callGetir(admin, platform as PlatformRow, "POST", path, body.payload);
-        if (!res.ok) return jsonResponse({ ok: false, status: res.status, data: res.data }, res.status);
+        if (!res.ok) {
+          const errText = JSON.stringify(res.data ?? res.raw ?? "");
+          if (messageImpliesRestaurantClosed(errText)) {
+            await admin
+              .from("online_order_platforms")
+              .update({ getir_restaurant_open: false })
+              .eq("id", platform.id);
+            return jsonResponse({
+              ok: false,
+              status: res.status,
+              data: res.data,
+              restaurantOpen: false,
+              storeClosed: true,
+            }, res.status);
+          }
+          return jsonResponse({ ok: false, status: res.status, data: res.data }, res.status);
+        }
         const list: any[] = Array.isArray(res.data) ? res.data : (res.data?.data || res.data?.orders || []);
         let saved = 0;
         let newCount = 0;
@@ -1146,12 +1287,46 @@ Deno.serve(async (req) => {
       // ---- RESTAURANT STATUS / BUSY --------------------------------------
       case "restaurant-status-open": {
         const res = await callGetir(admin, platform as PlatformRow, "PUT", "/restaurants/status/open");
-        return jsonResponse({ ok: res.ok, status: res.status, data: res.data });
+        let posOk = false;
+        let posData: any = null;
+        if (res.ok) {
+          const posResp = await fetch(`${baseUrl}/restaurants/pos-status`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              posStatus: 100,
+              appSecretKey: creds.appSecretKey,
+              restaurantSecretKey: creds.restaurantSecretKey,
+            }),
+          });
+          const posRaw = await posResp.text();
+          try { posData = posRaw ? JSON.parse(posRaw) : {}; } catch { posData = { raw: posRaw }; }
+          posOk = posResp.ok;
+          await admin
+            .from("online_order_platforms")
+            .update({
+              getir_restaurant_open: true,
+              getir_pos_status: posOk ? 100 : 200,
+              is_active: true,
+            })
+            .eq("id", platform.id);
+        }
+        return jsonResponse({
+          ok: res.ok,
+          status: res.status,
+          data: { ...res.data, restaurantOpened: res.ok, posOpened: posOk, pos: posData },
+        });
       }
       case "restaurant-status-close": {
         const tof = body.timeOffAmount === 30 ? 30 : body.timeOffAmount === 45 ? 45 : 15;
         const res = await callGetir(admin, platform as PlatformRow, "PUT", "/restaurants/status/close", { timeOffAmount: tof });
-        return jsonResponse({ ok: res.ok, status: res.status, data: res.data });
+        if (res.ok) {
+          await admin
+            .from("online_order_platforms")
+            .update({ getir_restaurant_open: false })
+            .eq("id", platform.id);
+        }
+        return jsonResponse({ ok: res.ok, status: res.status, data: res.data, timeOffAmount: tof });
       }
       case "restaurant-busy": {
         const payload: Record<string, any> = { isBusy: !!body.isBusy };

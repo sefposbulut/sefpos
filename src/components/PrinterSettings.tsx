@@ -272,7 +272,17 @@ export function PrinterSettings() {
                   </div>
                 </div>
               ) : agentStatus === 'not_running' ? (
-                <p className="text-sm text-amber-700 mt-1">Web üzerinden yazdırabilmek için bu bilgisayarda ŞefPOS masaüstü uygulamasının açık olması gerekir. Uygulama açıkken bağlantı otomatik kurulur (port 7878).</p>
+                <div className="text-sm text-amber-700 mt-1 space-y-1.5">
+                  <p>
+                    <strong className="text-amber-900">www üzerinde fiş</strong> bu bilgisayarda{' '}
+                    <strong className="text-amber-900">tarayıcı yazdırma penceresi</strong> ile çıkar (Getir paneli gibi).
+                    Termal yazıcınızı Windows’ta <strong>varsayılan yazıcı</strong> yapın; fiş basınca açılan pencerede <strong>Yazdır</strong> deyin.
+                  </p>
+                  <p className="text-xs text-amber-600">
+                    Uzaktan (telefon) sipariş alıyorsanız ve fiş başka kasada basılacaksa bu PC’de ŞefPOS masaüstü veya{' '}
+                    <code className="bg-amber-200 px-1 rounded">npm run print-agent</code> açık olmalıdır.
+                  </p>
+                </div>
               ) : (
                 <p className="text-sm text-amber-700 mt-1">Bağlantı kurulamadı. {agentDetail && <span className="font-mono text-xs">({agentDetail})</span>}</p>
               )}

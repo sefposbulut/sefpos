@@ -35,9 +35,9 @@ if (!html.includes('src="/assets/')) {
   console.warn('[assert-web-pages-dist] /assets/ bekleniyordu; yine de devam (özel base?).');
 }
 
-const routesPath = path.join(root, 'dist', '_routes.json');
-if (!fs.existsSync(routesPath)) {
-  console.error('[assert-web-pages-dist] dist/_routes.json eksik (public/_routes.json → build:pages ile kopyalanmalı).');
+const workerPath = path.join(root, 'dist', '_worker.js');
+if (!fs.existsSync(workerPath)) {
+  console.error('[assert-web-pages-dist] dist/_worker.js eksik (public/_worker.js → build:pages ile kopyalanmalı).');
   process.exit(1);
 }
 

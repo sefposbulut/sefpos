@@ -1,6 +1,0 @@
-{
-  "version": 1,
-  "description": "Cloudflare Pages: /api/* → Pages Functions (Getir webhook); SPA fallback disinda.",
-  "include": ["/api", "/api/*"],
-  "exclude": ["/assets/*", "/assets", "/platforms/*", "/platforms"]
-}

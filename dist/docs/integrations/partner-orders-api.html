@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ŞefPOS — Dış Partner Sipariş API | Kurumsal Dokümantasyon</title>
+  <meta name="description" content="ŞefPOS (SEFPOS) dış partner REST API — paket ve teslimat siparişleri entegrasyon kılavuzu." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --sp-orange: #ea580c;
+      --sp-orange-soft: #fff7ed;
+      --sp-ink: #0f172a;
+      --sp-muted: #475569;
+      --sp-border: #e2e8f0;
+      --sp-card: #ffffff;
+      --sp-indigo: #4f46e5;
+      --sp-success: #059669;
+      --radius: 12px;
+      --shadow: 0 4px 24px rgba(15, 23, 42, 0.08);
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+    body {
+      font-family: 'Inter', system-ui, sans-serif;
+      color: var(--sp-ink);
+      background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 40%, #e2e8f0 100%);
+      min-height: 100vh;
+      line-height: 1.55;
+      font-size: 15px;
+    }
+    .wrap { max-width: 1120px; margin: 0 auto; padding: 0 1.25rem 4rem; }
+    /* Header */
+    .site-header {
+      background: linear-gradient(135deg, #0f172a 0%, #1e293b 45%, #334155 100%);
+      color: #fff;
+      padding: 1.75rem 0 2.5rem;
+      margin-bottom: 2rem;
+      box-shadow: var(--shadow);
+    }
+    .site-header .inner { max-width: 1120px; margin: 0 auto; padding: 0 1.25rem; }
+    .brand-row {
+      display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;
+      margin-bottom: 1.25rem;
+    }
+    .logo-wrap {
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 56px;
+      height: 56px;
+      padding: 6px;
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.98);
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+    }
+    .brand-logo-img {
+      display: block;
+      width: 44px;
+      height: 44px;
+      object-fit: contain;
+    }
+    .brand-text h1 {
+      font-size: clamp(1.35rem, 3vw, 1.85rem);
+      font-weight: 800;
+      letter-spacing: -0.03em;
+    }
+    .brand-text .sub { color: #94a3b8; font-size: 0.9rem; margin-top: 0.25rem; }
+    .hero-meta {
+      display: flex; flex-wrap: wrap; gap: 0.6rem;
+      margin-top: 1rem;
+    }
+    .pill {
+      display: inline-flex; align-items: center; gap: 0.35rem;
+      padding: 0.35rem 0.75rem;
+      border-radius: 999px;
+      font-size: 0.75rem; font-weight: 600;
+      background: rgba(255,255,255,0.08);
+      border: 1px solid rgba(255,255,255,0.12);
+    }
+    .pill.api { background: rgba(234, 88, 12, 0.25); border-color: rgba(251, 146, 60, 0.4); color: #ffedd5; }
+    /* Layout */
+    .layout { display: grid; grid-template-columns: 240px 1fr; gap: 2.5rem; align-items: start; }
+    @media (max-width: 900px) {
+      .layout { grid-template-columns: 1fr; }
+      .toc { position: static !important; }
+    }
+    .toc {
+      position: sticky; top: 1rem;
+      background: var(--sp-card);
+      border: 1px solid var(--sp-border);
+      border-radius: var(--radius);
+      padding: 1rem 1rem 1.1rem;
+      box-shadow: var(--shadow);
+      font-size: 0.875rem;
+    }
+    .toc strong {
+      display: block; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--sp-muted); margin-bottom: 0.75rem;
+    }
+    .toc a {
+      display: block; color: #334155; text-decoration: none; padding: 0.35rem 0;
+      border-left: 2px solid transparent; padding-left: 0.6rem; margin-left: -0.6rem;
+    }
+    .toc a:hover { color: var(--sp-orange); border-left-color: var(--sp-orange); }
+    main { min-width: 0; }
+    section {
+      background: var(--sp-card);
+      border: 1px solid var(--sp-border);
+      border-radius: var(--radius);
+      padding: 1.5rem 1.75rem;
+      margin-bottom: 1.25rem;
+      box-shadow: 0 1px 3px rgba(15,23,42,0.04);
+    }
+    section h2 {
+      font-size: 1.15rem; font-weight: 800; letter-spacing: -0.02em;
+      margin-bottom: 1rem;
+      padding-bottom: 0.65rem;
+      border-bottom: 1px solid var(--sp-border);
+    }
+    section h3 { font-size: 1rem; font-weight: 700; margin: 1.25rem 0 0.5rem; color: #1e293b; }
+    p { margin-bottom: 0.85rem; color: #334155; }
+    ul { margin: 0.5rem 0 1rem 1.25rem; color: #334155; }
+    li { margin-bottom: 0.35rem; }
+    .lead { font-size: 1.02rem; color: #475569; }
+    /* Tables */
+    table { width: 100%; border-collapse: collapse; font-size: 0.88rem; margin: 1rem 0; }
+    th, td { border: 1px solid var(--sp-border); padding: 0.55rem 0.65rem; text-align: left; }
+    th { background: #f8fafc; font-weight: 600; color: #1e293b; }
+    /* Code inline */
+    code.inline {
+      font-family: 'JetBrains Mono', monospace; font-size: 0.82em;
+      background: #f1f5f9; padding: 0.15em 0.45em; border-radius: 4px; color: #0f172a;
+    }
+    /* Preview window — “canlı görüntü” */
+    .preview-wrap { margin: 1.25rem 0; }
+    .preview-label {
+      font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+      color: var(--sp-muted); margin-bottom: 0.5rem; display: flex; align-items: center; gap: 0.5rem;
+    }
+    .preview-label span.dot {
+      width: 6px; height: 6px; border-radius: 50%; background: var(--sp-success);
+      box-shadow: 0 0 0 3px rgba(5, 150, 105, 0.2);
+    }
+    .browser-chrome {
+      border-radius: 10px; overflow: hidden;
+      border: 1px solid #cbd5e1;
+      box-shadow: var(--shadow);
+      background: #0f172a;
+    }
+    .browser-top {
+      display: flex; align-items: center; gap: 0.5rem;
+      padding: 0.55rem 0.85rem;
+      background: linear-gradient(180deg, #334155 0%, #1e293b 100%);
+      border-bottom: 1px solid #0f172a;
+    }
+    .traffic { display: flex; gap: 6px; }
+    .traffic i { width: 10px; height: 10px; border-radius: 50%; display: block; }
+    .traffic i:nth-child(1) { background: #f87171; }
+    .traffic i:nth-child(2) { background: #fbbf24; }
+    .traffic i:nth-child(3) { background: #4ade80; }
+    .chrome-url {
+      flex: 1; font-family: 'JetBrains Mono', monospace; font-size: 0.68rem;
+      color: #cbd5e1; background: rgba(0,0,0,0.35);
+      padding: 0.35rem 0.65rem; border-radius: 6px; overflow-x: auto; white-space: nowrap;
+    }
+    .chrome-badge {
+      font-size: 0.65rem; font-weight: 700; padding: 0.2rem 0.45rem;
+      border-radius: 4px; background: rgba(52, 211, 153, 0.2); color: #6ee7b7;
+    }
+    .browser-body {
+      background: #0d1117;
+      padding: 1rem 1.1rem;
+      overflow-x: auto;
+    }
+    .browser-body pre {
+      font-family: 'JetBrains Mono', monospace; font-size: 0.72rem;
+      line-height: 1.5; color: #e2e8f0; margin: 0; white-space: pre-wrap; word-break: break-all;
+    }
+    .j-key { color: #7dd3fc; }
+    .j-str { color: #86efac; }
+    .j-num { color: #fcd34d; }
+    /* Flow */
+    .flow {
+      display: flex; flex-wrap: wrap; align-items: stretch; gap: 1rem;
+      margin: 1.25rem 0;
+    }
+    .flow-step {
+      flex: 1; min-width: 140px;
+      background: var(--sp-orange-soft);
+      border: 1px solid #fed7aa;
+      border-radius: var(--radius);
+      padding: 1rem;
+      text-align: center;
+    }
+    .flow-step strong { display: block; color: #9a3412; font-size: 0.8rem; margin-bottom: 0.35rem; }
+    .flow-step p { font-size: 0.85rem; margin: 0; color: #7c2d12; }
+    .flow-arrow {
+      display: flex; align-items: center; justify-content: center;
+      color: var(--sp-orange); font-size: 1.5rem; font-weight: 200;
+    }
+    @media (max-width: 700px) { .flow-arrow { transform: rotate(90deg); width: 100%; } }
+    /* Cards grid */
+    .card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1rem; margin-top: 1rem; }
+    .info-card {
+      border: 1px solid var(--sp-border); border-radius: var(--radius);
+      padding: 1.1rem; background: #fafafa;
+    }
+    .info-card h4 { font-size: 0.85rem; color: var(--sp-indigo); margin-bottom: 0.5rem; font-weight: 700; }
+    .info-card p { font-size: 0.85rem; margin: 0; }
+    footer.doc-footer {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: center;
+      gap: 0.35rem 0.75rem;
+      margin-top: 2.5rem; padding-top: 1.5rem;
+      border-top: 1px solid var(--sp-border);
+      font-size: 0.82rem; color: var(--sp-muted);
+      text-align: center;
+    }
+    footer.doc-footer img {
+      height: 28px;
+      width: auto;
+      vertical-align: middle;
+      margin-right: 0.25rem;
+      opacity: 0.88;
+    }
+    footer.doc-footer a { color: var(--sp-orange); font-weight: 600; }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <div class="inner">
+      <div class="brand-row">
+        <div class="logo-wrap">
+          <img src="/logo256.png" alt="ŞefPOS" class="brand-logo-img" width="44" height="44" decoding="async" />
+        </div>
+        <div class="brand-text">
+          <h1>Dış Partner Sipariş API</h1>
+          <p class="sub">ŞefPOS · Kurumsal entegrasyon kılavuzu · REST / JSON</p>
+        </div>
+      </div>
+      <div class="hero-meta">
+        <span class="pill api">API v1.0.0</span>
+        <span class="pill">Belge v1.1</span>
+        <span class="pill">HTTPS · UTF-8</span>
+        <span class="pill">Pull (polling) modeli</span>
+      </div>
+    </div>
+  </header>
+
+  <div class="wrap">
+    <div class="layout">
+      <nav class="toc" aria-label="İçindekiler">
+        <strong>İçindekiler</strong>
+        <a href="#overview">Genel bakış</a>
+        <a href="#scope">Kapsam</a>
+        <a href="#urls">Taban URL</a>
+        <a href="#auth">Kimlik doğrulama</a>
+        <a href="#flow">Entegrasyon akışı</a>
+        <a href="#endpoints">Endpoint’ler</a>
+        <a href="#examples">Örnek yanıtlar</a>
+        <a href="#errors">Hata kodları</a>
+        <a href="#downloads">İndir / OpenAPI</a>
+      </nav>
+
+      <main>
+        <section id="overview">
+          <h2>Genel bakış</h2>
+          <p class="lead">
+            Bu API, üçüncü taraf firmaların ŞefPOS’ta oluşturulan <strong>masasız paket servis ve teslimat siparişlerini</strong> kendi sistemlerine aktarması için tasarlanmıştır.
+            Teknik proje adı: <code class="inline">SEFPOS</code>.
+          </p>
+          <ul>
+            <li>Partner, belirli aralıklarla <code class="inline">GET /v1/orders</code> ile siparişleri <strong>çeker</strong> (webhook şart değildir).</li>
+            <li>Her partner (veya şube) için ŞefPOS’ta <strong>ayrı API anahtarı</strong> üretilir.</li>
+            <li>İşlenen sipariş <code class="inline">POST …/ack</code> ile işaretlenerek varsayılan listede tekrar görünmesi engellenir.</li>
+          </ul>
+        </section>
+
+        <section id="scope">
+          <h2>Kapsam</h2>
+          <div class="card-grid">
+            <div class="info-card">
+              <h4>Dahil</h4>
+              <p>POS’ta oluşturulan <code class="inline">delivery</code> ve adresli paket / takeaway siparişleri.</p>
+            </div>
+            <div class="info-card">
+              <h4>Hariç</h4>
+              <p>Masa siparişleri; Getir / Yemeksepeti vb. <strong>online platform</strong> siparişleri.</p>
+            </div>
+          </div>
+        </section>
+
+        <section id="urls">
+          <h2>Taban URL</h2>
+          <p><strong>Üretim (önerilen):</strong></p>
+          <p><code class="inline">https://www.sefpos.com.tr/api/integrations/partner</code></p>
+          <p style="margin-top:1rem;"><strong>Yedek (doğrudan Edge):</strong></p>
+          <p><code class="inline">https://xdfnozfuuzctubijbnds.supabase.co/functions/v1/partner-orders-api</code></p>
+        </section>
+
+        <section id="auth">
+          <h2>Kimlik doğrulama</h2>
+          <p>Anahtar: ŞefPOS <strong>Ayarlar → Dış Partner API</strong> ekranından oluşturulur (<code class="inline">sp_live_…</code>).</p>
+          <p>Aşağıdakilerden biri gönderilir (köke <code class="inline">GET /</code> hariç tüm işlemler):</p>
+          <ul>
+            <li><code class="inline">Authorization: Bearer &lt;api_key&gt;</code></li>
+            <li><code class="inline">X-Api-Key: &lt;api_key&gt;</code></li>
+          </ul>
+          <p>İsteğe bağlı: <code class="inline">X-Request-Id</code> (korelasyon).</p>
+        </section>
+
+        <section id="flow">
+          <h2>Entegrasyon akışı</h2>
+          <p>Tipik kurumsal akış — önerilen aralık yaklaşık <strong>30 saniye</strong>:</p>
+          <div class="flow">
+            <div class="flow-step">
+              <strong>1 · Poll</strong>
+              <p><code class="inline">GET /v1/orders?since=…</code></p>
+            </div>
+            <div class="flow-arrow" aria-hidden="true">→</div>
+            <div class="flow-step">
+              <strong>2 · İşle</strong>
+              <p>Partner sisteminde kaydet / kurye ata</p>
+            </div>
+            <div class="flow-arrow" aria-hidden="true">→</div>
+            <div class="flow-step">
+              <strong>3 · ACK</strong>
+              <p><code class="inline">POST …/ack</code></p>
+            </div>
+          </div>
+        </section>
+
+        <section id="endpoints">
+          <h2>Endpoint özeti</h2>
+          <table>
+            <thead>
+              <tr><th>HTTP</th><th>Yol</th><th>Kimlik</th><th>Açıklama</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>GET</td><td><code class="inline">/</code></td><td>Hayır</td><td>Meta ve sürüm</td></tr>
+              <tr><td>GET</td><td><code class="inline">/v1/orders</code></td><td>Evet</td><td>Liste</td></tr>
+              <tr><td>GET</td><td><code class="inline">/v1/orders/{id}</code></td><td>Evet</td><td>Tek sipariş</td></tr>
+              <tr><td>POST</td><td><code class="inline">/v1/orders/{id}/ack</code></td><td>Evet</td><td>Alındı</td></tr>
+              <tr><td>PATCH</td><td><code class="inline">/v1/orders/{id}/delivery</code></td><td>Evet</td><td>Teslimat güncelle</td></tr>
+            </tbody>
+          </table>
+          <h3>GET /v1/orders — sorgu parametreleri</h3>
+          <table>
+            <thead><tr><th>Parametre</th><th>Varsayılan</th><th>Açıklama</th></tr></thead>
+            <tbody>
+              <tr><td><code class="inline">since</code></td><td>—</td><td>ISO-8601, <code class="inline">created_at</code> üzerinden filtre</td></tr>
+              <tr><td><code class="inline">hours</code></td><td>24</td><td><code class="inline">since</code> yokken (max 168)</td></tr>
+              <tr><td><code class="inline">limit</code></td><td>50</td><td>En fazla 100</td></tr>
+              <tr><td><code class="inline">include_acked</code></td><td>false</td><td>Onaylıları da getir</td></tr>
+              <tr><td><code class="inline">status</code></td><td>—</td><td><code class="inline">active</code> veya <code class="inline">open</code></td></tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section id="examples">
+          <h2>Örnek yanıtlar (canlı önizleme)</h2>
+          <p style="margin-bottom:0.5rem;">Aşağıdaki kutular, üretimde dönen JSON yapısını temsil eder; veri örnektir.</p>
+
+          <div class="preview-wrap">
+            <div class="preview-label"><span class="dot" aria-hidden="true"></span> Sağlık · GET taban adres</div>
+            <div class="browser-chrome">
+              <div class="browser-top">
+                <div class="traffic" aria-hidden="true"><i></i><i></i><i></i></div>
+                <div class="chrome-url">GET https://www.sefpos.com.tr/api/integrations/partner</div>
+                <span class="chrome-badge">200</span>
+              </div>
+              <div class="browser-body">
+<pre>{
+  <span class="j-key">"service"</span>: <span class="j-str">"sefpos-partner-orders-api"</span>,
+  <span class="j-key">"api_version"</span>: <span class="j-str">"1.0.0"</span>,
+  <span class="j-key">"endpoints"</span>: [ <span class="j-str">"GET /v1/orders"</span>, <span class="j-str">"GET /v1/orders/{id}"</span>, … ],
+  <span class="j-key">"scope"</span>: <span class="j-str">"POS delivery/takeaway orders only"</span>
+}</pre>
+              </div>
+            </div>
+          </div>
+
+          <div class="preview-wrap">
+            <div class="preview-label"><span class="dot" aria-hidden="true"></span> Liste · GET /v1/orders</div>
+            <div class="browser-chrome">
+              <div class="browser-top">
+                <div class="traffic" aria-hidden="true"><i></i><i></i><i></i></div>
+                <div class="chrome-url">GET …/partner/v1/orders?limit=50</div>
+                <span class="chrome-badge">200</span>
+              </div>
+              <div class="browser-body">
+<pre>{
+  <span class="j-key">"api_version"</span>: <span class="j-str">"1.0.0"</span>,
+  <span class="j-key">"partner"</span>: <span class="j-str">"Örnek Partner A.Ş."</span>,
+  <span class="j-key">"count"</span>: <span class="j-num">1</span>,
+  <span class="j-key">"orders"</span>: [{
+    <span class="j-key">"id"</span>: <span class="j-str">"550e8400-e29b-41d4-a716-446655440000"</span>,
+    <span class="j-key">"type"</span>: <span class="j-str">"delivery"</span>,
+    <span class="j-key">"customer"</span>: { <span class="j-key">"name"</span>: <span class="j-str">"Ali Y."</span>, <span class="j-key">"phone"</span>: <span class="j-str">"+90…"</span>, <span class="j-key">"address"</span>: <span class="j-str">"…"</span> },
+    <span class="j-key">"payment"</span>: { <span class="j-key">"total"</span>: <span class="j-num">450</span> },
+    <span class="j-key">"items"</span>: [{ <span class="j-key">"name"</span>: <span class="j-str">"Lahmacun"</span>, <span class="j-key">"quantity"</span>: <span class="j-num">2</span> }]
+  }],
+  <span class="j-key">"next_since"</span>: <span class="j-str">"2026-05-15T12:30:00.000Z"</span>,
+  <span class="j-key">"polling_hint_seconds"</span>: <span class="j-num">30</span>
+}</pre>
+              </div>
+            </div>
+          </div>
+
+          <div class="preview-wrap">
+            <div class="preview-label"><span class="dot" aria-hidden="true"></span> Hata · 401</div>
+            <div class="browser-chrome">
+              <div class="browser-top">
+                <div class="traffic" aria-hidden="true"><i></i><i></i><i></i></div>
+                <div class="chrome-url">GET …/v1/orders (anahtar yok)</div>
+                <span class="chrome-badge" style="background:rgba(248,113,113,0.25);color:#fecaca;">401</span>
+              </div>
+              <div class="browser-body">
+<pre>{
+  <span class="j-key">"error"</span>: {
+    <span class="j-key">"code"</span>: <span class="j-str">"UNAUTHORIZED"</span>,
+    <span class="j-key">"message"</span>: <span class="j-str">"API anahtarı gerekli (Bearer veya X-Api-Key)."</span>
+  },
+  <span class="j-key">"request_id"</span>: <span class="j-str">"…"</span>
+}</pre>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section id="errors">
+          <h2>Hata kodları</h2>
+          <table>
+            <thead><tr><th>Kod</th><th>HTTP</th><th>Açıklama</th></tr></thead>
+            <tbody>
+              <tr><td><code class="inline">UNAUTHORIZED</code></td><td>401</td><td>Anahtar eksik / geçersiz / pasif</td></tr>
+              <tr><td><code class="inline">INVALID_SINCE</code></td><td>400</td><td><code class="inline">since</code> formatı</td></tr>
+              <tr><td><code class="inline">INVALID_BODY</code></td><td>400</td><td>Örn. <code class="inline">delivery_status</code></td></tr>
+              <tr><td><code class="inline">NOT_FOUND</code></td><td>404</td><td>Sipariş yok veya kapsam dışı</td></tr>
+              <tr><td><code class="inline">INTERNAL</code></td><td>500</td><td>Sunucu hatası</td></tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section id="downloads">
+          <h2>İndir · Makine okunur şema</h2>
+          <p>
+            Tam metin (Markdown): <a href="./partner-orders-api.md">partner-orders-api.md</a><br />
+            OpenAPI 3.0: <a href="./partner-orders-api.openapi.yaml">partner-orders-api.openapi.yaml</a> (Postman import)
+          </p>
+        </section>
+      </main>
+    </div>
+
+    <footer class="doc-footer">
+      <img src="/logo-header.png" alt="ŞefPOS" width="120" height="32" decoding="async" />
+      ŞefPOS / SEFPOS · Dış partner API dokümantasyonu ·
+      <a href="/">www.sefpos.com.tr</a>
+    </footer>
+  </div>
+</body>
+</html>

@@ -1936,6 +1936,27 @@ ipcMain.handle('register-printers', async (_, { tenantId, branchId, userJwt }) =
 
     await expireStalePendingJobsForTenant(tenantId, userJwt);
 
+    try {
+      const sessionPath = path.join(app.getPath('userData'), 'print-agent-session.json');
+      fs.mkdirSync(path.dirname(sessionPath), { recursive: true });
+      fs.writeFileSync(
+        sessionPath,
+        JSON.stringify({
+          tenantId,
+          branchId: branchId || null,
+          userJwt,
+          supabaseUrl: SUPABASE_URL,
+          anonKey: SUPABASE_ANON_KEY,
+          printers: printers || [],
+          savedAt: new Date().toISOString(),
+        }),
+        'utf8'
+      );
+      paLog('log', `print-agent-session.json güncellendi (${sessionPath})`);
+    } catch (sessErr) {
+      paLog('warn', 'print-agent-session yazılamadı: ' + (sessErr?.message || sessErr));
+    }
+
     if (tenantChanged || branchChanged || !realtimeConnected) {
       console.log('Tenant/branch değişti, Realtime yeniden bağlanıyor...');
       processingJobIds.clear();
@@ -3064,6 +3085,16 @@ ipcMain.handle('scale-get-weight', () => {
 });
 
 app.on('window-all-closed', () => {
+  // Windows kasada pencere kapatılınca uygulama kapanmasın — Print Agent ve
+  // print_jobs kuyruğu arka planda çalışmaya devam etsin (www siparişleri).
+  if (process.platform === 'win32') {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.hide();
+    }
+    paLog('log', 'Ana pencere gizlendi; Print Agent ve fiş kuyruğu arka planda çalışıyor.');
+    return;
+  }
+
   if (realtimeReconnectTimer) clearTimeout(realtimeReconnectTimer);
   if (realtimeWs) { try { realtimeWs.close(); } catch {} }
   if (printAgentServer) {

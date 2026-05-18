@@ -95,6 +95,13 @@ export interface DHReceiptOrderInput {
   customerComment?: string | null;
   vendorComment?: string | null;
 
+  /** Getir sipariş doğrulama kodu (örn. h593) — fiş üstünde büyük kutu. */
+  verificationCode?: string | null;
+  /** Getir ortak kampanya / restoran destekli indirim. */
+  ortakKampanya?: boolean;
+  /** Kurye tipi rozeti: Getir Getirsin / Restoran Getirsin. */
+  courierBadge?: string | null;
+
   products: DHProductForReceipt[];
 
   totals: {
@@ -219,11 +226,21 @@ export function renderDHOrderReceiptHtml(order: DHReceiptOrderInput): string {
   const grand = order.totals.grandTotal;
   const tip = order.totals.riderTip ?? 0;
 
+  const isGetir = /getir/i.test(platformLabel);
+  const verifyCode = (order.verificationCode || "").trim();
+  const logoHtml = isGetir
+    ? `<div style="text-align:center;background:linear-gradient(180deg,#FFD300 0%,#F5C500 100%);border:2px solid #000;border-radius:10px;padding:8px 6px;margin-bottom:4px">
+        <div style="font-size:32px;font-weight:900;font-style:italic;color:#5D3EBC;letter-spacing:-1px;line-height:1">getir</div>
+        <div style="font-size:11px;font-weight:900;color:#5D3EBC;letter-spacing:3px;margin-top:2px">YEMEK</div>
+      </div>`
+    : `<div class="platform-h">${escHtml(platformLabel)}</div>`;
+
   return `
 <style>
   .dh-r { font-family: Arial, sans-serif; width: 72mm; padding: 2mm 1mm; color: #000; }
   .dh-r * { box-sizing: border-box; }
   .dh-r .platform-h { text-align:center; font-weight:900; font-size:20px; letter-spacing:2px; padding:6px 0; border:2px solid #000; margin-bottom:4px; }
+  .dh-r .verify-box { text-align:center; font-size:22px; font-weight:900; letter-spacing:4px; padding:6px 0; border:2px dashed #5D3EBC; margin:4px 0; color:#5D3EBC; }
   .dh-r .code-box { text-align:center; font-size:26px; font-weight:900; letter-spacing:3px; padding:5px 0; border:2px solid #000; margin:4px 0; }
   .dh-r .flag-row { display:flex; gap:4px; justify-content:center; flex-wrap:wrap; margin:4px 0; }
   .dh-r .flag { font-size:10px; font-weight:900; padding:2px 6px; border:1px solid #000; }
@@ -253,12 +270,15 @@ export function renderDHOrderReceiptHtml(order: DHReceiptOrderInput): string {
   .dh-r .token { text-align:center; font-size:9px; color:#888; margin-top:2px; word-break:break-all; }
 </style>
 <div class="dh-r">
-  <div class="platform-h">${escHtml(platformLabel)}</div>
+  ${logoHtml}
+  ${verifyCode ? `<div class="verify-box">DOĞRULAMA: ${escHtml(verifyCode.toUpperCase())}</div>` : ""}
   ${orderCode ? `<div class="code-box">${escHtml(orderCode)}</div>` : ""}
 
   <div class="flag-row">
     ${order.testOrder ? `<span class="flag warn">TEST</span>` : ""}
     ${order.preOrder ? `<span class="flag">İLERİ TARİHLİ</span>` : ""}
+    ${order.ortakKampanya ? `<span class="flag warn">ORTAK KAMPANYA</span>` : ""}
+    ${order.courierBadge ? `<span class="flag">${escHtml(order.courierBadge)}</span>` : ""}
     ${order.delivery?.expressDelivery ? `<span class="flag warn">EXPRESS</span>` : ""}
     <span class="flag">${isDelivery ? "TESLİMAT" : "GEL-AL"}</span>
     <span class="flag">${order.isPaid ? "ONLİNE ÖDEME" : "KAPIDA ÖDEME"}</span>
@@ -296,7 +316,7 @@ export function renderDHOrderReceiptHtml(order: DHReceiptOrderInput): string {
       : ""}
 
   ${order.customerComment
-      ? `<div class="note-box">MÜŞTERİ NOTU:<br/>${escHtml(order.customerComment)}</div>`
+      ? `<div class="note-box">SİPARİŞ NOTU:<br/>${escHtml(order.customerComment)}</div>`
       : ""}
 
   ${order.vendorComment
@@ -307,7 +327,9 @@ export function renderDHOrderReceiptHtml(order: DHReceiptOrderInput): string {
 
   <div class="totals">
     ${subTotal != null ? `<div class="row"><span>Ara Toplam</span><span>${fmtTL(subTotal)}</span></div>` : ""}
-    ${discount > 0 ? `<div class="row"><span>İndirim (-)</span><span>-${fmtTL(discount)}</span></div>` : ""}
+    ${discount > 0
+      ? `<div class="row"><span>${order.ortakKampanya ? "Ortak Kampanya (-)" : "İndirim (-)"}</span><span>-${fmtTL(discount)}</span></div>`
+      : ""}
     ${fee > 0 ? `<div class="row"><span>Teslimat Ücreti</span><span>${fmtTL(fee)}</span></div>` : ""}
     ${tip > 0 ? `<div class="row"><span>Kurye Bahşişi</span><span>${fmtTL(tip)}</span></div>` : ""}
     ${vat != null && vat > 0 ? `<div class="row small"><span>KDV Dahil</span><span>${fmtTL(vat)}</span></div>` : ""}

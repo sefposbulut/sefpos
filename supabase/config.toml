@@ -435,3 +435,11 @@ verify_jwt = false
 [functions.getir-api]
 verify_jwt = false
 
+# Dış partner REST API (paket siparişleri) — X-Api-Key / Bearer ile doğrulanır.
+[functions.partner-orders-api]
+verify_jwt = false
+
+# HemenYolda outbound webhook — kullanıcı JWT + service role
+[functions.hemenyolda-webhook-push]
+verify_jwt = true
+

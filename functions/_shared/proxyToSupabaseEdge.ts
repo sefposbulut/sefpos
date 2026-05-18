@@ -20,10 +20,15 @@ export async function proxyToSupabaseEdge(
   request: Request,
   edgeFunctionName: string,
   env?: { SEFPOS_SUPABASE_URL?: string },
+  /** Function adından sonra yol, örn. `/v1/orders` */
+  subPath = '',
 ): Promise<Response> {
   const upstream = String(env?.SEFPOS_SUPABASE_URL || DEFAULT_UPSTREAM).replace(/\/$/, '');
   const url = new URL(request.url);
-  const dest = `${upstream}/functions/v1/${edgeFunctionName}${url.search}`;
+  const pathSuffix = subPath
+    ? (subPath.startsWith('/') ? subPath : `/${subPath}`)
+    : '';
+  const dest = `${upstream}/functions/v1/${edgeFunctionName}${pathSuffix}${url.search}`;
 
   const out = new Headers();
   for (const [k, v] of request.headers) {

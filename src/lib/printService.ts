@@ -1066,14 +1066,21 @@ function notifyPrintResult(opts: {
   success: boolean;
   printerName: string;
   errorDetail?: string;
-  channel?: 'electron' | 'queue' | 'agent';
+  channel?: 'electron' | 'queue' | 'agent' | 'browser';
   toastTitle?: string;
   silent?: boolean;
 }): void {
   if (opts.silent) return;
   const target = opts.printerName || undefined;
   if (opts.success) {
-    if (opts.channel === 'queue') {
+    if (opts.channel === 'browser') {
+      dispatchPrintToast({
+        kind: 'success',
+        message: opts.toastTitle || 'Yazdırma penceresi açıldı',
+        target,
+        detail: 'Termal yazıcınızı seçip Yazdır deyin (Getir paneli gibi).',
+      });
+    } else if (opts.channel === 'queue') {
       // Web/mobilde gerçek yazıcı yok — kasadaki Print Agent basacak.
       // "Kuyruğa eklendi" tek başına "çıkmadı mı acaba?" izlenimi verebildiği
       // için pozitif ve net bir cümle kullanıyoruz.
@@ -1100,23 +1107,197 @@ function notifyPrintResult(opts: {
   }
 }
 
+/** 80 mm termal fiş — tarayıcı yazdırma penceresi (web / www, Getir paneli gibi). */
+function buildBrowserThermalDocument(bodyHtml: string, title = 'ŞefPOS Fiş'): string {
+  const st = loadPrintSettings().printStyle || DEFAULT_PRINT_STYLE;
+  const off = clampOffsetMm(st.paperOffsetMm);
+  const safeTitle = escHtml(title);
+  return `<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="utf-8" />
+<title>${safeTitle}</title>
+<style>
+  @page { size: 80mm auto; margin: 0; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: Arial, Helvetica, "Segoe UI", sans-serif;
+    font-size: 12px;
+    width: 76mm;
+    max-width: 76mm;
+    padding: 4px;
+    margin-left: ${off}mm;
+    color: #000;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .center { text-align: center; }
+  .bold { font-weight: bold; }
+  .large { font-size: 14px; }
+  .xlarge { font-size: 16px; }
+  .line { border-top: 1px dashed #000; margin: 4px 0; }
+  .row { display: flex; justify-content: space-between; width: 100%; }
+  .name { flex: 1; overflow: hidden; }
+  .qty { width: 36px; text-align: right; }
+  .price { width: 80px; text-align: right; }
+  .note { font-size: 11px; font-style: italic; padding-left: 8px; }
+  .footer { text-align: center; font-size: 11px; margin-top: 4px; }
+  .total-row { display: flex; justify-content: space-between; font-weight: bold; font-size: 14px; }
+  @media print { body { width: 76mm; } }
+</style>
+</head>
+<body>
+${bodyHtml}
+<br><br><br>
+</body>
+</html>`;
+}
+
+/** Kullanıcı tıklamasıyla: yazdırma penceresi (pop-up). */
+async function printHtmlViaBrowser(
+  html: string,
+  title?: string
+): Promise<{ success: boolean; error?: string }> {
+  if (typeof window === 'undefined') return { success: false, error: 'Tarayıcı yok' };
+  const doc = buildBrowserThermalDocument(html, title || 'ŞefPOS');
+  const w = window.open('', 'sefpos-thermal-print', 'width=420,height=800');
+  if (!w) {
+    return { success: false, error: 'Pop-up engellendi — tarayıcıda bu site için açılır pencereye izin verin.' };
+  }
+  w.document.open();
+  w.document.write(doc);
+  w.document.close();
+  w.focus();
+  const tryPrint = () => {
+    try {
+      w.print();
+    } catch {
+      /* sessiz */
+    }
+  };
+  if (w.document.readyState === 'complete') {
+    setTimeout(tryPrint, 280);
+  } else {
+    w.addEventListener('load', () => setTimeout(tryPrint, 280));
+  }
+  w.addEventListener('afterprint', () => {
+    setTimeout(() => {
+      try {
+        w.close();
+      } catch {
+        /* sessiz */
+      }
+    }, 400);
+  });
+  return { success: true };
+}
+
+/** Otomatik onay (sessiz): gizli iframe — mümkünse dialog göstermeden basar. */
+async function printHtmlViaBrowserSilent(html: string): Promise<{ success: boolean; error?: string }> {
+  if (typeof window === 'undefined') return { success: false, error: 'Tarayıcı yok' };
+  return new Promise((resolve) => {
+    const iframe = document.createElement('iframe');
+    iframe.setAttribute('aria-hidden', 'true');
+    iframe.style.cssText = 'position:fixed;left:-9999px;top:0;width:1px;height:1px;border:0';
+    document.body.appendChild(iframe);
+    const win = iframe.contentWindow;
+    const doc = win?.document;
+    if (!win || !doc) {
+      iframe.remove();
+      resolve({ success: false, error: 'iframe oluşturulamadı' });
+      return;
+    }
+    doc.open();
+    doc.write(buildBrowserThermalDocument(html));
+    doc.close();
+    setTimeout(() => {
+      try {
+        win.focus();
+        win.print();
+        resolve({ success: true });
+      } catch (err: any) {
+        resolve({ success: false, error: err?.message || 'print blocked' });
+      }
+      setTimeout(() => {
+        try {
+          iframe.remove();
+        } catch {
+          /* sessiz */
+        }
+      }, 8000);
+    }, 450);
+  });
+}
+
+/** Yerel Print Agent (127.0.0.1:7878) — Electron kapalı olsa da çalışır. */
+async function tryLocalPrintAgent(
+  html: string,
+  printerName: string
+): Promise<{ success: boolean; error?: string } | null> {
+  try {
+    const res = await fetch(`${PRINT_AGENT_URL}/print`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ html, printerName: printerName || undefined, silent: true }),
+      signal: AbortSignal.timeout(15000),
+    });
+    const data = await res.json();
+    if (data?.success) return { success: true };
+    return { success: false, error: data?.error || data?.errorType || 'Print Agent başarısız' };
+  } catch {
+    return null;
+  }
+}
+
+const DEFAULT_SUPABASE_FN_BASE =
+  (import.meta.env.VITE_SUPABASE_URL as string | undefined)?.replace(/\/$/, '') ||
+  'https://xdfnozfuuzctubijbnds.supabase.co';
+
+/** Edge `online-order-reprint` ile onay fişi HTML üretir. */
+export async function fetchOnlineOrderReceiptHtml(
+  onlineOrderId: string,
+  directPrint = true
+): Promise<string | null> {
+  const { data: sess } = await supabase.auth.getSession();
+  const token = sess?.session?.access_token;
+  if (!token) return null;
+  const res = await fetch(`${DEFAULT_SUPABASE_FN_BASE}/functions/v1/online-order-reprint`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ onlineOrderId, directPrint }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data?.ok) return null;
+  return typeof data.html === 'string' ? data.html : null;
+}
+
+/** Getir / platform onay fişi — önce yerel agent/Electron, sonra kuyruk. */
+export async function printOnlineOrderReceiptFromEdge(
+  onlineOrderId: string,
+  opts?: { printerName?: string; title?: string; silent?: boolean }
+): Promise<{ success: boolean; error?: string }> {
+  const html = await fetchOnlineOrderReceiptHtml(onlineOrderId, true);
+  if (!html) {
+    return { success: false, error: 'Fiş oluşturulamadı' };
+  }
+  const settings = loadPrintSettings();
+  const printer = (opts?.printerName || settings.defaultKitchenPrinter || '').trim();
+  return printHtml(html, printer, {
+    title: opts?.title || 'Online sipariş fişi',
+    silent: opts?.silent,
+  });
+}
+
 /**
- * Yazdırma akışı — üç katmanlı strateji:
+ * Yazdırma akışı:
  *
- * 1. **Electron** (kasa makinesi): doğrudan yerel yazıcıya bas, sonuç
- *    `success/error` olarak toast'lanır.
- *
- * 2. **Web / mobil**: doğrudan yazıcı erişimi yoktur. Sipariş gönderen
- *    kişi mobilden de olsa, `print_jobs` kuyruğuna yazılır → kasadaki
- *    Electron Print Agent bunu Realtime ile alıp gerçek yazıcıdan basar.
- *    Insert başarılıysa **"Mutfağa gönderildi"** toast'ı atılır;
- *    başarısızsa kullanıcıya `"yazıcıya ulaşılamadı"` GİBİ HATA
- *    GÖSTERİLMEZ — siparişin kendisi zaten Supabase'e kaydedilmiştir.
- *    Sadece soft uyarı: "Bağlantı sorunu, kasaya iletildiğinde basılır."
- *
- * 3. **Eski local Print Agent HTTP fallback** yalnızca tenant/branch
- *    kimliği olmayan terminal modu için tutuluyor; web'de mixed-content
- *    yüzünden zaten erişilmez.
+ * 1. Electron — sessiz termal.
+ * 2. Yerel Print Agent (7878).
+ * 3. **Web (www) — tarayıcı yazdırma** (Getir paneli gibi; aynı PC'de termal seçilir).
+ * 4. `print_jobs` kuyruğu (uzaktan kasa / agent).
  */
 export async function printHtml(
   html: string,
@@ -1146,7 +1327,46 @@ export async function printHtml(
     }
   }
 
-  // 2) Web / mobil — Supabase print_jobs kuyruğu.
+  // 2) Yerel Print Agent — www veya Electron UI kapalı olsa da (aynı PC).
+  const agentHit = await tryLocalPrintAgent(html, printerName);
+  if (agentHit?.success) {
+    notifyPrintResult({
+      success: true,
+      printerName,
+      channel: 'agent',
+      toastTitle: title,
+      silent,
+    });
+    return { success: true };
+  }
+
+  // 3) Web — tarayıcı yazdırma (HTTPS'te Getir/Yemeksepeti paneli gibi).
+  if (!isElectron()) {
+    const browserResult = silent
+      ? await printHtmlViaBrowserSilent(html)
+      : await printHtmlViaBrowser(html, title || 'ŞefPOS Fiş');
+    if (browserResult.success) {
+      notifyPrintResult({
+        success: true,
+        printerName,
+        channel: 'browser',
+        toastTitle: title,
+        silent,
+      });
+      return { success: true };
+    }
+    if (!silent && browserResult.error?.includes('Pop-up')) {
+      notifyPrintResult({
+        success: false,
+        printerName,
+        errorDetail: browserResult.error,
+        channel: 'browser',
+        silent,
+      });
+    }
+  }
+
+  // 4) Web / mobil — Supabase print_jobs kuyruğu (uzak kasa veya otomatik yedek).
   // Tenant veya branch ID set edilmişse (login sonrası AuthContext bunu yapar),
   // Electron Print Agent kuyruğu Realtime ile dinler ve basar.
   if (_currentTenantId || _currentBranchId) {
@@ -1209,36 +1429,28 @@ export async function printHtml(
     }
   }
 
-  // 3) Local Print Agent HTTP fallback (terminal modu, tenant ID yok).
-  try {
-    const res = await fetch(`${PRINT_AGENT_URL}/print`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ html, printerName: printerName || undefined, silent: true }),
-      signal: AbortSignal.timeout(15000),
-    });
-    const data = await res.json();
+  // 5) Son çare — agent tekrar (tenant yokken yukarıdaki adım atlanmış olabilir).
+  const agentRetry = await tryLocalPrintAgent(html, printerName);
+  if (agentRetry) {
     notifyPrintResult({
-      success: !!data.success,
+      success: agentRetry.success,
       printerName,
-      errorDetail: data.errorType || data.error || undefined,
+      errorDetail: agentRetry.error,
       channel: 'agent',
       toastTitle: title,
       silent,
     });
-    return { success: data.success, error: data.errorType || data.error || undefined };
-  } catch (err: any) {
-    // Sessizce başarısız ol; kullanıcıya korkutucu hata atma.
-    console.warn('[ŞefPOS] Print Agent HTTP fallback başarısız:', err?.message);
-    if (!silent) {
-      dispatchPrintToast({
-        kind: 'queued',
-        message: 'Sipariş kaydedildi',
-        detail: 'Yazıcı çevrimdışı; kasaya bağlanınca basılacak.',
-      });
-    }
-    return { success: false, error: 'Print Agent yok' };
+    return agentRetry;
   }
+
+  if (!silent) {
+    dispatchPrintToast({
+      kind: 'queued',
+      message: 'Sipariş kaydedildi',
+      detail: 'Yazıcı çevrimdışı; Print Agent veya kasa açılınca basılacak.',
+    });
+  }
+  return { success: false, error: 'Print Agent yok' };
 }
 
 /**

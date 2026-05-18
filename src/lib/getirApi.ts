@@ -30,6 +30,8 @@ export interface GetirActionPayload {
     | 'handover'
     | 'deliver'
     | 'cancel'
+    | 'store-status-sync'
+    | 'restaurant-status-get'
     | 'restaurant-status-open'
     | 'restaurant-status-close'
     | 'restaurant-busy'
@@ -56,6 +58,9 @@ export interface GetirActionResult {
   data?: unknown;
   fetched?: number;
   saved?: number;
+  newCount?: number;
+  storeClosed?: boolean;
+  restaurantOpen?: boolean;
   expiresAt?: string;
   isFirstTime?: boolean;
   /**
@@ -436,6 +441,64 @@ export function getGetirUiPhase(order: {
   }
   if (order.status === 'arrived') return 'arrived_info';
   return 'verify';
+}
+
+/**
+ * Getir müşteri uygulamasında restoranı aç/kapat (Getir paneline gerek yok).
+ * Açarken isteğe bağlı POS entegrasyonunu da açar (sipariş alımı için).
+ */
+/** Getir'den POS + restoran açık/kapalı durumunu çekip DB'yi günceller. */
+export async function syncGetirStoreStatusFromApi(platformId: string): Promise<{
+  ok: boolean;
+  posStatus?: number;
+  restaurantOpen?: boolean | null;
+  error?: string;
+}> {
+  const res = await callGetir({ platformId, action: 'store-status-sync' });
+  if (!res.ok) {
+    return { ok: false, error: res.error || 'store-status-sync başarısız' };
+  }
+  const root =
+    res.data && typeof res.data === 'object' ? (res.data as Record<string, unknown>) : {};
+  const posRaw = root.posStatus;
+  const posStatus = posRaw != null ? Number(posRaw) : undefined;
+  const openRaw = root.restaurantOpen;
+  const restaurantOpen =
+    typeof openRaw === 'boolean' ? openRaw : openRaw == null ? null : Boolean(openRaw);
+  return {
+    ok: true,
+    posStatus: Number.isFinite(posStatus) ? posStatus : undefined,
+    restaurantOpen,
+  };
+}
+
+/** @deprecated syncGetirStoreStatusFromApi kullanın */
+export const syncGetirPosStatusFromApi = syncGetirStoreStatusFromApi;
+
+export async function syncGetirRestaurantOpen(
+  platformId: string,
+  open: boolean,
+  opts?: { timeOffAmount?: 15 | 30 | 45; openPosToo?: boolean },
+): Promise<GetirActionResult> {
+  const action = open ? 'restaurant-status-open' : 'restaurant-status-close';
+  const res = await callGetir({
+    platformId,
+    action,
+    ...(open ? {} : { timeOffAmount: opts?.timeOffAmount ?? 15 }),
+  });
+  if (!res.ok) return res;
+
+  if (open && opts?.openPosToo !== false) {
+    const pos = await callGetir({ platformId, action: 'pos-status-set', status: 100 });
+    if (!pos.ok) {
+      return {
+        ok: true,
+        data: res.data,
+        error: `Restoran Getir'de açıldı ancak POS açılamadı: ${pos.error || 'bilinmeyen hata'}`,
+      };
+    }
+  }
+  return res;
 }
 
 /** Random 32 karakterli x-api-key uretici. */

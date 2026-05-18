@@ -1,0 +1,199 @@
+openapi: 3.0.3
+info:
+  title: ŞefPOS Partner Orders API
+  description: |
+    REST API for third parties to pull POS package and delivery orders from ŞefPOS (SEFPOS).
+    Not included: online platform orders (Getir, etc.), dine-in table orders.
+  version: 1.0.0
+  contact:
+    name: ŞefPOS Integration
+servers:
+  - url: https://www.sefpos.com.tr/api/integrations/partner
+    description: Production (recommended)
+  - url: https://xdfnozfuuzctubijbnds.supabase.co/functions/v1/partner-orders-api
+    description: Direct Supabase Edge (fallback)
+
+paths:
+  /:
+    get:
+      operationId: getMeta
+      summary: API metadata and health (no auth)
+      security: []
+      responses:
+        '200':
+          description: Service description and version
+
+  /v1/orders:
+    get:
+      operationId: listOrders
+      summary: List package / delivery orders
+      parameters:
+        - name: since
+          in: query
+          schema:
+            type: string
+            format: date-time
+          description: Filter orders with created_at >= since (ISO-8601)
+        - name: hours
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 168
+            default: 24
+          description: Used when since is omitted; last N hours
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+        - name: include_acked
+          in: query
+          schema:
+            type: boolean
+            default: false
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [active, open]
+      responses:
+        '200':
+          description: Order list
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '500':
+          $ref: '#/components/responses/Error'
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+
+  /v1/orders/{orderId}:
+    get:
+      operationId: getOrder
+      summary: Get single order
+      parameters:
+        - $ref: '#/components/parameters/orderId'
+      responses:
+        '200':
+          description: Single order
+        '404':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+
+  /v1/orders/{orderId}/ack:
+    post:
+      operationId: ackOrder
+      summary: Mark order as received by partner
+      parameters:
+        - $ref: '#/components/parameters/orderId'
+      responses:
+        '200':
+          description: Ack recorded
+        '404':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+
+  /v1/orders/{orderId}/delivery:
+    patch:
+      operationId: patchDelivery
+      summary: Update delivery status / courier fields
+      parameters:
+        - $ref: '#/components/parameters/orderId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - delivery_status
+              properties:
+                delivery_status:
+                  $ref: '#/components/schemas/DeliveryStatus'
+                courier_name:
+                  type: string
+                courier_id:
+                  type: string
+                  format: uuid
+      responses:
+        '200':
+          description: Updated
+        '400':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: sp_live_...
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-Api-Key
+
+  parameters:
+    orderId:
+      name: orderId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+  schemas:
+    DeliveryStatus:
+      type: string
+      enum:
+        - pending
+        - preparing
+        - ready
+        - assigned
+        - on_the_way
+        - picked_up
+        - delivered
+        - failed
+        - cancelled
+
+    ErrorBody:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            details: {}
+        request_id:
+          type: string
+          format: uuid
+
+  responses:
+    Error:
+      description: Error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorBody'

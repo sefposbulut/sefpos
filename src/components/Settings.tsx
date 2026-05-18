@@ -3,7 +3,8 @@ import { supabase } from '../lib/supabase';
 import { createClient } from '@supabase/supabase-js';
 import { useAuth } from '../contexts/AuthContext';
 import { Database } from '../lib/supabase';
-import { X, Plus, Trash2, Settings as SettingsIcon, Building2, ToggleLeft, ToggleRight, Printer, AlertCircle, MapPin, Phone, Save, CreditCard as Edit2, User, Store, CheckCircle, Wifi, WifiOff, Globe, RefreshCw, Lock, ShieldCheck, Eye, EyeOff, Package, CheckSquare, Square, Database as DatabaseIcon, Receipt, Pencil, Scale, Loader, QrCode, PhoneIncoming, FlaskConical, Clock, Download, Sparkles, ChevronDown, ChevronUp, HelpCircle, Info, Percent } from 'lucide-react';
+import { X, Plus, Trash2, Settings as SettingsIcon, Building2, ToggleLeft, ToggleRight, Printer, AlertCircle, MapPin, Phone, Save, CreditCard as Edit2, User, Store, CheckCircle, Wifi, WifiOff, Globe, RefreshCw, Lock, ShieldCheck, Eye, EyeOff, Package, CheckSquare, Square, Database as DatabaseIcon, Receipt, Pencil, Scale, Loader, QrCode, PhoneIncoming, FlaskConical, Clock, Download, Sparkles, ChevronDown, ChevronUp, HelpCircle, Info, Percent, Link2 } from 'lucide-react';
+import PartnerIntegrationSettings from './PartnerIntegrationSettings';
 import {
   isCallerIdAvailable,
   startCallerId,
@@ -24,7 +25,7 @@ import { DeviceManagement } from './DeviceManagement';
 import { WaiterManagement } from './WaiterManagement';
 import { ScaleCalibration } from './ScaleCalibration';
 import { QrMenuManager } from './QrMenuManager';
-import { callGetir, generateGetirApiKey } from '../lib/getirApi';
+import { callGetir, generateGetirApiKey, syncGetirRestaurantOpen } from '../lib/getirApi';
 import { publicPartnerEdgeUrl } from '../lib/publicWebhookBaseUrl';
 
 type TableGroup = Database['public']['Tables']['table_groups']['Row'];
@@ -35,7 +36,7 @@ interface SettingsProps {
 
 export function Settings({ onClose }: SettingsProps) {
   const { tenant, profile, activeBranch, refreshProfile, refreshBranches } = useAuth();
-  const [activeTab, setActiveTab] = useState<'tables' | 'products' | 'manage' | 'platforms' | 'branches' | 'printers' | 'account' | 'system' | 'security' | 'branch-products' | 'database' | 'hugin' | 'devices' | 'waiters' | 'scale' | 'qr-menu' | 'caller-id'>('branches');
+  const [activeTab, setActiveTab] = useState<'tables' | 'products' | 'manage' | 'platforms' | 'partner-api' | 'branches' | 'printers' | 'account' | 'system' | 'security' | 'branch-products' | 'database' | 'hugin' | 'devices' | 'waiters' | 'scale' | 'qr-menu' | 'caller-id'>('branches');
   const [groups, setGroups] = useState<TableGroup[]>([]);
   const [showGroupForm, setShowGroupForm] = useState(false);
   const [groupName, setGroupName] = useState('');
@@ -425,7 +426,7 @@ export function Settings({ onClose }: SettingsProps) {
       if (activeTab === 'platforms') {
         loadPlatforms();
       }
-      if (activeTab === 'branches') {
+      if (activeTab === 'partner-api' || activeTab === 'branches') {
         loadBranches();
       }
       if (activeTab === 'branch-products') {
@@ -976,15 +977,59 @@ export function Settings({ onClose }: SettingsProps) {
     loadPlatforms();
   };
 
-  const handleTogglePlatform = async (platformId: string, currentStatus: boolean) => {
+  const handleTogglePlatform = async (platform: {
+    id: string;
+    is_active: boolean;
+    platform_code: string;
+  }) => {
+    const nextActive = !platform.is_active;
+
+    if (platform.platform_code === 'getir') {
+      const label = nextActive ? 'açmak' : 'kapatmak';
+      if (
+        !confirm(
+          nextActive
+            ? 'Getir uygulamasında restoranı AÇMAK ve POS entegrasyonunu etkinleştirmek istiyor musunuz?'
+            : 'Getir uygulamasında restoranı KAPATMAK istiyor musunuz? (Müşteriler sipariş veremez.)',
+        )
+      ) {
+        return;
+      }
+      const res = await syncGetirRestaurantOpen(platform.id, nextActive, {
+        timeOffAmount: 15,
+        openPosToo: nextActive,
+      });
+      if (!res.ok) {
+        const dataObj =
+          res.data && typeof res.data === 'object' ? (res.data as Record<string, unknown>) : {};
+        const detail =
+          (dataObj.message as string | undefined) ||
+          (dataObj.error as string | undefined) ||
+          res.error ||
+          'Getir API hatası';
+        alert(`Getir restoranını ${label} başarısız:\n\n${detail}`);
+        return;
+      }
+      if (res.error) {
+        alert(res.error);
+      }
+    }
+
+    const patch: Record<string, unknown> = { is_active: nextActive };
+    if (platform.platform_code === 'getir') {
+      patch.getir_restaurant_open = nextActive;
+    }
+
     const { error } = await supabase
       .from('online_order_platforms')
-      .update({ is_active: !currentStatus })
-      .eq('id', platformId);
+      .update(patch)
+      .eq('id', platform.id);
 
-    if (!error) {
-      loadPlatforms();
+    if (error) {
+      alert('Kayıt güncellenemedi: ' + error.message);
+      return;
     }
+    loadPlatforms();
   };
 
   const handleDeletePlatform = async (platformId: string) => {
@@ -1010,6 +1055,7 @@ export function Settings({ onClose }: SettingsProps) {
     { id: 'tables', label: 'Masa Grupları', icon: Store, group: 'Masalar' },
     { id: 'manage', label: 'Masa Düzenle', icon: SettingsIcon, group: 'Masalar' },
     { id: 'platforms', label: 'Online Platformlar', icon: Globe, group: 'Siparişler' },
+    { id: 'partner-api', label: 'Dış Partner API', icon: Link2, group: 'Siparişler' },
     { id: 'printers', label: 'Yazıcılar', icon: Printer, group: 'Sistem' },
     { id: 'hugin', label: 'Yazarkasa (Hugin)', icon: Receipt, group: 'Sistem' },
     { id: 'scale', label: 'Terazi Testi', icon: Scale, group: 'Sistem' },
@@ -2219,6 +2265,25 @@ export function Settings({ onClose }: SettingsProps) {
                                       {platform.getir_pos_status === 100 ? 'AÇIK' : 'KAPALI'}
                                     </strong>
                                   </span>
+                                  <span className="text-gray-300">·</span>
+                                  <span>
+                                    Restoran:{' '}
+                                    <strong
+                                      className={
+                                        platform.getir_restaurant_open === false
+                                          ? 'text-red-700'
+                                          : platform.getir_restaurant_open === true
+                                            ? 'text-green-700'
+                                            : 'text-amber-700'
+                                      }
+                                    >
+                                      {platform.getir_restaurant_open === false
+                                        ? 'KAPALI'
+                                        : platform.getir_restaurant_open === true
+                                          ? 'AÇIK'
+                                          : '?'}
+                                    </strong>
+                                  </span>
                                 </>
                               )}
                             </div>
@@ -2244,7 +2309,7 @@ export function Settings({ onClose }: SettingsProps) {
                           <div className="border-t border-gray-200 px-4 py-3">
                             <div className="flex flex-wrap items-center justify-end gap-2 mb-3">
                               <button
-                                onClick={() => handleTogglePlatform(platform.id, platform.is_active)}
+                                onClick={() => handleTogglePlatform(platform)}
                                 className={`px-3 py-1.5 rounded-lg font-bold transition text-xs ${
                                   platform.is_active
                                     ? 'bg-green-600 hover:bg-green-700 text-white'
@@ -2436,6 +2501,15 @@ export function Settings({ onClose }: SettingsProps) {
               </>
               )}
             </div>
+          ) : activeTab === 'partner-api' ? (
+            tenant ? (
+              <PartnerIntegrationSettings
+                tenantId={tenant.id}
+                branches={branches.map((b) => ({ id: b.id, name: b.name }))}
+                activeBranchId={activeBranch?.id ?? null}
+                userId={profile?.id ?? null}
+              />
+            ) : null
           ) : activeTab === 'printers' ? (
             <PrinterSettings />
           ) : activeTab === 'scale' ? (
@@ -4146,6 +4220,7 @@ interface GetirPlatformControlsProps {
 function GetirPlatformControls({ platform, onChanged }: GetirPlatformControlsProps) {
   const [busy, setBusy] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [closeMinutes, setCloseMinutes] = useState<15 | 30 | 45>(15);
   const [section, setSection] = useState<'controls' | 'webhooks' | 'help' | null>('controls');
 
   const newOrderUrl = publicPartnerEdgeUrl('getir-webhook?type=new');
@@ -4163,6 +4238,38 @@ function GetirPlatformControls({ platform, onChanged }: GetirPlatformControlsPro
       setTimeout(() => setCopiedKey(null), 1500);
     } catch {
       window.prompt('Kopyalanacak değer:', text);
+    }
+  };
+
+  const setRestaurantOpen = async (open: boolean) => {
+    setBusy(open ? 'rest-open' : 'rest-close');
+    try {
+      const res = await syncGetirRestaurantOpen(platform.id, open, {
+        timeOffAmount: closeMinutes,
+        openPosToo: open,
+      });
+      if (!res.ok) {
+        const dataObj =
+          res.data && typeof res.data === 'object' ? (res.data as Record<string, unknown>) : {};
+        const msg =
+          (dataObj.message as string | undefined) ||
+          (dataObj.error as string | undefined) ||
+          res.error ||
+          'Getir tarafı hata döndü';
+        alert(`Restoran durumu güncellenemedi: ${msg}`);
+      } else {
+        if (res.error) alert(res.error);
+        else {
+          alert(
+            open
+              ? 'Getir uygulamasında restoran AÇIK. POS entegrasyonu da açıldı (gerekirse).'
+              : `Getir uygulamasında restoran ${closeMinutes} dk kapalı olarak işaretlendi.`,
+          );
+        }
+        onChanged();
+      }
+    } finally {
+      setBusy(null);
     }
   };
 
@@ -4308,8 +4415,14 @@ function GetirPlatformControls({ platform, onChanged }: GetirPlatformControlsPro
         <SectionHeader
           id="controls"
           icon={SettingsIcon}
-          title="Çalışma Modu & POS Durumu"
-          subtitle={`Ortam: ${platform.getir_environment === 'production' ? 'CANLI' : 'TEST'} · POS: ${platform.getir_pos_status === 100 ? 'AÇIK' : 'KAPALI'}`}
+          title="Restoran, POS & Ortam"
+          subtitle={`Ortam: ${platform.getir_environment === 'production' ? 'CANLI' : 'TEST'} · Restoran: ${
+            platform.getir_restaurant_open === false
+              ? 'KAPALI'
+              : platform.getir_restaurant_open === true
+                ? 'AÇIK'
+                : 'bilinmiyor'
+          } · POS: ${platform.getir_pos_status === 100 ? 'AÇIK' : 'KAPALI'}`}
         />
         {section === 'controls' && (
           <div className="px-3 pb-3 pt-1 space-y-3">
@@ -4344,7 +4457,49 @@ function GetirPlatformControls({ platform, onChanged }: GetirPlatformControlsPro
             </div>
 
             <div>
-              <label className="text-[11px] text-purple-900 font-bold block mb-1.5">Getir POS Durumu</label>
+              <label className="text-[11px] text-purple-900 font-bold block mb-1">Restoran Açık / Kapalı (Getir uygulaması)</label>
+              <p className="text-[10px] text-slate-600 mb-2 leading-snug">
+                Müşterinin Getir uygulamasında gördüğü durum. Getir paneline girmeden buradan yönetin.
+              </p>
+              <div className="grid grid-cols-2 gap-2 mb-2">
+                <button
+                  type="button"
+                  onClick={() => setRestaurantOpen(true)}
+                  disabled={busy !== null}
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white font-black py-2.5 px-2 rounded-lg shadow disabled:opacity-50 text-xs"
+                >
+                  {busy === 'rest-open' ? '...' : 'RESTORANI AÇ'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setRestaurantOpen(false)}
+                  disabled={busy !== null}
+                  className="bg-rose-600 hover:bg-rose-700 text-white font-black py-2.5 px-2 rounded-lg shadow disabled:opacity-50 text-xs"
+                >
+                  {busy === 'rest-close' ? '...' : 'RESTORANI KAPAT'}
+                </button>
+              </div>
+              <div className="flex items-center gap-2 mb-3">
+                <span className="text-[10px] text-slate-600 shrink-0">Kapama süresi:</span>
+                {([15, 30, 45] as const).map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    onClick={() => setCloseMinutes(m)}
+                    className={`px-2 py-1 rounded text-[10px] font-bold border ${
+                      closeMinutes === m
+                        ? 'bg-purple-600 text-white border-purple-600'
+                        : 'bg-white text-purple-800 border-purple-200'
+                    }`}
+                  >
+                    {m} dk
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <label className="text-[11px] text-purple-900 font-bold block mb-1.5">Getir POS Durumu (teknik entegrasyon)</label>
               <div className="grid grid-cols-3 gap-2">
                 <button
                   type="button"

@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback, Fragment, useMemo } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
-import { ShoppingBag, Clock, Phone, MapPin, Check, X, ChevronDown, ChevronUp, Bike, Package, RefreshCw, Volume2, VolumeX, AlertTriangle, Hash, Tag, BellRing, Printer } from 'lucide-react';
+import { ShoppingBag, Clock, Phone, MapPin, Check, X, ChevronDown, ChevronUp, Bike, Package, RefreshCw, Volume2, VolumeX, AlertTriangle, Hash, Tag, BellRing, Printer, Store } from 'lucide-react';
 import {
   startContinuousAlert,
   stopContinuousAlert,
@@ -11,10 +11,23 @@ import {
   playOnlineOrderAlert,
   getAudioState,
 } from '../lib/notification';
-import { callGetir, eligibleCancelReasons, getGetirNextStepHint, getGetirUiPhase, getirStatusLabel } from '../lib/getirApi';
+import {
+  callGetir,
+  eligibleCancelReasons,
+  getGetirNextStepHint,
+  getGetirUiPhase,
+  getirStatusLabel,
+  syncGetirRestaurantOpen,
+  syncGetirStoreStatusFromApi,
+} from '../lib/getirApi';
+import { GETIR_STORE_STATUS_EVENT } from './GlobalGetirSync';
 import { internalStatusLabelTr } from '../../supabase/functions/_shared/getirOrderStatus';
 import { PlatformLogo } from './PlatformLogo';
-import { loadPrintSettings, printOnlineOrderKitchenTicket } from '../lib/printService';
+import {
+  loadPrintSettings,
+  printOnlineOrderKitchenTicket,
+  printOnlineOrderReceiptFromEdge,
+} from '../lib/printService';
 
 /**
  * `Database` tipinde online sipariş tabloları tanımlı olmadığı için bu ekranda yerel model.
@@ -183,24 +196,29 @@ export function OnlineOrders() {
       if (wasKitchenPrinted(tenant.id, o.id)) return;
       kitchenPrintInFlight.current.add(o.id);
       try {
-        const settings = loadPrintSettings();
-        await printOnlineOrderKitchenTicket({
-          settings,
-          restaurantName: (settings.restaurantName || tenant?.name || 'ŞefPOS').trim(),
-          platformLabel:
-            o.online_order_platforms?.platform_name ||
-            o.online_order_platforms?.platform_code ||
-            'Online',
-          orderNumber: String(o.platform_order_number || (o.platform_order_id || '').slice(0, 12)),
-          customerName: o.customer_name || undefined,
-          customerAddress: o.customer_address || undefined,
-          verificationCode: o.getir_verification_code || null,
-          items: (o.items || []).map((it) => ({
-            platform_product_name: it.platform_product_name || '',
-            quantity: it.quantity,
-            notes: it.notes || null,
-          })),
-        });
+        const platformCode = (o.online_order_platforms?.platform_code || '').toLowerCase();
+        if (platformCode === 'getir') {
+          await printOnlineOrderReceiptFromEdge(o.id, { silent: true });
+        } else {
+          const settings = loadPrintSettings();
+          await printOnlineOrderKitchenTicket({
+            settings,
+            restaurantName: (settings.restaurantName || tenant?.name || 'ŞefPOS').trim(),
+            platformLabel:
+              o.online_order_platforms?.platform_name ||
+              o.online_order_platforms?.platform_code ||
+              'Online',
+            orderNumber: String(o.platform_order_number || (o.platform_order_id || '').slice(0, 12)),
+            customerName: o.customer_name || undefined,
+            customerAddress: o.customer_address || undefined,
+            verificationCode: o.getir_verification_code || null,
+            items: (o.items || []).map((it) => ({
+              platform_product_name: it.platform_product_name || '',
+              quantity: it.quantity,
+              notes: it.notes || null,
+            })),
+          });
+        }
         markKitchenPrinted(tenant.id, o.id);
       } catch (e) {
         console.warn('[OnlineOrders] Mutfak fişi yazdırılamadı:', e);
@@ -343,32 +361,61 @@ export function OnlineOrders() {
         const { data: rows } = await supabase
           .from('online_order_platforms')
           .select(
-            'id, platform_code, is_active, getir_app_secret_key, getir_restaurant_secret_key, getir_restaurant_id, getir_pos_status, getir_environment',
+            'id, platform_code, is_active, getir_app_secret_key, getir_restaurant_secret_key, getir_restaurant_id, getir_pos_status, getir_environment, getir_restaurant_open',
           )
           .eq('tenant_id', tenant.id)
           .eq('platform_code', 'getir')
-          .eq('is_active', true);
+          .limit(1);
         if (cancelled) return;
         const platform = (rows || [])[0] as
           | {
+              id: string;
               getir_app_secret_key?: string | null;
               getir_restaurant_secret_key?: string | null;
               getir_restaurant_id?: string | null;
               getir_pos_status?: number | null;
               getir_environment?: string | null;
+              getir_restaurant_open?: boolean | null;
             }
           | undefined;
-        if (!platform) return;
+        if (!platform) {
+          setGetirPlatformMeta(null);
+          return;
+        }
+        let restaurantOpen = platform.getir_restaurant_open ?? null;
+        let posStatus = platform.getir_pos_status ?? null;
+
         const missing: string[] = [];
         if (!platform.getir_app_secret_key) missing.push('appSecretKey');
         if (!platform.getir_restaurant_secret_key) missing.push('restaurantSecretKey');
         if (!platform.getir_restaurant_id) missing.push('restaurantId');
         if (missing.length) {
+          setGetirPlatformMeta({ id: platform.id, getir_restaurant_open: restaurantOpen, getir_pos_status: posStatus });
           setGetirPollIssue(`Getir credential eksik: ${missing.join(', ')}`);
           return;
         }
-        if (platform.getir_pos_status === 200) {
-          setGetirPollIssue('Getir POS durumu PASİF (200). Polling devre dışı.');
+
+        // Sayfa yenilemede DB'de null kaldıysa Getir'den gerçek durumu çek (panelde açık görünüp uyarı çıkmasın).
+        const sync = await syncGetirStoreStatusFromApi(platform.id);
+        if (cancelled) return;
+        if (sync.ok) {
+          if (sync.posStatus != null) posStatus = sync.posStatus;
+          if (sync.restaurantOpen != null) restaurantOpen = sync.restaurantOpen;
+          else if (sync.posStatus === 100 && restaurantOpen == null) restaurantOpen = true;
+        }
+
+        setGetirPlatformMeta({
+          id: platform.id,
+          getir_restaurant_open: restaurantOpen,
+          getir_pos_status: posStatus,
+        });
+
+        if (restaurantOpen === false) {
+          setGetirPollIssue('Getir uygulamasında restoran KAPALI — müşteriler sipariş veremez.');
+        } else if (posStatus === 200) {
+          setGetirPollIssue('Getir POS pasif — «Getir Restoranı Aç» butonu POS’u da açar.');
+        } else {
+          setGetirPollIssue(null);
         }
       } catch (e) {
         console.warn('[OnlineOrders] Getir platform precheck:', e);
@@ -378,6 +425,35 @@ export function OnlineOrders() {
       cancelled = true;
     };
   }, [tenant]);
+
+  // GlobalGetirSync (~20 sn) Getir panelinden kapatınca anında banner günceller.
+  useEffect(() => {
+    const onStoreStatus = (ev: Event) => {
+      const d = (ev as CustomEvent<{
+        platformId: string;
+        restaurantOpen: boolean | null;
+        posStatus: number | null;
+      }>).detail;
+      if (!d?.platformId) return;
+      setGetirPlatformMeta((prev) => {
+        if (!prev || prev.id !== d.platformId) return prev;
+        return {
+          ...prev,
+          getir_restaurant_open: d.restaurantOpen,
+          getir_pos_status: d.posStatus ?? prev.getir_pos_status,
+        };
+      });
+      if (d.restaurantOpen === false) {
+        setGetirPollIssue('Getir uygulamasında restoran KAPALI — müşteriler sipariş veremez.');
+      } else if (d.posStatus === 200) {
+        setGetirPollIssue('Getir POS pasif — «Getir Restoranı Aç» butonu POS’u da açar.');
+      } else if (d.restaurantOpen === true) {
+        setGetirPollIssue(null);
+      }
+    };
+    window.addEventListener(GETIR_STORE_STATUS_EVENT, onStoreStatus);
+    return () => window.removeEventListener(GETIR_STORE_STATUS_EVENT, onStoreStatus);
+  }, []);
 
   // Getir API auto-poll — her tick'te HEM onay bekleyen (`poll-unapproved`) HEM
   // aktif (`poll-active`) siparişleri çek. Webhook gecikse veya kaybolsa bile
@@ -690,27 +766,17 @@ export function OnlineOrders() {
   const reprintOnlineOrder = async (order: OrderWithDetails): Promise<void> => {
     setBusyOrderId(order.id);
     try {
-      const { data: sess } = await supabase.auth.getSession();
-      const token = sess?.session?.access_token;
-      if (!token) {
-        alert('Oturum bilgisi alınamadı. Yeniden giriş yapın.');
-        return;
-      }
-      const baseUrl = (import.meta.env.VITE_SUPABASE_URL || 'https://xdfnozfuuzctubijbnds.supabase.co').replace(/\/$/, '');
-      const res = await fetch(`${baseUrl}/functions/v1/online-order-reprint`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ onlineOrderId: order.id }),
+      const settings = loadPrintSettings();
+      const printer = settings.defaultKitchenPrinter || '';
+      const result = await printOnlineOrderReceiptFromEdge(order.id, {
+        printerName: printer,
+        title: 'Fiş yazdırılıyor',
       });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || !data?.ok) {
-        alert(`Fiş tekrar basılamadı: ${data?.error || res.statusText}`);
-        return;
+      if (!result.success) {
+        alert(
+          'Fiş açılamadı. Pop-up engelliyse tarayıcıda www.sefpos.com.tr için açılır pencereye izin verin. Termal yazıcı bu PC\'deyse yazdırma penceresinden varsayılan yazıcıyı seçin.'
+        );
       }
-      console.info(`[OnlineOrders] Fiş tekrar baskıya gönderildi: order=${order.id}, job=${data.jobId}`);
     } catch (err: any) {
       alert(`Reprint hatası: ${err?.message || err}`);
     } finally {
@@ -1074,6 +1140,12 @@ export function OnlineOrders() {
   const [getirPollIssue, setGetirPollIssue] = useState<string | null>(null);
   /** Başarılı son senkron özeti — "0 sipariş bulundu" durumunu da kullanıcıya göstermek için. */
   const [getirPollInfo, setGetirPollInfo] = useState<{ fetched: number; saved: number; ts: string } | null>(null);
+  const [getirPlatformMeta, setGetirPlatformMeta] = useState<{
+    id: string;
+    getir_restaurant_open: boolean | null;
+    getir_pos_status: number | null;
+  } | null>(null);
+  const [getirStoreBusy, setGetirStoreBusy] = useState(false);
   // Sayfa acildiginda audio context'i unlock dene; engellendiyse banner goster.
   useEffect(() => {
     unlockAudio();
@@ -1091,6 +1163,59 @@ export function OnlineOrders() {
     await playOnlineOrderAlert('Test', 1);
     setAudioBlocked(false);
   };
+
+  const setGetirRestaurantOpen = async (wantOpen: boolean) => {
+    if (!getirPlatformMeta) return;
+    if (!wantOpen && !confirm('Getir uygulamasında restoranı kapatmak istiyor musunuz?')) return;
+    setGetirStoreBusy(true);
+    try {
+      const res = await syncGetirRestaurantOpen(getirPlatformMeta.id, wantOpen, { openPosToo: true });
+      if (!res.ok) {
+        const dataObj =
+          res.data && typeof res.data === 'object' ? (res.data as Record<string, unknown>) : {};
+        const detail =
+          (dataObj.message as string | undefined) ||
+          (dataObj.error as string | undefined) ||
+          res.error ||
+          'Getir API hatası';
+        alert(`Getir mağaza durumu değiştirilemedi:\n\n${detail}`);
+        return;
+      }
+      if (res.error) alert(res.error);
+      if (wantOpen) {
+        const verify = await syncGetirStoreStatusFromApi(getirPlatformMeta.id);
+        const openNow = verify.restaurantOpen === true;
+        const posNow = verify.posStatus ?? (openNow ? 100 : null);
+        setGetirPlatformMeta((prev) =>
+          prev
+            ? {
+                ...prev,
+                getir_restaurant_open: openNow,
+                getir_pos_status: posNow,
+              }
+            : null,
+        );
+        if (openNow) {
+          setGetirPollIssue(null);
+        } else {
+          setGetirPollIssue(
+            'Getir API aç komutu gönderildi ama Getir hâlâ kapalı görünüyor. Ayarlar → Online Platformlar → ortam TEST/CANLI ve credential eşleşmesini kontrol edin.',
+          );
+        }
+      } else {
+        setGetirPlatformMeta((prev) =>
+          prev ? { ...prev, getir_restaurant_open: false } : null,
+        );
+        setGetirPollIssue('Getir uygulamasında restoran KAPALI.');
+      }
+    } finally {
+      setGetirStoreBusy(false);
+    }
+  };
+
+  /** Yalnızca Getir'de gerçekten KAPALI ise «Aç» göster; null/ bilinmiyor = uyarı yok. */
+  const getirNeedsOpen =
+    !!getirPlatformMeta && getirPlatformMeta.getir_restaurant_open === false;
 
   return (
     <div className="h-full flex flex-col bg-slate-50">
@@ -1111,6 +1236,31 @@ export function OnlineOrders() {
             </div>
           </div>
           <div className="flex items-center gap-2 shrink-0">
+            {getirPlatformMeta && (
+              getirNeedsOpen ? (
+                <button
+                  type="button"
+                  onClick={() => setGetirRestaurantOpen(true)}
+                  disabled={getirStoreBusy}
+                  title="Getir Yemek uygulamasında restoranı aç (ayarlara gerek yok)"
+                  className="flex items-center gap-1.5 px-3 py-2 rounded-xl font-black text-xs text-white bg-gradient-to-r from-purple-600 to-violet-700 shadow-md ring-2 ring-purple-300 hover:from-purple-700 hover:to-violet-800 transition active:scale-95 disabled:opacity-50 animate-pulse"
+                >
+                  <Store className="w-4 h-4 shrink-0" />
+                  <span>{getirStoreBusy ? 'Açılıyor…' : 'Getir Restoranı Aç'}</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setGetirRestaurantOpen(false)}
+                  disabled={getirStoreBusy}
+                  title="Getir Yemek uygulamasında restoranı kapat"
+                  className="flex items-center gap-1.5 px-3 py-2 rounded-xl font-bold text-xs ring-1 transition active:scale-95 disabled:opacity-50 bg-emerald-50 text-emerald-800 ring-emerald-200 hover:bg-emerald-100"
+                >
+                  <Store className="w-4 h-4 shrink-0" />
+                  <span>{getirStoreBusy ? '…' : 'Getir: Açık'}</span>
+                </button>
+              )
+            )}
             {activeAlertCount > 0 && (
               <button
                 onClick={silenceNow}
@@ -1171,6 +1321,28 @@ export function OnlineOrders() {
         </div>
       </div>
 
+      {/* ─────────── GETIR RESTORAN KAPALI — tek tık aç ─────────── */}
+      {getirNeedsOpen && (
+        <div className="bg-gradient-to-r from-purple-700 to-violet-800 border-b border-purple-900 shrink-0">
+          <div className="max-w-7xl mx-auto px-4 md:px-6 py-3 flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+            <div className="flex-1 text-white min-w-0">
+              <p className="font-black text-sm md:text-base">Getir Yemek’te restoran kapalı görünüyor</p>
+              <p className="text-xs md:text-sm text-purple-100 mt-0.5">
+                Müşteriler sipariş veremez. Ayarlara gitmeden buradan açın; POS entegrasyonu da açılır.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setGetirRestaurantOpen(true)}
+              disabled={getirStoreBusy}
+              className="shrink-0 px-5 py-3 bg-white text-purple-900 rounded-xl font-black text-sm shadow-lg hover:bg-purple-50 transition active:scale-95 disabled:opacity-60"
+            >
+              {getirStoreBusy ? 'Getir’e bağlanılıyor…' : 'Getir Restoranı Aç'}
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* ─────────── AUDIO KILITLI UYARI ─────────── */}
       {audioBlocked && soundEnabled && (
         <div className="bg-amber-50 border-b border-amber-200 px-4 md:px-6 py-2.5 shrink-0">
@@ -1220,7 +1392,7 @@ export function OnlineOrders() {
                   : /pos|pasif|inactive/i.test(getirPollIssue)
                     ? 'Çözüm: Ayarlar → Online Sipariş Ayarları → Getir → POS durumunu AÇIK (100) yapın.'
                     : /restaurant.*clos|kapal/i.test(getirPollIssue)
-                      ? 'Çözüm: Getir paneline veya Ayarlar → Getir → "Restoran Aç" ile restoranı açın.'
+                      ? 'Çözüm: Yukarıdaki mor şeritte veya sağ üstte «Getir Restoranı Aç» butonuna basın.'
                       : 'Detaylı sebep için F12 → Console; `[getir-api]` satırına bakın.'}
               </div>
             </div>

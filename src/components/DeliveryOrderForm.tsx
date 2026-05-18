@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { Courier, DeliveryCustomer } from './TakeawayOrders';
 import { loadPrintSettings, printTakeawayReceipt } from '../lib/printService';
+import { notifyHemenYolda } from '../lib/hemenyoldaApi';
 
 /** Cari hesap (customers tablosu) — paket formunda teslimat kaydı ile birlikte aranır */
 interface CariCustomerRow {
@@ -433,6 +434,10 @@ export function DeliveryOrderForm({ couriers, editOrder, prefillCustomer, onClos
           total: cartTotal,
         });
       }
+    }
+
+    if (subtype !== 'gel_al') {
+      notifyHemenYolda(orderId, editOrder ? 'update' : 'new', activeBranch?.id ?? null);
     }
 
     setSubmitting(false);

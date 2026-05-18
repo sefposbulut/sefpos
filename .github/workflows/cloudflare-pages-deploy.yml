@@ -63,11 +63,10 @@ jobs:
       - name: dist kök yolu doğrulama (./assets deploy engeli)
         run: node scripts/assert-web-pages-dist.mjs
 
-      - name: Pages Functions dosyaları
+      - name: Pages Advanced mode worker (dist/_worker.js)
         run: |
-          test -f functions/api/getir-webhook.ts
-          test -f functions/api/supabase-fn/[[path]].ts
-          test -f dist/_routes.json
+          test -f public/_worker.js
+          test -f dist/_worker.js
 
       - name: Deploy to Cloudflare Pages
         uses: cloudflare/wrangler-action@v3

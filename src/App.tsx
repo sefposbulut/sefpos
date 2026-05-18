@@ -42,6 +42,7 @@ import { isSqlServerMode } from './lib/sqlDb';
 import { queryCache } from './lib/queryCache';
 import { SystemNotificationContainer } from './components/SystemNotificationBanner';
 import { OnlineOrderToast } from './components/OnlineOrderToast';
+import { GlobalGetirSync } from './components/GlobalGetirSync';
 import { PrintStatusToast } from './components/PrintStatusToast';
 import { TerminalLogin, TerminalApp, isTerminalMode, exitTerminalMode } from './components/TerminalMode';
 import { isCapacitorNative } from './lib/capacitorPlatform';
@@ -717,6 +718,7 @@ function App() {
         notifications={systemNotifications}
         onDismiss={(id) => setSystemNotifications(prev => prev.filter(n => n.id !== id))}
       />
+      <GlobalGetirSync />
       <OnlineOrderToast
         onOpenOnlineOrders={() => handleNavigate('online-orders')}
         currentPage={currentPage}

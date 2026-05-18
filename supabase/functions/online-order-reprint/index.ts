@@ -67,9 +67,14 @@ interface OnlineOrderRow {
   rider_pickup_time: string | null;
   dh_raw_payload: any;
   getir_verification_code: string | null;
+  getir_masked_phone: string | null;
   getir_courier_name: string | null;
   getir_courier_phone: string | null;
   getir_status_code: number | null;
+  getir_delivery_type: number | null;
+  getir_is_scheduled: boolean | null;
+  getir_total_discount: number | null;
+  getir_supplier_support_rate: number | null;
 }
 
 interface PlatformRow {
@@ -165,6 +170,21 @@ function buildGetirReceiptFromDB(
   order: OnlineOrderRow,
   items: OrderItemRow[],
 ): DHReceiptOrderInput {
+  const discount =
+    Number(order.discount_amount) ||
+    Number(order.getir_total_discount) ||
+    0;
+  const ortakKampanya =
+    discount > 0 ||
+    Number(order.getir_supplier_support_rate) > 0;
+  const dt = Number(order.getir_delivery_type);
+  const courierBadge =
+    dt === 1 ? "GETİR GETİRSİN" : dt === 2 ? "RESTORAN GETİRSİN" : null;
+  const phone =
+    order.customer_phone ||
+    order.getir_masked_phone ||
+    null;
+
   return {
     platformLabel: "GETİR YEMEK",
     orderCode: order.platform_order_number || order.platform_order_id || order.id.slice(0, 8),
@@ -173,9 +193,10 @@ function buildGetirReceiptFromDB(
     expeditionType: "delivery",
     isPaid: true,
     paymentType: order.payment_type || "Getir",
+    preOrder: !!order.getir_is_scheduled,
     customer: {
       fullName: order.customer_name || "Müşteri",
-      mobilePhone: order.customer_phone,
+      mobilePhone: phone,
     },
     delivery: order.customer_address
       ? {
@@ -187,9 +208,10 @@ function buildGetirReceiptFromDB(
       : null,
     pickup: null,
     customerComment: order.customer_notes,
-    vendorComment: order.getir_verification_code
-      ? `Doğrulama: ${order.getir_verification_code}`
-      : null,
+    vendorComment: null,
+    verificationCode: order.getir_verification_code,
+    ortakKampanya,
+    courierBadge,
     products: items.map((it) => ({
       name: it.platform_product_name || "Ürün",
       quantity: it.quantity,
@@ -202,7 +224,7 @@ function buildGetirReceiptFromDB(
       subTotal: Number(order.subtotal) || undefined,
       vatTotal: Number(order.tax_amount) || undefined,
       deliveryFee: Number(order.delivery_fee) || undefined,
-      discountTotal: Number(order.discount_amount) || undefined,
+      discountTotal: discount > 0 ? discount : undefined,
     },
   };
 }
@@ -258,8 +280,9 @@ Deno.serve(async (req: Request) => {
         expedition_type, payment_status, payment_type,
         subtotal, delivery_fee, tax_amount, discount_amount, total_amount,
         created_at, platform_created_at, estimated_delivery_time, rider_pickup_time,
-        dh_raw_payload, getir_verification_code, getir_courier_name, getir_courier_phone,
-        getir_status_code
+        dh_raw_payload, getir_verification_code, getir_masked_phone,
+        getir_courier_name, getir_courier_phone, getir_status_code,
+        getir_delivery_type, getir_is_scheduled, getir_total_discount, getir_supplier_support_rate
       `)
       .eq("id", onlineOrderId)
       .eq("tenant_id", profile.tenant_id)
@@ -293,6 +316,11 @@ Deno.serve(async (req: Request) => {
       : buildDHReceiptFromDB(pf as PlatformRow, order as OnlineOrderRow, itemRows);
 
     const html = renderDHOrderReceiptHtml(receiptInput);
+    const directPrint = body?.directPrint === true;
+
+    if (directPrint) {
+      return jsonResponse({ ok: true, html, platform: pf.platform_code });
+    }
 
     const { data: job, error: jobError } = await admin
       .from("print_jobs")
@@ -310,7 +338,7 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ ok: false, error: "queue failed", details: jobError.message }, 500);
     }
 
-    return jsonResponse({ ok: true, jobId: job.id, platform: pf.platform_code });
+    return jsonResponse({ ok: true, jobId: job.id, html, platform: pf.platform_code });
   } catch (err: any) {
     console.error("[online-order-reprint] error:", err);
     return jsonResponse({ ok: false, error: "internal", details: String(err?.message || err) }, 500);
