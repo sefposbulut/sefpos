@@ -28,11 +28,9 @@ import {
   loadPrintSettings,
   savePrintSettings,
   getOnlinePlatformPrinterName,
-  getAvailablePrinters,
   printOnlineOrderKitchenTicket,
   printOnlineOrderReceiptFromEdge,
   PRINT_SETTINGS_REMOTE_UPDATED_EVENT,
-  type PrinterDevice,
 } from '../lib/printService';
 
 /**
@@ -191,25 +189,31 @@ export function OnlineOrders() {
   const soundEnabledRef = useRef(soundEnabled);
   soundEnabledRef.current = soundEnabled;
 
-  const [onlinePlatformPrinter, setOnlinePlatformPrinter] = useState(() =>
-    getOnlinePlatformPrinterName(),
+  const [autoApproveOnline, setAutoApproveOnline] = useState(
+    () => loadPrintSettings().autoApproveOnlineOrders === true,
   );
-  const [orderPrinters, setOrderPrinters] = useState<PrinterDevice[]>([]);
+  const [onlinePrinterLabel, setOnlinePrinterLabel] = useState(() => {
+    const name = getOnlinePlatformPrinterName();
+    return name || '';
+  });
+  const autoApproveInFlight = useRef<Set<string>>(new Set());
+  const autoApproveOrderRef = useRef<(o: OrderWithDetails) => Promise<void>>(async () => {});
 
   useEffect(() => {
-    const refreshPrinter = () => setOnlinePlatformPrinter(getOnlinePlatformPrinterName());
-    refreshPrinter();
-    void getAvailablePrinters()
-      .then(setOrderPrinters)
-      .catch(() => setOrderPrinters([]));
-    window.addEventListener(PRINT_SETTINGS_REMOTE_UPDATED_EVENT, refreshPrinter);
-    return () => window.removeEventListener(PRINT_SETTINGS_REMOTE_UPDATED_EVENT, refreshPrinter);
+    const refreshFromSettings = () => {
+      setAutoApproveOnline(loadPrintSettings().autoApproveOnlineOrders === true);
+      const name = getOnlinePlatformPrinterName();
+      setOnlinePrinterLabel(name || '');
+    };
+    refreshFromSettings();
+    window.addEventListener(PRINT_SETTINGS_REMOTE_UPDATED_EVENT, refreshFromSettings);
+    return () => window.removeEventListener(PRINT_SETTINGS_REMOTE_UPDATED_EVENT, refreshFromSettings);
   }, []);
 
-  const persistOnlinePlatformPrinter = (name: string) => {
-    setOnlinePlatformPrinter(name);
+  const persistAutoApproveOnline = (enabled: boolean) => {
+    setAutoApproveOnline(enabled);
     const s = loadPrintSettings();
-    savePrintSettings({ ...s, defaultOnlinePlatformPrinter: name });
+    savePrintSettings({ ...s, autoApproveOnlineOrders: enabled });
   };
 
   const kitchenPrintInFlight = useRef<Set<string>>(new Set());
@@ -312,6 +316,14 @@ export function OnlineOrders() {
         if (PENDING_APPROVAL_STATUSES.has(o.status) && soundEnabledRef.current) {
           const label = o.online_order_platforms?.platform_name || 'Online';
           startContinuousAlert(o.id, label);
+        }
+
+        if (
+          isFirstSighting &&
+          PENDING_APPROVAL_STATUSES.has(o.status) &&
+          loadPrintSettings().autoApproveOnlineOrders
+        ) {
+          void autoApproveOrderRef.current(o as OrderWithDetails);
         }
 
         // 2) Onaylanmış statü → fiş. Geçiş veya ilk görüşte (eski kayıt)
@@ -816,7 +828,7 @@ export function OnlineOrders() {
         const detail = result.error ? ` (${result.error})` : '';
         alert(
           isElectron()
-            ? `Online fiş yazdırılamadı.${detail}\n\nÜstteki «Online fiş yazıcısı» alanından termal yazıcıyı seçin (Windows’taki adla aynı olmalı).`
+            ? `Online fiş yazdırılamadı.${detail}\n\nAyarlar → Yazıcılar → «Online platform fişi yazıcısı» bölümünden termal yazıcıyı seçin (Windows’taki adla aynı olmalı).`
             : `Fiş açılamadı.${detail} Pop-up engelliyse tarayıcıda www.sefpos.com.tr için açılır pencereye izin verin. Termal yazıcı bu PC'deyse yazdırma penceresinden varsayılan yazıcıyı seçin.`,
         );
       }
@@ -852,7 +864,9 @@ export function OnlineOrders() {
     action: 'verify' | 'verify-scheduled' | 'prepare' | 'handover' | 'deliver' | 'cancel',
     extra?: { cancelReasonId?: string; cancelNote?: string },
     retryCount: number = 0,
+    options?: { silent?: boolean },
   ): Promise<void> => {
+    const silent = options?.silent === true;
     setBusyOrderId(order.id);
     try {
       const res = await callGetir({
@@ -872,9 +886,10 @@ export function OnlineOrders() {
           lower.includes('status is invalid') || lower.includes('invalid status');
 
         if (is429) {
-          alert(
-            'Çok sık istek gönderildi (geçici limit). Bir dakika bekleyip "Siparişleri Yenile" veya aynı butona tekrar deneyin.',
-          );
+          const msg429 =
+            'Çok sık istek gönderildi (geçici limit). Bir dakika bekleyip "Siparişleri Yenile" veya aynı butona tekrar deneyin.';
+          if (silent) console.warn('[Getir] auto:', msg429);
+          else alert(msg429);
           await loadOrders();
           return;
         }
@@ -891,22 +906,38 @@ export function OnlineOrders() {
                 : action === 'deliver'
                   ? '«Teslim edildi»'
                   : `«${action}»`;
-          alert(
+          const timeMsg =
             `${actionTr} aksiyonu için Getir bir bekleme süresi uyguluyor.\n\n` +
-              `Önceki adımdan sonra ~1–2 dakika geçmeden bu aksiyon kabul edilmiyor.\n\n` +
-              `Lütfen 1–2 dakika sonra aynı butona tekrar basın.`,
-          );
+            `Önceki adımdan sonra ~1–2 dakika geçmeden bu aksiyon kabul edilmiyor.\n\n` +
+            `Lütfen 1–2 dakika sonra aynı butona tekrar basın.`;
+          if (silent) console.warn('[Getir] auto:', timeMsg);
+          else alert(timeMsg);
           await loadOrders();
           return;
         }
 
-        // "Invalid status" hatasi → Getir'in iç state'i DB ile uyumsuz.
-        // Kullanıcıya "yerel olarak kapatmak ister misiniz?" diye sor; onaylarsa
-        // siparişi delivered yap (Getir'e ek istek atılmaz, 429 baskısı yok).
+        // "Invalid status" — teslim/kurye/hazır adımlarında yerel kapatma sunma;
+        // aksi halde ŞefPOS "teslim" görünür, Getir müşteride hâlâ hazırlanıyor kalır.
         if (isInvalidStatus && retryCount === 0) {
-          console.log(`[Getir] ${action} invalid status → kullanıcıya yerel kapatma seçeneği sun`);
           const currentCode =
             typeof order.getir_status_code === 'number' ? order.getir_status_code : null;
+          const needsGetirChain =
+            (action === 'deliver' && (currentCode == null || currentCode < 800)) ||
+            (action === 'handover' && (currentCode == null || currentCode < 550)) ||
+            (action === 'prepare' && (currentCode == null || currentCode < 500));
+
+          if (needsGetirChain) {
+            const chainMsg =
+              'Getir bu adımı henüz kabul etmedi.\n\n' +
+              'Sıra: Onayla → Yemek hazır → Kurye yola çıktı → Teslim edildi.\n\n' +
+              'Eksik adımlar otomatik denenir; birkaç saniye sonra aynı butona tekrar basın veya «Siparişleri Yenile».';
+            if (silent) console.warn('[Getir] auto:', chainMsg);
+            else alert(chainMsg);
+            await loadOrders();
+            return;
+          }
+
+          console.log(`[Getir] ${action} invalid status → kullanıcıya yerel kapatma seçeneği sun`);
           const label = currentCode != null ? getirStatusLabel(currentCode) : 'bilinmiyor';
           const confirmClose = confirm(
             `Getir bu işlemi kabul etmedi (sıra dışı bir adım).\n\n` +
@@ -935,7 +966,9 @@ export function OnlineOrders() {
           return;
         }
 
-        alert(friendlyGetirError(action, raw));
+        const errMsg = friendlyGetirError(action, raw);
+        if (silent) console.warn('[Getir] auto:', errMsg);
+        else alert(errMsg);
         await loadOrders();
         return;
       }
@@ -959,10 +992,11 @@ export function OnlineOrders() {
           }
         | undefined;
       if (meta?.skippedGetirCourier) {
-        alert(
+        const courierMsg =
           'Bu sipariş Getir kuryesi tarafından taşınıyor.\n\n' +
-            'Restoran «Kurye yola çıktı» / «Teslim edildi» basmaz; Getir teslim alınca ve teslim ettiğinde durum otomatik ilerler.',
-        );
+          'Restoran «Kurye yola çıktı» / «Teslim edildi» basmaz; Getir teslim alınca ve teslim ettiğinde durum otomatik ilerler.';
+        if (!silent) alert(courierMsg);
+        else console.info('[Getir] auto:', courierMsg);
       } else if (meta?.cancelled) {
         alert(
           `Bu sipariş Getir tarafında iptal edilmiş — ŞefPOS'ta da otomatik olarak kapatıldı.`,
@@ -987,10 +1021,34 @@ export function OnlineOrders() {
         );
       }
     } catch (err: any) {
-      alert(`Getir aksiyonu sırasında hata: ${err?.message || err}`);
+      if (silent) console.warn('[Getir] auto:', err?.message || err);
+      else alert(`Getir aksiyonu sırasında hata: ${err?.message || err}`);
       await loadOrders();
     } finally {
       setBusyOrderId(null);
+    }
+  };
+
+  autoApproveOrderRef.current = async (order: OrderWithDetails) => {
+    if (!loadPrintSettings().autoApproveOnlineOrders) return;
+    if (!PENDING_APPROVAL_STATUSES.has(order.status)) return;
+    if (autoApproveInFlight.current.has(order.id)) return;
+    autoApproveInFlight.current.add(order.id);
+    try {
+      const pc = order.online_order_platforms?.platform_code;
+      if (pc === 'getir') {
+        const action =
+          order.status === 'scheduled_new' || order.getir_is_scheduled
+            ? 'verify-scheduled'
+            : 'verify';
+        await doGetirAction(order, action, undefined, 0, { silent: true });
+      } else {
+        await updateOrderStatus(order.id, 'accepted', 'accept');
+      }
+    } catch (err) {
+      console.warn('[OnlineOrders] Otomatik onay başarısız:', order.id, err);
+    } finally {
+      autoApproveInFlight.current.delete(order.id);
     }
   };
 
@@ -1365,32 +1423,29 @@ export function OnlineOrders() {
       </div>
 
       <div className="bg-white border-b border-orange-100 px-4 md:px-6 py-2.5 shrink-0">
-        <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
-          <div className="flex items-center gap-2 min-w-0">
-            <Printer className="w-4 h-4 text-orange-600 shrink-0" />
-            <span className="text-xs font-bold text-slate-700 uppercase tracking-wide shrink-0">
-              Online fiş yazıcısı
-            </span>
-          </div>
-          <select
-            value={onlinePlatformPrinter}
-            onChange={(e) => persistOnlinePlatformPrinter(e.target.value)}
-            className="flex-1 min-w-0 max-w-md px-3 py-2 rounded-lg border border-orange-200 bg-orange-50/40 text-sm font-semibold text-slate-800 focus:ring-2 focus:ring-orange-400 outline-none"
-            title="Getir / Yemeksepeti / Trendyol onay fişi bu yazıcıdan çıkar"
-          >
-            <option value="">Varsayılan mutfak yazıcısı</option>
-            {orderPrinters.map((p) => (
-              <option key={p.name} value={p.name}>
-                {p.name}
-                {p.isDefault ? ' (Windows varsayılan)' : ''}
-              </option>
-            ))}
-            {orderPrinters.length === 0 && onlinePlatformPrinter && (
-              <option value={onlinePlatformPrinter}>{onlinePlatformPrinter}</option>
-            )}
-          </select>
-          <p className="text-[11px] text-slate-500 sm:max-w-xs">
-            Sipariş <strong className="text-slate-700">onaylandığında</strong> fiş seçili yazıcıya gider.
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-4">
+          <label className="flex items-center gap-2 cursor-pointer shrink-0 select-none">
+            <input
+              type="checkbox"
+              checked={autoApproveOnline}
+              onChange={(e) => persistAutoApproveOnline(e.target.checked)}
+              className="w-4 h-4 rounded border-orange-300 text-orange-600 focus:ring-orange-400"
+            />
+            <span className="text-xs font-bold text-slate-700">Otomatik onay + fiş</span>
+          </label>
+          <p className="text-[11px] text-slate-500 sm:text-right">
+            {autoApproveOnline ? (
+              <>
+                Yeni sipariş <strong className="text-slate-700">otomatik onaylanır</strong> ve fiş basılır.
+              </>
+            ) : (
+              <>
+                Sipariş <strong className="text-slate-700">onaylandığında</strong> fiş basılır.
+              </>
+            )}{' '}
+            Fiş yazıcısı:{' '}
+            <strong className="text-slate-700">{onlinePrinterLabel || 'varsayılan mutfak'}</strong> —{' '}
+            <span className="text-orange-700 font-semibold">Ayarlar → Yazıcılar</span>
           </p>
         </div>
       </div>
@@ -1987,8 +2042,19 @@ export function OnlineOrders() {
                           )}
 
                           {order.status === 'delivered' && (
-                            <div className="w-full bg-green-100 text-green-800 font-bold py-3 rounded-xl text-center text-sm">
-                              ✓ Sipariş teslim edildi
+                            <div className="w-full space-y-2">
+                              <div className="bg-green-100 text-green-800 font-bold py-3 rounded-xl text-center text-sm">
+                                ✓ ŞefPOS: teslim edildi
+                              </div>
+                              {typeof order.getir_status_code === 'number' &&
+                                order.getir_status_code < 800 &&
+                                order.getir_status_code >= 400 && (
+                                  <div className="bg-amber-50 border border-amber-200 text-amber-900 text-xs font-semibold py-2.5 px-3 rounded-xl text-center">
+                                    Getir müşteri uygulamasında henüz teslim görünmüyor (durum:{' '}
+                                    {getirStatusLabel(order.getir_status_code)}). «Yemek hazır» → «Kurye yola
+                                    çıktı» → «Teslim edildi» sırasını tamamlayın veya «Siparişleri Yenile».
+                                  </div>
+                                )}
                             </div>
                           )}
                           {order.status === 'cancelled' && (

@@ -349,6 +349,15 @@ const PREV_ACTION: Record<string, string | null> = {
   deliver: "handover",
 };
 
+/** handover/deliver için eksik adımları sırayla dener (prepare → handover → deliver). */
+function getGetirActionChain(action: string): string[] {
+  if (action === "handover") return ["prepare", "handover"];
+  if (action === "deliver") return ["prepare", "handover", "deliver"];
+  return [action];
+}
+
+const GETIR_CHAIN_STEP_DELAY_MS = 450;
+
 function isInvalidStatusError(data: any): boolean {
   const msg = String(data?.message || data?.error || "").toLowerCase();
   return (
@@ -377,114 +386,148 @@ async function tryGetirActionWithRecovery(
   orderId: string,
   payload: any,
 ): Promise<{ ok: boolean; status: number; data: any; meta?: Record<string, any> }> {
-  const path = `/food-orders/${encodeURIComponent(orderId)}/${action}`;
-  const res = await callGetir(admin, platform, "POST", path, payload || {});
-  if (res.ok) {
-    return { ok: true, status: 200, data: res.data };
-  }
+  const steps = getGetirActionChain(action);
+  const chainExecuted: string[] = [];
+  let lastData: any = null;
 
-  if (!isInvalidStatusError(res.data)) {
-    return { ok: false, status: res.status, data: res.data };
-  }
+  for (let i = 0; i < steps.length; i++) {
+    const step = steps[i]!;
+    const path = `/food-orders/${encodeURIComponent(orderId)}/${step}`;
+    const stepPayload = step === action ? (payload || {}) : {};
+    const res = await callGetir(admin, platform, "POST", path, stepPayload);
 
-  // ---- Auto-recovery: inquiry ile gerçek state'i öğren ----
-  const inq = await callGetir(
-    admin,
-    platform,
-    "GET",
-    `/food-orders/${encodeURIComponent(orderId)}`,
-  );
-  if (!inq.ok) {
+    if (res.ok) {
+      const embedded = extractOrderFromGetirActionResponse(res.data);
+      if (embedded) {
+        await upsertGetirOrder(admin, platform, embedded, { skipAckClamp: true });
+      }
+      lastData = res.data;
+      if (step !== action) {
+        chainExecuted.push(step);
+        await new Promise((r) => setTimeout(r, GETIR_CHAIN_STEP_DELAY_MS));
+        continue;
+      }
+      return {
+        ok: true,
+        status: 200,
+        data: lastData,
+        meta: chainExecuted.length
+          ? { chained: chainExecuted.join(","), fullChain: steps.join("→") }
+          : undefined,
+      };
+    }
+
+    if (!isInvalidStatusError(res.data)) {
+      return { ok: false, status: res.status, data: res.data };
+    }
+
+    const inq = await callGetir(
+      admin,
+      platform,
+      "GET",
+      `/food-orders/${encodeURIComponent(orderId)}`,
+    );
+    if (!inq.ok) {
+      return {
+        ok: false,
+        status: res.status,
+        data: res.data,
+        meta: { recoveryFailed: true, reason: "inquiry-failed", inquiryStatus: inq.status, step },
+      };
+    }
+    const ord = (inq.data as any)?.data || inq.data;
+    if (!ord || typeof ord !== "object") {
+      return {
+        ok: false,
+        status: res.status,
+        data: res.data,
+        meta: { recoveryFailed: true, reason: "empty-inquiry", step },
+      };
+    }
+
+    const rawCode = (ord as any).status;
+    const realCode = typeof rawCode === "number" ? rawCode : Number(rawCode);
+    await upsertGetirOrder(admin, platform, ord, { skipAckClamp: true });
+
+    if (Number.isFinite(realCode) && realCode >= 900 && realCode < 1500) {
+      const nowIso = new Date().toISOString();
+      await admin
+        .from("online_orders")
+        .update({ status: "cancelled", cancelled_at: nowIso })
+        .eq("platform_id", platform.id)
+        .eq("platform_order_id", orderId)
+        .is("cancelled_at", null);
+      return {
+        ok: true,
+        status: 200,
+        data: { recovered: true, cancelled: true, getirStatusCode: realCode },
+        meta: { cancelled: true, realCode },
+      };
+    }
+
+    const targetCode = ACTION_COMPLETED[step];
+    if (Number.isFinite(realCode) && typeof targetCode === "number" && realCode >= targetCode) {
+      if (step !== action) {
+        chainExecuted.push(`${step}(skip)`);
+        await new Promise((r) => setTimeout(r, 200));
+        continue;
+      }
+      return {
+        ok: true,
+        status: 200,
+        data: { recovered: true, alreadyDone: true, getirStatusCode: realCode },
+        meta: { alreadyDone: true, realCode, chained: chainExecuted.join(",") || undefined },
+      };
+    }
+
+    if (step === action) {
+      const prev = PREV_ACTION[action];
+      if (prev && !steps.includes(prev)) {
+        const prevPath = `/food-orders/${encodeURIComponent(orderId)}/${prev}`;
+        const prevRes = await callGetir(admin, platform, "POST", prevPath, {});
+        if (prevRes.ok) {
+          const prevEmbedded = extractOrderFromGetirActionResponse(prevRes.data);
+          if (prevEmbedded) {
+            await upsertGetirOrder(admin, platform, prevEmbedded, { skipAckClamp: true });
+          }
+          await new Promise((r) => setTimeout(r, GETIR_CHAIN_STEP_DELAY_MS));
+          const retry = await callGetir(admin, platform, "POST", path, stepPayload);
+          if (retry.ok) {
+            const retryEmb = extractOrderFromGetirActionResponse(retry.data);
+            if (retryEmb) {
+              await upsertGetirOrder(admin, platform, retryEmb, { skipAckClamp: true });
+            }
+            return {
+              ok: true,
+              status: 200,
+              data: retry.data,
+              meta: { chained: prev, realCodeBefore: realCode },
+            };
+          }
+          return {
+            ok: false,
+            status: retry.status,
+            data: retry.data,
+            meta: { chained: prev, retryFailed: true, realCodeBefore: realCode },
+          };
+        }
+      }
+    }
+
     return {
       ok: false,
       status: res.status,
       data: res.data,
-      meta: { recoveryFailed: true, reason: "inquiry-failed", inquiryStatus: inq.status },
-    };
-  }
-  const ord = (inq.data as any)?.data || inq.data;
-  if (!ord || typeof ord !== "object") {
-    return { ok: false, status: res.status, data: res.data, meta: { recoveryFailed: true, reason: "empty-inquiry" } };
-  }
-
-  const rawCode = (ord as any).status;
-  const realCode = typeof rawCode === "number" ? rawCode : Number(rawCode);
-
-  await upsertGetirOrder(admin, platform, ord, { skipAckClamp: true });
-
-  // 1) Getir tarafında iptal edilmiş → DB de iptal et, ok dön
-  if (Number.isFinite(realCode) && realCode >= 900 && realCode < 1500) {
-    const nowIso = new Date().toISOString();
-    await admin
-      .from("online_orders")
-      .update({ status: "cancelled", cancelled_at: nowIso })
-      .eq("platform_id", platform.id)
-      .eq("platform_order_id", orderId)
-      .is("cancelled_at", null);
-    return {
-      ok: true,
-      status: 200,
-      data: { recovered: true, cancelled: true, getirStatusCode: realCode },
-      meta: { cancelled: true, realCode },
+      meta: {
+        realCode,
+        behind: true,
+        failedStep: step,
+        chainAttempted: chainExecuted.join(",") || undefined,
+      },
     };
   }
 
-  // 2) Hedef aksiyon zaten yapılmış (Getir ileride) → DB sync edildi, success
-  const targetCode = ACTION_COMPLETED[action];
-  if (Number.isFinite(realCode) && typeof targetCode === "number" && realCode >= targetCode) {
-    return {
-      ok: true,
-      status: 200,
-      data: { recovered: true, alreadyDone: true, getirStatusCode: realCode },
-      meta: { alreadyDone: true, realCode },
-    };
-  }
-
-  // 3) 1 adım geride → önceki aksiyonu otomatik çağır, sonra hedef aksiyonu tekrar dene
-  const prev = PREV_ACTION[action];
-  if (prev) {
-    const prevPath = `/food-orders/${encodeURIComponent(orderId)}/${prev}`;
-    const prevRes = await callGetir(admin, platform, "POST", prevPath, {});
-    if (prevRes.ok) {
-      const prevEmbedded = extractOrderFromGetirActionResponse(prevRes.data);
-      if (prevEmbedded) {
-        await upsertGetirOrder(admin, platform, prevEmbedded, { skipAckClamp: true });
-      }
-      // Getir state'in oturması için kısa bekleme
-      await new Promise((r) => setTimeout(r, 400));
-      // Hedef aksiyonu tekrar dene
-      const retry = await callGetir(admin, platform, "POST", path, payload || {});
-      if (retry.ok) {
-        return {
-          ok: true,
-          status: 200,
-          data: retry.data,
-          meta: { chained: prev, realCodeBefore: realCode },
-        };
-      }
-      // Retry da invalid status verdi → recovery limitini aştık
-      return {
-        ok: false,
-        status: retry.status,
-        data: retry.data,
-        meta: { chained: prev, retryFailed: true, realCodeBefore: realCode },
-      };
-    }
-    return {
-      ok: false,
-      status: prevRes.status,
-      data: prevRes.data,
-      meta: { chainAttempted: prev, chainFailed: true, realCode },
-    };
-  }
-
-  // 4) Recover edilemez → orijinal hatayı dön (frontend bilgilendirir)
-  return {
-    ok: false,
-    status: res.status,
-    data: res.data,
-    meta: { realCode, behind: true },
-  };
+  return { ok: false, status: 400, data: { message: "empty action chain" } };
 }
 
 function isMissingObjectError(err: any): boolean {

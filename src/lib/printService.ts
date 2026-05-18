@@ -49,6 +49,11 @@ export interface PrintSettings {
    * Boşsa `defaultKitchenPrinter` kullanılır.
    */
   defaultOnlinePlatformPrinter: string;
+  /**
+   * Online sipariş geldiğinde kasada otomatik onay + mutfak fişi (alarm yine çalar).
+   * Varsayılan kapalı — restoran açıkça açar.
+   */
+  autoApproveOnlineOrders: boolean;
   defaultTakeawayPrinter: string;
   autoPrintKitchen: boolean;
   autoPrintReceipt: boolean;
@@ -210,6 +215,7 @@ function normalizePrintSettings(raw: Partial<PrintSettings> & Record<string, unk
     defaultKitchenPrinter: typeof ps.defaultKitchenPrinter === 'string' ? ps.defaultKitchenPrinter : '',
     defaultOnlinePlatformPrinter:
       typeof ps.defaultOnlinePlatformPrinter === 'string' ? ps.defaultOnlinePlatformPrinter : '',
+    autoApproveOnlineOrders: ps.autoApproveOnlineOrders === true,
     defaultTakeawayPrinter: typeof ps.defaultTakeawayPrinter === 'string' ? ps.defaultTakeawayPrinter : '',
     autoPrintKitchen: ps.autoPrintKitchen !== false,
     autoPrintReceipt: !!ps.autoPrintReceipt,

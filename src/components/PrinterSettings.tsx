@@ -384,14 +384,30 @@ export function PrinterSettings() {
               )}
             </select>
           </div>
-          <div>
-            <label className="block text-xs font-bold text-slate-600 mb-1.5 uppercase tracking-wide">
-              Online platform fişi yazıcısı
+          <div className="rounded-xl border-2 border-orange-200 bg-orange-50/40 p-4 space-y-3">
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1 uppercase tracking-wide">
+                Online sipariş fişi (Getir / Yemeksepeti / Trendyol)
+              </label>
+              <p className="text-[11px] text-slate-600">
+                Buradan <strong className="text-slate-800">bir kez</strong> yazıcı seçin; tüm online sipariş onay
+                fişleri (manuel veya otomatik onay) hep bu yazıcıdan çıkar. Boş bırakırsanız varsayılan mutfak
+                yazıcısı kullanılır.
+              </p>
+            </div>
+            <label className="flex items-center gap-2 mb-2 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={settings.autoApproveOnlineOrders === true}
+                onChange={(e) =>
+                  setSettings((p) => ({ ...p, autoApproveOnlineOrders: e.target.checked }))
+                }
+                className="w-4 h-4 rounded border-orange-300 text-orange-600 focus:ring-orange-400"
+              />
+              <span className="text-sm font-semibold text-slate-700">
+                Otomatik onay + fiş (sipariş gelince kasada onayla ve yazdır)
+              </span>
             </label>
-            <p className="text-[11px] text-slate-500 mb-1.5">
-              Getir / Yemeksepeti / Trendyol — <strong className="text-slate-700">Onayla</strong> sonrası fiş doğrudan bu
-              yazıcıdan çıkar. Boşsa varsayılan mutfak yazıcısı kullanılır.
-            </p>
             <select
               value={settings.defaultOnlinePlatformPrinter || ''}
               onChange={(e) => setSettings((p) => ({ ...p, defaultOnlinePlatformPrinter: e.target.value }))}
