@@ -133,6 +133,8 @@ export function TakeawayOrders() {
   const [incomingCalls, setIncomingCalls] = useState<Array<{ id: string; ring: CallerIdRing; matched: DeliveryCustomer | null; }>>([]);
   const [cidPrefill, setCidPrefill] = useState<{ phone: string; matched: DeliveryCustomer | null } | null>(null);
   const [cidError, setCidError] = useState<string | null>(null);
+  /** X ile kapatılan numaralar tekrar çalma gelene kadar listede gösterilmez (ms). */
+  const dismissedPhonesUntilRef = useRef<Map<string, number>>(new Map());
 
   const refreshCidStatus = useCallback(async () => {
     try {
@@ -170,6 +172,9 @@ export function TakeawayOrders() {
     if (!cidAvailable) return;
     const offRing = onCallerIdRing(async (ring) => {
       if (!tenant || !ring.phone) return;
+      const snoozeUntil = dismissedPhonesUntilRef.current.get(ring.phone) ?? 0;
+      if (snoozeUntil > Date.now()) return;
+
       let matched: DeliveryCustomer | null = null;
       try {
         const { data } = await supabase
@@ -194,10 +199,13 @@ export function TakeawayOrders() {
       } catch (e) {
         console.error('[CallerID] müşteri arama hatası:', e);
       }
-      setIncomingCalls((prev) => [
-        { id: `${ring.ts}-${ring.phone}`, ring, matched },
-        ...prev,
-      ].slice(0, 5));
+      setIncomingCalls((prev) => {
+        const withoutDup = prev.filter((p) => p.ring.phone !== ring.phone);
+        return [
+          { id: `${ring.ts}-${ring.phone}`, ring, matched },
+          ...withoutDup,
+        ].slice(0, 3);
+      });
     });
     const offSignal = onCallerIdSignal((sig) => {
       setCidStatusInfo((prev) => ({
@@ -222,8 +230,15 @@ export function TakeawayOrders() {
     setIncomingCalls((prev) => prev.filter((p) => p.ring.ts !== item.ring.ts));
   };
 
-  const handleDismissCall = (id: string) =>
-    setIncomingCalls((prev) => prev.filter((p) => p.id !== id));
+  const handleDismissCall = (id: string) => {
+    setIncomingCalls((prev) => {
+      const hit = prev.find((p) => p.id === id);
+      if (hit?.ring.phone) {
+        dismissedPhonesUntilRef.current.set(hit.ring.phone, Date.now() + 15 * 60 * 1000);
+      }
+      return prev.filter((p) => p.id !== id);
+    });
+  };
 
   const updateCidSetting = async (patch: Partial<{ autoStart: boolean; softTest: boolean }>) => {
     const next = { ...cidSettings, ...patch };
@@ -582,6 +597,14 @@ export function TakeawayOrders() {
               </button>
               {cidError && <span className="text-xs text-rose-600">{cidError}</span>}
             </div>
+          </div>
+        )}
+
+        {cidStatusInfo.softTest && (
+          <div className="mt-3 mb-2 p-3 rounded-xl border border-purple-200 bg-purple-50 text-sm text-purple-900">
+            <strong>Soft test açık:</strong> Aynı numaradan sürekli sahte çağrı gelebilir. Kapatmak için üstteki telefon
+            simgesine tıklayın → <strong>Soft test</strong> işaretini kaldırın veya <strong>Dinlemeyi durdur</strong>.
+            HemenYolda testi için sipariş açmanız gerekmez.
           </div>
         )}
 

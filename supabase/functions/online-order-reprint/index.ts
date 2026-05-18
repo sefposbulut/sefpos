@@ -26,6 +26,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
 import {
+  buildGetirReceiptInput,
   renderDHOrderReceiptHtml,
   type DHReceiptOrderInput,
 } from "../_shared/dhOrderReceipt.ts";
@@ -75,6 +76,7 @@ interface OnlineOrderRow {
   getir_is_scheduled: boolean | null;
   getir_total_discount: number | null;
   getir_supplier_support_rate: number | null;
+  getir_raw_payload: Record<string, unknown> | null;
 }
 
 interface PlatformRow {
@@ -166,67 +168,11 @@ function buildDHReceiptFromDB(
 }
 
 function buildGetirReceiptFromDB(
-  platform: PlatformRow,
+  _platform: PlatformRow,
   order: OnlineOrderRow,
   items: OrderItemRow[],
 ): DHReceiptOrderInput {
-  const discount =
-    Number(order.discount_amount) ||
-    Number(order.getir_total_discount) ||
-    0;
-  const ortakKampanya =
-    discount > 0 ||
-    Number(order.getir_supplier_support_rate) > 0;
-  const dt = Number(order.getir_delivery_type);
-  const courierBadge =
-    dt === 1 ? "GETİR GETİRSİN" : dt === 2 ? "RESTORAN GETİRSİN" : null;
-  const phone =
-    order.customer_phone ||
-    order.getir_masked_phone ||
-    null;
-
-  return {
-    platformLabel: "GETİR YEMEK",
-    orderCode: order.platform_order_number || order.platform_order_id || order.id.slice(0, 8),
-    orderToken: null,
-    createdAt: order.platform_created_at || order.created_at,
-    expeditionType: "delivery",
-    isPaid: true,
-    paymentType: order.payment_type || "Getir",
-    preOrder: !!order.getir_is_scheduled,
-    customer: {
-      fullName: order.customer_name || "Müşteri",
-      mobilePhone: phone,
-    },
-    delivery: order.customer_address
-      ? {
-          address: { street: order.customer_address },
-          expectedDeliveryTime: order.estimated_delivery_time,
-          expressDelivery: false,
-          riderPickupTime: order.rider_pickup_time,
-        }
-      : null,
-    pickup: null,
-    customerComment: order.customer_notes,
-    vendorComment: null,
-    verificationCode: order.getir_verification_code,
-    ortakKampanya,
-    courierBadge,
-    products: items.map((it) => ({
-      name: it.platform_product_name || "Ürün",
-      quantity: it.quantity,
-      unitPrice: it.unit_price,
-      paidPrice: it.total_amount,
-      comment: it.notes,
-    })),
-    totals: {
-      grandTotal: Number(order.total_amount) || 0,
-      subTotal: Number(order.subtotal) || undefined,
-      vatTotal: Number(order.tax_amount) || undefined,
-      deliveryFee: Number(order.delivery_fee) || undefined,
-      discountTotal: discount > 0 ? discount : undefined,
-    },
-  };
+  return buildGetirReceiptInput(order, items);
 }
 
 Deno.serve(async (req: Request) => {
@@ -282,7 +228,8 @@ Deno.serve(async (req: Request) => {
         created_at, platform_created_at, estimated_delivery_time, rider_pickup_time,
         dh_raw_payload, getir_verification_code, getir_masked_phone,
         getir_courier_name, getir_courier_phone, getir_status_code,
-        getir_delivery_type, getir_is_scheduled, getir_total_discount, getir_supplier_support_rate
+        getir_delivery_type, getir_is_scheduled, getir_total_discount, getir_supplier_support_rate,
+        getir_raw_payload
       `)
       .eq("id", onlineOrderId)
       .eq("tenant_id", profile.tenant_id)

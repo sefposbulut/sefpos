@@ -274,9 +274,9 @@ export function PrinterSettings() {
               ) : agentStatus === 'not_running' ? (
                 <div className="text-sm text-amber-700 mt-1 space-y-1.5">
                   <p>
-                    <strong className="text-amber-900">www üzerinde fiş</strong> bu bilgisayarda{' '}
-                    <strong className="text-amber-900">tarayıcı yazdırma penceresi</strong> ile çıkar (Getir paneli gibi).
-                    Termal yazıcınızı Windows’ta <strong>varsayılan yazıcı</strong> yapın; fiş basınca açılan pencerede <strong>Yazdır</strong> deyin.
+                    <strong className="text-amber-900">Getir / Yemeksepeti / Trendyol</strong> gibi online sipariş fişleri bu
+                    bilgisayarda <strong className="text-amber-900">tarayıcı yazdırma penceresi</strong> ile çıkabilir (Electron
+                    kurmadan, Getir paneli gibi). Masa ve mutfak fişleri kasadaki ŞefPOS veya Print Agent üzerinden basılır.
                   </p>
                   <p className="text-xs text-amber-600">
                     Uzaktan (telefon) sipariş alıyorsanız ve fiş başka kasada basılacaksa bu PC’de ŞefPOS masaüstü veya{' '}
@@ -386,7 +386,10 @@ export function PrinterSettings() {
           </div>
           <div>
             <label className="block text-xs font-bold text-slate-600 mb-1.5 uppercase tracking-wide">Varsayılan mutfak yazıcısı</label>
-            <p className="text-[11px] text-slate-500 mb-1.5">Ürün/kategori eşleşmezse mutfak fişi buraya gider. Adisyon yazıcısına düşmez.</p>
+            <p className="text-[11px] text-slate-500 mb-1.5">
+              Ürün/kategori eşleşmezse mutfak fişi buraya gider. <strong className="text-slate-700">Getir onay fişi</strong>{' '}
+              (logo, doğrulama kodu, 0850 hat, sipariş notu, ortak kampanya) de bu yazıcıdan basılır.
+            </p>
             <select
               value={settings.defaultKitchenPrinter}
               onChange={e => setSettings(p => ({ ...p, defaultKitchenPrinter: e.target.value }))}

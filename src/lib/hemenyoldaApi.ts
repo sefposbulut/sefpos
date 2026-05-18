@@ -67,16 +67,32 @@ function parseFunctionResult(
   const body = (data && typeof data === 'object' ? data : {}) as HemenyoldaPushResult & {
     error?: string;
     message?: string;
+    hint?: string;
   };
-  if (error) {
-    const detail =
-      (typeof body.message === 'string' && body.message) ||
-      (typeof body.error === 'string' && body.error) ||
-      error.message ||
-      'İstek başarısız';
-    return { ...body, ok: false, error: detail };
+
+  const detailFromBody =
+    (typeof body.hint === 'string' && body.hint) ||
+    (typeof body.message === 'string' && body.message) ||
+    (typeof body.error === 'string' && body.error) ||
+    null;
+
+  if (body.ok === true || body.status === 204) {
+    return { ...body, ok: true };
   }
-  return body;
+
+  if (detailFromBody) {
+    return { ...body, ok: false, error: detailFromBody };
+  }
+
+  if (error) {
+    return {
+      ...body,
+      ok: false,
+      error: error.message || 'İstek başarısız',
+    };
+  }
+
+  return { ...body, ok: body.ok ?? false };
 }
 
 export async function pushHemenYoldaOrder(

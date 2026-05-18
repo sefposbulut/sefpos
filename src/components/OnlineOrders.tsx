@@ -24,6 +24,7 @@ import { GETIR_STORE_STATUS_EVENT } from './GlobalGetirSync';
 import { internalStatusLabelTr } from '../../supabase/functions/_shared/getirOrderStatus';
 import { PlatformLogo } from './PlatformLogo';
 import {
+  isElectron,
   loadPrintSettings,
   printOnlineOrderKitchenTicket,
   printOnlineOrderReceiptFromEdge,
@@ -197,8 +198,13 @@ export function OnlineOrders() {
       kitchenPrintInFlight.current.add(o.id);
       try {
         const platformCode = (o.online_order_platforms?.platform_code || '').toLowerCase();
+        let printed = false;
         if (platformCode === 'getir') {
-          await printOnlineOrderReceiptFromEdge(o.id, { silent: true });
+          const result = await printOnlineOrderReceiptFromEdge(o.id, { silent: true });
+          printed = result.success;
+          if (!printed) {
+            console.warn('[OnlineOrders] Getir fişi yazdırılamadı:', result.error);
+          }
         } else {
           const settings = loadPrintSettings();
           await printOnlineOrderKitchenTicket({
@@ -218,8 +224,9 @@ export function OnlineOrders() {
               notes: it.notes || null,
             })),
           });
+          printed = true;
         }
-        markKitchenPrinted(tenant.id, o.id);
+        if (printed) markKitchenPrinted(tenant.id, o.id);
       } catch (e) {
         console.warn('[OnlineOrders] Mutfak fişi yazdırılamadı:', e);
       } finally {
@@ -773,8 +780,11 @@ export function OnlineOrders() {
         title: 'Fiş yazdırılıyor',
       });
       if (!result.success) {
+        const detail = result.error ? ` (${result.error})` : '';
         alert(
-          'Fiş açılamadı. Pop-up engelliyse tarayıcıda www.sefpos.com.tr için açılır pencereye izin verin. Termal yazıcı bu PC\'deyse yazdırma penceresinden varsayılan yazıcıyı seçin.'
+          isElectron()
+            ? `Getir fişi yazdırılamadı.${detail}\n\nAyarlar → Yazıcılar → «Varsayılan mutfak yazıcısı»nı bu bilgisayardaki termal yazıcı adıyla seçin (Windows’taki adla aynı olmalı).`
+            : `Fiş açılamadı.${detail} Pop-up engelliyse tarayıcıda www.sefpos.com.tr için açılır pencereye izin verin. Termal yazıcı bu PC'deyse yazdırma penceresinden varsayılan yazıcıyı seçin.`,
         );
       }
     } catch (err: any) {

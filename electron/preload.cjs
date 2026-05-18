@@ -56,7 +56,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.removeAllListeners('update-error');
   },
   getIpAddress: () => ipcRenderer.invoke('get-ip-address'),
+  getMacAddress: () => ipcRenderer.invoke('get-mac-address'),
   getDeviceFingerprint: () => ipcRenderer.invoke('get-device-fingerprint'),
+  huginRequest: (opts) => ipcRenderer.invoke('hugin-request', opts),
   scaleStartWeighing: (opts) => ipcRenderer.invoke('scale-start-weighing', opts),
   scaleInitialZero: (opts) => ipcRenderer.invoke('scale-initial-zero', opts ?? {}),
   scaleTareWeighing: () => ipcRenderer.invoke('scale-tare-weighing'),

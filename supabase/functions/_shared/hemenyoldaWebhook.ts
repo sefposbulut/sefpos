@@ -69,12 +69,51 @@ export function normalizePhone(phone: string | null | undefined): string {
   return d;
 }
 
+const pad2 = (n: number) => String(n).padStart(2, "0");
+
+/** HemenYolda: `YYYY-MM-DD HH:mm:ss` — mutlaka UTC (İstanbul saati değil). */
+export function formatHemenYoldaUtcDateTime(date: Date = new Date()): string {
+  const d = date;
+  return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())} ${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())}:${pad2(d.getUTCSeconds())}`;
+}
+
 function formatUtc(iso: string | null | undefined): string | null {
   if (!iso) return null;
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return null;
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`;
+  return formatHemenYoldaUtcDateTime(d);
+}
+
+/** Trendyol: çağrı merkezi hattı + 11 haneli müşteri kodu (6 hane kabul edilmez). */
+export const TRENDYOL_HEMENYOLDA_CALL_CENTER = "8503469382";
+
+export function splitTrendyolPhoneForHemenYolda(
+  raw: string | null | undefined,
+): { phoneNumber: string; phoneCode: string | null } {
+  const d = digitsOnly(raw);
+  if (!d) {
+    return { phoneNumber: TRENDYOL_HEMENYOLDA_CALL_CENTER, phoneCode: null };
+  }
+  // Zaten çağrı merkezi formatı
+  if (d.startsWith("850") && d.length <= 13) {
+    return { phoneNumber: d.slice(0, 13), phoneCode: null };
+  }
+  let local = d;
+  if (local.startsWith("90")) local = local.slice(2);
+  if (local.startsWith("0")) local = local.slice(1);
+  if (local.length >= 11) {
+    return {
+      phoneNumber: TRENDYOL_HEMENYOLDA_CALL_CENTER,
+      phoneCode: local.slice(0, 11),
+    };
+  }
+  if (local.length >= 6) {
+    return {
+      phoneNumber: TRENDYOL_HEMENYOLDA_CALL_CENTER,
+      phoneCode: local.padStart(11, "0").slice(-11),
+    };
+  }
+  return { phoneNumber: TRENDYOL_HEMENYOLDA_CALL_CENTER, phoneCode: local || null };
 }
 
 function mapPaymentMethod(method: string | null, collected: boolean): string {

@@ -67,6 +67,8 @@ export function DeliveryOrderForm({ couriers, editOrder, prefillCustomer, onClos
   const [showLastOrders, setShowLastOrders] = useState(false);
   const [loadingCustomer, setLoadingCustomer] = useState(false);
   const phoneDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const customerSearchRef = useRef<HTMLDivElement | null>(null);
+  const nameInputRef = useRef<HTMLInputElement | null>(null);
 
   const availableCouriers = couriers.filter(c => c.status === 'available');
   const isDelivery = subtype === 'delivery';
@@ -116,9 +118,21 @@ export function DeliveryOrderForm({ couriers, editOrder, prefillCustomer, onClos
       setCustomerPhone(phone);
       setCustomerName('');
       setDeliveryAddress('');
+      setShowSuggestions(false);
+      window.setTimeout(() => nameInputRef.current?.focus(), 150);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prefillCustomer?.phone, prefillCustomer?.matched?.id]);
+
+  useEffect(() => {
+    if (!showSuggestions) return;
+    const onPointerDown = (e: PointerEvent) => {
+      if (customerSearchRef.current?.contains(e.target as Node)) return;
+      setShowSuggestions(false);
+    };
+    document.addEventListener('pointerdown', onPointerDown);
+    return () => document.removeEventListener('pointerdown', onPointerDown);
+  }, [showSuggestions]);
 
   const searchCustomers = async (raw: string) => {
     const q = raw.trim();
@@ -486,8 +500,11 @@ export function DeliveryOrderForm({ couriers, editOrder, prefillCustomer, onClos
               })}
             </div>
 
-            <div className="relative">
+            <div className="relative" ref={customerSearchRef}>
               <label className="text-xs font-bold text-slate-600 mb-1 block">Müşteri ara (cari adı, teslimat kaydı veya telefon)</label>
+              <p className="text-[11px] text-slate-500 mb-1.5">
+                Üst kutu arama içindir. Müşteri adını <strong>aşağıdaki «Ad Soyad»</strong> alanına yazın.
+              </p>
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                 <input
@@ -505,7 +522,7 @@ export function DeliveryOrderForm({ couriers, editOrder, prefillCustomer, onClos
               </div>
 
               {showSuggestions && customerSuggestions.length > 0 && (
-                <div className="absolute z-20 top-full mt-1 left-0 right-0 bg-white border border-slate-200 rounded-xl shadow-xl overflow-hidden max-h-72 overflow-y-auto">
+                <div className="absolute z-30 top-full mt-1 left-0 right-0 bg-white border border-slate-200 rounded-xl shadow-xl overflow-hidden max-h-48 overflow-y-auto">
                   <div className="px-3 py-1.5 bg-slate-50 border-b border-slate-100">
                     <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">Eşleşen kayıtlar</p>
                   </div>
@@ -569,14 +586,17 @@ export function DeliveryOrderForm({ couriers, editOrder, prefillCustomer, onClos
               )}
             </div>
 
-            <div>
+            <div className="relative z-10">
               <label className="text-xs font-bold text-slate-600 mb-1 block">Ad Soyad *</label>
               <input
+                ref={nameInputRef}
                 type="text"
                 value={customerName}
                 onChange={e => setCustomerName(e.target.value)}
-                placeholder="Müşteri adı"
-                className="w-full px-3 py-2.5 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-orange-400 focus:border-transparent"
+                onFocus={() => setShowSuggestions(false)}
+                placeholder="Örn. Ahmet Yılmaz"
+                autoComplete="name"
+                className="w-full px-3 py-2.5 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-orange-400 focus:border-transparent bg-white"
               />
             </div>
 

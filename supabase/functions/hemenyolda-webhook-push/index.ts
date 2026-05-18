@@ -95,7 +95,9 @@ function isDuplicateOrderIdError(errText: string): boolean {
 function isOrderNotFoundForModify(errText: string): boolean {
   const errs = parseHyErrors(errText);
   const idErr = errs?.["order.id"];
-  return Array.isArray(idErr) && idErr.some((e) => String(e).includes("exists"));
+  if (Array.isArray(idErr) && idErr.some((e) => String(e).includes("exists"))) return true;
+  const t = errText.toLowerCase();
+  return t.includes("not found") || t.includes("bulunamad") || t.includes("does not exist");
 }
 
 async function seedYemeksepetiNewOrder(
@@ -129,8 +131,19 @@ async function runModifyTest(
 
   let seeded = false;
   const tryOnce = async (id: string) => {
-    await seedYemeksepetiNewOrder(cfg, id);
-    seeded = true;
+    const seedResult = await seedYemeksepetiNewOrder(cfg, id);
+    seeded = seedResult.ok;
+    if (!seedResult.ok) {
+      return {
+        ok: false,
+        status: seedResult.status,
+        error: seedResult.error || "Sipariş oluşturulamadı (önce new-order gerekir)",
+        url: seedResult.url,
+        errors: seedResult.errors,
+        note:
+          "İptal/güncelleme öncesi YemekSepeti örneği ile sipariş oluşturulamadı. Token ve APP_NAME kontrol edin; veya önce «YemekSepeti örneği» butonuna basın.",
+      };
+    }
     let body: { order: Record<string, unknown> };
     if (sampleKey === "cancel") {
       body = { order: { id } };
@@ -381,6 +394,8 @@ Deno.serve(async (req) => {
     const hint = result.errors
       ? formatHyErrorHint(result.errors)
       : result.note;
+    // Test: her zaman HTTP 200 — aksi halde supabase.functions.invoke yalnızca
+    // "Edge Function returned a non-2xx status code" gösterir, HemenYolda detayı kaybolur.
     return json({
       sample: sampleKey,
       action: sample.action,
@@ -389,7 +404,7 @@ Deno.serve(async (req) => {
       seeded,
       hint,
       ...result,
-    }, result.ok ? 200 : 422);
+    }, 200);
   }
 
   // ——— Gerçek sipariş push ———

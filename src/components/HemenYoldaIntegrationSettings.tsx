@@ -28,7 +28,7 @@ const TEST_BUTTONS: { sample: HemenyoldaTestSample; label: string }[] = [
   { sample: 'trendyol', label: 'Trendyol örneği' },
   { sample: 'telefon', label: 'Telefon siparişi' },
   { sample: 'update', label: 'Sipariş güncelleme' },
-  { sample: 'cancel', label: 'Sipariş iptal' },
+  { sample: 'cancel', label: 'Sipariş iptal (önce otomatik test siparişi açar)' },
 ];
 
 export default function HemenYoldaIntegrationSettings({
@@ -276,7 +276,7 @@ export default function HemenYoldaIntegrationSettings({
         {showCertTests && (
           <div className="bg-amber-50 border-t border-amber-200 p-4 space-y-3">
             <p className="text-sm text-amber-800">
-              Önce <strong>Kaydet</strong>. Sipariş tarihleri otomatik <strong>bugün (TR)</strong> gönderilir.
+              Önce <strong>Kaydet</strong>. Sipariş tarihleri otomatik <strong>bugün (UTC)</strong> gönderilir.
               Sertifikasyon paketi doküman id’leri kullanır. Başarı: <strong>HTTP 204</strong>.
             </p>
         <button

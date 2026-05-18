@@ -1,31 +1,17 @@
 // deno-lint-ignore-file no-explicit-any
 import type { HemenyoldaAction } from "./hemenyoldaWebhook.ts";
+import {
+  formatHemenYoldaUtcDateTime,
+  TRENDYOL_HEMENYOLDA_CALL_CENTER,
+} from "./hemenyoldaWebhook.ts";
 
-/** HemenYolda örnek formatı: YYYY-MM-DD HH:mm:ss (Türkiye saati). */
-export function formatHemenYoldaLocalDateTime(date: Date = new Date()): string {
-  const parts = new Intl.DateTimeFormat("en-GB", {
-    timeZone: "Europe/Istanbul",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-  }).formatToParts(date);
-  const get = (type: Intl.DateTimeFormatPartTypes) =>
-    parts.find((p) => p.type === type)?.value ?? "00";
-  const [day, month, year] = [get("day"), get("month"), get("year")];
-  return `${year}-${month}-${day} ${get("hour")}:${get("minute")}:${get("second")}`;
-}
-
-/** Sertifikasyon/test gönderiminde createdAt (ve varsa scheduledAt) bugün olur. */
+/** Sertifikasyon/test: createdAt ve scheduledAt bugün — UTC. */
 export function applyTodayDatesToHemenYoldaTestOrder(order: Record<string, unknown>): void {
-  const now = formatHemenYoldaLocalDateTime();
+  const now = formatHemenYoldaUtcDateTime();
   order.createdAt = now;
   if (order.scheduledAt != null) {
     const plusHour = new Date(Date.now() + 60 * 60 * 1000);
-    order.scheduledAt = formatHemenYoldaLocalDateTime(plusHour);
+    order.scheduledAt = formatHemenYoldaUtcDateTime(plusHour);
   }
 }
 
@@ -135,8 +121,8 @@ export const HEMENYOLDA_TEST_SAMPLES: Record<
         id: "ty-order-2023-88421",
         customer: {
           fullName: "Ayşe Öztürk",
-          phoneNumber: "8503469382",
-          phoneCode: "482910",
+          phoneNumber: TRENDYOL_HEMENYOLDA_CALL_CENTER,
+          phoneCode: "55544433221",
         },
         address: {
           text: "Caferağa Mah. Moda Cad. No:42 D:3",

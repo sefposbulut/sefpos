@@ -16,7 +16,15 @@ import {
   callerIdLocalSettings,
   type CallerIdStatus,
 } from '../lib/callerId';
-import { HuginSettings, loadHuginSettings, saveHuginSettings, testHuginConnection } from '../lib/huginTps';
+import {
+  HuginSettings,
+  loadHuginSettings,
+  saveHuginSettings,
+  testHuginConnection,
+  fetchHuginHardwareId,
+  huginRequiresDesktop,
+} from '../lib/huginTps';
+import { isElectron } from '../lib/printService';
 import { isFeatureUnlocked, submitFeatureRequest, FEATURE_LABELS } from '../lib/featureGate';
 import { Branch } from '../contexts/AuthContext';
 import { PrinterSettings } from './PrinterSettings';
@@ -280,6 +288,11 @@ export function Settings({ onClose }: SettingsProps) {
 
   useEffect(() => {
     if (!tenant || activeTab !== 'hugin') return;
+    if (huginRequiresDesktop() && !huginSettings.hardwareId.trim()) {
+      void fetchHuginHardwareId().then((mac) => {
+        if (mac) setHuginSettings((s) => ({ ...s, hardwareId: mac }));
+      });
+    }
     supabase
       .from('categories')
       .select('id, name, vat_rate, hugin_department_id')
@@ -3185,14 +3198,26 @@ export function Settings({ onClose }: SettingsProps) {
                   <Receipt className="w-6 h-6" />
                   <h3 className="text-xl font-bold">Hugin S1 Yazarkasa Entegrasyonu</h3>
                 </div>
-                <p className="text-slate-300 text-sm">Nakit odeme alindiginda Hugin S1 yazarkasaniza otomatik fis keser. Cihazin ayni ag uzerinde olmasi gerekir.</p>
+                <p className="text-slate-300 text-sm">
+                  Nakit ve kart ödemede otomatik fiş. S1 kablosuz:{' '}
+                  <a href="https://developer.hugin.com.tr/" target="_blank" rel="noopener noreferrer" className="underline text-white">PC Link</a>
+                  {' '}(4443). Eski:{' '}
+                  <a href="https://github.com/huginsdk/tps" target="_blank" rel="noopener noreferrer" className="underline text-white">TPS</a>.
+                </p>
               </div>
+
+              {!isElectron() && (
+                <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm text-amber-800">
+                  <p className="font-semibold">Masaüstü uygulama gerekli</p>
+                  <p className="mt-1 text-amber-700">Yazarkasa yerel ağda; bağlantı yalnızca ŞefPOS Windows uygulamasından yapılır.</p>
+                </div>
+              )}
 
               <div className="bg-white border-2 border-slate-200 rounded-xl p-5 space-y-4">
                 <div className="flex items-center justify-between">
                   <div>
                     <h4 className="font-bold text-slate-800">Yazarkasa Entegrasyonu</h4>
-                    <p className="text-sm text-slate-500 mt-0.5">Aktif edildiginde nakit odemede otomatik fis basilir</p>
+                    <p className="text-sm text-slate-500 mt-0.5">Nakit ve kart ödemede otomatik fiş kesilir</p>
                   </div>
                   <button
                     onClick={() => setHuginSettings(s => ({ ...s, enabled: !s.enabled }))}
@@ -3204,6 +3229,25 @@ export function Settings({ onClose }: SettingsProps) {
 
                 {huginSettings.enabled && (
                   <div className="border-t border-slate-100 pt-4 space-y-4">
+                    <div>
+                      <label className="block text-sm font-semibold text-slate-700 mb-1">API türü</label>
+                      <select
+                        value={huginSettings.apiMode || 'pc_link'}
+                        onChange={e => {
+                          const apiMode = e.target.value as 'pc_link' | 'tps';
+                          setHuginSettings(s => ({
+                            ...s,
+                            apiMode,
+                            devicePort: apiMode === 'pc_link' ? 4443 : 3001,
+                          }));
+                        }}
+                        className="w-full px-3 py-2.5 border border-slate-300 rounded-lg text-sm"
+                      >
+                        <option value="pc_link">PC Link — Hugin S1 kablosuz (HTTPS 4443, önerilen)</option>
+                        <option value="tps">TPS — Eski HTTP servisi (port 3001)</option>
+                      </select>
+                    </div>
+
                     <div className="grid grid-cols-2 gap-4">
                       <div>
                         <label className="block text-sm font-semibold text-slate-700 mb-1">Cihaz IP Adresi</label>
@@ -3220,35 +3264,85 @@ export function Settings({ onClose }: SettingsProps) {
                         <input
                           type="number"
                           value={huginSettings.devicePort}
-                          onChange={e => setHuginSettings(s => ({ ...s, devicePort: parseInt(e.target.value) || 3001 }))}
+                          onChange={e => setHuginSettings(s => ({ ...s, devicePort: parseInt(e.target.value) || (s.apiMode === 'pc_link' ? 4443 : 3001) }))}
                           className="w-full px-3 py-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500 focus:border-transparent text-sm font-mono"
-                          placeholder="3001"
+                          placeholder={huginSettings.apiMode === 'pc_link' ? '4443' : '3001'}
                         />
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-sm font-semibold text-slate-700 mb-1">OKC ID</label>
-                        <input
-                          type="text"
-                          value={huginSettings.okcId}
-                          onChange={e => setHuginSettings(s => ({ ...s, okcId: e.target.value }))}
-                          className="w-full px-3 py-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500 focus:border-transparent text-sm"
-                          placeholder="Cihaz kimlik numarasi"
-                        />
+                    {huginSettings.apiMode === 'pc_link' ? (
+                      <div className="space-y-4">
+                        <div className="grid grid-cols-2 gap-4">
+                          <div>
+                            <label className="block text-sm font-semibold text-slate-700 mb-1">Yazılım ID (VKN)</label>
+                            <input
+                              type="text"
+                              value={huginSettings.softwareId || ''}
+                              onChange={e => setHuginSettings(s => ({ ...s, softwareId: e.target.value }))}
+                              className="w-full px-3 py-2.5 border border-slate-300 rounded-lg text-sm font-mono"
+                              placeholder="Entegrasyon sözleşmesindeki VKN"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-sm font-semibold text-slate-700 mb-1">Donanım ID (MAC)</label>
+                            <div className="flex gap-2">
+                              <input
+                                type="text"
+                                value={huginSettings.hardwareId || ''}
+                                onChange={e => setHuginSettings(s => ({ ...s, hardwareId: e.target.value.toUpperCase() }))}
+                                className="flex-1 px-3 py-2.5 border border-slate-300 rounded-lg text-sm font-mono"
+                                placeholder="AA:BB:CC:DD:EE:FF"
+                              />
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  const mac = await fetchHuginHardwareId();
+                                  if (mac) setHuginSettings(s => ({ ...s, hardwareId: mac }));
+                                }}
+                                className="px-3 py-2 border border-slate-300 rounded-lg text-xs font-semibold text-slate-700 hover:bg-slate-50 whitespace-nowrap"
+                              >
+                                MAC al
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                        <div>
+                          <label className="block text-sm font-semibold text-slate-700 mb-1">Mali sicil no (X-SerialNo)</label>
+                          <input
+                            type="text"
+                            value={huginSettings.serialNo || ''}
+                            onChange={e => setHuginSettings(s => ({ ...s, serialNo: e.target.value }))}
+                            className="w-full px-3 py-2.5 border border-slate-300 rounded-lg text-sm font-mono"
+                            placeholder="İlk eşleşmede boş bırakılabilir; test sonrası dolar"
+                          />
+                          <p className="text-xs text-slate-500 mt-1">Cihazda Uygulama Merkezi → PC Link → VKN girin; “Eşleşme bekleniyor” iken bağlantı testi yapın.</p>
+                        </div>
                       </div>
-                      <div>
-                        <label className="block text-sm font-semibold text-slate-700 mb-1">Sifre</label>
-                        <input
-                          type="password"
-                          value={huginSettings.password}
-                          onChange={e => setHuginSettings(s => ({ ...s, password: e.target.value }))}
-                          className="w-full px-3 py-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500 focus:border-transparent text-sm"
-                          placeholder="Cihaz sifresi"
-                        />
+                    ) : (
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-sm font-semibold text-slate-700 mb-1">OKC ID</label>
+                          <input
+                            type="text"
+                            value={huginSettings.okcId}
+                            onChange={e => setHuginSettings(s => ({ ...s, okcId: e.target.value }))}
+                            className="w-full px-3 py-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500 focus:border-transparent text-sm"
+                            placeholder="Cihaz kimlik numarasi"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-semibold text-slate-700 mb-1">Sifre</label>
+                          <input
+                            type="password"
+                            value={huginSettings.password}
+                            onChange={e => setHuginSettings(s => ({ ...s, password: e.target.value }))}
+                            className="w-full px-3 py-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500 focus:border-transparent text-sm"
+                            placeholder="Cihaz sifresi"
+                          />
+                        </div>
                       </div>
-                    </div>
+                    )}
 
                     <div className="grid grid-cols-2 gap-4">
                       <div>
@@ -3345,7 +3439,17 @@ export function Settings({ onClose }: SettingsProps) {
                         setHuginTesting(true);
                         setHuginTestResult(null);
                         const result = await testHuginConnection(huginSettings);
-                        setHuginTestResult({ ok: result.success, msg: result.success ? 'Cihaza basariyla baglandi!' : (result.error || 'Baglanti hatasi') });
+                        if (result.success && result.serialNo && !huginSettings.serialNo.trim()) {
+                          const next = { ...huginSettings, serialNo: result.serialNo };
+                          setHuginSettings(next);
+                          saveHuginSettings(next);
+                        }
+                        const msg = result.success
+                          ? result.serialNo && !huginSettings.serialNo.trim()
+                            ? `Bağlantı OK. Mali sicil kaydedildi: ${result.serialNo}`
+                            : 'Cihaza başarıyla bağlandı!'
+                          : (result.error || 'Bağlantı hatası');
+                        setHuginTestResult({ ok: result.success, msg });
                         setHuginTesting(false);
                       }}
                       disabled={huginTesting}
@@ -3378,11 +3482,11 @@ export function Settings({ onClose }: SettingsProps) {
               <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm text-amber-800">
                 <p className="font-semibold mb-1">Kurulum Notu</p>
                 <ul className="space-y-1 list-disc list-inside text-amber-700">
-                  <li>Hugin S1 cihazi bilgisayarinizla ayni ag (Wi-Fi/LAN) uzerinde olmali</li>
-                  <li>Cihazin IP adresini Hugin S1 ekranindaki ag ayarlarindan ogrenebilirsiniz</li>
-                  <li>OKC ID ve sifre bilgilerini Hugin yetkili servisinden alin</li>
-                  <li>Nakit ve kredi karti odemelerde otomatik fis kesilir</li>
-                  <li>Kismi odeme durumunda her odeme ayri PayItem olarak gonderilir</li>
+                  <li>Cihaz ve kasa PC aynı Wi‑Fi/LAN üzerinde olmalı</li>
+                  <li>S1: Uygulama Merkezi → PC Link → Hugin entegrasyon VKN → ekrandaki IP (genelde port 4443)</li>
+                  <li>İlk eşleşme: Bağlantı testi → dönen mali sicil otomatik kaydedilir</li>
+                  <li>ŞefPOS yalnızca masaüstü (Electron) uygulamasından yazarkasaya bağlanır</li>
+                  <li>Nakit ve kredi kartı ödemelerde otomatik fiş; kısmi ödemede her ödeme ayrı satır</li>
                 </ul>
               </div>
             </div>

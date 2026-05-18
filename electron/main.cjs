@@ -2570,6 +2570,101 @@ ipcMain.handle('get-ip-address', async () => {
   return 'unknown';
 });
 
+/** Hugin PC Link / TPS — yerel cihaz HTTPS (self-signed ÖKC sertifikası). */
+ipcMain.handle('hugin-request', async (_, opts = {}) => {
+  const https = require('https');
+  const http = require('http');
+  const { URL } = require('url');
+
+  const method = String(opts.method || 'GET').toUpperCase();
+  const urlStr = String(opts.url || '');
+  const timeoutMs = Number(opts.timeoutMs) > 0 ? Number(opts.timeoutMs) : 12000;
+
+  if (!urlStr) {
+    return { ok: false, status: 0, body: '', error: 'URL bos' };
+  }
+
+  let parsed;
+  try {
+    parsed = new URL(urlStr);
+  } catch (e) {
+    return { ok: false, status: 0, body: '', error: `Gecersiz URL: ${e?.message || e}` };
+  }
+
+  const isHttps = parsed.protocol === 'https:';
+  const lib = isHttps ? https : http;
+  const bodyStr =
+    opts.body === undefined || opts.body === null
+      ? ''
+      : typeof opts.body === 'string'
+        ? opts.body
+        : JSON.stringify(opts.body);
+
+  const headers = { ...(opts.headers || {}) };
+  if (bodyStr && !headers['Content-Length'] && !headers['content-length']) {
+    headers['Content-Length'] = Buffer.byteLength(bodyStr, 'utf8');
+  }
+
+  return new Promise((resolve) => {
+    const reqOpts = {
+      hostname: parsed.hostname,
+      port: parsed.port || (isHttps ? 443 : 80),
+      path: `${parsed.pathname}${parsed.search}`,
+      method,
+      headers,
+      rejectUnauthorized: false,
+      timeout: timeoutMs,
+    };
+
+    const req = lib.request(reqOpts, (res) => {
+      let data = '';
+      res.setEncoding('utf8');
+      res.on('data', (chunk) => {
+        data += chunk;
+      });
+      res.on('end', () => {
+        const status = res.statusCode || 0;
+        resolve({
+          ok: status >= 200 && status < 300,
+          status,
+          body: data,
+        });
+      });
+    });
+
+    req.on('timeout', () => {
+      req.destroy();
+      resolve({ ok: false, status: 0, body: '', error: 'Zaman asimi' });
+    });
+    req.on('error', (err) => {
+      resolve({ ok: false, status: 0, body: '', error: err?.message || 'Baglanti hatasi' });
+    });
+
+    if (bodyStr && method !== 'GET' && method !== 'HEAD') {
+      req.write(bodyStr);
+    }
+    req.end();
+  });
+});
+
+ipcMain.handle('get-mac-address', async () => {
+  const os = require('os');
+  const interfaces = os.networkInterfaces();
+  for (const name of Object.keys(interfaces)) {
+    for (const iface of interfaces[name] || []) {
+      if (
+        iface.family === 'IPv4' &&
+        !iface.internal &&
+        iface.mac &&
+        iface.mac !== '00:00:00:00:00:00'
+      ) {
+        return iface.mac.toUpperCase();
+      }
+    }
+  }
+  return '';
+});
+
 ipcMain.handle('get-device-fingerprint', async () => {
   const os = require('os');
   const crypto = require('crypto');

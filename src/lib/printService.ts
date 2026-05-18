@@ -675,6 +675,31 @@ export function pickKitchenPrinterFromDevices(devices: PrinterDevice[]): string 
   return names[0] || '';
 }
 
+/** Electron: ayarlardaki mantıksal adı Windows yazıcı listesiyle eşleştir. */
+export async function resolveTargetThermalPrinterName(logicalName: string): Promise<string> {
+  const devices = await getAvailablePrinters();
+  const settings = loadPrintSettings();
+  const tryNames: string[] = [];
+  const push = (s: string | null | undefined) => {
+    const t = (s || '').trim();
+    if (t && !tryNames.includes(t)) tryNames.push(t);
+  };
+  push(logicalName);
+  push(settings.defaultKitchenPrinter);
+  push(settings.defaultReceiptPrinter);
+  for (const p of settings.printers) {
+    if (p?.enabled && (p.type === 'kitchen' || p.type === 'bar' || p.type === 'custom') && p.printerName) {
+      push(p.printerName);
+    }
+  }
+  for (const c of tryNames) {
+    const n = await resolveThermalDeviceName(c, devices);
+    const use = ((n || '').trim() || c).trim();
+    if (use) return use;
+  }
+  return pickKitchenPrinterFromDevices(devices);
+}
+
 export type PrintAgentStatus = 'connected' | 'not_running' | 'blocked_mixed_content' | 'unknown_error';
 
 export async function checkPrintAgent(): Promise<boolean> {
@@ -1284,10 +1309,14 @@ export async function printOnlineOrderReceiptFromEdge(
     return { success: false, error: 'Fiş oluşturulamadı' };
   }
   const settings = loadPrintSettings();
-  const printer = (opts?.printerName || settings.defaultKitchenPrinter || '').trim();
+  let printer = (opts?.printerName || settings.defaultKitchenPrinter || '').trim();
+  if (isElectron()) {
+    printer = await resolveTargetThermalPrinterName(printer);
+  }
   return printHtml(html, printer, {
     title: opts?.title || 'Online sipariş fişi',
     silent: opts?.silent,
+    allowBrowserFallback: true,
   });
 }
 
@@ -1296,35 +1325,54 @@ export async function printOnlineOrderReceiptFromEdge(
  *
  * 1. Electron — sessiz termal.
  * 2. Yerel Print Agent (7878).
- * 3. **Web (www) — tarayıcı yazdırma** (Getir paneli gibi; aynı PC'de termal seçilir).
+ * 3. **Web (www) — tarayıcı yazdırma** (yalnızca `allowBrowserFallback`; Getir/YS/TY uzaktan).
  * 4. `print_jobs` kuyruğu (uzaktan kasa / agent).
  */
 export async function printHtml(
   html: string,
   printerName: string,
-  toastOpts?: { title?: string; silent?: boolean }
+  toastOpts?: { title?: string; silent?: boolean; /** Web: tarayıcı yazdırma penceresi (online platform) */ allowBrowserFallback?: boolean }
 ): Promise<{ success: boolean; error?: string }> {
   const w = window as any;
   const silent = toastOpts?.silent === true;
   const title = toastOpts?.title;
 
-  // 1) Electron — yerel yazıcı.
+  // 1) Electron — yerel yazıcı (OS adı çözümle + varsayılan yazıcı yedek).
   if (w.electronAPI?.printReceipt) {
-    try {
-      const result = await w.electronAPI.printReceipt({ html, printerName: printerName || undefined, silent: true });
-      notifyPrintResult({
-        success: !!result.success,
-        printerName,
-        errorDetail: result.errorType || result.error || undefined,
-        channel: 'electron',
-        toastTitle: title,
-        silent,
-      });
-      return { success: result.success, error: result.errorType || undefined };
-    } catch (err: any) {
-      notifyPrintResult({ success: false, printerName, errorDetail: err?.message, channel: 'electron', silent });
-      return { success: false, error: err.message };
+    const resolved = await resolveTargetThermalPrinterName(printerName);
+    const tryNames = [resolved, ''].filter((n, i, a) => a.indexOf(n) === i);
+    let lastErr: string | undefined;
+    for (const name of tryNames) {
+      try {
+        const result = await w.electronAPI.printReceipt({
+          html,
+          printerName: name || undefined,
+          silent: true,
+        });
+        if (result.success) {
+          notifyPrintResult({
+            success: true,
+            printerName: name || resolved,
+            channel: 'electron',
+            toastTitle: title,
+            silent,
+          });
+          return { success: true };
+        }
+        lastErr = result.errorType || result.error || undefined;
+      } catch (err: any) {
+        lastErr = err?.message;
+      }
     }
+    notifyPrintResult({
+      success: false,
+      printerName: resolved,
+      errorDetail: lastErr,
+      channel: 'electron',
+      toastTitle: title,
+      silent,
+    });
+    // Electron aynı makinede print_jobs kuyruğunu da dinler — aşağıdaki adımlara düş.
   }
 
   // 2) Yerel Print Agent — www veya Electron UI kapalı olsa da (aynı PC).
@@ -1340,8 +1388,8 @@ export async function printHtml(
     return { success: true };
   }
 
-  // 3) Web — tarayıcı yazdırma (HTTPS'te Getir/Yemeksepeti paneli gibi).
-  if (!isElectron()) {
+  // 3) Web — tarayıcı yazdırma (yalnızca online platform siparişleri; masa/mutfak değil).
+  if (!isElectron() && toastOpts?.allowBrowserFallback === true) {
     const browserResult = silent
       ? await printHtmlViaBrowserSilent(html)
       : await printHtmlViaBrowser(html, title || 'ŞefPOS Fiş');
@@ -1710,6 +1758,8 @@ export async function printKitchenReceipts(opts: {
   note?: string;
   /** Siparişi alan garson; mutfak fişi başlığında yazılır. */
   waiterName?: string;
+  /** Web: agent yoksa tarayıcı yazdırma (yalnızca online platform mutfak fişi). */
+  allowWebBrowserPrint?: boolean;
 }): Promise<void> {
   const { settings, items } = opts;
   const st = settings.printStyle || DEFAULT_PRINT_STYLE;
@@ -1741,7 +1791,10 @@ export async function printKitchenReceipts(opts: {
     });
     const label = printerName ? `printer="${printerName}"` : 'printer=(varsayılan)';
     console.info(`[ŞefPOS] Mutfak fişi: ${batchItems.length} ürün → ${label}`);
-    await printHtml(html, printerName, { title: 'Mutfak fişi gönderildi' });
+    await printHtml(html, printerName, {
+      title: 'Mutfak fişi gönderildi',
+      allowBrowserFallback: opts.allowWebBrowserPrint === true,
+    });
   };
 
   // Mobil / web: ayarlardaki mantıksal yazıcı adıyla **ayrı** print_jobs satırı.
@@ -1854,5 +1907,6 @@ export async function printOnlineOrderKitchenTicket(opts: {
     orderNumber: opts.orderNumber,
     items: kitchenItems,
     note: noteParts.join('\n'),
+    allowWebBrowserPrint: true,
   });
 }

@@ -114,6 +114,219 @@ export interface DHReceiptOrderInput {
   };
 }
 
+function extractLocalized(val: unknown): string {
+  if (val == null) return "";
+  if (typeof val === "string") return val.trim();
+  if (typeof val === "object" && val !== null) {
+    const o = val as Record<string, unknown>;
+    for (const k of ["tr", "TR", "en", "EN"]) {
+      const v = o[k];
+      if (typeof v === "string" && v.trim()) return v.trim();
+    }
+    for (const v of Object.values(o)) {
+      if (typeof v === "string" && v.trim()) return v.trim();
+    }
+  }
+  return String(val).trim();
+}
+
+/** Getir müşteri hattı — paneldeki gibi 0850 maskeli format. */
+export function formatGetirMaskedPhone(phone: string | null | undefined): string {
+  const t = String(phone || "").trim();
+  if (!t) return "";
+  const digits = t.replace(/\D/g, "");
+  if (digits.startsWith("0850") && digits.length >= 7) {
+    const rest = digits.slice(4);
+    return `0850 ${rest.slice(0, 3)} ${rest.slice(3, 6)} ${rest.slice(6)}`.trim();
+  }
+  if (digits.startsWith("850") && digits.length >= 6) {
+    const rest = digits.slice(3);
+    return `0850 ${rest.slice(0, 3)} ${rest.slice(3, 6)} ${rest.slice(6)}`.trim();
+  }
+  return t;
+}
+
+function mapGetirItemToppings(toppings: unknown): DHToppingForReceipt[] | undefined {
+  if (!Array.isArray(toppings) || toppings.length === 0) return undefined;
+  const out: DHToppingForReceipt[] = [];
+  for (const t of toppings) {
+    if (typeof t === "string" && t.trim()) {
+      out.push({ name: t.trim(), quantity: 1 });
+      continue;
+    }
+    if (t && typeof t === "object") {
+      const o = t as Record<string, unknown>;
+      const name = extractLocalized(o.name || o.optionName || o.title || o.label);
+      if (name) out.push({ name, quantity: Number(o.quantity || o.count || 1) || 1 });
+    }
+  }
+  return out.length ? out : undefined;
+}
+
+/** Webhook/poll ham JSON'dan ürün satırları (DB kalemleri yoksa). */
+export function mapGetirProductsFromRaw(raw: Record<string, unknown> | null | undefined): DHProductForReceipt[] {
+  const products = Array.isArray(raw?.products) ? raw!.products : [];
+  return products.map((p: Record<string, unknown>) => {
+    const qty = Number(p.count ?? p.quantity ?? 1) || 1;
+    const unit = Number(p.price ?? p.unitPrice ?? 0);
+    const paid = Number(p.totalPrice ?? p.paidPrice ?? unit * qty);
+    return {
+      name: extractLocalized(p.name || p.productName || (p.menuItem as Record<string, unknown>)?.name) || "Ürün",
+      quantity: qty,
+      unitPrice: unit,
+      paidPrice: paid,
+      comment: extractLocalized(p.note || p.specialInstructions) || null,
+      selectedToppings: mapGetirItemToppings(p.options || p.selectedOptions || p.extras),
+    };
+  });
+}
+
+export interface GetirReceiptDbSlice {
+  platform_order_number?: string | null;
+  platform_order_id?: string | null;
+  id?: string;
+  customer_name?: string | null;
+  customer_phone?: string | null;
+  customer_address?: string | null;
+  customer_notes?: string | null;
+  platform_created_at?: string | null;
+  created_at?: string;
+  estimated_delivery_time?: string | null;
+  rider_pickup_time?: string | null;
+  payment_type?: string | null;
+  subtotal?: number | null;
+  delivery_fee?: number | null;
+  tax_amount?: number | null;
+  discount_amount?: number | null;
+  total_amount?: number;
+  getir_verification_code?: string | null;
+  getir_masked_phone?: string | null;
+  getir_delivery_type?: number | null;
+  getir_is_scheduled?: boolean | null;
+  getir_total_discount?: number | null;
+  getir_supplier_support_rate?: number | null;
+  getir_raw_payload?: Record<string, unknown> | null;
+}
+
+export interface GetirReceiptItemSlice {
+  platform_product_name: string;
+  quantity: number;
+  unit_price: number;
+  total_amount: number;
+  notes: string | null;
+  toppings?: unknown;
+}
+
+/** DB + ham Getir payload → tek fiş girdisi (onay / tekrar bas). */
+export function buildGetirReceiptInput(
+  order: GetirReceiptDbSlice,
+  items: GetirReceiptItemSlice[],
+): DHReceiptOrderInput {
+  const raw = (order.getir_raw_payload && typeof order.getir_raw_payload === "object")
+    ? order.getir_raw_payload
+    : {};
+  const customer = (raw.client || raw.customer || {}) as Record<string, unknown>;
+
+  const verificationCode = String(
+    order.getir_verification_code ||
+      raw.confirmationId ||
+      raw.verificationCode ||
+      "",
+  ).trim() || null;
+
+  const maskedPhone = formatGetirMaskedPhone(
+    order.getir_masked_phone ||
+      order.customer_phone ||
+      String(customer.maskedPhoneNumber || customer.phoneNumber || customer.phone || ""),
+  ) || null;
+
+  const customerComment = String(
+    order.customer_notes ||
+      raw.note ||
+      raw.clientNote ||
+      raw.clientRequest ||
+      raw.orderNote ||
+      "",
+  ).trim() || null;
+
+  const subtotal = Number(order.subtotal ?? raw.totalPrice ?? 0);
+  const discounted = Number(
+    order.total_amount ?? raw.totalDiscountedPrice ?? raw.totalPrice ?? subtotal,
+  );
+  const discount =
+    Number(order.discount_amount) ||
+    Number(order.getir_total_discount) ||
+    (subtotal && discounted ? Math.max(0, subtotal - discounted) : 0);
+  const supplierRate = Number(order.getir_supplier_support_rate ?? raw.supplierSupportRate ?? 0);
+  const ortakKampanya =
+    discount > 0 ||
+    supplierRate > 0 ||
+    !!(raw.isSupplierSupportApplied || raw.supplierSupportApplied);
+
+  const dt = Number(order.getir_delivery_type ?? raw.deliveryType ?? 0);
+  const courierBadge =
+    dt === 1 ? "GETİR GETİRSİN" : dt === 2 ? "RESTORAN GETİRSİN" : null;
+
+  const dbProducts: DHProductForReceipt[] = (items || []).map((it) => ({
+    name: it.platform_product_name || "Ürün",
+    quantity: it.quantity,
+    unitPrice: it.unit_price,
+    paidPrice: it.total_amount,
+    comment: it.notes,
+    selectedToppings: mapGetirItemToppings(it.toppings),
+  }));
+  const products = dbProducts.length > 0 ? dbProducts : mapGetirProductsFromRaw(raw);
+
+  const addressObj = (raw.address || customer.address || {}) as Record<string, unknown>;
+  const addressFromRaw = [
+    addressObj.address,
+    addressObj.aptNo ? `Daire: ${addressObj.aptNo}` : null,
+    addressObj.floor ? `Kat: ${addressObj.floor}` : null,
+    addressObj.directions ? `(${addressObj.directions})` : null,
+  ].filter(Boolean).join(", ");
+
+  return {
+    platformLabel: "GETİR YEMEK",
+    orderCode:
+      order.platform_order_number ||
+      String(raw.orderNumber || raw.confirmationId || "") ||
+      order.platform_order_id ||
+      (order.id || "").slice(0, 8),
+    orderToken: null,
+    createdAt: order.platform_created_at || order.created_at || null,
+    expeditionType: "delivery",
+    isPaid: true,
+    paymentType: order.payment_type || "Getir",
+    preOrder: !!(order.getir_is_scheduled || raw.isScheduled),
+    customer: {
+      fullName: order.customer_name || extractLocalized(customer.name || customer.firstName) || "Müşteri",
+      mobilePhone: maskedPhone,
+    },
+    delivery: (order.customer_address || addressFromRaw)
+      ? {
+          address: { street: order.customer_address || addressFromRaw },
+          expectedDeliveryTime: order.estimated_delivery_time || null,
+          expressDelivery: false,
+          riderPickupTime: order.rider_pickup_time || null,
+        }
+      : null,
+    pickup: null,
+    customerComment,
+    vendorComment: extractLocalized(raw.vendorNote || raw.restaurantNote) || null,
+    verificationCode,
+    ortakKampanya,
+    courierBadge,
+    products,
+    totals: {
+      grandTotal: Number(order.total_amount) || discounted || subtotal,
+      subTotal: subtotal || undefined,
+      vatTotal: Number(order.tax_amount) || undefined,
+      deliveryFee: Number(order.delivery_fee) || undefined,
+      discountTotal: discount > 0 ? discount : undefined,
+    },
+  };
+}
+
 function escHtml(s: string | null | undefined): string {
   if (s == null) return "";
   return String(s)
@@ -228,6 +441,7 @@ export function renderDHOrderReceiptHtml(order: DHReceiptOrderInput): string {
 
   const isGetir = /getir/i.test(platformLabel);
   const verifyCode = (order.verificationCode || "").trim();
+  const maskedPhoneLine = isGetir ? formatGetirMaskedPhone(phone) : phone;
   const logoHtml = isGetir
     ? `<div style="text-align:center;background:linear-gradient(180deg,#FFD300 0%,#F5C500 100%);border:2px solid #000;border-radius:10px;padding:8px 6px;margin-bottom:4px">
         <div style="font-size:32px;font-weight:900;font-style:italic;color:#5D3EBC;letter-spacing:-1px;line-height:1">getir</div>
@@ -241,6 +455,8 @@ export function renderDHOrderReceiptHtml(order: DHReceiptOrderInput): string {
   .dh-r * { box-sizing: border-box; }
   .dh-r .platform-h { text-align:center; font-weight:900; font-size:20px; letter-spacing:2px; padding:6px 0; border:2px solid #000; margin-bottom:4px; }
   .dh-r .verify-box { text-align:center; font-size:22px; font-weight:900; letter-spacing:4px; padding:6px 0; border:2px dashed #5D3EBC; margin:4px 0; color:#5D3EBC; }
+  .dh-r .phone-box { text-align:center; font-size:14px; font-weight:900; padding:5px 6px; border:2px solid #000; margin:4px 0; background:#f5f5f5; line-height:1.35; }
+  .dh-r .phone-box .phone-num { font-size:16px; letter-spacing:1px; margin-top:2px; }
   .dh-r .code-box { text-align:center; font-size:26px; font-weight:900; letter-spacing:3px; padding:5px 0; border:2px solid #000; margin:4px 0; }
   .dh-r .flag-row { display:flex; gap:4px; justify-content:center; flex-wrap:wrap; margin:4px 0; }
   .dh-r .flag { font-size:10px; font-weight:900; padding:2px 6px; border:1px solid #000; }
@@ -271,8 +487,11 @@ export function renderDHOrderReceiptHtml(order: DHReceiptOrderInput): string {
 </style>
 <div class="dh-r">
   ${logoHtml}
-  ${verifyCode ? `<div class="verify-box">DOĞRULAMA: ${escHtml(verifyCode.toUpperCase())}</div>` : ""}
-  ${orderCode ? `<div class="code-box">${escHtml(orderCode)}</div>` : ""}
+  ${verifyCode ? `<div class="verify-box">SİPARİŞ DOĞRULAMA<br/>${escHtml(verifyCode.toUpperCase())}</div>` : ""}
+  ${isGetir && maskedPhoneLine
+      ? `<div class="phone-box">MÜŞTERİ HATTI (MASKELİ)<div class="phone-num">${escHtml(maskedPhoneLine)}</div></div>`
+      : ""}
+  ${orderCode ? `<div class="code-box">#${escHtml(orderCode)}</div>` : ""}
 
   <div class="flag-row">
     ${order.testOrder ? `<span class="flag warn">TEST</span>` : ""}
@@ -296,7 +515,7 @@ export function renderDHOrderReceiptHtml(order: DHReceiptOrderInput): string {
   <div class="section">
     <div class="section-title">Müşteri</div>
     <div>${escHtml(customerFull)}</div>
-    ${phone ? `<div><span class="label">Tel:</span> ${escHtml(phone)}</div>` : ""}
+    ${phone && !(isGetir && maskedPhoneLine) ? `<div><span class="label">Tel:</span> ${escHtml(phone)}</div>` : ""}
     ${email ? `<div style="font-size:11px"><span class="label">E-posta:</span> ${escHtml(email)}</div>` : ""}
   </div>
 

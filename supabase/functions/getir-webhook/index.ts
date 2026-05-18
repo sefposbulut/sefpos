@@ -205,7 +205,7 @@ function buildOrderRow(
     customer_name: customerName,
     customer_phone: maskedPhone || null,
     customer_address: address || null,
-    customer_notes: order.note || null,
+    customer_notes: order.note || order.clientNote || order.clientRequest || null,
     subtotal,
     delivery_fee: Number(order.deliveryFee ?? 0),
     discount_amount: totalDiscount,
