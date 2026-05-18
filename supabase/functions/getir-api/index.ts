@@ -33,6 +33,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
 import { extractGetirCourier, resolveFromNumeric, resolveFromPlatformEnum, clampGetirStatusUntilPosAck } from "../_shared/getirOrderStatus.ts";
+import { buildGetirCustomerNotesForDb } from "../_shared/dhOrderReceipt.ts";
 
 const corsHeaders: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -689,7 +690,12 @@ async function upsertGetirOrder(
     customer_name: customerName,
     customer_phone: maskedPhone || null,
     customer_address: address || null,
-    customer_notes: order.note || order.clientNote || order.clientRequest || null,
+    customer_notes:
+      buildGetirCustomerNotesForDb(order as Record<string, unknown>) ||
+      order.note ||
+      order.clientNote ||
+      (typeof order.clientRequest === "string" ? order.clientRequest : null) ||
+      null,
     subtotal,
     delivery_fee: deliveryFee,
     discount_amount: totalDiscount,

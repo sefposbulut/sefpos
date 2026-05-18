@@ -17,6 +17,7 @@ import {
   resolveWebhookTargetStatus,
   sha256DedupeKeyPart,
 } from "../_shared/getirOrderStatus.ts";
+import { buildGetirCustomerNotesForDb } from "../_shared/dhOrderReceipt.ts";
 
 const corsHeaders: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -208,7 +209,12 @@ function buildOrderRow(
     customer_name: customerName,
     customer_phone: maskedPhone || null,
     customer_address: address || null,
-    customer_notes: order.note || order.clientNote || order.clientRequest || null,
+    customer_notes:
+      buildGetirCustomerNotesForDb(order as Record<string, unknown>) ||
+      order.note ||
+      order.clientNote ||
+      (typeof order.clientRequest === "string" ? order.clientRequest : null) ||
+      null,
     subtotal,
     delivery_fee: Number(order.deliveryFee ?? 0),
     discount_amount: totalDiscount,

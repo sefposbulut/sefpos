@@ -94,6 +94,8 @@ export interface DHReceiptOrderInput {
 
   customerComment?: string | null;
   vendorComment?: string | null;
+  /** Getir teslimat tercihleri (kapıya bırak, zili çalma, çatal yok, teslimat zamanı). */
+  deliveryPreferences?: string[];
 
   /** Getir sipariş doğrulama kodu (örn. h593) — fiş üstünde büyük kutu. */
   verificationCode?: string | null;
@@ -184,36 +186,247 @@ export function formatGetirMaskedPhonePanel(
   return raw;
 }
 
-/** Getir sipariş notu — tüm bilinen alan adları. */
+export interface GetirParsedOrderNotes {
+  textNote: string | null;
+  preferences: string[];
+  combined: string | null;
+}
+
+function isTruthyFlag(v: unknown): boolean {
+  if (v === true || v === 1) return true;
+  if (typeof v === "string") {
+    const s = v.toLowerCase().trim();
+    return s === "true" || s === "1" || s === "yes" || s === "evet";
+  }
+  return false;
+}
+
+function isExplicitFalse(v: unknown): boolean {
+  if (v === false || v === 0) return true;
+  if (typeof v === "string") {
+    const s = v.toLowerCase().trim();
+    return s === "false" || s === "0" || s === "no" || s === "hayır" || s === "hayir";
+  }
+  return false;
+}
+
+/** Getir order JSON — kök + client/customer/delivery iç içe nesneleri. */
+function getirNestedSources(raw: Record<string, unknown>): Record<string, unknown>[] {
+  const out: Record<string, unknown>[] = [];
+  const seen = new Set<unknown>();
+  const walk = (obj: Record<string, unknown>, depth: number) => {
+    if (!obj || seen.has(obj) || depth > 3) return;
+    seen.add(obj);
+    out.push(obj);
+    for (const key of [
+      "client",
+      "customer",
+      "delivery",
+      "checkout",
+      "orderDetails",
+      "details",
+      "preferences",
+      "options",
+      "extra",
+      "extras",
+    ]) {
+      const child = obj[key];
+      if (child && typeof child === "object" && !Array.isArray(child)) {
+        walk(child as Record<string, unknown>, depth + 1);
+      }
+    }
+  };
+  walk(raw, 0);
+  return out;
+}
+
+function firstTruthyFlag(sources: Record<string, unknown>[], keys: string[]): boolean {
+  for (const src of sources) {
+    for (const k of keys) {
+      if (isTruthyFlag(src[k])) return true;
+    }
+  }
+  return false;
+}
+
+function wantsNoRing(sources: Record<string, unknown>[]): boolean {
+  if (
+    firstTruthyFlag(sources, [
+      "doNotKnock",
+      "doNotRing",
+      "dontRingBell",
+      "doNotRingBell",
+      "noRing",
+      "dontRing",
+      "ringBellOff",
+      "disableRing",
+      "silentDelivery",
+    ])
+  ) {
+    return true;
+  }
+  for (const src of sources) {
+    if (
+      isExplicitFalse(src.ringDoorBell) ||
+      isExplicitFalse(src.ringBell) ||
+      isExplicitFalse(src.shouldRingBell)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+const GETIR_PREF_KEY_PATTERNS: Array<{ re: RegExp; label: string }> = [
+  { re: /drop.*door|door.*drop|leave.*door|atdoor|kapıya|kapiya|contactless/i, label: "Siparişi Kapıya Bırak" },
+  { re: /donotknock|dont.*ring|noring|zili|ringbell|ring.*bell/i, label: "Zili Çalma" },
+  { re: /eco|cutlery|çatal|servis|plastic|peçete|pecete|friendly/i, label: "Servis (çatal-bıçak-peçete) gönderme" },
+];
+
+function collectPrefsFromObjectFlags(sources: Record<string, unknown>[], addPref: (s: string) => void) {
+  for (const src of sources) {
+    for (const [key, val] of Object.entries(src)) {
+      if (!isTruthyFlag(val)) continue;
+      const kl = key.toLowerCase();
+      for (const { re, label } of GETIR_PREF_KEY_PATTERNS) {
+        if (re.test(kl)) addPref(label);
+      }
+    }
+  }
+}
+
+function parseClientRequestText(req: unknown): string[] {
+  const lines: string[] = [];
+  if (typeof req === "string" && req.trim()) {
+    lines.push(req.trim());
+    return lines;
+  }
+  if (Array.isArray(req)) {
+    for (const item of req) {
+      if (typeof item === "string" && item.trim()) lines.push(item.trim());
+      else if (item && typeof item === "object") {
+        const o = item as Record<string, unknown>;
+        const t = extractLocalized(o.title || o.name || o.label || o.text || o.description);
+        if (t) lines.push(t);
+      }
+    }
+    return lines;
+  }
+  if (req && typeof req === "object") {
+    const o = req as Record<string, unknown>;
+    for (const [key, val] of Object.entries(o)) {
+      if (typeof val === "string" && val.trim()) lines.push(val.trim());
+      else if (isTruthyFlag(val)) {
+        const kl = key.toLowerCase();
+        for (const { re, label } of GETIR_PREF_KEY_PATTERNS) {
+          if (re.test(kl)) lines.push(label);
+        }
+      }
+    }
+  }
+  return lines;
+}
+
+/** Getir ham JSON → metin not + teslimat tercihleri (fiş ve DB için). */
+export function parseGetirOrderNotes(
+  raw: Record<string, unknown>,
+  dbNotes?: string | null,
+): GetirParsedOrderNotes {
+  const sources = getirNestedSources(raw);
+  const textParts: string[] = [];
+  const pushText = (v: unknown) => {
+    const t = typeof v === "string" ? v.trim() : extractLocalized(v);
+    if (!t) return;
+    if (textParts.some((x) => x.toLowerCase() === t.toLowerCase())) return;
+    textParts.push(t);
+  };
+
+  pushText(dbNotes);
+  for (const src of sources) {
+    pushText(src.note);
+    pushText(src.clientNote);
+    pushText(src.orderNote);
+    pushText(src.customerNote);
+    pushText(src.restaurantNote);
+    pushText(src.vendorNote);
+    const comments = src.comments as Record<string, unknown> | undefined;
+    if (comments) {
+      pushText(comments.customerComment);
+      pushText(comments.vendorComment);
+    }
+    for (const line of parseClientRequestText(src.clientRequest)) {
+      const isPref = GETIR_PREF_KEY_PATTERNS.some(({ label }) =>
+        line.toLowerCase() === label.toLowerCase()
+      );
+      if (!isPref) pushText(line);
+    }
+  }
+
+  const preferences: string[] = [];
+  const addPref = (s: string) => {
+    const t = s.trim();
+    if (t && !preferences.includes(t)) preferences.push(t);
+  };
+
+  const scheduled =
+    firstTruthyFlag(sources, ["isScheduled", "scheduled"]) ||
+    sources.some((s) => s.scheduledDate != null && String(s.scheduledDate).trim() !== "");
+  if (scheduled) {
+    const sd = raw.scheduledDate ?? sources.find((s) => s.scheduledDate)?.scheduledDate;
+    addPref(sd ? "İleri tarihli teslimat" : "İleri tarihli sipariş");
+  } else {
+    addPref("Teslimat: Şimdi gelsin");
+  }
+
+  if (
+    firstTruthyFlag(sources, [
+      "dropOffAtDoor",
+      "dropOrderAtDoor",
+      "leaveAtDoor",
+      "leaveOrderAtDoor",
+      "contactlessDelivery",
+      "isContactlessDelivery",
+      "doorDropOff",
+      "isDropOffAtDoor",
+    ])
+  ) {
+    addPref("Siparişi Kapıya Bırak");
+  }
+  if (wantsNoRing(sources)) addPref("Zili Çalma");
+  if (
+    firstTruthyFlag(sources, [
+      "isEcoFriendly",
+      "ecoFriendly",
+      "noCutlery",
+      "withoutCutlery",
+      "dontSendCutlery",
+      "skipPlasticCutlery",
+      "noPlasticCutlery",
+      "isReusable",
+      "noServiceItems",
+    ])
+  ) {
+    addPref("Servis (çatal-bıçak-peçete) gönderme");
+  }
+
+  collectPrefsFromObjectFlags(sources, addPref);
+
+  const textNote = textParts.length ? textParts.join(" • ") : null;
+  const combined = [...preferences, ...(textNote ? [textNote] : [])].join(" • ") || null;
+  return { textNote, preferences, combined };
+}
+
+/** DB `customer_notes` — tüm not + tercihler tek satır. */
+export function buildGetirCustomerNotesForDb(order: Record<string, unknown>): string | null {
+  return parseGetirOrderNotes(order, null).combined;
+}
+
+/** @deprecated `parseGetirOrderNotes` kullanın */
 export function extractGetirOrderNotes(
   raw: Record<string, unknown>,
   dbNotes?: string | null,
 ): string | null {
-  const parts: string[] = [];
-  const push = (v: unknown) => {
-    const t = typeof v === "string" ? v.trim() : extractLocalized(v);
-    if (t) parts.push(t);
-  };
-
-  push(dbNotes);
-  push(raw.note);
-  push(raw.clientNote);
-  push(raw.clientRequest);
-  push(raw.orderNote);
-  push(raw.customerNote);
-  push(raw.restaurantNote);
-  push(raw.vendorNote);
-  const comments = raw.comments as Record<string, unknown> | undefined;
-  if (comments) {
-    push(comments.customerComment);
-    push(comments.vendorComment);
-  }
-  if (raw.doNotKnock === true) parts.push("Zile basmayın");
-  if (raw.dropOffAtDoor === true) parts.push("Kapıya bırakın");
-  if (raw.isEcoFriendly === true) parts.push("Çatal-bıçak istemiyor");
-
-  const uniq = [...new Set(parts)];
-  return uniq.length ? uniq.join(" • ") : null;
+  return parseGetirOrderNotes(raw, dbNotes).combined;
 }
 
 function mapGetirItemToppings(toppings: unknown): DHToppingForReceipt[] | undefined {
@@ -315,7 +528,7 @@ export function buildGetirReceiptInput(
     phoneCode,
   ) || null;
 
-  const customerComment = extractGetirOrderNotes(raw, order.customer_notes);
+  const parsedNotes = parseGetirOrderNotes(raw, order.customer_notes);
 
   const subtotal = Number(order.subtotal ?? raw.totalPrice ?? 0);
   const discounted = Number(
@@ -379,7 +592,8 @@ export function buildGetirReceiptInput(
         }
       : null,
     pickup: null,
-    customerComment,
+    customerComment: parsedNotes.textNote,
+    deliveryPreferences: parsedNotes.preferences,
     vendorComment: extractLocalized(raw.vendorNote || raw.restaurantNote) || null,
     verificationCode,
     ortakKampanya,
@@ -500,6 +714,15 @@ export function renderGetirThermalReceiptHtml(order: DHReceiptOrderInput): strin
   const box = "border:2px solid #000;padding:6px 4px;margin:4px 0;text-align:center;";
   const big = "font-size:22px;font-weight:900;letter-spacing:2px;";
 
+  const prefs = order.deliveryPreferences ?? [];
+  const prefsHtml =
+    prefs.length > 0
+      ? `<div style="${box}text-align:left;padding:4px 5px;"><div style="font-size:10px;font-weight:900;margin-bottom:2px;">TESLİMAT TERCİHLERİ</div>${prefs.map((p) => `<div style="font-size:10px;font-weight:700;line-height:1.3;">▪ ${escHtml(p)}</div>`).join("")}</div>`
+      : "";
+  const noteHtml = order.customerComment
+    ? `<div style="${box}text-align:left;padding:4px 5px;"><div style="font-size:10px;font-weight:900;margin-bottom:2px;">SİPARİŞ NOTU</div><div style="font-size:11px;font-weight:700;word-wrap:break-word;">${escHtml(order.customerComment)}</div></div>`
+    : "";
+
   return `<div style="${W}">
   <div style="${box}">
     <div style="font-size:30px;font-weight:900;line-height:1;letter-spacing:-1px;">GETİR</div>
@@ -515,9 +738,8 @@ export function renderGetirThermalReceiptHtml(order: DHReceiptOrderInput): strin
   ${order.ortakKampanya
     ? `<div style="${box}border:3px solid #000;"><div style="font-size:14px;font-weight:900;">ORTAK KAMPANYA</div></div>`
     : ""}
-  ${order.customerComment
-    ? `<div style="${box}text-align:left;"><div style="font-size:12px;font-weight:900;margin-bottom:4px;">SİPARİŞ NOTU</div><div style="font-size:12px;font-weight:700;">${escHtml(order.customerComment)}</div></div>`
-    : ""}
+  ${prefsHtml}
+  ${noteHtml}
   ${order.courierBadge ? `<div style="text-align:center;font-size:11px;font-weight:900;margin:4px 0;border:1px solid #000;padding:3px;">${escHtml(order.courierBadge)}</div>` : ""}
   <div style="border:1px solid #000;padding:4px 6px;margin:4px 0;">
     <div style="font-size:10px;font-weight:900;margin-bottom:2px;">MÜŞTERİ</div>
