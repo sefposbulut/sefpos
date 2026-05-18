@@ -385,11 +385,33 @@ export function PrinterSettings() {
             </select>
           </div>
           <div>
-            <label className="block text-xs font-bold text-slate-600 mb-1.5 uppercase tracking-wide">Varsayılan mutfak yazıcısı</label>
+            <label className="block text-xs font-bold text-slate-600 mb-1.5 uppercase tracking-wide">
+              Online platform fişi yazıcısı
+            </label>
             <p className="text-[11px] text-slate-500 mb-1.5">
-              Ürün/kategori eşleşmezse mutfak fişi buraya gider. <strong className="text-slate-700">Getir onay fişi</strong>{' '}
-              (logo, doğrulama kodu, 0850 hat, sipariş notu, ortak kampanya) de bu yazıcıdan basılır.
+              Getir / Yemeksepeti / Trendyol — <strong className="text-slate-700">Onayla</strong> sonrası fiş doğrudan bu
+              yazıcıdan çıkar. Boşsa varsayılan mutfak yazıcısı kullanılır.
             </p>
+            <select
+              value={settings.defaultOnlinePlatformPrinter || ''}
+              onChange={(e) => setSettings((p) => ({ ...p, defaultOnlinePlatformPrinter: e.target.value }))}
+              className="w-full px-3 py-2.5 rounded-lg border border-orange-200 bg-orange-50/50 focus:ring-2 focus:ring-orange-400 focus:border-transparent outline-none text-sm"
+            >
+              <option value="">Varsayılan mutfak yazıcısını kullan</option>
+              {availablePrinters.map((p) => (
+                <option key={`on-${p.name}`} value={p.name}>
+                  {p.name}
+                  {p.isDefault ? ' (Windows varsayılan)' : ''}
+                </option>
+              ))}
+              {availablePrinters.length === 0 && settings.defaultOnlinePlatformPrinter && (
+                <option value={settings.defaultOnlinePlatformPrinter}>{settings.defaultOnlinePlatformPrinter}</option>
+              )}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-bold text-slate-600 mb-1.5 uppercase tracking-wide">Varsayılan mutfak yazıcısı</label>
+            <p className="text-[11px] text-slate-500 mb-1.5">Ürün/kategori eşleşmezse masa mutfak fişi buraya gider.</p>
             <select
               value={settings.defaultKitchenPrinter}
               onChange={e => setSettings(p => ({ ...p, defaultKitchenPrinter: e.target.value }))}

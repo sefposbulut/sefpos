@@ -44,6 +44,11 @@ export interface PrintSettings {
   defaultReceiptPrinter: string;
   /** Mutfak/bar: kategori veya ürün eşlemesi yoksa son çare (kasa fişine düşmez) */
   defaultKitchenPrinter: string;
+  /**
+   * Getir / Yemeksepeti / Trendyol onay fişi — «Onayla» sonrası doğrudan bu yazıcıdan basılır.
+   * Boşsa `defaultKitchenPrinter` kullanılır.
+   */
+  defaultOnlinePlatformPrinter: string;
   defaultTakeawayPrinter: string;
   autoPrintKitchen: boolean;
   autoPrintReceipt: boolean;
@@ -203,6 +208,8 @@ function normalizePrintSettings(raw: Partial<PrintSettings> & Record<string, unk
       : [],
     defaultReceiptPrinter: typeof ps.defaultReceiptPrinter === 'string' ? ps.defaultReceiptPrinter : '',
     defaultKitchenPrinter: typeof ps.defaultKitchenPrinter === 'string' ? ps.defaultKitchenPrinter : '',
+    defaultOnlinePlatformPrinter:
+      typeof ps.defaultOnlinePlatformPrinter === 'string' ? ps.defaultOnlinePlatformPrinter : '',
     defaultTakeawayPrinter: typeof ps.defaultTakeawayPrinter === 'string' ? ps.defaultTakeawayPrinter : '',
     autoPrintKitchen: ps.autoPrintKitchen !== false,
     autoPrintReceipt: !!ps.autoPrintReceipt,
@@ -259,6 +266,7 @@ function isPrintSettingsEffectivelyWithoutPrinters(s: PrintSettings): boolean {
     c.printers.length === 0 &&
     !String(c.defaultReceiptPrinter || '').trim() &&
     !String(c.defaultKitchenPrinter || '').trim() &&
+    !String(c.defaultOnlinePlatformPrinter || '').trim() &&
     !String(c.defaultTakeawayPrinter || '').trim()
   );
 }
@@ -664,6 +672,12 @@ export function isElectron(): boolean {
  * `pickDefaultKitchenPrinter` ile aynı mantığa sahiptir; mobile/web isElectron
  * false olduğunda bu çağrılmaz.)
  */
+/** Online platform onay fişi yazıcısı (Getir / YS / TY). */
+export function getOnlinePlatformPrinterName(settings?: PrintSettings): string {
+  const s = settings || loadPrintSettings();
+  return (s.defaultOnlinePlatformPrinter || s.defaultKitchenPrinter || '').trim();
+}
+
 export function pickKitchenPrinterFromDevices(devices: PrinterDevice[]): string {
   if (!Array.isArray(devices) || devices.length === 0) return '';
   const names = devices.map((d) => (typeof d === 'string' ? d : d?.name || '')).filter(Boolean);
@@ -685,6 +699,7 @@ export async function resolveTargetThermalPrinterName(logicalName: string): Prom
     if (t && !tryNames.includes(t)) tryNames.push(t);
   };
   push(logicalName);
+  push(settings.defaultOnlinePlatformPrinter);
   push(settings.defaultKitchenPrinter);
   push(settings.defaultReceiptPrinter);
   for (const p of settings.printers) {
@@ -1309,7 +1324,7 @@ export async function printOnlineOrderReceiptFromEdge(
     return { success: false, error: 'Fiş oluşturulamadı' };
   }
   const settings = loadPrintSettings();
-  let printer = (opts?.printerName || settings.defaultKitchenPrinter || '').trim();
+  let printer = (opts?.printerName || getOnlinePlatformPrinterName(settings)).trim();
   if (isElectron()) {
     printer = await resolveTargetThermalPrinterName(printer);
   }
@@ -1885,7 +1900,9 @@ export async function printOnlineOrderKitchenTicket(opts: {
   customerAddress?: string;
   verificationCode?: string | null;
   items: Array<{ platform_product_name: string; quantity: number; notes?: string | null }>;
-}): Promise<void> {
+  /** Verilirse kategori yönlendirmesi atlanır; tek yazıcıya basılır. */
+  printerName?: string;
+}): Promise<{ success: boolean; error?: string }> {
   const kitchenItems: KitchenPrintItem[] = (opts.items || []).map((it) => ({
     productName: (it.platform_product_name || 'Ürün').trim() || 'Ürün',
     quantity: Math.max(1, Math.floor(Number(it.quantity) || 1)),
@@ -1900,6 +1917,28 @@ export async function printOnlineOrderKitchenTicket(opts: {
     opts.customerAddress ? `Adres: ${opts.customerAddress}` : '',
     opts.verificationCode ? `Doğrulama: ${String(opts.verificationCode).toUpperCase()}` : '',
   ].filter(Boolean);
+  const forcedPrinter = (opts.printerName || getOnlinePlatformPrinterName(opts.settings)).trim();
+  if (forcedPrinter) {
+    const st = opts.settings.printStyle || DEFAULT_PRINT_STYLE;
+    const html = buildKitchenHtml({
+      restaurantName: opts.restaurantName,
+      tableLabel: `ONLINE • ${opts.platformLabel}`,
+      orderNumber: opts.orderNumber,
+      items: kitchenItems,
+      note: noteParts.join('\n'),
+      printStyle: st,
+    });
+    let printer = forcedPrinter;
+    if (isElectron()) {
+      printer = await resolveTargetThermalPrinterName(printer);
+    }
+    return printHtml(html, printer, {
+      title: 'Online sipariş fişi',
+      silent: true,
+      allowBrowserFallback: true,
+    });
+  }
+
   await printKitchenReceipts({
     settings: opts.settings,
     restaurantName: opts.restaurantName,
@@ -1909,4 +1948,6 @@ export async function printOnlineOrderKitchenTicket(opts: {
     note: noteParts.join('\n'),
     allowWebBrowserPrint: true,
   });
+  return { success: true };
 }
+

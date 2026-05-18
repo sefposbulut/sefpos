@@ -26,8 +26,13 @@ import { PlatformLogo } from './PlatformLogo';
 import {
   isElectron,
   loadPrintSettings,
+  savePrintSettings,
+  getOnlinePlatformPrinterName,
+  getAvailablePrinters,
   printOnlineOrderKitchenTicket,
   printOnlineOrderReceiptFromEdge,
+  PRINT_SETTINGS_REMOTE_UPDATED_EVENT,
+  type PrinterDevice,
 } from '../lib/printService';
 
 /**
@@ -186,6 +191,27 @@ export function OnlineOrders() {
   const soundEnabledRef = useRef(soundEnabled);
   soundEnabledRef.current = soundEnabled;
 
+  const [onlinePlatformPrinter, setOnlinePlatformPrinter] = useState(() =>
+    getOnlinePlatformPrinterName(),
+  );
+  const [orderPrinters, setOrderPrinters] = useState<PrinterDevice[]>([]);
+
+  useEffect(() => {
+    const refreshPrinter = () => setOnlinePlatformPrinter(getOnlinePlatformPrinterName());
+    refreshPrinter();
+    void getAvailablePrinters()
+      .then(setOrderPrinters)
+      .catch(() => setOrderPrinters([]));
+    window.addEventListener(PRINT_SETTINGS_REMOTE_UPDATED_EVENT, refreshPrinter);
+    return () => window.removeEventListener(PRINT_SETTINGS_REMOTE_UPDATED_EVENT, refreshPrinter);
+  }, []);
+
+  const persistOnlinePlatformPrinter = (name: string) => {
+    setOnlinePlatformPrinter(name);
+    const s = loadPrintSettings();
+    savePrintSettings({ ...s, defaultOnlinePlatformPrinter: name });
+  };
+
   const kitchenPrintInFlight = useRef<Set<string>>(new Set());
   // Her siparişin son bilinen statüsü — onaylama anında geçişi yakalamak için.
   const lastStatusByOrderId = useRef<Map<string, string>>(new Map());
@@ -197,18 +223,21 @@ export function OnlineOrders() {
       if (wasKitchenPrinted(tenant.id, o.id)) return;
       kitchenPrintInFlight.current.add(o.id);
       try {
-        const platformCode = (o.online_order_platforms?.platform_code || '').toLowerCase();
+        const settings = loadPrintSettings();
+        const printer = getOnlinePlatformPrinterName(settings);
         let printed = false;
-        if (platformCode === 'getir') {
-          const result = await printOnlineOrderReceiptFromEdge(o.id, { silent: true });
-          printed = result.success;
-          if (!printed) {
-            console.warn('[OnlineOrders] Getir fişi yazdırılamadı:', result.error);
-          }
-        } else {
-          const settings = loadPrintSettings();
-          await printOnlineOrderKitchenTicket({
+
+        const edgeResult = await printOnlineOrderReceiptFromEdge(o.id, {
+          silent: true,
+          printerName: printer,
+        });
+        printed = edgeResult.success;
+
+        if (!printed) {
+          console.warn('[OnlineOrders] Platform fişi (edge) yazdırılamadı, mutfak fişi deneniyor:', edgeResult.error);
+          const fallback = await printOnlineOrderKitchenTicket({
             settings,
+            printerName: printer,
             restaurantName: (settings.restaurantName || tenant?.name || 'ŞefPOS').trim(),
             platformLabel:
               o.online_order_platforms?.platform_name ||
@@ -224,7 +253,11 @@ export function OnlineOrders() {
               notes: it.notes || null,
             })),
           });
-          printed = true;
+          printed = fallback.success;
+        }
+
+        if (!printed) {
+          console.warn('[OnlineOrders] Online fiş yazdırılamadı; yazıcı:', printer || '(seçilmedi)');
         }
         if (printed) markKitchenPrinted(tenant.id, o.id);
       } catch (e) {
@@ -774,7 +807,7 @@ export function OnlineOrders() {
     setBusyOrderId(order.id);
     try {
       const settings = loadPrintSettings();
-      const printer = settings.defaultKitchenPrinter || '';
+      const printer = getOnlinePlatformPrinterName(settings);
       const result = await printOnlineOrderReceiptFromEdge(order.id, {
         printerName: printer,
         title: 'Fiş yazdırılıyor',
@@ -783,7 +816,7 @@ export function OnlineOrders() {
         const detail = result.error ? ` (${result.error})` : '';
         alert(
           isElectron()
-            ? `Getir fişi yazdırılamadı.${detail}\n\nAyarlar → Yazıcılar → «Varsayılan mutfak yazıcısı»nı bu bilgisayardaki termal yazıcı adıyla seçin (Windows’taki adla aynı olmalı).`
+            ? `Online fiş yazdırılamadı.${detail}\n\nÜstteki «Online fiş yazıcısı» alanından termal yazıcıyı seçin (Windows’taki adla aynı olmalı).`
             : `Fiş açılamadı.${detail} Pop-up engelliyse tarayıcıda www.sefpos.com.tr için açılır pencereye izin verin. Termal yazıcı bu PC'deyse yazdırma penceresinden varsayılan yazıcıyı seçin.`,
         );
       }
@@ -1328,6 +1361,37 @@ export function OnlineOrders() {
               <span>{syncing ? 'Senkronize ediliyor…' : 'Siparişleri Çek'}</span>
             </button>
           </div>
+        </div>
+      </div>
+
+      <div className="bg-white border-b border-orange-100 px-4 md:px-6 py-2.5 shrink-0">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
+          <div className="flex items-center gap-2 min-w-0">
+            <Printer className="w-4 h-4 text-orange-600 shrink-0" />
+            <span className="text-xs font-bold text-slate-700 uppercase tracking-wide shrink-0">
+              Online fiş yazıcısı
+            </span>
+          </div>
+          <select
+            value={onlinePlatformPrinter}
+            onChange={(e) => persistOnlinePlatformPrinter(e.target.value)}
+            className="flex-1 min-w-0 max-w-md px-3 py-2 rounded-lg border border-orange-200 bg-orange-50/40 text-sm font-semibold text-slate-800 focus:ring-2 focus:ring-orange-400 outline-none"
+            title="Getir / Yemeksepeti / Trendyol onay fişi bu yazıcıdan çıkar"
+          >
+            <option value="">Varsayılan mutfak yazıcısı</option>
+            {orderPrinters.map((p) => (
+              <option key={p.name} value={p.name}>
+                {p.name}
+                {p.isDefault ? ' (Windows varsayılan)' : ''}
+              </option>
+            ))}
+            {orderPrinters.length === 0 && onlinePlatformPrinter && (
+              <option value={onlinePlatformPrinter}>{onlinePlatformPrinter}</option>
+            )}
+          </select>
+          <p className="text-[11px] text-slate-500 sm:max-w-xs">
+            Sipariş <strong className="text-slate-700">onaylandığında</strong> fiş seçili yazıcıya gider.
+          </p>
         </div>
       </div>
 
