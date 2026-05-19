@@ -10,6 +10,25 @@ export type HemenyoldaTestSample =
   | 'update'
   | 'cancel';
 
+/** Sertifikasyon paketi sırası (HemenYolda dokümanı). */
+export const HEMENYOLDA_CERT_SEQUENCE: HemenyoldaTestSample[] = [
+  'getir',
+  'yemeksepeti',
+  'trendyol',
+  'telefon',
+  'update',
+  'cancel',
+];
+
+export const HEMENYOLDA_CERT_STEP_LABELS: Record<HemenyoldaTestSample, string> = {
+  getir: '1. Getir — yeni sipariş',
+  yemeksepeti: '2. YemekSepeti — yeni sipariş',
+  trendyol: '3. Trendyol — yeni sipariş',
+  telefon: '4. Telefon — yeni sipariş',
+  update: '5. Sipariş güncelleme',
+  cancel: '6. Sipariş iptali',
+};
+
 /** HemenYolda sertifikasyon mailinde iletilecek sabit sipariş id'leri (doküman). */
 export const HEMENYOLDA_CERT_MAIL_ORDER_IDS: Record<HemenyoldaTestSample, string> = {
   getir: '6555dc4a1fcf792dd71545b11033',
@@ -120,4 +139,38 @@ export async function sendHemenYoldaTestSample(
 export function maskToken(token: string): string {
   if (token.length <= 12) return '••••••••';
   return `${token.slice(0, 8)}…${token.slice(-6)}`;
+}
+
+/** Edge test yanıtı başarılı sayılır (204 veya kayıtlı id tekrarı). */
+export function isHemenYoldaTestSuccess(res: HemenyoldaPushResult): boolean {
+  if (res.ok === true || res.status === 204) return true;
+  const t = `${res.note || ''} ${res.hint || ''} ${res.error || ''}`.toLowerCase();
+  return t.includes('zaten kayıtlı') || t.includes('unique');
+}
+
+export function buildHemenYoldaCertMailText(appName: string, baseUrl: string): string {
+  const base = baseUrl.replace(/\/+$/, '');
+  const name = appName.trim() || 'test-pos';
+  const today = new Date().toLocaleDateString('tr-TR');
+  const lines = HEMENYOLDA_CERT_SEQUENCE.map(
+    (s) => `- ${HEMENYOLDA_CERT_STEP_LABELS[s].replace(/^\d+\.\s*/, '')}: ${HEMENYOLDA_CERT_MAIL_ORDER_IDS[s]}`,
+  );
+  return [
+    'Konu: ŞefPOS – HemenYolda webhook sertifikasyon tamamlandı',
+    '',
+    'Merhaba HemenYolda Destek Ekibi,',
+    '',
+    `ŞefPOS (SEFPOS) olarak ${today} tarihinde test ortamında webhook sertifikasyon paketini tamamladık.`,
+    '',
+    `APP_NAME: ${name}`,
+    `Endpoint: ${base}/api/integration/${name}/`,
+    '',
+    'Test sipariş id’leri (doküman):',
+    ...lines,
+    '',
+    'Tüm istekler HTTP 204 (veya kayıtlı id tekrarı) döndü.',
+    '',
+    'Teşekkürler,',
+    '[İşletme adı / iletişim]',
+  ].join('\n');
 }

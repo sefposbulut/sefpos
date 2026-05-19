@@ -64,6 +64,17 @@ export function PlatformLogo({ code, name, size = 'md' }: PlatformLogoProps) {
       </div>
     );
   }
+  if (c.includes('hemenyolda') || c.includes('hemen yolda')) {
+    return (
+      <div
+        className={`inline-flex flex-col items-center justify-center bg-sky-600 text-white ${px} ${py} rounded-md leading-none shadow-sm`}
+        style={{ minWidth }}
+      >
+        <span className={isSm ? 'text-[9px] font-black tracking-tight' : 'text-[10px] font-black tracking-tight'}>Hemen</span>
+        <span className="text-[8px] font-bold opacity-95 -mt-0.5">YOLDA</span>
+      </div>
+    );
+  }
   if (c.includes('migros')) {
     return (
       <div

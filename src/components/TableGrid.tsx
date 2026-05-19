@@ -8,7 +8,8 @@ import { ReprintReceiptModal } from './ReprintReceiptModal';
 import { isLocalMode } from '../lib/sqlDb';
 import { warmOrderItemsForPanel, bulkWarmOrderItemsForOrders } from '../lib/orderPanelWarm';
 import { LiveDuration } from './LiveDuration';
-import { getTrialInfo, formatTrialRemaining } from '../lib/tenantTrial';
+import { getTrialInfo, formatTrialRemaining, type TenantTrialFields } from '../lib/tenantTrial';
+import { APP_DISPLAY_VERSION } from '../lib/appVersion';
 import {
   tableGridRuntimeCache,
   readPersistedTableGridSnapshot,
@@ -29,9 +30,46 @@ const PLAN_LABELS: Record<string, string> = {
 };
 
 function prettyPlan(plan: string | null | undefined): string {
-  if (!plan) return 'Lisans yok';
+  if (!plan) return 'Tanımsız';
   const k = plan.toLowerCase().trim();
   return PLAN_LABELS[k] || (plan.charAt(0).toUpperCase() + plan.slice(1));
+}
+
+function formatLicenseStatus(tenant: TenantTrialFields | null | undefined): string {
+  if (!tenant) return '—';
+  const trial = getTrialInfo(tenant);
+  if (trial.isTrial) {
+    return trial.expired ? 'Deneme (süresi doldu)' : `Deneme · ${formatTrialRemaining(trial)}`;
+  }
+  const s = (tenant.subscription_status || '').toLowerCase();
+  const map: Record<string, string> = {
+    active: 'Aktif',
+    suspended: 'Askıya alındı',
+    cancelled: 'İptal',
+    trial: 'Deneme',
+  };
+  return map[s] || tenant.subscription_status || '—';
+}
+
+function FooterInfoItem({
+  label,
+  value,
+  valueMaxClass = 'max-w-[7rem] sm:max-w-[10rem] md:max-w-[14rem]',
+}: {
+  label: string;
+  value: string;
+  valueMaxClass?: string;
+}) {
+  return (
+    <span className="inline-flex items-center gap-1 shrink-0">
+      <span className="opacity-90">{label}:</span>
+      <span className={`font-bold truncate inline-block ${valueMaxClass}`}>{value}</span>
+    </span>
+  );
+}
+
+function FooterSep() {
+  return <span className="opacity-45 shrink-0 select-none">|</span>;
 }
 
 const FOOTER_AMOUNT_VISIBLE_KEY = 'sefpos.tableGrid.footerAmountVisible';
@@ -176,6 +214,9 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
   const pendingUpdatesRef = useRef<Set<string>>(new Set());
   const updateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const tablesRef = useRef<TableWithOrder[]>([]);
+  /** Mobil masa listesinde kaydırma ile yanlışlıkla masa açılmasını önler */
+  const mobilePointerStartRef = useRef<{ x: number; y: number } | null>(null);
+  const mobileScrollMovedRef = useRef(false);
   const groupsReloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cacheKey = useMemo(
     () => (tenant?.id && activeBranch?.id ? `${tenant.id}:${activeBranch.id}` : null),
@@ -945,17 +986,27 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
       </div>
 
       <div
-        className="md:hidden flex-1 min-h-0 overflow-y-auto bg-white p-3"
-        style={{ overscrollBehaviorY: 'contain' }}
+        className="md:hidden flex-1 min-h-0 overflow-y-auto bg-white p-3 touch-pan-y"
+        style={{ overscrollBehaviorY: 'contain', WebkitOverflowScrolling: 'touch' }}
+        onPointerDownCapture={(e) => {
+          if (e.pointerType === 'mouse' && e.button !== 0) return;
+          mobileScrollMovedRef.current = false;
+          mobilePointerStartRef.current = { x: e.clientX, y: e.clientY };
+        }}
+        onPointerMoveCapture={(e) => {
+          const start = mobilePointerStartRef.current;
+          if (!start || mobileScrollMovedRef.current) return;
+          if (Math.hypot(e.clientX - start.x, e.clientY - start.y) > 12) {
+            mobileScrollMovedRef.current = true;
+          }
+        }}
       >
         <div
           style={{
             display: 'grid',
             gridTemplateColumns: `repeat(${mobileTableCols}, minmax(0, 1fr))`,
             gap: 10,
-            // Alta yeterli boşluk: tarayıcının alt çubuğu, iOS home indicator
-            // (safe-area) ve sağdaki yüzen zoom paneli son masaları örtmesin.
-            paddingBottom: 'calc(96px + env(safe-area-inset-bottom, 0px))',
+            paddingBottom: 'calc(12px + env(safe-area-inset-bottom, 0px))',
           }}
         >
           {filteredTables.map((table) => {
@@ -976,10 +1027,15 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
             return (
               <button
                 key={table.id}
-                onPointerDown={(e) => { e.currentTarget.style.transform = 'scale(0.93)'; }}
-                onPointerUp={(e) => { e.currentTarget.style.transform = ''; if (!isLocked) handleSelectTableInstant(table); }}
+                onPointerDown={(e) => {
+                  e.currentTarget.style.transform = 'scale(0.93)';
+                }}
+                onPointerUp={(e) => {
+                  e.currentTarget.style.transform = '';
+                  if (!isLocked && !mobileScrollMovedRef.current) handleSelectTableInstant(table);
+                }}
                 onPointerLeave={(e) => { e.currentTarget.style.transform = ''; }}
-                className={`${bgColor} rounded-xl flex flex-col items-center justify-center text-white shadow-lg relative select-none overflow-hidden`}
+                className={`${bgColor} rounded-xl flex flex-col items-center justify-center text-white shadow-lg relative select-none overflow-hidden touch-manipulation`}
                 style={{ height: cardH, transition: 'transform 0.08s ease', opacity: isLocked ? 0.85 : 1 }}
               >
                 {isLocked && (
@@ -1017,7 +1073,7 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
       </div>
 
       <div
-        className="hidden md:grid gap-3 flex-1 min-h-0 overflow-y-auto pb-14"
+        className="hidden md:grid gap-3 flex-1 min-h-0 overflow-y-auto pb-16"
         style={{ gridTemplateColumns: `repeat(${desktopTableCols}, minmax(0, 1fr))`, gridAutoRows: '1fr', alignContent: 'start' }}
       >
         {filteredTables.map((table) => {
@@ -1107,16 +1163,11 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
           hour: '2-digit',
           minute: '2-digit',
         });
-        const userName =
-          (profile as any)?.full_name ||
-          profile?.email ||
-          user?.email ||
-          'Kullanıcı';
         const trial = getTrialInfo(tenant as any);
-        const planLabel = trial.isTrial
-          ? `Deneme · ${trial.expired ? 'Süre doldu' : formatTrialRemaining(trial)}`
-          : prettyPlan((tenant as any)?.subscription_plan);
-        const branchName = (activeBranch as any)?.name || (tenant as any)?.name || '';
+        const firmName = (tenant as any)?.name?.trim() || '—';
+        const licenseInfo = formatLicenseStatus(tenant as any);
+        const packageName = trial.isTrial ? 'Deneme' : prettyPlan((tenant as any)?.subscription_plan);
+        const branchName = (activeBranch as any)?.name?.trim() || '—';
 
         return (
           <div
@@ -1126,24 +1177,24 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
               background: '#f97316',
             }}
           >
-            <div className="flex items-center justify-between gap-2 md:gap-4 px-3 md:px-5 py-1 md:py-1.5 text-[11px] md:text-xs whitespace-nowrap overflow-hidden">
-              <div className="flex items-center gap-2 min-w-0 truncate">
-                <span className="font-bold truncate">{userName}</span>
-                <span className="inline-block text-[9px] md:text-[10px] font-semibold bg-white/20 rounded px-1.5 py-0.5 leading-tight shrink-0">
-                  {planLabel}
-                </span>
-                {branchName && (
-                  <span className="hidden md:inline opacity-85 truncate">
-                    · {branchName}
-                  </span>
-                )}
+            <div className="flex items-center justify-between gap-3 md:gap-5 px-3 md:px-5 py-1.5 md:py-2 text-[10px] md:text-[11px] leading-none whitespace-nowrap overflow-x-auto [&::-webkit-scrollbar]:hidden">
+              <div className="flex items-center gap-2 md:gap-3 shrink-0">
+                <FooterInfoItem label="Firma Bilgisi" value={firmName} />
+                <FooterSep />
+                <FooterInfoItem label="Lisans" value={licenseInfo} valueMaxClass="max-w-[6rem] md:max-w-[9rem]" />
+                <FooterSep />
+                <FooterInfoItem label="Paket Adı" value={packageName} valueMaxClass="max-w-[5rem] md:max-w-[8rem]" />
+                <FooterSep />
+                <FooterInfoItem label="Şube" value={branchName} valueMaxClass="max-w-[5rem] md:max-w-[10rem]" />
+                <FooterSep />
+                <FooterInfoItem label="Sürüm" value={APP_DISPLAY_VERSION} valueMaxClass="max-w-[4.5rem]" />
               </div>
 
-              <div className="flex items-center gap-3 md:gap-5 shrink-0">
+              <div className="flex items-center gap-2 md:gap-3 shrink-0 pl-2 md:pl-3 border-l border-white/25">
                 <span className="font-semibold">
-                  Açık Masa Sayısı:{' '}
-                  <b className="font-black tabular-nums ml-0.5">{occupiedCount}</b>
+                  Açık Masa: <b className="font-black tabular-nums">{occupiedCount}</b>
                 </span>
+                <FooterSep />
                 <button
                   type="button"
                   onContextMenu={(e) => {
@@ -1156,9 +1207,9 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
                     }
                   }}
                   title="Sağ tık: açık masa toplam tutarını gizle/göster"
-                  className="font-semibold inline-flex items-center gap-1.5 px-1.5 py-0.5 rounded hover:bg-white/10 transition cursor-context-menu select-none"
+                  className="font-semibold inline-flex items-center gap-1 rounded hover:bg-white/10 transition cursor-context-menu select-none"
                 >
-                  Açık Masa Toplamı:
+                  Toplam:
                   <b className="font-black tabular-nums">
                     {footerAmountVisible ? `${tl} ₺` : '••••• ₺'}
                   </b>
@@ -1170,10 +1221,8 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
                     )}
                   </span>
                 </button>
-              </div>
-
-              <div className="font-semibold tabular-nums shrink-0 whitespace-nowrap">
-                {dateStr} · {timeStr}
+                <FooterSep />
+                <span className="font-semibold tabular-nums">{dateStr} · {timeStr}</span>
               </div>
             </div>
           </div>

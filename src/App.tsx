@@ -8,6 +8,7 @@ import { ElectronAuth } from './components/ElectronAuth';
 import { SetupWizard } from './components/SetupWizard';
 import { SqlServerSettings } from './components/SqlServerSettings';
 import { LandingPage } from './components/landing/LandingPage';
+import { isLandingPath } from './components/landing/landingRoutes';
 import { CourierApp } from './components/CourierApp';
 import { Header } from './components/Header';
 import { MainMenu } from './components/MainMenu';
@@ -41,6 +42,11 @@ import { Database, supabase } from './lib/supabase';
 import { isSqlServerMode } from './lib/sqlDb';
 import { queryCache } from './lib/queryCache';
 import { SystemNotificationContainer } from './components/SystemNotificationBanner';
+import {
+  fetchSupportNotifications,
+  getDismissedIds,
+  isNotificationUnread,
+} from './lib/supportNotifications';
 import { OnlineOrderToast } from './components/OnlineOrderToast';
 import { GlobalGetirSync } from './components/GlobalGetirSync';
 import { PrintStatusToast } from './components/PrintStatusToast';
@@ -186,6 +192,7 @@ function App() {
     try {
       const path = (window.location.pathname || '/').toLowerCase();
       if (isAuthRoutePath(path)) return true;
+      if (isLandingPath(path)) return false;
       const params = new URLSearchParams(window.location.search);
       if (params.has('landing')) return false;
       const host = window.location.hostname;
@@ -298,9 +305,6 @@ function App() {
     if (!tenant || !user) return;
     if (isSqlServerMode()) return;
 
-    const lastSeenKey = `notif_last_seen_${tenant.id}`;
-    const lastCheckedRef = { value: localStorage.getItem(lastSeenKey) || new Date(Date.now() - 60000).toISOString() };
-
     const channel = supabase
       .channel(`system-notifs-${tenant.id}`)
       .on('postgres_changes', {
@@ -310,24 +314,23 @@ function App() {
       }, (payload) => {
         const n = payload.new as any;
         if (n.tenant_id && n.tenant_id !== tenant.id) return;
+        if (n.type === 'revoke') return;
         showNewNotification(n);
-        lastCheckedRef.value = new Date().toISOString();
-        localStorage.setItem(lastSeenKey, lastCheckedRef.value);
       })
       .subscribe(async (status) => {
         if (status === 'SUBSCRIBED') {
-          const now = new Date().toISOString();
-          const { data } = await supabase
-            .from('support_notifications')
-            .select('id, title, message, type, tenant_id, created_at')
-            .or(`tenant_id.eq.${tenant.id},tenant_id.is.null`)
-            .gt('created_at', lastCheckedRef.value)
-            .order('created_at', { ascending: true });
-          if (data && data.length > 0) {
-            data.forEach((n: any) => showNewNotification(n));
-            lastCheckedRef.value = now;
-            localStorage.setItem(lastSeenKey, now);
-          }
+          // Kanal baglanmadan hemen once gelen bildirimleri kacirmamak icin kisa pencere
+          const since = new Date(Date.now() - 60_000).toISOString();
+          const rows = await fetchSupportNotifications(tenant.id, 20);
+          const dismissed = getDismissedIds(tenant.id);
+          rows
+            .filter(
+              (n) =>
+                n.created_at >= since &&
+                isNotificationUnread(n, tenant.id, dismissed),
+            )
+            .reverse()
+            .forEach((n) => showNewNotification(n));
         }
       });
 
@@ -568,7 +571,10 @@ function App() {
           onOpenSettings={() => setShowSettings(true)}
           onOpenOnboarding={() => setShowOnboarding(true)}
           currentPage={currentPage}
-          onBackToTables={() => handleNavigate('tables')}
+          onBackToTables={() => {
+            setSelectedTable(null);
+            handleNavigate('tables');
+          }}
           onOpenShifts={() => setShowShiftQuickClose(true)}
         />
       )}
@@ -632,7 +638,7 @@ function App() {
 
       {wasMounted('takeaway') && (
         <div style={{ display: show('takeaway') ? undefined : 'none' }} className="fixed inset-0 top-14 md:top-20 overflow-auto">
-          <TakeawayOrders />
+          <TakeawayOrders isActive={currentPage === 'takeaway'} />
         </div>
       )}
 

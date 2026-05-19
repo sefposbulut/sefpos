@@ -1,11 +1,16 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Copy, Send, AlertCircle, CheckCircle2, ChevronDown, FlaskConical } from 'lucide-react';
+import { Copy, Send, AlertCircle, CheckCircle2, ChevronDown, FlaskConical, Mail } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import {
   maskToken,
   sendHemenYoldaTestSample,
   HEMENYOLDA_CERT_MAIL_ORDER_IDS,
+  HEMENYOLDA_CERT_SEQUENCE,
+  HEMENYOLDA_CERT_STEP_LABELS,
+  buildHemenYoldaCertMailText,
+  isHemenYoldaTestSuccess,
   type HemenYoldaIntegrationRow,
+  type HemenYoldaPushResult,
   type HemenyoldaTestSample,
 } from '../lib/hemenyoldaApi';
 
@@ -22,13 +27,21 @@ interface Props {
   onConfiguredChange?: (active: boolean) => void;
 }
 
-const TEST_BUTTONS: { sample: HemenyoldaTestSample; label: string }[] = [
-  { sample: 'getir', label: 'Getir örneği' },
-  { sample: 'yemeksepeti', label: 'YemekSepeti örneği' },
-  { sample: 'trendyol', label: 'Trendyol örneği' },
-  { sample: 'telefon', label: 'Telefon siparişi' },
-  { sample: 'update', label: 'Sipariş güncelleme' },
-  { sample: 'cancel', label: 'Sipariş iptal (önce otomatik test siparişi açar)' },
+type CertStepResult = {
+  sample: HemenyoldaTestSample;
+  ok: boolean;
+  status?: number;
+  orderId: string;
+  detail?: string;
+};
+
+const ADVANCED_TESTS: { sample: HemenyoldaTestSample; label: string }[] = [
+  { sample: 'getir', label: 'Getir (tekil — mail için değil)' },
+  { sample: 'yemeksepeti', label: 'YemekSepeti (tekil)' },
+  { sample: 'trendyol', label: 'Trendyol (tekil)' },
+  { sample: 'telefon', label: 'Telefon (tekil)' },
+  { sample: 'update', label: 'Güncelleme (tekil)' },
+  { sample: 'cancel', label: 'İptal (tekil)' },
 ];
 
 export default function HemenYoldaIntegrationSettings({
@@ -43,6 +56,8 @@ export default function HemenYoldaIntegrationSettings({
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<string | null>(null);
+  const [certSteps, setCertSteps] = useState<CertStepResult[] | null>(null);
+  const [certDone, setCertDone] = useState(false);
   const [appName, setAppName] = useState('test-pos');
   const [accessToken, setAccessToken] = useState('');
   const [baseUrl, setBaseUrl] = useState('https://hemenyolda.com');
@@ -50,7 +65,9 @@ export default function HemenYoldaIntegrationSettings({
   const [isActive, setIsActive] = useState(true);
   const [isTestMode, setIsTestMode] = useState(true);
   const [copied, setCopied] = useState(false);
-  const [showCertTests, setShowCertTests] = useState(!embedded);
+  const [mailCopied, setMailCopied] = useState(false);
+  const [showCertTests, setShowCertTests] = useState(true);
+  const [showAdvanced, setShowAdvanced] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -61,7 +78,7 @@ export default function HemenYoldaIntegrationSettings({
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();
-    const r = data as HemenyoldaIntegrationRow | null;
+    const r = data as HemenYoldaIntegrationRow | null;
     setRow(r);
     if (r) {
       setAppName(r.app_name);
@@ -113,28 +130,76 @@ export default function HemenYoldaIntegrationSettings({
       return;
     }
     await load();
-    setTestResult('Ayarlar kaydedildi.');
+    setTestResult('Adım 1 tamam: ayarlar kaydedildi. Şimdi Adım 2 — sertifikasyon paketini gönderin.');
+    setCertSteps(null);
+    setCertDone(false);
   };
 
-  const runTest = async (sample: HemenyoldaTestSample) => {
-    if (!accessToken.trim()) {
-      alert('Önce Access Token girin ve Kaydet\'e basın.');
+  const runCertification = async () => {
+    if (!row?.id || !accessToken.trim()) {
+      alert('Önce HemenYolda’dan gelen APP_NAME ve token’ı girip Kaydet’e basın.');
       return;
     }
-    if (!row?.id) {
-      alert('Ayarları kaydetmeden test gönderilemez. Kaydet\'e basın.');
+    setTesting('cert');
+    setTestResult(null);
+    setCertDone(false);
+    const results: CertStepResult[] = [];
+
+    for (const sample of HEMENYOLDA_CERT_SEQUENCE) {
+      setTestResult(`${HEMENYOLDA_CERT_STEP_LABELS[sample]} gönderiliyor…`);
+      const res: HemenYoldaPushResult = await sendHemenYoldaTestSample(sample, true);
+      const ok = isHemenYoldaTestSuccess(res);
+      const step: CertStepResult = {
+        sample,
+        ok,
+        status: res.status,
+        orderId: HEMENYOLDA_CERT_MAIL_ORDER_IDS[sample],
+        detail: ok
+          ? res.note || res.hint || `HTTP ${res.status ?? 204}`
+          : res.hint || res.error || res.message || 'Bilinmeyen hata',
+      };
+      results.push(step);
+      setCertSteps([...results]);
+
+      if (!ok) {
+        setTesting(null);
+        setTestResult(`Sertifikasyon Adım ${results.length} başarısız (${sample}): ${step.detail}`);
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 400));
+    }
+
+    setTesting(null);
+    setCertDone(true);
+    await load();
+    setTestResult(
+      'Adım 2 tamam: 6/6 sertifikasyon isteği başarılı. Adım 3 — mail metnini kopyalayıp HemenYolda’ya gönderin.',
+    );
+  };
+
+  const copyCertMail = async () => {
+    const text = buildHemenYoldaCertMailText(appName, baseUrl);
+    try {
+      await navigator.clipboard.writeText(text);
+      setMailCopied(true);
+      setTimeout(() => setMailCopied(false), 2500);
+    } catch {
+      prompt('Mail metni:', text);
+    }
+  };
+
+  const runAdvancedTest = async (sample: HemenyoldaTestSample) => {
+    if (!row?.id || !accessToken.trim()) {
+      alert('Önce kaydedin.');
       return;
     }
     setTesting(sample);
-    setTestResult(null);
-    const res = await sendHemenYoldaTestSample(sample);
+    const res = await sendHemenYoldaTestSample(sample, false);
     setTesting(null);
-    if (res.ok || res.status === 204) {
-      const note = res.note || res.hint ? ` — ${res.note || res.hint}` : '';
-      setTestResult(`${sample}: başarılı (HTTP ${res.status ?? 204}) — sipariş id: ${res.order_id ?? '—'}${note}`);
+    if (isHemenYoldaTestSuccess(res)) {
+      setTestResult(`${sample}: OK (HTTP ${res.status ?? 204}) — id: ${res.order_id ?? '—'}`);
     } else {
-      const detail = res.hint || res.error || res.message || JSON.stringify(res);
-      setTestResult(`${sample}: hata — ${detail}`);
+      setTestResult(`${sample}: hata — ${res.hint || res.error || res.message}`);
     }
   };
 
@@ -159,6 +224,9 @@ export default function HemenYoldaIntegrationSettings({
     return <p className="text-sm text-slate-500">HemenYolda ayarları yükleniyor…</p>;
   }
 
+  const step1Done = !!row?.id && !!row.access_token;
+  const step2Done = certDone && certSteps?.every((s) => s.ok);
+
   return (
     <div className="space-y-4">
       {!embedded && (
@@ -167,17 +235,31 @@ export default function HemenYoldaIntegrationSettings({
           <p className="text-emerald-50 text-sm">Paket siparişleri otomatik webhook ile gider.</p>
         </div>
       )}
-      {embedded && (
-        <p className="text-sm text-slate-600">
-          <strong>APP_NAME</strong> ve <strong>Access Token</strong> girin, <strong>Entegrasyon aktif</strong> ile kaydedin.
+
+      <div className="rounded-xl border-2 border-emerald-200 bg-emerald-50/80 p-4 space-y-2">
+        <h4 className="font-bold text-emerald-900 text-sm">Sertifikasyon — 3 adım</h4>
+        <ol className="text-sm text-emerald-900 space-y-1.5 list-decimal list-inside">
+          <li className={step1Done ? 'font-semibold' : ''}>
+            {step1Done ? '✓ ' : ''}APP_NAME + token gir → <strong>Kaydet</strong>
+          </li>
+          <li className={step2Done ? 'font-semibold' : ''}>
+            {step2Done ? '✓ ' : ''}
+            <strong>Sertifikasyon paketi</strong> (6 istek, doküman id)
+          </li>
+          <li>
+            <strong>Mail metnini kopyala</strong> → HemenYolda destek
+          </li>
+        </ol>
+        <p className="text-xs text-emerald-800">
+          Tek tek test butonlarını mail için kullanmayın; rastgele sipariş id üretirler.
         </p>
-      )}
+      </div>
 
       <div className={embedded ? 'space-y-4' : 'bg-white rounded-xl border border-slate-200 p-4 space-y-4'}>
-        <h4 className="font-bold text-slate-800">Bağlantı bilgileri</h4>
+        <h4 className="font-bold text-slate-800">Adım 1 — Bağlantı bilgileri</h4>
         <p className="text-xs text-slate-500">
-          HemenYolda’dan gelen <strong>APP_NAME</strong> ve <strong>Access Token</strong> değerlerini girin. Test:{' '}
-          <code className="bg-slate-100 px-1 rounded">test-pos</code>
+          HemenYolda mailindeki <strong>APP_NAME</strong> ve <strong>Access Token</strong> (genelde{' '}
+          <code className="bg-slate-100 px-1 rounded">test-pos</code>).
         </p>
         <label className="block text-sm">
           <span className="text-slate-600 font-medium">APP_NAME</span>
@@ -202,7 +284,7 @@ export default function HemenYoldaIntegrationSettings({
           )}
         </label>
         <label className="block text-sm">
-          <span className="text-slate-600 font-medium">API kök (genelde değiştirmeyin)</span>
+          <span className="text-slate-600 font-medium">API kök</span>
           <input
             value={baseUrl}
             onChange={(e) => setBaseUrl(e.target.value)}
@@ -216,7 +298,7 @@ export default function HemenYoldaIntegrationSettings({
             onChange={(e) => setBranchId(e.target.value)}
             className="mt-1 w-full px-3 py-2 border rounded-lg"
           >
-            <option value="">Tüm şubeler</option>
+            <option value="">Tüm şubeler (önerilen)</option>
             {branches.map((b) => (
               <option key={b.id} value={b.id}>
                 {b.name}
@@ -231,12 +313,10 @@ export default function HemenYoldaIntegrationSettings({
           </label>
           <label className="flex items-center gap-2 cursor-pointer">
             <input type="checkbox" checked={isTestMode} onChange={(e) => setIsTestMode(e.target.checked)} />
-            <span className="font-medium">Yalnızca test (gerçek sipariş gönderilmez)</span>
+            <span className="font-medium">Yalnızca test modu</span>
           </label>
-          <p className="text-xs text-slate-500 pl-6">
-            HemenYolda sertifikasyonu bitene kadar işaretli bırakın. Canlıya geçince kapatın.
-          </p>
         </div>
+        <p className="text-xs text-slate-500">Sertifikasyon bitene kadar test modu açık kalsın.</p>
         <div className="flex flex-wrap gap-2">
           <button
             type="button"
@@ -244,7 +324,7 @@ export default function HemenYoldaIntegrationSettings({
             disabled={saving}
             className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-semibold text-sm disabled:opacity-50"
           >
-            {saving ? 'Kaydediliyor…' : 'Kaydet'}
+            {saving ? 'Kaydediliyor…' : 'Kaydet (Adım 1)'}
           </button>
           <button
             type="button"
@@ -258,85 +338,115 @@ export default function HemenYoldaIntegrationSettings({
         {row?.last_push_at && (
           <p className="text-xs text-slate-500">
             Son başarılı gönderim: {new Date(row.last_push_at).toLocaleString('tr-TR')}
-            {row.branch_id ? ` · ${branches.find((b) => b.id === row.branch_id)?.name ?? ''}` : ''}
           </p>
         )}
       </div>
 
-      <div className="border border-amber-200 rounded-xl overflow-hidden">
+      <div className="border border-amber-300 rounded-xl overflow-hidden shadow-sm">
         <button
           type="button"
           onClick={() => setShowCertTests((v) => !v)}
-          className="w-full flex items-center gap-2 px-4 py-3 bg-amber-50 hover:bg-amber-100 text-amber-900 font-semibold text-sm"
+          className="w-full flex items-center gap-2 px-4 py-3 bg-amber-100 hover:bg-amber-200 text-amber-950 font-semibold text-sm"
         >
           <FlaskConical className="w-4 h-4" />
-          <span className="flex-1 text-left">Sertifikasyon ve testler</span>
+          <span className="flex-1 text-left">Adım 2 — Sertifikasyon paketi (6 istek)</span>
           <ChevronDown className={`w-4 h-4 transition-transform ${showCertTests ? 'rotate-180' : ''}`} />
         </button>
         {showCertTests && (
           <div className="bg-amber-50 border-t border-amber-200 p-4 space-y-3">
-            <p className="text-sm text-amber-800">
-              Önce <strong>Kaydet</strong>. Sipariş tarihleri otomatik <strong>bugün (UTC)</strong> gönderilir.
-              Sertifikasyon paketi doküman id’leri kullanır. Başarı: <strong>HTTP 204</strong>.
-            </p>
-        <button
-          type="button"
-          disabled={!!testing}
-          onClick={async () => {
-            if (!row?.id || !accessToken.trim()) {
-              alert('Önce kaydedin.');
-              return;
-            }
-            setTesting('cert');
-            setTestResult('Sertifikasyon gönderiliyor…');
-            const order: HemenyoldaTestSample[] = ['getir', 'yemeksepeti', 'trendyol', 'telefon', 'update', 'cancel'];
-            const ids: string[] = [];
-            for (const s of order) {
-              const res = await sendHemenYoldaTestSample(s, true);
-              ids.push(`${s}: ${HEMENYOLDA_CERT_MAIL_ORDER_IDS[s]}`);
-              if (!res.ok && res.status !== 204) {
-                setTesting(null);
-                setTestResult(`Sertifikasyon durdu (${s}): ${res.hint || res.error}`);
-                return;
-              }
-            }
-            setTesting(null);
-            setTestResult(`Sertifikasyon tamam. Mailde iletin:\n${ids.join('\n')}`);
-          }}
-          className="w-full px-3 py-2.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-sm font-bold disabled:opacity-50"
-        >
-          {testing === 'cert' ? 'Gönderiliyor…' : 'Sertifikasyon paketi (doküman ID — HemenYolda maili)'}
-        </button>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-          {TEST_BUTTONS.map(({ sample, label }) => (
             <button
-              key={sample}
               type="button"
               disabled={!!testing}
-              onClick={() => runTest(sample)}
-              className="flex items-center justify-center gap-2 px-3 py-2.5 bg-white border border-amber-300 rounded-lg text-sm font-semibold text-amber-900 hover:bg-amber-100 disabled:opacity-50"
+              onClick={runCertification}
+              className="w-full px-4 py-3 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-sm font-bold disabled:opacity-50"
             >
-              <Send className="w-4 h-4 shrink-0" />
-              {testing === sample ? 'Gönderiliyor…' : label}
+              {testing === 'cert' ? 'Gönderiliyor (6 adım)…' : 'Sertifikasyon paketini gönder'}
             </button>
-          ))}
-        </div>
-        {testResult && (
-          <p
-            className={`text-sm flex items-start gap-2 ${
-              testResult.includes('başarılı') || testResult.includes('kaydedildi')
-                ? 'text-emerald-800'
-                : 'text-red-800'
-            }`}
-          >
-            {testResult.includes('hata') ? (
-              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-            ) : (
-              <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
+
+            {certSteps && certSteps.length > 0 && (
+              <ul className="space-y-1.5 text-sm">
+                {certSteps.map((s) => (
+                  <li
+                    key={s.sample}
+                    className={`flex items-start gap-2 rounded-lg px-2 py-1.5 ${
+                      s.ok ? 'bg-emerald-100 text-emerald-900' : 'bg-red-100 text-red-900'
+                    }`}
+                  >
+                    {s.ok ? (
+                      <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
+                    ) : (
+                      <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                    )}
+                    <span>
+                      <strong>{HEMENYOLDA_CERT_STEP_LABELS[s.sample]}</strong>
+                      <br />
+                      <span className="font-mono text-xs">{s.orderId}</span>
+                      {s.detail ? ` — ${s.detail}` : ''}
+                    </span>
+                  </li>
+                ))}
+              </ul>
             )}
-            {testResult}
-          </p>
-        )}
+
+            {step2Done && (
+              <div className="border border-emerald-300 rounded-lg p-3 bg-white space-y-2">
+                <h5 className="font-bold text-emerald-900 text-sm flex items-center gap-2">
+                  <Mail className="w-4 h-4" />
+                  Adım 3 — Maili gönderin
+                </h5>
+                <button
+                  type="button"
+                  onClick={copyCertMail}
+                  className="w-full px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-semibold"
+                >
+                  {mailCopied ? 'Mail metni kopyalandı' : 'HemenYolda mail metnini kopyala'}
+                </button>
+                <p className="text-xs text-slate-600">
+                  Kopyalayıp HemenYolda’nın size yazdığı destek adresine gönderin. Yanıt 1–3 iş günü sürebilir.
+                </p>
+              </div>
+            )}
+
+            <button
+              type="button"
+              onClick={() => setShowAdvanced((v) => !v)}
+              className="text-xs text-amber-800 underline"
+            >
+              {showAdvanced ? 'Gelişmiş tekil testleri gizle' : 'Gelişmiş tekil testler (mail için değil)'}
+            </button>
+            {showAdvanced && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                {ADVANCED_TESTS.map(({ sample, label }) => (
+                  <button
+                    key={sample}
+                    type="button"
+                    disabled={!!testing}
+                    onClick={() => runAdvancedTest(sample)}
+                    className="flex items-center gap-2 px-3 py-2 bg-white border border-amber-300 rounded-lg text-xs font-medium text-amber-900 disabled:opacity-50"
+                  >
+                    <Send className="w-3 h-3 shrink-0" />
+                    {testing === sample ? '…' : label}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {testResult && (
+              <p
+                className={`text-sm flex items-start gap-2 ${
+                  testResult.includes('hata') || testResult.includes('başarısız')
+                    ? 'text-red-800'
+                    : 'text-emerald-800'
+                }`}
+              >
+                {testResult.includes('hata') || testResult.includes('başarısız') ? (
+                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                ) : (
+                  <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
+                )}
+                <span className="whitespace-pre-wrap">{testResult}</span>
+              </p>
+            )}
           </div>
         )}
       </div>

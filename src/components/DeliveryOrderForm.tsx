@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import {
@@ -9,21 +9,17 @@ import {
 import { Courier, DeliveryCustomer } from './TakeawayOrders';
 import { loadPrintSettings, printTakeawayReceipt } from '../lib/printService';
 import { notifyHemenYolda } from '../lib/hemenyoldaApi';
+import { queryCache } from '../lib/queryCache';
+import {
+  searchTakeawayCustomers,
+  type CariCustomerHit,
+  type DeliveryCustomerHit,
+  type TakeawayCustomerSuggestion,
+} from '../lib/takeawayCustomerSearch';
 
-/** Cari hesap (customers tablosu) — paket formunda teslimat kaydı ile birlikte aranır */
-interface CariCustomerRow {
-  id: string;
-  name: string;
-  phone: string | null;
-  email: string | null;
-  address: string | null;
-  notes: string | null;
-  is_active: boolean;
-}
-
-type CustomerSuggestion =
-  | { kind: 'delivery'; row: DeliveryCustomer }
-  | { kind: 'cari'; row: CariCustomerRow };
+type CustomerSuggestion = TakeawayCustomerSuggestion;
+type CariCustomerRow = CariCustomerHit;
+type DeliveryCustomerSearchRow = DeliveryCustomerHit;
 
 type Category = { id: string; name: string; sort_order: number };
 type Product = { id: string; name: string; price: number; category_id: string | null; tax_rate?: number | null };
@@ -36,7 +32,7 @@ interface DeliveryOrderFormProps {
   editOrder?: any | null;
   /** Caller ID akışından gelen önyükleme: telefonu yaz, varsa müşteriyi seç. */
   prefillCustomer?: { phone: string; matched: DeliveryCustomer | null } | null;
-  onClose: () => void;
+  onClose: (result?: { orderId?: string; reload?: boolean }) => void;
 }
 
 export function DeliveryOrderForm({ couriers, editOrder, prefillCustomer, onClose }: DeliveryOrderFormProps) {
@@ -67,6 +63,7 @@ export function DeliveryOrderForm({ couriers, editOrder, prefillCustomer, onClos
   const [showLastOrders, setShowLastOrders] = useState(false);
   const [loadingCustomer, setLoadingCustomer] = useState(false);
   const phoneDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const customerSearchSeq = useRef(0);
   const customerSearchRef = useRef<HTMLDivElement | null>(null);
   const nameInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -75,25 +72,34 @@ export function DeliveryOrderForm({ couriers, editOrder, prefillCustomer, onClos
 
   useEffect(() => {
     if (!tenant) return;
-    void supabase
-      .from('categories')
-      .select('id, name, sort_order')
-      .eq('tenant_id', tenant.id)
-      .order('sort_order')
-      .then(({ data, error }) => {
-        if (error) console.error('[Paket] kategoriler:', error);
-        if (data) setCategories(data);
-      });
-    void supabase
-      .from('products')
-      .select('id, name, price, category_id, tax_rate')
-      .eq('tenant_id', tenant.id)
-      .eq('is_active', true)
-      .order('name')
-      .then(({ data, error }) => {
-        if (error) console.error('[Paket] ürünler:', error);
-        if (data) setProducts(data as Product[]);
-      });
+    let cancelled = false;
+    void queryCache.getProductsAndCategories(tenant.id).then(({ products: prods, categories: cats }) => {
+      if (cancelled) return;
+      setCategories(
+        (cats || [])
+          .map((c: { id: string; name: string; sort_order?: number }) => ({
+            id: c.id,
+            name: c.name,
+            sort_order: c.sort_order ?? 0,
+          }))
+          .sort((a: Category, b: Category) => a.sort_order - b.sort_order),
+      );
+      setProducts(
+        (prods || [])
+          .filter((p: { is_active?: boolean | null }) => p.is_active !== false)
+          .map((p: { id: string; name: string; price: number; category_id: string | null; tax_rate?: number | null }) => ({
+            id: p.id,
+            name: p.name,
+            price: p.price,
+            category_id: p.category_id,
+            tax_rate: p.tax_rate,
+          }))
+          .sort((a: Product, b: Product) => a.name.localeCompare(b.name, 'tr')),
+      );
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [tenant]);
 
   useEffect(() => {
@@ -134,84 +140,42 @@ export function DeliveryOrderForm({ couriers, editOrder, prefillCustomer, onClos
     return () => document.removeEventListener('pointerdown', onPointerDown);
   }, [showSuggestions]);
 
-  const searchCustomers = async (raw: string) => {
-    const q = raw.trim();
-    if (!tenant || q.length < 2) {
-      setCustomerSuggestions([]);
-      setShowSuggestions(false);
-      return;
-    }
-    setLoadingCustomer(true);
-    const safe = q.replace(/%/g, '').replace(/,/g, ' ').trim();
-    const pattern = `%${safe}%`;
-
-    const [byDelPhone, byDelName, byCariName, byCariPhone] = await Promise.all([
-      supabase
-        .from('delivery_customers')
-        .select('*')
-        .eq('tenant_id', tenant.id)
-        .ilike('phone', pattern)
-        .order('last_order_at', { ascending: false })
-        .limit(8),
-      supabase
-        .from('delivery_customers')
-        .select('*')
-        .eq('tenant_id', tenant.id)
-        .ilike('full_name', pattern)
-        .order('last_order_at', { ascending: false })
-        .limit(8),
-      supabase
-        .from('customers')
-        .select('id, name, phone, email, address, notes, is_active')
-        .eq('tenant_id', tenant.id)
-        .eq('is_active', true)
-        .ilike('name', pattern)
-        .order('name', { ascending: true })
-        .limit(8),
-      supabase
-        .from('customers')
-        .select('id, name, phone, email, address, notes, is_active')
-        .eq('tenant_id', tenant.id)
-        .eq('is_active', true)
-        .ilike('phone', pattern)
-        .order('name', { ascending: true })
-        .limit(8),
-    ]);
-
-    const err = byDelPhone.error || byDelName.error || byCariName.error || byCariPhone.error;
-    if (err) console.error('[Paket] müşteri ara:', err);
-
-    const merged: CustomerSuggestion[] = [];
-    const seenDel = new Set<string>();
-    const seenCari = new Set<string>();
-
-    for (const row of [...(byDelPhone.data || []), ...(byDelName.data || [])]) {
-      const r = row as DeliveryCustomer;
-      if (seenDel.has(r.id)) continue;
-      seenDel.add(r.id);
-      merged.push({ kind: 'delivery', row: r });
-    }
-    for (const row of [...(byCariName.data || []), ...(byCariPhone.data || [])]) {
-      const r = row as CariCustomerRow;
-      if (seenCari.has(r.id)) continue;
-      seenCari.add(r.id);
-      merged.push({ kind: 'cari', row: r });
-    }
-
-    setCustomerSuggestions(merged);
-    setShowSuggestions(merged.length > 0);
-    setLoadingCustomer(false);
-  };
+  const searchCustomers = useCallback(
+    async (raw: string, seq: number) => {
+      if (!tenant) return;
+      const merged = await searchTakeawayCustomers(tenant.id, raw);
+      if (seq !== customerSearchSeq.current) return;
+      setCustomerSuggestions(merged);
+      setShowSuggestions(merged.length > 0);
+      setLoadingCustomer(false);
+    },
+    [tenant],
+  );
 
   const handleCustomerSearchChange = (val: string) => {
     setCustomerPhone(val);
     setSelectedDeliveryCustomer(null);
     setSelectedCariCustomer(null);
     if (phoneDebounce.current) clearTimeout(phoneDebounce.current);
-    phoneDebounce.current = setTimeout(() => searchCustomers(val), 300);
+    const q = val.trim();
+    if (q.length < 2) {
+      setCustomerSuggestions([]);
+      setShowSuggestions(false);
+      setLoadingCustomer(false);
+      return;
+    }
+    setLoadingCustomer(true);
+    const seq = ++customerSearchSeq.current;
+    phoneDebounce.current = setTimeout(() => void searchCustomers(val, seq), 180);
   };
 
-  const loadLastOrdersForDeliveryCustomer = async (customer: DeliveryCustomer) => {
+  useEffect(() => {
+    return () => {
+      if (phoneDebounce.current) clearTimeout(phoneDebounce.current);
+    };
+  }, []);
+
+  const loadLastOrdersForDeliveryCustomer = async (customer: DeliveryCustomerSearchRow) => {
     const { data } = await supabase
       .from('orders')
       .select('*, order_items(quantity, unit_price, products(name))')
@@ -246,7 +210,7 @@ export function DeliveryOrderForm({ couriers, editOrder, prefillCustomer, onClos
     if (data) setLastOrders(data);
   };
 
-  const selectDeliveryCustomer = async (customer: DeliveryCustomer) => {
+  const selectDeliveryCustomer = async (customer: DeliveryCustomerSearchRow) => {
     setSelectedDeliveryCustomer(customer);
     setSelectedCariCustomer(null);
     setCustomerPhone(customer.phone);
@@ -286,11 +250,19 @@ export function DeliveryOrderForm({ couriers, editOrder, prefillCustomer, onClos
     setShowLastOrders(false);
   };
 
-  const filteredProducts = products.filter(p => {
-    const matchSearch = !search || p.name.toLowerCase().includes(search.toLowerCase());
-    const matchCat = !selectedCategory || p.category_id === selectedCategory;
-    return matchSearch && matchCat;
-  });
+  const searchLower = search.trim().toLowerCase();
+  const filteredProducts = useMemo(() => {
+    return products.filter((p) => {
+      const matchSearch = !searchLower || p.name.toLowerCase().includes(searchLower);
+      const matchCat = !selectedCategory || p.category_id === selectedCategory;
+      return matchSearch && matchCat;
+    });
+  }, [products, searchLower, selectedCategory]);
+
+  const cartTotal = useMemo(
+    () => cart.reduce((s, i) => s + i.product.price * i.quantity, 0),
+    [cart],
+  );
 
   const addToCart = (product: Product) => {
     setCart(prev => {
@@ -313,8 +285,6 @@ export function DeliveryOrderForm({ couriers, editOrder, prefillCustomer, onClos
   const updateNote = (productId: string, note: string) => {
     setCart(prev => prev.map(i => i.product.id === productId ? { ...i, note } : i));
   };
-
-  const cartTotal = cart.reduce((s, i) => s + i.product.price * i.quantity, 0);
 
   const upsertCustomer = async (): Promise<string | null> => {
     if (!tenant || !customerPhone.trim()) return null;
@@ -455,7 +425,7 @@ export function DeliveryOrderForm({ couriers, editOrder, prefillCustomer, onClos
     }
 
     setSubmitting(false);
-    onClose();
+    onClose(editOrder ? { reload: true } : { orderId });
   };
 
   const SUBTYPES: { key: OrderSubtype; label: string; icon: any; color: string; active: string }[] = [
@@ -467,7 +437,7 @@ export function DeliveryOrderForm({ couriers, editOrder, prefillCustomer, onClos
   return (
     <div className="h-full flex flex-col bg-slate-50">
       <div className="bg-white border-b border-slate-200 px-4 py-3 flex items-center gap-3 shrink-0">
-        <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-xl transition">
+        <button type="button" onClick={() => onClose()} className="p-2 hover:bg-slate-100 rounded-xl transition">
           <ChevronLeft className="w-5 h-5 text-slate-600" />
         </button>
         <div className="flex-1">

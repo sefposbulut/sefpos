@@ -1,13 +1,14 @@
 {
   "name": "shefpos",
   "private": true,
-  "version": "1.0.148",
+  "version": "1.0.149",
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "build:pages": "cross-env CF_PAGES=1 VITE_PUBLIC_SUPABASE_FN_PROXY_BASE_URL=https://www.sefpos.com.tr/api NODE_OPTIONS=--max-old-space-size=6144 vite build",
+    "seo:generate": "node scripts/gen-turkey-seo.mjs",
+    "build:pages": "npm run seo:generate && cross-env CF_PAGES=1 VITE_PUBLIC_SUPABASE_FN_PROXY_BASE_URL=https://www.sefpos.com.tr/api NODE_OPTIONS=--max-old-space-size=6144 vite build",
     "lint": "eslint .",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.app.json",

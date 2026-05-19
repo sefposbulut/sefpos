@@ -1,12 +1,22 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { LogOut, User, Settings, ChevronDown, MapPin, Check, Building2, Zap, ZoomIn, ZoomOut, Bell, Headphones as HeadphonesIcon, X, Send, Sparkles, Phone, Mail, ArrowLeft, LayoutGrid, PlayCircle, Lock, Minimize2, UserCheck } from 'lucide-react';
+import { LogOut, User, Settings, ChevronDown, MapPin, Check, Building2, Zap, ZoomIn, ZoomOut, Bell, Headphones as HeadphonesIcon, X, Send, Sparkles, Phone, Mail, ArrowLeft, LayoutGrid, PlayCircle, Lock, Minimize2, UserCheck, Trash2 } from 'lucide-react';
 import { WaiterCallBell } from './WaiterCallBell';
 import { supabase } from '../lib/supabase';
 import { getTrialInfo, formatTrialRemaining } from '../lib/tenantTrial';
 import { useActiveShift } from '../lib/useActiveShift';
 import { shiftDurationLabel, shiftIcon } from '../lib/businessDay';
 import { useUiPrefs, setHeaderHidden, setUiScale, bumpUiScale, resetUiScale, UI_SCALE_MIN, UI_SCALE_MAX, UI_SCALE_STEP } from '../lib/uiPrefs';
+import {
+  clearAllSupportNotifications,
+  countUnreadNotifications,
+  dismissSupportNotification,
+  fetchSupportNotifications,
+  isNotificationUnread,
+  markSupportNotificationsRead,
+  notificationTypeLabel,
+  type SupportNotificationRow,
+} from '../lib/supportNotifications';
 
 const isElectron = !!(window as any).electronAPI;
 
@@ -102,6 +112,7 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
   const [showSupport, setShowSupport] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
   const [tickets, setTickets] = useState<Notification[]>([]);
+  const [systemNotifs, setSystemNotifs] = useState<SupportNotificationRow[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [systemUnreadCount, setSystemUnreadCount] = useState(0);
   const [supportSubject, setSupportSubject] = useState('');
@@ -110,6 +121,8 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
   const [supportLoading, setSupportLoading] = useState(false);
   const [supportSent, setSupportSent] = useState(false);
   const [showTrialInfo, setShowTrialInfo] = useState(false);
+  const [clearingNotifId, setClearingNotifId] = useState<string | null>(null);
+  const [clearingAllNotifs, setClearingAllNotifs] = useState(false);
 
   const trialInfo = getTrialInfo(tenant as any);
   const showTrialBadge = trialInfo.isTrial;
@@ -127,40 +140,54 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
     }
   }, [isElectron, uiPrefs.uiScale]);
 
-  useEffect(() => {
-    if (!tenant || !user) return;
-    loadTickets();
-  }, [tenant, user]);
+  const loadSystemNotifications = async () => {
+    if (!tenant) return;
+    const rows = await fetchSupportNotifications(tenant.id);
+    setSystemNotifs(rows);
+    setSystemUnreadCount(countUnreadNotifications(rows, tenant.id));
+  };
+
+  const loadAllNotifications = async () => {
+    await Promise.all([loadTickets(), loadSystemNotifications()]);
+  };
+
+  const handleDismissNotification = async (notif: SupportNotificationRow) => {
+    if (!tenant || clearingNotifId) return;
+    setClearingNotifId(notif.id);
+    const result = await dismissSupportNotification(notif, tenant.id);
+    setClearingNotifId(null);
+    if (!result.ok) {
+      alert('Bildirim kaldırılamadı: ' + (result.error || 'hata'));
+      return;
+    }
+    setSystemNotifs((prev) => {
+      const next = prev.filter((row) => row.id !== notif.id);
+      setSystemUnreadCount(countUnreadNotifications(next, tenant.id));
+      return next;
+    });
+  };
+
+  const handleClearAllNotifications = async () => {
+    if (!tenant || clearingAllNotifs || systemNotifs.length === 0) return;
+    if (!window.confirm('Tüm sistem bildirimleri listenizden kaldırılsın mı?')) return;
+    setClearingAllNotifs(true);
+    const result = await clearAllSupportNotifications(systemNotifs, tenant.id);
+    setClearingAllNotifs(false);
+    if (!result.ok) {
+      alert('Bildirimler temizlenemedi: ' + (result.error || 'hata'));
+      return;
+    }
+    setSystemNotifs([]);
+    setSystemUnreadCount(0);
+  };
 
   useEffect(() => {
     if (!tenant || !user) return;
+    void loadAllNotifications();
+  }, [tenant?.id, user?.id]);
 
-    const unreadKey = `notif_unread_${tenant.id}`;
-    const dismissedKey = `notif_dismissed_${tenant.id}`;
-    const sessionStartKey = `notif_session_start_${tenant.id}_${user.id}`;
-    const sessionStart = localStorage.getItem(sessionStartKey) || new Date().toISOString();
-    localStorage.setItem(sessionStartKey, sessionStart);
-    const stored = JSON.parse(localStorage.getItem(unreadKey) || '[]') as string[];
-    const dismissed = new Set(JSON.parse(localStorage.getItem(dismissedKey) || '[]') as string[]);
-    setSystemUnreadCount(stored.filter(id => !dismissed.has(id)).length);
-
-    supabase
-      .from('support_notifications')
-      .select('id, tenant_id, created_at, type')
-      .or(`tenant_id.eq.${tenant.id},tenant_id.is.null`)
-      .gte('created_at', sessionStart)
-      .order('created_at', { ascending: false })
-      .limit(100)
-      .then(({ data }) => {
-        const incoming = (data || [])
-          .filter((d: any) => d.type !== 'revoke')
-          .map((d: any) => d.id)
-          .filter((id: string) => !dismissed.has(id));
-        const current = new Set(stored.filter(id => !dismissed.has(id)));
-        incoming.forEach((id: string) => current.add(id));
-        localStorage.setItem(unreadKey, JSON.stringify(Array.from(current).slice(-300)));
-        setSystemUnreadCount(current.size);
-      });
+  useEffect(() => {
+    if (!tenant || !user) return;
 
     const channel = supabase
       .channel(`header-system-notifs-${tenant.id}`)
@@ -169,15 +196,28 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
         schema: 'public',
         table: 'support_notifications',
       }, (payload) => {
-        const n = payload.new as any;
+        const n = payload.new as SupportNotificationRow;
         if (n.tenant_id && n.tenant_id !== tenant.id) return;
         if (n.type === 'revoke') return;
-        if (n.created_at && n.created_at < sessionStart) return;
-        if (dismissed.has(n.id)) return;
-        const current = new Set(JSON.parse(localStorage.getItem(unreadKey) || '[]') as string[]);
-        current.add(n.id);
-        localStorage.setItem(unreadKey, JSON.stringify(Array.from(current).slice(-300)));
-        setSystemUnreadCount(current.size);
+        setSystemNotifs((prev) => {
+          if (prev.some((row) => row.id === n.id)) return prev;
+          const next = [n, ...prev].slice(0, 50);
+          setSystemUnreadCount(countUnreadNotifications(next, tenant.id));
+          return next;
+        });
+      })
+      .on('postgres_changes', {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'support_notifications',
+      }, (payload) => {
+        const n = payload.new as SupportNotificationRow;
+        if (n.tenant_id && n.tenant_id !== tenant.id && n.tenant_id !== null) return;
+        setSystemNotifs((prev) => {
+          const next = prev.map((row) => (row.id === n.id ? { ...row, ...n } : row));
+          setSystemUnreadCount(countUnreadNotifications(next, tenant.id));
+          return next;
+        });
       })
       .subscribe();
 
@@ -236,10 +276,25 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
         <div className="px-3 md:px-6">
           <div className="flex justify-between items-center h-14 md:h-20">
             <div className="flex items-center gap-2 md:gap-3 ml-12 md:ml-16 min-w-0">
+              {onBackToTables ? (
+                <button
+                  type="button"
+                  onClick={onBackToTables}
+                  className="md:hidden flex-shrink-0 rounded-lg active:opacity-80 focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-500"
+                  aria-label="Ana sayfa — Masalar"
+                >
+                  <img
+                    src={logoSrc}
+                    alt="ŞefPOS"
+                    className="h-9 w-auto object-contain select-none pointer-events-none"
+                    draggable={false}
+                  />
+                </button>
+              ) : null}
               <img
                 src={logoSrc}
                 alt="ŞefPOS"
-                className="h-9 md:h-12 w-auto object-contain flex-shrink-0 select-none"
+                className={`h-9 md:h-12 w-auto object-contain flex-shrink-0 select-none ${onBackToTables ? 'hidden md:block' : ''}`}
                 draggable={false}
               />
 
@@ -435,11 +490,16 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
                   const next = !showNotifications;
                   setShowNotifications(next);
                   setShowSupport(false);
-                  loadTickets();
-                  if (next && tenant?.id) {
-                    const unreadKey = `notif_unread_${tenant.id}`;
-                    localStorage.removeItem(unreadKey);
-                    setSystemUnreadCount(0);
+                  if (next && tenant) {
+                    void (async () => {
+                      const rows = await fetchSupportNotifications(tenant.id);
+                      setSystemNotifs(rows);
+                      await loadTickets();
+                      await markSupportNotificationsRead(rows, tenant.id);
+                      const refreshed = await fetchSupportNotifications(tenant.id);
+                      setSystemNotifs(refreshed);
+                      setSystemUnreadCount(countUnreadNotifications(refreshed, tenant.id));
+                    })();
                   }
                 }}
                 className="relative p-1.5 md:p-2 text-slate-600 hover:text-slate-900 rounded-lg hover:bg-slate-100 transition-all active:scale-95"
@@ -676,16 +736,82 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
                 <Bell className="w-4 h-4 text-slate-600" />
                 <span className="font-bold text-slate-700">Bildirimler</span>
               </div>
-              <button onClick={() => setShowNotifications(false)} className="p-1 rounded hover:bg-slate-200 transition">
-                <X className="w-4 h-4 text-slate-500" />
-              </button>
+              <div className="flex items-center gap-1 shrink-0">
+                {systemNotifs.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => void handleClearAllNotifications()}
+                    disabled={clearingAllNotifs}
+                    className="px-2 py-1 text-[10px] font-bold text-red-600 hover:bg-red-50 rounded-md transition disabled:opacity-50"
+                    title="Tüm sistem bildirimlerini temizle"
+                  >
+                    {clearingAllNotifs ? '…' : 'Tümünü temizle'}
+                  </button>
+                )}
+                <button onClick={() => setShowNotifications(false)} className="p-1 rounded hover:bg-slate-200 transition">
+                  <X className="w-4 h-4 text-slate-500" />
+                </button>
+              </div>
             </div>
             <div className="max-h-80 overflow-y-auto">
-              {tickets.length === 0 ? (
+              {systemNotifs.length === 0 && tickets.length === 0 ? (
                 <div className="p-6 text-center text-slate-500 text-sm">Henüz bildirim yok</div>
               ) : (
-                tickets.map(ticket => (
+                <>
+                  {systemNotifs.map((notif) => {
+                    const unread = tenant ? isNotificationUnread(notif, tenant.id) : false;
+                    const typeClass =
+                      notif.type === 'error'
+                        ? 'bg-red-100 text-red-700'
+                        : notif.type === 'warning'
+                          ? 'bg-amber-100 text-amber-800'
+                          : notif.type === 'success'
+                            ? 'bg-green-100 text-green-700'
+                            : 'bg-blue-100 text-blue-700';
+                    return (
+                      <div
+                        key={notif.id}
+                        className={`px-4 py-3 border-b border-slate-100 ${unread ? 'bg-orange-50/60' : ''}`}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <p className="text-sm font-semibold text-slate-800 flex-1 min-w-0">{notif.title}</p>
+                          <div className="flex items-center gap-1 shrink-0">
+                            {unread && (
+                              <span className="text-[9px] font-bold uppercase tracking-wide text-orange-600">
+                                Yeni
+                              </span>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => void handleDismissNotification(notif)}
+                              disabled={clearingNotifId === notif.id}
+                              className="p-1 rounded-md text-slate-400 hover:text-red-600 hover:bg-red-50 transition disabled:opacity-40"
+                              title="Bildirimi kaldır"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                        <p className="text-xs text-slate-600 mt-1 line-clamp-3">{notif.message}</p>
+                        <div className="flex items-center gap-2 mt-1.5">
+                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${typeClass}`}>
+                            {notificationTypeLabel(notif.type)}
+                          </span>
+                          <span className="text-[10px] text-slate-400">
+                            {new Date(notif.created_at).toLocaleString('tr-TR', {
+                              day: '2-digit',
+                              month: 'short',
+                              hour: '2-digit',
+                              minute: '2-digit',
+                            })}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {tickets.map((ticket) => (
                   <div key={ticket.id} className="px-4 py-3 border-b border-slate-100 last:border-0">
+                    <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400 mb-0.5">Destek yanıtı</p>
                     <p className="text-sm font-semibold text-slate-800">{ticket.subject}</p>
                     {ticket.admin_reply && (
                       <p className="text-xs text-slate-600 mt-1 line-clamp-2">{ticket.admin_reply}</p>
@@ -703,7 +829,8 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
                       </span>
                     </div>
                   </div>
-                ))
+                  ))}
+                </>
               )}
             </div>
           </div>

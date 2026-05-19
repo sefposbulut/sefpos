@@ -105,3 +105,194 @@ input[type="range"]::-moz-range-thumb {
     transition: transform 0.05s ease;
   }
 }
+
+/* Pazarlama sitesi — hero POS mockup animasyonları */
+@keyframes landing-table-glow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(251, 146, 60, 0.45); }
+  50% { box-shadow: 0 0 12px 2px rgba(251, 146, 60, 0.35); }
+}
+
+@keyframes landing-paying-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.88; }
+}
+
+@keyframes landing-order-in {
+  from { opacity: 0; transform: translateX(6px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes landing-caller-ring {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.35); }
+  50% { box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.15); }
+}
+
+@keyframes landing-revenue-flash {
+  0% { color: #fff; }
+  40% { color: #fdba74; }
+  100% { color: #fff; }
+}
+
+.landing-table-active {
+  animation: landing-table-glow 2.2s ease-in-out infinite;
+}
+
+.landing-table-paying {
+  animation: landing-paying-pulse 1.8s ease-in-out infinite;
+}
+
+.landing-order-slide {
+  animation: landing-order-in 0.5s ease-out both;
+}
+
+.landing-order-highlight {
+  opacity: 1 !important;
+  transform: scale(1.02);
+  background: rgb(51 65 85) !important;
+}
+
+.landing-caller-pulse {
+  animation: landing-caller-ring 2s ease-in-out infinite;
+}
+
+.landing-revenue-tick {
+  animation: landing-revenue-flash 0.6s ease-out;
+}
+
+.landing-hero-dashboard {
+  box-shadow: 0 0 0 1px rgba(127, 29, 29, 0.25), 0 24px 48px rgba(0, 0, 0, 0.45);
+}
+
+/* Pazarlama — marka (yuvarlak logo: turuncu + kırmızı) */
+.landing-hero-bg {
+  background: radial-gradient(ellipse 80% 60% at 50% -10%, rgba(249, 115, 22, 0.15), transparent),
+    #000;
+}
+
+.landing-hero-glow {
+  background: radial-gradient(circle at 30% 20%, rgba(249, 115, 22, 0.12), transparent 45%),
+    radial-gradient(circle at 70% 60%, rgba(185, 28, 28, 0.1), transparent 40%);
+}
+
+.landing-logo-ring {
+  background: radial-gradient(circle, rgba(249, 115, 22, 0.35) 0%, transparent 70%);
+}
+
+.landing-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.375rem 0.875rem;
+  border-radius: 9999px;
+  font-size: 0.6875rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #fdba74;
+  background: rgba(249, 115, 22, 0.12);
+  border: 1px solid rgba(249, 115, 22, 0.35);
+}
+
+.landing-btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 1rem 2rem;
+  border-radius: 0.75rem;
+  font-weight: 800;
+  color: #fff;
+  background: linear-gradient(135deg, #f97316 0%, #ea580c 50%, #b91c1c 100%);
+  box-shadow: 0 10px 40px rgba(249, 115, 22, 0.35);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.landing-btn-primary:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 14px 48px rgba(249, 115, 22, 0.45);
+}
+
+.landing-btn-outline {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 1rem 2rem;
+  border-radius: 0.75rem;
+  font-weight: 800;
+  color: #fff;
+  border: 2px solid rgba(255, 255, 255, 0.25);
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.landing-btn-outline:hover {
+  border-color: #f97316;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.landing-stat-pill {
+  padding: 0.75rem;
+  border-radius: 0.75rem;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.landing-workflow-card {
+  padding: 1.5rem;
+  border-radius: 1rem;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+.landing-workflow-card:hover {
+  border-color: rgba(249, 115, 22, 0.4);
+  background: rgba(249, 115, 22, 0.06);
+}
+
+.landing-testimonial {
+  padding: 1.5rem;
+  border-radius: 1rem;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  box-shadow: 0 4px 24px rgba(15, 23, 42, 0.06);
+  transition: box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.landing-testimonial:hover {
+  border-color: #fed7aa;
+  box-shadow: 0 12px 40px rgba(249, 115, 22, 0.12);
+}
+
+.landing-link-more {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 800;
+  color: #ea580c;
+  transition: gap 0.2s ease, color 0.2s ease;
+}
+
+.landing-link-more:hover {
+  gap: 0.75rem;
+  color: #b91c1c;
+}
+
+@keyframes landing-marquee {
+  0% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(-50%);
+  }
+}
+
+.landing-marquee-track {
+  display: flex;
+  width: max-content;
+  animation: landing-marquee 36s linear infinite;
+}
+
+.landing-marquee-track:hover {
+  animation-play-state: paused;
+}
