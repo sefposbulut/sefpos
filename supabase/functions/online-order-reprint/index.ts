@@ -74,6 +74,7 @@ interface OnlineOrderRow {
   getir_status_code: number | null;
   getir_delivery_type: number | null;
   getir_is_scheduled: boolean | null;
+  getir_scheduled_at: string | null;
   getir_total_discount: number | null;
   getir_supplier_support_rate: number | null;
   getir_raw_payload: Record<string, unknown> | null;
@@ -228,7 +229,7 @@ Deno.serve(async (req: Request) => {
         created_at, platform_created_at, estimated_delivery_time, rider_pickup_time,
         dh_raw_payload, getir_verification_code, getir_masked_phone,
         getir_courier_name, getir_courier_phone, getir_status_code,
-        getir_delivery_type, getir_is_scheduled, getir_total_discount, getir_supplier_support_rate,
+        getir_delivery_type, getir_is_scheduled, getir_scheduled_at, getir_total_discount, getir_supplier_support_rate,
         getir_raw_payload
       `)
       .eq("id", onlineOrderId)
