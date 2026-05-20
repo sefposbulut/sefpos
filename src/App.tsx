@@ -598,7 +598,6 @@ function App() {
         <ElectronDesktopHome
           onNavigate={handleNavigate}
           onOpenSettings={() => setShowSettings(true)}
-          onLockScreen={() => setIsLocked(true)}
         />
       )}
 

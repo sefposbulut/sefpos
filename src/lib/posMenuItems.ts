@@ -2,6 +2,7 @@ import type { LucideIcon } from 'lucide-react';
 import {
   Ban,
   Boxes,
+  ClipboardList,
   Clock,
   Grid3x3,
   Layers,
@@ -24,8 +25,10 @@ export type PosMenuTile = {
   show: boolean;
   /** App.tsx `handleNavigate` hedefi; `cashier` kasa modalini acar. */
   page: string;
-  /** Ana sayfa grid'inde daha buyuk karo (POS cekirdek modulleri). */
+  /** @deprecated Electron ana sayfada `desktopPrimary` kullanin. */
   featured?: boolean;
+  /** Electron masaustu ana sayfa — ustteki 4 buyuk kart. */
+  desktopPrimary?: boolean;
 };
 
 type AuthSlice = {
@@ -62,11 +65,20 @@ export function buildPosMenuTiles({
     {
       id: 'tables',
       label: 'Masalar',
-      description: 'Masa düzeni ve sipariş',
+      description: 'Masa durumunu görüntüle',
       icon: Grid3x3,
       show: !!permissions.can_view_tables && mod('tables'),
       page: 'tables',
-      featured: true,
+      desktopPrimary: true,
+    },
+    {
+      id: 'adisyons',
+      label: 'Adisyonlar',
+      description: 'Açık adisyonları görüntüle',
+      icon: ClipboardList,
+      show: !!permissions.can_view_tables && mod('tables'),
+      page: 'tables',
+      desktopPrimary: true,
     },
     {
       id: 'quick-sale',
@@ -78,29 +90,28 @@ export function buildPosMenuTiles({
         !!permissions.can_process_payments &&
         mod('quick-sale'),
       page: 'quick-sale',
-      featured: true,
     },
     {
       id: 'takeaway',
       label: 'Paket Servis',
-      description: 'Paket ve kurye',
+      description: 'Paket servis oluştur',
       icon: ShoppingCart,
       show:
         !!(permissions.can_take_orders || permissions.can_view_tables) &&
         mod('takeaway'),
       page: 'takeaway',
-      featured: true,
+      desktopPrimary: true,
     },
     {
       id: 'online-orders',
       label: 'Online Siparişler',
-      description: 'Getir · Yemeksepeti · Trendyol',
+      description: 'Siparişleri yönet',
       icon: ShoppingBag,
       show:
         !!(permissions.can_take_orders || permissions.can_view_tables) &&
         mod('online-orders'),
       page: 'online-orders',
-      featured: true,
+      desktopPrimary: true,
     },
     {
       id: 'products',
