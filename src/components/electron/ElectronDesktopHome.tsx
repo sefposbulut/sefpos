@@ -1,22 +1,21 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  ArrowRight,
   Bell,
-  ChevronRight,
   Cloud,
-  CloudOff,
   Headphones,
+  LayoutGrid,
   Lock,
   LogOut,
   MapPin,
   Settings,
-  Sun,
   Wifi,
   WifiOff,
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { publicAsset } from '../../lib/assetUrl';
 import { APP_DISPLAY_VERSION } from '../../lib/appVersion';
-import { buildPosMenuTiles } from '../../lib/posMenuItems';
+import { buildPosMenuTiles, type PosMenuTile } from '../../lib/posMenuItems';
 import { supabase } from '../../lib/supabase';
 import { isSqlServerMode } from '../../lib/sqlDb';
 import { INVENTORY_TAB_STORAGE_KEY } from '../../lib/inventoryNav';
@@ -50,18 +49,6 @@ const roleLabels: Record<string, string> = {
   kitchen: 'Mutfak',
 };
 
-function formatTurkishDate(d: Date): string {
-  return d.toLocaleDateString('tr-TR', {
-    weekday: 'long',
-    day: 'numeric',
-    month: 'long',
-  });
-}
-
-function formatClock(d: Date): string {
-  return d.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
-}
-
 function formatNotifTime(iso: string): string {
   try {
     return new Date(iso).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
@@ -77,7 +64,6 @@ export function ElectronDesktopHome({
 }: ElectronDesktopHomeProps) {
   const { tenant, profile, user, activeBranch, branches, setActiveBranch, signOut, permissions, shiftsEnabled } =
     useAuth();
-  const [now, setNow] = useState(() => new Date());
   const [isOnline, setIsOnline] = useState(() => navigator.onLine);
   const [serverOk, setServerOk] = useState(true);
   const [notifs, setNotifs] = useState<DashboardNotif[]>([]);
@@ -97,13 +83,8 @@ export function ElectronDesktopHome({
     [permissions, tenant, shiftsEnabled],
   );
 
-  const featuredTiles = tiles.filter((t) => t.featured);
-  const otherTiles = tiles.filter((t) => !t.featured);
-
-  useEffect(() => {
-    const t = setInterval(() => setNow(new Date()), 30_000);
-    return () => clearInterval(t);
-  }, []);
+  const quickTiles = tiles.filter((t) => t.featured);
+  const moreTiles = tiles.filter((t) => !t.featured);
 
   useEffect(() => {
     const on = () => setIsOnline(true);
@@ -149,7 +130,7 @@ export function ElectronDesktopHome({
         .eq('tenant_id', tenant.id)
         .in('status', NEWISH_STATUSES)
         .order('created_at', { ascending: false })
-        .limit(6);
+        .limit(5);
       if (error) throw error;
       const rows: DashboardNotif[] = (data || []).map((row: Record<string, unknown>) => {
         const plat = row.online_order_platforms as { platform_code?: string; platform_name?: string } | null;
@@ -212,321 +193,295 @@ export function ElectronDesktopHome({
     user?.email?.split('@')[0] ||
     'Kullanıcı';
   const roleLabel = roleLabels[profile?.role || ''] || profile?.role || '';
+  const tenantName = (tenant as { name?: string })?.name || 'İşletme';
 
   return (
-    <div
-      className="fixed inset-0 z-[30] flex flex-col overflow-hidden text-white"
-      style={{
-        background:
-          'radial-gradient(ellipse 120% 80% at 70% 20%, rgba(249,115,22,0.22) 0%, transparent 55%), radial-gradient(ellipse 90% 70% at 10% 90%, rgba(190,24,93,0.18) 0%, transparent 50%), linear-gradient(145deg, #0f172a 0%, #1e1b4b 38%, #431407 100%)',
-        fontFamily: '"Inter", "Segoe UI", system-ui, sans-serif',
-      }}
-    >
-      {/* Üst şerit */}
-      <header className="flex-shrink-0 flex items-center justify-between gap-4 px-5 md:px-8 py-4 border-b border-white/10 bg-black/20 backdrop-blur-md">
-        <div className="flex items-center gap-4 min-w-0">
-          <img
-            src={logoSrc}
-            alt="ŞefPOS"
-            className="h-10 md:h-12 w-auto object-contain drop-shadow-lg"
-            onError={(e) => {
-              (e.currentTarget as HTMLImageElement).style.display = 'none';
-            }}
-          />
-          <div className="min-w-0 hidden sm:block">
-            <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-orange-300/90">ŞefPOS</p>
-            <h1 className="text-lg md:text-xl font-black truncate text-white">
-              {(tenant as { name?: string })?.name || 'İşletme'}
-            </h1>
-          </div>
-        </div>
-
-        <div className="flex flex-wrap items-center justify-end gap-2 md:gap-3">
-          <StatusPill
-            ok={isOnline}
-            okLabel="İnternet bağlı"
-            badLabel="İnternet yok"
-            iconOn={Wifi}
-            iconOff={WifiOff}
-          />
-          <StatusPill
-            ok={serverOk && isOnline}
-            okLabel="Sunucu bağlı"
-            badLabel="Sunucu yanıt vermiyor"
-            iconOn={Cloud}
-            iconOff={CloudOff}
-          />
-
-          {branches.length > 1 && (
-            <div className="relative">
-              <button
-                type="button"
-                onClick={() => setBranchPickerOpen((v) => !v)}
-                className="flex items-center gap-2 px-3 py-2 rounded-xl bg-white/10 hover:bg-white/15 border border-white/15 text-xs font-bold transition"
-              >
-                <MapPin className="w-4 h-4 text-orange-300 shrink-0" />
-                <span className="max-w-[120px] truncate">{activeBranch?.name || 'Şube'}</span>
-              </button>
-              {branchPickerOpen && (
-                <>
-                  <div className="fixed inset-0 z-10" onClick={() => setBranchPickerOpen(false)} />
-                  <div className="absolute right-0 top-full mt-1 z-20 min-w-[200px] rounded-xl border border-white/15 bg-slate-900/95 shadow-2xl py-1">
-                    {branches.map((b) => (
-                      <button
-                        key={b.id}
-                        type="button"
-                        onClick={() => {
-                          setActiveBranch(b.id);
-                          setBranchPickerOpen(false);
-                        }}
-                        className={`w-full text-left px-4 py-2.5 text-sm font-semibold hover:bg-white/10 ${
-                          activeBranch?.id === b.id ? 'text-orange-300' : 'text-white'
-                        }`}
-                      >
-                        {b.name}
-                      </button>
-                    ))}
-                  </div>
-                </>
-              )}
+    <div className="fixed inset-0 z-[30] flex flex-col bg-gradient-to-br from-slate-50 via-white to-orange-50/40 overflow-hidden">
+      {/* Üst bar — Header ile aynı dil: beyaz + turuncu vurgu */}
+      <header className="flex-shrink-0 bg-white border-b border-slate-200 shadow-sm">
+        <div className="flex items-center justify-between gap-3 px-4 md:px-8 py-3 md:py-4">
+          <div className="flex items-center gap-3 min-w-0">
+            <img
+              src={logoSrc}
+              alt="ŞefPOS"
+              className="h-9 md:h-11 w-auto object-contain"
+              onError={(e) => {
+                (e.currentTarget as HTMLImageElement).style.display = 'none';
+              }}
+            />
+            <div className="min-w-0 border-l border-slate-200 pl-3">
+              <p className="text-[10px] font-bold uppercase tracking-widest text-orange-600">ŞefPOS Masaüstü</p>
+              <h1 className="text-base md:text-lg font-extrabold text-slate-900 truncate">{tenantName}</h1>
             </div>
-          )}
-
-          <div className="hidden md:flex flex-col items-end text-right px-2">
-            <span className="text-sm font-bold truncate max-w-[160px]">{displayName}</span>
-            <span className="text-[10px] text-white/60 font-semibold uppercase tracking-wide">{roleLabel}</span>
           </div>
 
-          <button
-            type="button"
-            onClick={() => void signOut()}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white/10 hover:bg-red-500/30 border border-white/15 text-xs font-bold transition"
-            title="Çıkış"
-          >
-            <LogOut className="w-4 h-4" />
-            <span className="hidden lg:inline">Çıkış</span>
-          </button>
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <StatusChip ok={isOnline} label={isOnline ? 'Çevrimiçi' : 'Çevrimdışı'} icon={isOnline ? Wifi : WifiOff} />
+            <StatusChip
+              ok={serverOk && isOnline}
+              label={serverOk ? 'Bulut' : 'Sunucu'}
+              icon={Cloud}
+            />
+
+            {branches.length > 1 && (
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setBranchPickerOpen((v) => !v)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 text-xs font-bold text-slate-700 transition"
+                >
+                  <MapPin className="w-3.5 h-3.5 text-orange-500" />
+                  <span className="max-w-[100px] truncate">{activeBranch?.name || 'Şube'}</span>
+                </button>
+                {branchPickerOpen && (
+                  <>
+                    <div className="fixed inset-0 z-10" onClick={() => setBranchPickerOpen(false)} />
+                    <div className="absolute right-0 top-full mt-1 z-20 min-w-[180px] rounded-xl border border-slate-200 bg-white shadow-xl py-1">
+                      {branches.map((b) => (
+                        <button
+                          key={b.id}
+                          type="button"
+                          onClick={() => {
+                            setActiveBranch(b.id);
+                            setBranchPickerOpen(false);
+                          }}
+                          className={`w-full text-left px-3 py-2 text-sm font-semibold hover:bg-orange-50 ${
+                            activeBranch?.id === b.id ? 'text-orange-600' : 'text-slate-700'
+                          }`}
+                        >
+                          {b.name}
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+
+            <div className="hidden sm:block text-right px-1">
+              <p className="text-sm font-bold text-slate-800 truncate max-w-[140px]">{displayName}</p>
+              <p className="text-[10px] font-semibold text-slate-500">{roleLabel}</p>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => void signOut()}
+              className="p-2 rounded-lg text-slate-500 hover:bg-red-50 hover:text-red-600 transition"
+              title="Çıkış"
+            >
+              <LogOut className="w-5 h-5" />
+            </button>
+          </div>
         </div>
       </header>
 
-      <div className="flex-1 flex min-h-0">
-        {/* Sol panel — saat, bildirimler */}
-        <aside className="hidden lg:flex w-[300px] xl:w-[340px] flex-shrink-0 flex-col border-r border-white/10 bg-black/15 p-6 gap-6">
-          <div>
-            <p className="text-5xl xl:text-6xl font-black tabular-nums tracking-tight">{formatClock(now)}</p>
-            <p className="mt-2 text-sm font-semibold text-white/70 capitalize">{formatTurkishDate(now)}</p>
-            <div className="mt-4 flex items-center gap-3 text-white/50">
-              <Sun className="w-8 h-8 text-amber-300/80" />
-              <div>
-                <p className="text-xs font-bold uppercase tracking-wide">Hava</p>
-                <p className="text-sm text-white/60">Yerel hava servisi yakında</p>
-              </div>
-            </div>
-          </div>
-
-          <div className="flex-1 min-h-0 flex flex-col">
-            <div className="flex items-center justify-between mb-3">
-              <h2 className="text-xs font-black uppercase tracking-[0.15em] text-orange-200/90 flex items-center gap-2">
-                <Bell className="w-4 h-4" />
-                Bildirimler
-              </h2>
-              {notifs.length > 0 && (
-                <span className="text-[10px] font-bold bg-orange-500 text-white px-2 py-0.5 rounded-full">
-                  {notifs.length}
-                </span>
-              )}
-            </div>
-            <div className="flex-1 overflow-y-auto space-y-2 pr-1 custom-scrollbar">
-              {notifs.length === 0 ? (
-                <p className="text-sm text-white/40 py-4">Yeni online sipariş yok.</p>
-              ) : (
-                notifs.map((n) => (
-                  <button
-                    key={n.id}
-                    type="button"
-                    onClick={() => onNavigate('online-orders')}
-                    className="w-full text-left p-3 rounded-2xl bg-white/8 hover:bg-white/12 border border-white/10 transition group"
-                  >
-                    <div className="flex items-start gap-3">
-                      <PlatformLogo code={n.platform_code} name={n.platform_name} size="sm" />
-                      <div className="min-w-0 flex-1">
-                        <p className="text-xs font-bold text-orange-200">Yeni sipariş!</p>
-                        <p className="text-sm font-semibold truncate">{n.customer_name}</p>
-                        <p className="text-[10px] text-white/50 mt-0.5">
-                          {formatNotifTime(n.created_at)} · {n.total_amount.toFixed(2)} ₺
-                        </p>
-                      </div>
-                      <ChevronRight className="w-4 h-4 text-white/30 group-hover:text-orange-300 shrink-0 mt-1" />
-                    </div>
-                  </button>
-                ))
-              )}
-            </div>
-            {notifs.length > 0 && (
-              <button
-                type="button"
-                onClick={() => onNavigate('online-orders')}
-                className="mt-3 w-full py-2.5 rounded-xl text-xs font-bold text-orange-200 bg-orange-500/15 hover:bg-orange-500/25 border border-orange-400/20 transition"
-              >
-                Tüm bildirimleri göster
-              </button>
-            )}
-          </div>
-
-          <a
-            href="mailto:destek@sefpos.com.tr"
-            className="flex items-center gap-2 text-xs font-semibold text-white/50 hover:text-orange-200 transition"
-          >
-            <Headphones className="w-4 h-4" />
-            Müşteri hizmetleri
-          </a>
-        </aside>
-
-        {/* Ana modül ızgarası */}
-        <main className="flex-1 flex flex-col min-w-0 p-4 md:p-6 lg:p-8 overflow-y-auto">
-          <div className="lg:hidden mb-4 flex items-end justify-between">
+      <div className="flex-1 overflow-y-auto">
+        <div className="max-w-6xl mx-auto px-4 md:px-8 py-6 md:py-8 space-y-8">
+          {/* Karşılama — saat/hava yok; ŞefPOS tipi kısa özet */}
+          <section className="flex flex-col md:flex-row md:items-end md:justify-between gap-4">
             <div>
-              <p className="text-4xl font-black tabular-nums">{formatClock(now)}</p>
-              <p className="text-xs text-white/60 capitalize">{formatTurkishDate(now)}</p>
-            </div>
-            {notifs.length > 0 && (
-              <button
-                type="button"
-                onClick={() => onNavigate('online-orders')}
-                className="flex items-center gap-2 px-3 py-2 rounded-full bg-orange-500/20 border border-orange-400/30 text-xs font-bold"
-              >
-                <Bell className="w-4 h-4" />
-                {notifs.length} yeni sipariş
-              </button>
-            )}
-          </div>
-
-          {featuredTiles.length > 0 && (
-            <section className="mb-6">
-              <p className="text-[10px] font-black uppercase tracking-[0.2em] text-white/40 mb-3">Ana modüller</p>
-              <div className="grid grid-cols-2 xl:grid-cols-4 gap-3 md:gap-4">
-                {featuredTiles.map((tile) => (
-                  <ModuleTile key={tile.id} tile={tile} large onClick={() => handleTileClick(tile.page)} />
-                ))}
-              </div>
-            </section>
-          )}
-
-          {otherTiles.length > 0 && (
-            <section className="flex-1">
-              <p className="text-[10px] font-black uppercase tracking-[0.2em] text-white/40 mb-3">Yönetim</p>
-              <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-3 md:gap-4">
-                {otherTiles.map((tile) => (
-                  <ModuleTile key={tile.id} tile={tile} onClick={() => handleTileClick(tile.page)} />
-                ))}
-              </div>
-            </section>
-          )}
-
-          {tiles.length === 0 && (
-            <div className="flex-1 flex items-center justify-center">
-              <p className="text-white/50 text-center max-w-md">
-                Hesabınız için tanımlı modül bulunamadı. Lisans veya yetkilerinizi kontrol edin.
+              <h2 className="text-2xl md:text-3xl font-black text-slate-900 tracking-tight">
+                Merhaba, {displayName.split(' ')[0]}
+              </h2>
+              <p className="mt-1 text-sm text-slate-600 font-medium">
+                Modül seçerek devam edin
+                {activeBranch?.name ? ` · ${activeBranch.name}` : ''}
               </p>
             </div>
-          )}
-        </main>
+            <div className="flex flex-wrap gap-2">
+              {canOpenSettings && onOpenSettings && (
+                <button
+                  type="button"
+                  onClick={onOpenSettings}
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-xl border border-slate-200 bg-white text-sm font-bold text-slate-700 hover:border-orange-300 hover:bg-orange-50 transition shadow-sm"
+                >
+                  <Settings className="w-4 h-4 text-orange-500" />
+                  Ayarlar
+                </button>
+              )}
+              {onLockScreen && hasPin && (
+                <button
+                  type="button"
+                  onClick={onLockScreen}
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-xl border border-slate-200 bg-white text-sm font-bold text-slate-700 hover:bg-slate-100 transition shadow-sm"
+                >
+                  <Lock className="w-4 h-4" />
+                  Kilitle
+                </button>
+              )}
+            </div>
+          </section>
+
+          <div className="grid grid-cols-1 xl:grid-cols-[1fr_280px] gap-6">
+            <div className="space-y-8">
+              {/* Hızlı erişim — yatay kartlar, turuncu şerit */}
+              {quickTiles.length > 0 && (
+                <section>
+                  <SectionTitle icon={LayoutGrid} title="Hızlı erişim" />
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {quickTiles.map((tile) => (
+                      <QuickLaunchCard key={tile.id} tile={tile} onClick={() => handleTileClick(tile.page)} />
+                    ))}
+                  </div>
+                </section>
+              )}
+
+              {moreTiles.length > 0 && (
+                <section>
+                  <SectionTitle title="Diğer modüller" />
+                  <div className="grid grid-cols-2 md:grid-cols-3 gap-2.5">
+                    {moreTiles.map((tile) => (
+                      <CompactModuleButton key={tile.id} tile={tile} onClick={() => handleTileClick(tile.page)} />
+                    ))}
+                  </div>
+                </section>
+              )}
+
+              {tiles.length === 0 && (
+                <p className="text-slate-500 text-center py-12">
+                  Hesabınız için tanımlı modül bulunamadı. Lisans veya yetkilerinizi kontrol edin.
+                </p>
+              )}
+            </div>
+
+            {/* Bildirimler — sağda ince panel, tam sol sidebar değil */}
+            <aside className="xl:sticky xl:top-6 h-fit">
+              <div className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+                <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100 bg-slate-50/80">
+                  <span className="text-xs font-black uppercase tracking-wide text-slate-600 flex items-center gap-2">
+                    <Bell className="w-4 h-4 text-orange-500" />
+                    Online siparişler
+                  </span>
+                  {notifs.length > 0 && (
+                    <span className="text-[10px] font-bold bg-orange-500 text-white px-2 py-0.5 rounded-full">
+                      {notifs.length}
+                    </span>
+                  )}
+                </div>
+                <div className="p-3 space-y-2 max-h-[320px] overflow-y-auto">
+                  {notifs.length === 0 ? (
+                    <p className="text-xs text-slate-400 py-6 text-center">Bekleyen sipariş yok</p>
+                  ) : (
+                    notifs.map((n) => (
+                      <button
+                        key={n.id}
+                        type="button"
+                        onClick={() => onNavigate('online-orders')}
+                        className="w-full flex items-center gap-2.5 p-2.5 rounded-xl hover:bg-orange-50 border border-transparent hover:border-orange-100 transition text-left"
+                      >
+                        <PlatformLogo code={n.platform_code} name={n.platform_name} size="sm" />
+                        <div className="min-w-0 flex-1">
+                          <p className="text-xs font-bold text-slate-800 truncate">{n.customer_name}</p>
+                          <p className="text-[10px] text-slate-500">
+                            {formatNotifTime(n.created_at)} · {n.total_amount.toFixed(2)} ₺
+                          </p>
+                        </div>
+                        <ArrowRight className="w-3.5 h-3.5 text-slate-300 shrink-0" />
+                      </button>
+                    ))
+                  )}
+                </div>
+                {notifs.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => onNavigate('online-orders')}
+                    className="w-full py-2.5 text-xs font-bold text-orange-600 bg-orange-50 hover:bg-orange-100 border-t border-orange-100 transition"
+                  >
+                    Tümünü aç
+                  </button>
+                )}
+              </div>
+              <a
+                href="mailto:destek@sefpos.com.tr"
+                className="mt-3 flex items-center justify-center gap-2 text-[11px] font-semibold text-slate-400 hover:text-orange-600 transition"
+              >
+                <Headphones className="w-3.5 h-3.5" />
+                destek@sefpos.com.tr
+              </a>
+            </aside>
+          </div>
+        </div>
       </div>
 
-      {/* Alt şerit */}
-      <footer className="flex-shrink-0 flex items-center justify-between px-5 md:px-8 py-3 border-t border-white/10 bg-black/25 backdrop-blur-md">
-        <p className="text-[11px] font-semibold text-white/40">
-          ŞefPOS {APP_DISPLAY_VERSION}
-          {activeBranch?.name ? ` · ${activeBranch.name}` : ''}
-        </p>
-        <div className="flex items-center gap-2">
-          {onLockScreen && hasPin && (
-            <button
-              type="button"
-              onClick={onLockScreen}
-              className="flex items-center gap-2 px-4 py-2.5 rounded-full bg-white/10 hover:bg-white/15 text-sm font-bold transition"
-            >
-              <Lock className="w-4 h-4" />
-              <span className="hidden sm:inline">Kilitle</span>
-            </button>
-          )}
-          {canOpenSettings && onOpenSettings && (
-            <button
-              type="button"
-              onClick={onOpenSettings}
-              className="flex items-center gap-2 px-5 py-2.5 rounded-full bg-gradient-to-r from-orange-500 to-red-600 hover:from-orange-600 hover:to-red-700 text-sm font-black shadow-lg shadow-orange-900/40 transition active:scale-[0.98]"
-            >
-              <Settings className="w-4 h-4" />
-              Ayarlar
-            </button>
-          )}
-        </div>
+      <footer className="flex-shrink-0 px-4 md:px-8 py-2 border-t border-slate-200 bg-white/80 text-[11px] font-semibold text-slate-400 text-center">
+        ŞefPOS {APP_DISPLAY_VERSION}
       </footer>
     </div>
   );
 }
 
-function StatusPill({
-  ok,
-  okLabel,
-  badLabel,
-  iconOn: IconOn,
-  iconOff: IconOff,
+function SectionTitle({
+  title,
+  icon: Icon,
 }: {
-  ok: boolean;
-  okLabel: string;
-  badLabel: string;
-  iconOn: React.ComponentType<{ className?: string }>;
-  iconOff: React.ComponentType<{ className?: string }>;
+  title: string;
+  icon?: React.ComponentType<{ className?: string }>;
 }) {
-  const Icon = ok ? IconOn : IconOff;
   return (
-    <div
-      className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wide border ${
-        ok
-          ? 'bg-emerald-500/15 text-emerald-200 border-emerald-400/25'
-          : 'bg-red-500/15 text-red-200 border-red-400/25'
-      }`}
-    >
-      <Icon className="w-3.5 h-3.5 shrink-0" />
-      <span className="hidden md:inline">{ok ? okLabel : badLabel}</span>
-    </div>
+    <h3 className="text-xs font-black uppercase tracking-wider text-slate-500 mb-3 flex items-center gap-2">
+      {Icon && <Icon className="w-4 h-4 text-orange-500" />}
+      {title}
+    </h3>
   );
 }
 
-function ModuleTile({
-  tile,
-  large,
-  onClick,
+function StatusChip({
+  ok,
+  label,
+  icon: Icon,
 }: {
-  tile: ReturnType<typeof buildPosMenuTiles>[number];
-  large?: boolean;
-  onClick: () => void;
+  ok: boolean;
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
 }) {
+  return (
+    <span
+      className={`inline-flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-bold ${
+        ok ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'
+      }`}
+    >
+      <Icon className="w-3 h-3" />
+      {label}
+    </span>
+  );
+}
+
+/** Büyük hızlı erişim — beyaz kart, sol turuncu çizgi (ŞefPOS POS kart dili). */
+function QuickLaunchCard({ tile, onClick }: { tile: PosMenuTile; onClick: () => void }) {
   const Icon = tile.icon;
   return (
     <button
       type="button"
       onClick={onClick}
-      className={`group relative flex flex-col items-center justify-center text-center rounded-2xl md:rounded-3xl border border-white/12 bg-white/[0.07] hover:bg-white/[0.12] hover:border-orange-400/35 hover:shadow-[0_0_40px_rgba(249,115,22,0.15)] transition-all duration-200 active:scale-[0.98] ${
-        large ? 'min-h-[140px] md:min-h-[168px] p-5 md:p-6' : 'min-h-[108px] md:min-h-[120px] p-4'
-      }`}
+      className="group flex items-center gap-4 w-full text-left p-4 md:p-5 rounded-2xl bg-white border border-slate-200 shadow-sm hover:shadow-md hover:border-orange-300 transition-all active:scale-[0.99] border-l-4 border-l-orange-500"
     >
-      <div
-        className={`rounded-2xl flex items-center justify-center mb-3 bg-gradient-to-br from-orange-500/90 to-rose-600/90 shadow-lg shadow-orange-900/30 group-hover:scale-105 transition-transform ${
-          large ? 'w-14 h-14 md:w-16 md:h-16' : 'w-11 h-11 md:w-12 md:h-12'
-        }`}
-      >
-        <Icon className={large ? 'w-7 h-7 md:w-8 md:h-8 text-white' : 'w-5 h-5 md:w-6 md:h-6 text-white'} strokeWidth={2.2} />
-      </div>
-      <span className={`font-black text-white leading-tight ${large ? 'text-base md:text-lg' : 'text-sm'}`}>
-        {tile.label}
+      <span className="flex-shrink-0 w-12 h-12 rounded-xl bg-gradient-to-br from-orange-500 to-red-600 flex items-center justify-center shadow-md shadow-orange-200/50 group-hover:scale-105 transition-transform">
+        <Icon className="w-6 h-6 text-white" strokeWidth={2.2} />
       </span>
-      {tile.description && (
-        <span className="mt-1 text-[10px] md:text-xs text-white/45 font-medium leading-snug max-w-[90%]">
-          {tile.description}
-        </span>
-      )}
+      <span className="min-w-0 flex-1">
+        <span className="block text-base md:text-lg font-extrabold text-slate-900">{tile.label}</span>
+        {tile.description && (
+          <span className="block text-xs text-slate-500 font-medium mt-0.5">{tile.description}</span>
+        )}
+      </span>
+      <ArrowRight className="w-5 h-5 text-slate-300 group-hover:text-orange-500 shrink-0 transition-colors" />
+    </button>
+  );
+}
+
+/** Küçük modül — kompakt chip, koyu gradient yok. */
+function CompactModuleButton({ tile, onClick }: { tile: PosMenuTile; onClick: () => void }) {
+  const Icon = tile.icon;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="flex flex-col items-center justify-center gap-2 p-3 rounded-xl bg-white border border-slate-200 hover:border-orange-400 hover:bg-orange-50/50 shadow-sm transition active:scale-[0.98] min-h-[88px]"
+    >
+      <span className="w-9 h-9 rounded-lg bg-orange-100 text-orange-600 flex items-center justify-center">
+        <Icon className="w-4 h-4" strokeWidth={2.2} />
+      </span>
+      <span className="text-[11px] font-bold text-slate-800 text-center leading-tight">{tile.label}</span>
     </button>
   );
 }
