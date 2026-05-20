@@ -18,6 +18,10 @@ import {
   type SupportNotificationRow,
 } from '../lib/supportNotifications';
 import { publicAsset } from '../lib/assetUrl';
+import {
+  ELECTRON_HEADER_BAR_CLASS,
+  ELECTRON_HEADER_LOGO_CLASS,
+} from '../lib/electronLayout';
 
 const isElectron = !!(window as any).electronAPI;
 
@@ -34,8 +38,6 @@ const roleLabels: Record<string, string> = {
 
 // Web: yatay logo. Electron: turuncu barda kontrast icin yuvarlak logo (ana sayfa ile ayni).
 const logoSrc = isElectron ? publicAsset('sefpos-round.png') : '/logo-header.png';
-const electronLogoClass =
-  'h-10 w-10 md:h-11 md:w-11 rounded-full object-cover bg-white ring-2 ring-white/35 shadow-md shrink-0 select-none';
 
 interface HeaderProps {
   onOpenSettings: () => void;
@@ -275,13 +277,15 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
       <header
         className={
           isElectron
-            ? 'fixed top-0 left-0 right-0 z-30 bg-gradient-to-r from-orange-500 via-orange-600 to-orange-700 text-white shadow-lg border-b border-orange-800/30'
+            ? `fixed top-0 left-0 right-0 z-30 ${ELECTRON_HEADER_BAR_CLASS}`
             : 'fixed top-0 left-0 right-0 bg-white shadow-sm border-b border-slate-200 z-30'
         }
       >
-        <div className="px-3 md:px-6">
-          <div className="flex justify-between items-center h-14 md:h-20">
-            <div className="flex items-center gap-2 md:gap-3 ml-12 md:ml-16 min-w-0">
+        <div className={isElectron ? 'px-3 md:px-6' : 'px-3 md:px-6'}>
+          <div className="flex justify-between items-center h-14 md:h-20 w-full">
+            <div
+              className={`flex items-center gap-2 md:gap-3 min-w-0 ${isElectron ? '' : 'ml-12 md:ml-16'}`}
+            >
               {onBackToTables ? (
                 <button
                   type="button"
@@ -294,7 +298,7 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
                     alt="ŞefPOS"
                     className={
                       isElectron
-                        ? `${electronLogoClass} pointer-events-none`
+                        ? `${ELECTRON_HEADER_LOGO_CLASS} pointer-events-none`
                         : 'h-9 w-auto object-contain select-none pointer-events-none'
                     }
                     draggable={false}
@@ -313,7 +317,7 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
                 alt="ŞefPOS"
                 className={
                   isElectron
-                    ? `${electronLogoClass} ${onBackToTables ? 'hidden md:block' : ''}`
+                    ? `${ELECTRON_HEADER_LOGO_CLASS} ${onBackToTables ? 'hidden md:block' : ''}`
                     : `h-9 md:h-12 w-auto object-contain flex-shrink-0 select-none ${onBackToTables ? 'hidden md:block' : ''}`
                 }
                 draggable={false}

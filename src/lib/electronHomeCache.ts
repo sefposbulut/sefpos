@@ -7,7 +7,7 @@ export type ElectronHomeCachePayload = {
   cachedAt: number;
 };
 
-const PREFIX = 'sefpos:electron-home:v1:';
+const PREFIX = 'sefpos:electron-home:v2:';
 const ram = new Map<string, ElectronHomeCachePayload>();
 
 export function electronHomeCacheKey(tenantId: string, branchId: string): string {

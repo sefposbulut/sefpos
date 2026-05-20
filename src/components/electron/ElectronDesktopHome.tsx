@@ -33,6 +33,12 @@ import {
 import { isSqlServerMode } from '../../lib/sqlDb';
 import { INVENTORY_TAB_STORAGE_KEY } from '../../lib/inventoryNav';
 import { REPORTS_INITIAL_TAB_STORAGE_KEY, REPORTS_MENU_LAST_KEY } from '../../lib/reportsNav';
+import {
+  ELECTRON_HEADER_BAR_CLASS,
+  ELECTRON_HEADER_LOGO_CLASS,
+  ELECTRON_HEADER_PADDING,
+  ELECTRON_HEADER_ROW_CLASS,
+} from '../../lib/electronLayout';
 
 interface ElectronDesktopHomeProps {
   onNavigate: (page: string) => void;
@@ -209,13 +215,14 @@ export function ElectronDesktopHome({
 
   return (
     <div className="fixed inset-0 z-[30] flex flex-col bg-gradient-to-br from-slate-50 to-slate-100 text-slate-900 overflow-hidden">
-      <header className="flex-shrink-0 bg-gradient-to-r from-orange-500 via-orange-600 to-orange-700 text-white shadow-lg">
-        <div className="flex items-center justify-between gap-4 px-5 md:px-8 h-14 md:h-16">
+      <header className={ELECTRON_HEADER_BAR_CLASS}>
+        <div className={ELECTRON_HEADER_PADDING}>
+          <div className={ELECTRON_HEADER_ROW_CLASS}>
           <div className="flex items-center gap-3 min-w-0">
             <img
               src={roundLogoSrc}
               alt="ŞefPOS"
-              className="h-10 w-10 md:h-11 md:w-11 rounded-full object-cover bg-white ring-2 ring-white/30 shadow-md shrink-0"
+              className={ELECTRON_HEADER_LOGO_CLASS}
               onError={(e) => {
                 (e.currentTarget as HTMLImageElement).src = publicAsset('logo.png');
               }}
@@ -302,6 +309,7 @@ export function ElectronDesktopHome({
                 <LogOut className="w-4 h-4 text-white" />
               </button>
             </div>
+          </div>
           </div>
         </div>
       </header>

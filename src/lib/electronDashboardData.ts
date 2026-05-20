@@ -224,26 +224,89 @@ export async function fetchElectronRecentActivity(
     .slice(0, limit);
 }
 
-/** Masa (dine_in) + hızlı satış (counter) — online/paket hariç */
+/** Masa + hızlı satış; paket/online (delivery) hariç */
 const TOP_SELLER_ORDER_TYPES = ['dine_in', 'counter'] as const;
 
-async function fetchOrderItemsForTopSellers(
-  tenantId: string,
-  orderIds: string[],
-): Promise<Record<string, unknown>[]> {
-  const all: Record<string, unknown>[] = [];
-  const chunkSize = 80;
-  for (let i = 0; i < orderIds.length; i += chunkSize) {
-    const chunk = orderIds.slice(i, i + chunkSize);
-    const { data, error } = await supabase
-      .from('order_items')
-      .select('product_id, quantity, total_amount, products(name)')
-      .eq('tenant_id', tenantId)
-      .in('order_id', chunk);
-    if (error) break;
-    if (data?.length) all.push(...(data as Record<string, unknown>[]));
+type OrderWithItems = {
+  order_items?: Array<{
+    product_id?: string;
+    quantity?: number;
+    total_amount?: number;
+    cancelled_at?: string | null;
+    products?: { name?: string } | null;
+  }>;
+};
+
+function aggregateTopSellersFromOrders(
+  orders: OrderWithItems[],
+  productNameById: Map<string, string>,
+): TopSellerRow[] {
+  const agg = new Map<string, TopSellerRow>();
+  for (const order of orders) {
+    for (const item of order.order_items || []) {
+      if (item.cancelled_at) continue;
+      const productId = String(item.product_id || '');
+      if (!productId) continue;
+      const qty = Number(item.quantity) || 0;
+      const rev = Number(item.total_amount) || 0;
+      if (qty <= 0 && rev <= 0) continue;
+      const name =
+        item.products?.name ||
+        productNameById.get(productId) ||
+        'Ürün';
+      const prev = agg.get(productId);
+      if (prev) {
+        prev.quantity += qty;
+        prev.revenue += rev;
+      } else {
+        agg.set(productId, { productId, name, quantity: qty, revenue: rev });
+      }
+    }
   }
-  return all;
+  return [...agg.values()].sort((a, b) => b.revenue - a.revenue || b.quantity - a.quantity);
+}
+
+async function loadProductNames(tenantId: string, productIds: string[]): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  if (!productIds.length) return map;
+  const chunkSize = 80;
+  for (let i = 0; i < productIds.length; i += chunkSize) {
+    const chunk = productIds.slice(i, i + chunkSize);
+    const { data } = await supabase
+      .from('products')
+      .select('id, name')
+      .eq('tenant_id', tenantId)
+      .in('id', chunk);
+    for (const p of data || []) {
+      map.set(String((p as { id: string }).id), String((p as { name?: string }).name || 'Ürün'));
+    }
+  }
+  return map;
+}
+
+async function fetchOrdersWithItemsForTopSellers(
+  tenantId: string,
+  branchId: string,
+  dayStart: string,
+  dayEnd: string,
+  orderTypes: readonly string[] | null,
+): Promise<OrderWithItems[]> {
+  let q = supabase
+    .from('orders')
+    .select('id, order_items(product_id, quantity, total_amount, cancelled_at, products(name))')
+    .eq('tenant_id', tenantId)
+    .eq('branch_id', branchId)
+    .neq('status', 'cancelled')
+    .gte('created_at', dayStart)
+    .lte('created_at', dayEnd);
+  if (orderTypes?.length) {
+    q = q.in('order_type', [...orderTypes]);
+  } else {
+    q = q.not('order_type', 'eq', 'delivery');
+  }
+  const { data, error } = await q;
+  if (error || !data?.length) return [];
+  return data as OrderWithItems[];
 }
 
 export async function fetchElectronTopSellers(
@@ -254,40 +317,31 @@ export async function fetchElectronTopSellers(
   if (isSqlServerMode() || !branchId) return [];
 
   const today = dayBounds(0);
-  const { data: orders, error: ordersErr } = await supabase
-    .from('orders')
-    .select('id')
-    .eq('tenant_id', tenantId)
-    .eq('branch_id', branchId)
-    .in('order_type', [...TOP_SELLER_ORDER_TYPES])
-    .neq('status', 'cancelled')
-    .gte('created_at', today.start)
-    .lte('created_at', today.end);
-
-  if (ordersErr || !orders?.length) return [];
-
-  const orderIds = orders.map((o) => String((o as { id: string }).id));
-  const items = await fetchOrderItemsForTopSellers(tenantId, orderIds);
-  if (!items.length) return [];
-
-  const agg = new Map<string, TopSellerRow>();
-  for (const item of items) {
-    const productId = String(item.product_id || 'unknown');
-    const products = item.products as { name?: string } | null;
-    const name = products?.name || 'Ürün';
-    const qty = Number(item.quantity) || 0;
-    const rev = Number(item.total_amount) || 0;
-    if (qty <= 0 && rev <= 0) continue;
-    const prev = agg.get(productId);
-    if (prev) {
-      prev.quantity += qty;
-      prev.revenue += rev;
-    } else {
-      agg.set(productId, { productId, name, quantity: qty, revenue: rev });
-    }
+  let orders = await fetchOrdersWithItemsForTopSellers(
+    tenantId,
+    branchId,
+    today.start,
+    today.end,
+    TOP_SELLER_ORDER_TYPES,
+  );
+  if (!orders.length) {
+    orders = await fetchOrdersWithItemsForTopSellers(
+      tenantId,
+      branchId,
+      today.start,
+      today.end,
+      null,
+    );
   }
 
-  return [...agg.values()].sort((a, b) => b.revenue - a.revenue || b.quantity - a.quantity).slice(0, limit);
+  const productIds = new Set<string>();
+  for (const o of orders) {
+    for (const it of o.order_items || []) {
+      if (it.product_id && !it.products?.name) productIds.add(String(it.product_id));
+    }
+  }
+  const productNameById = await loadProductNames(tenantId, [...productIds]);
+  return aggregateTopSellersFromOrders(orders, productNameById).slice(0, limit);
 }
 
 export type ElectronHomeBundle = {
