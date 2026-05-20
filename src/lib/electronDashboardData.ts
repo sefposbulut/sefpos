@@ -1,5 +1,6 @@
 import { supabase } from './supabase';
 import { isSqlServerMode } from './sqlDb';
+import { writeElectronHomeCache } from './electronHomeCache';
 
 export type DashboardSnapshot = {
   /** Aktif şubede `current_order_id` dolu masa sayısı */
@@ -23,6 +24,13 @@ export type RecentActivityRow = {
   status: string;
   statusTone: 'open' | 'preparing' | 'done' | 'neutral';
   created_at: string;
+};
+
+export type TopSellerRow = {
+  productId: string;
+  name: string;
+  quantity: number;
+  revenue: number;
 };
 
 function dayBounds(offsetDays = 0): { start: string; end: string; label: string } {
@@ -123,48 +131,68 @@ export async function fetchElectronDashboardSnapshot(
   };
 }
 
+const mapOrderStatus = (status: string): { label: string; tone: RecentActivityRow['statusTone'] } => {
+  if (status === 'completed') return { label: 'Tamamlandı', tone: 'done' };
+  if (status === 'cancelled') return { label: 'İptal', tone: 'neutral' };
+  if (status === 'active' || status === 'open') return { label: 'Açık', tone: 'open' };
+  if (status === 'pending') return { label: 'Hazırlanıyor', tone: 'preparing' };
+  return { label: status, tone: 'neutral' };
+};
+
 export async function fetchElectronRecentActivity(
   tenantId: string,
   branchId: string | null,
-  limit = 5,
+  limit = 8,
 ): Promise<RecentActivityRow[]> {
   if (isSqlServerMode() || !branchId) return [];
 
-  let ordersQ = supabase
-    .from('orders')
-    .select('id, order_number, status, total_amount, order_type, created_at, table_id, restaurant_tables(table_number)')
-    .eq('tenant_id', tenantId)
-    .eq('branch_id', branchId)
-    .order('created_at', { ascending: false })
-    .limit(limit);
+  const perSource = Math.max(limit, 8);
 
-  let onlineQ = supabase
-    .from('online_orders')
-    .select('id, customer_name, status, total_amount, created_at, platform_order_number')
-    .eq('tenant_id', tenantId)
-    .eq('branch_id', branchId)
-    .order('created_at', { ascending: false })
-    .limit(limit);
+  const [ordersRes, onlineRes] = await Promise.all([
+    supabase
+      .from('orders')
+      .select('id, order_number, status, total_amount, order_type, created_at, table_id')
+      .eq('tenant_id', tenantId)
+      .eq('branch_id', branchId)
+      .neq('status', 'cancelled')
+      .order('created_at', { ascending: false })
+      .limit(perSource),
+    supabase
+      .from('online_orders')
+      .select('id, customer_name, status, total_amount, created_at, platform_order_number')
+      .eq('tenant_id', tenantId)
+      .eq('branch_id', branchId)
+      .order('created_at', { ascending: false })
+      .limit(perSource),
+  ]);
 
-  const [{ data: orders }, { data: online }] = await Promise.all([ordersQ, onlineQ]);
+  const orders = (ordersRes.data || []) as Record<string, unknown>[];
+  const tableIds = [
+    ...new Set(
+      orders.map((o) => o.table_id).filter((id): id is string => typeof id === 'string' && id.length > 0),
+    ),
+  ];
 
-  const mapOrderStatus = (status: string): { label: string; tone: RecentActivityRow['statusTone'] } => {
-    if (status === 'completed') return { label: 'Tamamlandı', tone: 'done' };
-    if (status === 'cancelled') return { label: 'İptal', tone: 'neutral' };
-    if (status === 'active' || status === 'open') return { label: 'Açık', tone: 'open' };
-    if (status === 'pending') return { label: 'Hazırlanıyor', tone: 'preparing' };
-    return { label: status, tone: 'neutral' };
-  };
+  const tableMap = new Map<string, string | number>();
+  if (tableIds.length > 0) {
+    const { data: tables } = await supabase
+      .from('restaurant_tables')
+      .select('id, table_number')
+      .eq('tenant_id', tenantId)
+      .in('id', tableIds);
+    for (const t of tables || []) {
+      tableMap.set(String((t as { id: string }).id), (t as { table_number?: string | number }).table_number ?? '');
+    }
+  }
 
-  const orderRows: RecentActivityRow[] = (orders || []).map((o: Record<string, unknown>) => {
-    const tbl = o.restaurant_tables as { table_number?: string | number } | null;
-    const tableNum = tbl?.table_number;
+  const orderRows: RecentActivityRow[] = orders.map((o) => {
+    const tableNum = o.table_id ? tableMap.get(String(o.table_id)) : null;
     const st = mapOrderStatus(String(o.status || ''));
     const orderType = String(o.order_type || '');
     return {
       id: `o-${o.id}`,
       kind: orderType === 'takeaway' ? 'takeaway' : 'table',
-      title: tableNum != null ? `Masa ${tableNum}` : `Sipariş #${o.order_number || '—'}`,
+      title: tableNum != null && tableNum !== '' ? `Masa ${tableNum}` : `Sipariş #${o.order_number || '—'}`,
       subtitle: orderType === 'takeaway' ? 'Paket servis' : 'Salon',
       amount: Number(o.total_amount) || 0,
       status: st.label,
@@ -173,11 +201,12 @@ export async function fetchElectronRecentActivity(
     };
   });
 
-  const onlineRows: RecentActivityRow[] = (online || []).map((o: Record<string, unknown>) => {
+  const onlineRows: RecentActivityRow[] = (onlineRes.data || []).map((o: Record<string, unknown>) => {
     const raw = String(o.status || '');
-    let st = { label: 'Yeni', tone: 'open' as const };
+    let st: { label: string; tone: RecentActivityRow['statusTone'] } = { label: 'Yeni', tone: 'open' };
     if (raw === 'preparing' || raw === 'ready') st = { label: 'Hazırlanıyor', tone: 'preparing' };
     if (raw === 'delivered' || raw === 'completed') st = { label: 'Tamamlandı', tone: 'done' };
+    if (raw === 'cancelled') st = { label: 'İptal', tone: 'neutral' };
     return {
       id: `on-${o.id}`,
       kind: 'online',
@@ -193,6 +222,73 @@ export async function fetchElectronRecentActivity(
   return [...orderRows, ...onlineRows]
     .sort((a, b) => b.created_at.localeCompare(a.created_at))
     .slice(0, limit);
+}
+
+export async function fetchElectronTopSellers(
+  tenantId: string,
+  branchId: string | null,
+  limit = 10,
+): Promise<TopSellerRow[]> {
+  if (isSqlServerMode() || !branchId) return [];
+
+  const today = dayBounds(0);
+  const { data: orders, error } = await supabase
+    .from('orders')
+    .select('order_items(product_id, quantity, total_amount, products(name))')
+    .eq('tenant_id', tenantId)
+    .eq('branch_id', branchId)
+    .eq('status', 'completed')
+    .gte('created_at', today.start)
+    .lte('created_at', today.end);
+
+  if (error || !orders?.length) return [];
+
+  const agg = new Map<string, TopSellerRow>();
+  for (const order of orders as { order_items?: unknown[] }[]) {
+    const items = (order.order_items || []) as Record<string, unknown>[];
+    for (const item of items) {
+      const productId = String(item.product_id || 'unknown');
+      const products = item.products as { name?: string } | null;
+      const name = products?.name || 'Ürün';
+      const key = productId;
+      const qty = Number(item.quantity) || 0;
+      const rev = Number(item.total_amount) || 0;
+      const prev = agg.get(key);
+      if (prev) {
+        prev.quantity += qty;
+        prev.revenue += rev;
+      } else {
+        agg.set(key, { productId: key, name, quantity: qty, revenue: rev });
+      }
+    }
+  }
+
+  return [...agg.values()].sort((a, b) => b.revenue - a.revenue || b.quantity - a.quantity).slice(0, limit);
+}
+
+export type ElectronHomeBundle = {
+  stats: DashboardSnapshot;
+  recent: RecentActivityRow[];
+  topSellers: TopSellerRow[];
+};
+
+export async function fetchElectronHomeBundle(
+  tenantId: string,
+  branchId: string | null,
+): Promise<ElectronHomeBundle> {
+  const [stats, recent, topSellers] = await Promise.all([
+    fetchElectronDashboardSnapshot(tenantId, branchId),
+    fetchElectronRecentActivity(tenantId, branchId, 8),
+    fetchElectronTopSellers(tenantId, branchId, 10),
+  ]);
+  return { stats, recent, topSellers };
+}
+
+/** Electron acilisinda arka planda cagrilir; ana sayfa aninda cache'den dolar. */
+export function preloadElectronHomeData(tenantId: string, branchId: string): void {
+  void fetchElectronHomeBundle(tenantId, branchId).then((bundle) => {
+    writeElectronHomeCache(tenantId, branchId, bundle);
+  });
 }
 
 export function formatDashboardDateLabel(): string {

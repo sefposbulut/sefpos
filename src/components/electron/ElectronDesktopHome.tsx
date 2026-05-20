@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import type { LucideIcon } from 'lucide-react';
 import {
   ArrowDown,
   ArrowUp,
@@ -6,21 +7,23 @@ import {
   LayoutGrid,
   LogOut,
   Settings,
+  TrendingUp,
   Zap,
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { publicAsset } from '../../lib/assetUrl';
 import { APP_DISPLAY_VERSION } from '../../lib/appVersion';
 import {
-  fetchElectronDashboardSnapshot,
-  fetchElectronRecentActivity,
+  fetchElectronHomeBundle,
   formatDashboardDateLabel,
   formatMoneyTr,
   formatRelativeTr,
   revenueChangePct,
   type DashboardSnapshot,
   type RecentActivityRow,
+  type TopSellerRow,
 } from '../../lib/electronDashboardData';
+import { readElectronHomeCache, writeElectronHomeCache } from '../../lib/electronHomeCache';
 import { buildPosMenuTiles, type PosMenuTile } from '../../lib/posMenuItems';
 import {
   countUnreadNotifications,
@@ -36,6 +39,18 @@ interface ElectronDesktopHomeProps {
   onOpenSettings?: () => void;
   onLockScreen?: () => void;
 }
+
+const EMPTY_STATS: DashboardSnapshot = {
+  openTablesWithOrder: 0,
+  occupiedTables: 0,
+  totalTables: 0,
+  todayRevenue: 0,
+  yesterdayRevenue: 0,
+  todayOrderCount: 0,
+  todayTakeawayCount: 0,
+  todayOnlineCount: 0,
+  pendingOnlineCount: 0,
+};
 
 const roleLabels: Record<string, string> = {
   owner: 'Sahip',
@@ -54,11 +69,21 @@ export function ElectronDesktopHome({
   onOpenSettings,
 }: ElectronDesktopHomeProps) {
   const { tenant, profile, user, activeBranch, signOut, permissions, shiftsEnabled } = useAuth();
+  const tenantId = tenant?.id || '';
+  const branchId = activeBranch?.id || '';
+
+  const initialCache = useMemo(() => {
+    if (!tenantId || !branchId) return null;
+    return readElectronHomeCache(tenantId, branchId);
+  }, [tenantId, branchId]);
+
   const [now, setNow] = useState(() => new Date());
-  const [stats, setStats] = useState<DashboardSnapshot | null>(null);
-  const [recent, setRecent] = useState<RecentActivityRow[]>([]);
+  const [stats, setStats] = useState<DashboardSnapshot>(() => initialCache?.stats ?? EMPTY_STATS);
+  const [recent, setRecent] = useState<RecentActivityRow[]>(() => initialCache?.recent ?? []);
+  const [topSellers, setTopSellers] = useState<TopSellerRow[]>(() => initialCache?.topSellers ?? []);
   const [systemNotifs, setSystemNotifs] = useState<SupportNotificationRow[]>([]);
   const [notifOpen, setNotifOpen] = useState(false);
+  const [dataReady, setDataReady] = useState(() => !!initialCache);
 
   const canOpenSettings = !!permissions?.can_manage_settings;
   const roundLogoSrc = publicAsset('sefpos-round.png');
@@ -104,19 +129,40 @@ export function ElectronDesktopHome({
   const unreadBell =
     countUnreadNotifications(systemNotifs, tenant?.id || '') + (stats?.pendingOnlineCount ?? 0);
 
+  const applyBundle = useCallback(
+    (bundle: { stats: DashboardSnapshot; recent: RecentActivityRow[]; topSellers: TopSellerRow[] }) => {
+      setStats(bundle.stats);
+      setRecent(bundle.recent);
+      setTopSellers(bundle.topSellers);
+      setDataReady(true);
+      if (tenantId && branchId) {
+        writeElectronHomeCache(tenantId, branchId, bundle);
+      }
+    },
+    [tenantId, branchId],
+  );
+
   const refreshData = useCallback(async () => {
-    if (!tenant?.id) return;
-    const [snap, activity, notifs] = await Promise.all([
-      fetchElectronDashboardSnapshot(tenant.id, activeBranch?.id || null),
-      fetchElectronRecentActivity(tenant.id, activeBranch?.id || null, 5),
-      isSqlServerMode() ? Promise.resolve([]) : fetchSupportNotifications(tenant.id),
-    ]);
-    setStats(snap);
-    setRecent(activity);
-    setSystemNotifs(notifs);
-  }, [tenant?.id, activeBranch?.id]);
+    if (!tenantId || !branchId) return;
+    const bundle = await fetchElectronHomeBundle(tenantId, branchId);
+    applyBundle(bundle);
+    if (!isSqlServerMode()) {
+      const notifs = await fetchSupportNotifications(tenantId);
+      setSystemNotifs(notifs);
+    }
+  }, [tenantId, branchId, applyBundle]);
 
   useEffect(() => {
+    if (!tenantId || !branchId) return;
+    const cached = readElectronHomeCache(tenantId, branchId);
+    if (cached) {
+      applyBundle(cached);
+    } else {
+      setStats(EMPTY_STATS);
+      setRecent([]);
+      setTopSellers([]);
+      setDataReady(false);
+    }
     void refreshData();
     const t = setInterval(() => setNow(new Date()), 30_000);
     const poll = setInterval(() => void refreshData(), 90_000);
@@ -124,7 +170,7 @@ export function ElectronDesktopHome({
       clearInterval(t);
       clearInterval(poll);
     };
-  }, [refreshData]);
+  }, [tenantId, branchId, applyBundle, refreshData]);
 
   const handleTileClick = (page: string) => {
     if (page === 'settings') {
@@ -152,7 +198,7 @@ export function ElectronDesktopHome({
   const displayName = profile?.full_name?.trim() || user?.email?.split('@')[0] || 'Kullanıcı';
   const roleLabel = roleLabels[profile?.role || ''] || profile?.role || '';
   const tenantName = (tenant as { name?: string })?.name || 'İşletme';
-  const revPct = stats ? revenueChangePct(stats.todayRevenue, stats.yesterdayRevenue) : null;
+  const revPct = revenueChangePct(stats.todayRevenue, stats.yesterdayRevenue);
   const dateFooter = now.toLocaleDateString('tr-TR', {
     weekday: 'long',
     day: 'numeric',
@@ -162,8 +208,7 @@ export function ElectronDesktopHome({
   const timeFooter = now.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
 
   return (
-    <div className="fixed inset-0 z-[30] flex flex-col bg-slate-100 text-slate-900 overflow-hidden">
-      {/* Üst bar — ŞefPOS turuncu */}
+    <div className="fixed inset-0 z-[30] flex flex-col bg-gradient-to-br from-slate-50 to-slate-100 text-slate-900 overflow-hidden">
       <header className="flex-shrink-0 bg-gradient-to-r from-orange-500 via-orange-600 to-orange-700 text-white shadow-lg">
         <div className="flex items-center justify-between gap-4 px-5 md:px-8 h-14 md:h-16">
           <div className="flex items-center gap-3 min-w-0">
@@ -262,82 +307,93 @@ export function ElectronDesktopHome({
       </header>
 
       <div className="flex-1 flex min-h-0 overflow-hidden">
-        {/* Sol + orta */}
         <div className="flex-1 overflow-y-auto">
-          <div className="max-w-5xl mx-auto px-5 md:px-8 py-6 space-y-6">
-            <section>
+          <div className="max-w-5xl mx-auto px-5 md:px-8 py-5 md:py-6 space-y-5">
+            <section className="bg-white rounded-2xl shadow-md border border-slate-200/80 p-5 md:p-6">
               <h1 className="text-2xl md:text-3xl font-black text-slate-900">
                 Merhaba, {displayName.split(' ')[0]}
               </h1>
               <p className="text-sm text-slate-600 mt-1 font-medium">
-                {tenantName} yönetim paneline hoş geldiniz.
-                {activeBranch?.name ? ` (${activeBranch.name})` : ''}
+                {tenantName}
+                {activeBranch?.name ? ` · ${activeBranch.name}` : ''}
               </p>
-              {activeBranch && stats && (
-                <div className="flex flex-wrap gap-3 mt-4">
+              {activeBranch?.id ? (
+                <div className="flex flex-wrap gap-2 mt-4">
                   <StatChip
-                    label={`Açık masa (${activeBranch.name})`}
+                    label={`Açık masa`}
                     value={String(stats.openTablesWithOrder)}
                   />
                   <StatChip
                     label="Dolu masa"
                     value={`${stats.occupiedTables} / ${stats.totalTables || '—'}`}
                   />
+                  <StatChip label="Bugün adisyon" value={String(stats.todayOrderCount)} accent />
                 </div>
-              )}
-              {!activeBranch?.id && (
-                <p className="mt-3 text-sm text-amber-700 font-semibold">Özet için şube seçin.</p>
+              ) : (
+                <p className="mt-3 text-sm text-amber-700 font-semibold bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 inline-block">
+                  Özet için üst menüden şube seçin.
+                </p>
               )}
             </section>
 
-            {primaryTiles.length > 0 && (
-              <section>
-                <SectionLabel title="Ana işlemler" />
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  {primaryTiles.map((tile) => (
-                    <PrimaryActionCard key={tile.id} tile={tile} onClick={() => handleTileClick(tile.page)} />
-                  ))}
-                </div>
-              </section>
-            )}
+            <section>
+              <SectionLabel title="Ana işlemler" />
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 md:gap-4 min-h-[168px]">
+                {primaryTiles.map((tile) => (
+                  <PrimaryActionCard key={tile.id} tile={tile} onClick={() => handleTileClick(tile.page)} />
+                ))}
+              </div>
+            </section>
 
-            {moduleTiles.length > 0 && (
-              <section>
-                <SectionLabel title="Modüller" />
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
-                  {moduleTiles.map((tile) => (
-                    <ModuleCard key={tile.id} tile={tile} onClick={() => handleTileClick(tile.page)} />
-                  ))}
-                </div>
-              </section>
-            )}
+            <section>
+              <SectionLabel title="Modüller" />
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 min-h-[120px]">
+                {moduleTiles.map((tile) => (
+                  <ModuleCard key={tile.id} tile={tile} onClick={() => handleTileClick(tile.page)} />
+                ))}
+              </div>
+            </section>
           </div>
         </div>
 
-        {/* Sağ panel */}
-        <aside className="hidden lg:flex w-[300px] xl:w-[320px] flex-shrink-0 flex-col border-l border-slate-200 bg-white overflow-y-auto">
+        <aside className="hidden lg:flex w-[300px] xl:w-[340px] flex-shrink-0 flex-col border-l border-orange-200/60 bg-white shadow-[inset_4px_0_12px_rgba(0,0,0,0.02)] overflow-hidden">
           {quickSaleTile && (
-            <div className="p-4 border-b border-slate-100">
+            <div className="p-4 border-b border-orange-100 bg-gradient-to-r from-orange-50 to-white">
               <button
                 type="button"
                 onClick={() => handleTileClick('quick-sale')}
-                className="w-full flex items-center justify-center gap-2 py-4 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-black text-sm shadow-lg transition active:scale-[0.99]"
+                className="w-full flex items-center justify-center gap-2 py-3.5 rounded-xl bg-gradient-to-br from-amber-400 via-orange-500 to-red-500 hover:from-amber-500 hover:via-orange-600 hover:to-red-600 text-white font-black text-sm shadow-lg border-2 border-orange-600 transition active:scale-[0.99]"
               >
-                <Zap className="w-5 h-5 text-amber-400" />
+                <Zap className="w-5 h-5" strokeWidth={2.5} />
                 Hızlı Satış
               </button>
             </div>
           )}
 
           <div className="p-4 border-b border-slate-100">
-            <p className="text-[10px] font-black uppercase tracking-wider text-slate-500 mb-3">Günlük özet</p>
+            <PanelTitle icon={TrendingUp} title="En çok satanlar" subtitle="Bugün · max 10" />
+            <div className="mt-2 space-y-1.5 min-h-[200px]">
+              {topSellers.length === 0 ? (
+                <p className="text-xs text-slate-400 py-6 text-center">
+                  {branchId ? (dataReady ? 'Bugün satış yok' : 'Yükleniyor…') : 'Şube seçin'}
+                </p>
+              ) : (
+                topSellers.map((row, idx) => (
+                  <TopSellerRow key={row.productId} rank={idx + 1} row={row} />
+                ))
+              )}
+            </div>
+          </div>
+
+          <div className="p-4 border-b border-slate-100">
+            <p className="text-[10px] font-black uppercase tracking-wider text-orange-600 mb-1">Günlük özet</p>
             <p className="text-xs text-slate-500 mb-2">{formatDashboardDateLabel()}</p>
             <p className="text-[10px] font-bold text-slate-500 uppercase">Toplam ciro</p>
             <p className="text-2xl font-black text-emerald-600 tabular-nums">
-              {formatMoneyTr(stats?.todayRevenue ?? 0)}
+              {formatMoneyTr(stats.todayRevenue)}
             </p>
             <div className="flex items-center gap-2 mt-1 text-xs text-slate-500">
-              <span>Dün: {formatMoneyTr(stats?.yesterdayRevenue ?? 0)}</span>
+              <span>Dün: {formatMoneyTr(stats.yesterdayRevenue)}</span>
               {revPct != null && (
                 <span
                   className={`inline-flex items-center gap-0.5 font-bold ${
@@ -349,33 +405,39 @@ export function ElectronDesktopHome({
                 </span>
               )}
             </div>
-            <div className="grid grid-cols-2 gap-2 mt-4">
-              <MiniMetric label="Adisyon" value={String(stats?.todayOrderCount ?? 0)} />
+            <div className="grid grid-cols-2 gap-2 mt-3">
+              <MiniMetric label="Adisyon" value={String(stats.todayOrderCount)} />
               <MiniMetric
                 label="Ort. tutar"
                 value={
-                  stats && stats.todayOrderCount > 0
+                  stats.todayOrderCount > 0
                     ? formatMoneyTr(stats.todayRevenue / stats.todayOrderCount)
                     : '—'
                 }
               />
-              <MiniMetric label="Paket" value={String(stats?.todayTakeawayCount ?? 0)} />
-              <MiniMetric label="Online" value={String(stats?.todayOnlineCount ?? 0)} />
+              <MiniMetric label="Paket" value={String(stats.todayTakeawayCount)} />
+              <MiniMetric label="Online" value={String(stats.todayOnlineCount)} />
             </div>
           </div>
 
-          <div className="p-4 flex-1 min-h-0">
-            <p className="text-[10px] font-black uppercase tracking-wider text-slate-500 mb-3">Son işlemler</p>
-            <div className="space-y-2">
+          <div className="p-4 flex-1 min-h-0 overflow-y-auto">
+            <PanelTitle title="Son işlemler" subtitle="Canlı" />
+            <div className="mt-2 space-y-1.5 min-h-[140px]">
               {recent.length === 0 ? (
-                <p className="text-xs text-slate-400 py-4 text-center">Henüz işlem yok</p>
+                <p className="text-xs text-slate-400 py-6 text-center">
+                  {branchId ? (dataReady ? 'Henüz işlem yok' : 'Yükleniyor…') : 'Şube seçin'}
+                </p>
               ) : (
                 recent.map((row) => (
-                  <RecentRow key={row.id} row={row} onOpen={() => {
-                    if (row.kind === 'online') onNavigate('online-orders');
-                    else if (row.kind === 'takeaway') onNavigate('takeaway');
-                    else onNavigate('tables');
-                  }} />
+                  <RecentRow
+                    key={row.id}
+                    row={row}
+                    onOpen={() => {
+                      if (row.kind === 'online') onNavigate('online-orders');
+                      else if (row.kind === 'takeaway') onNavigate('takeaway');
+                      else onNavigate('tables');
+                    }}
+                  />
                 ))
               )}
             </div>
@@ -383,22 +445,44 @@ export function ElectronDesktopHome({
         </aside>
       </div>
 
-      {/* Alt durum çubuğu */}
-      <footer className="flex-shrink-0 h-9 px-5 md:px-8 flex items-center justify-between bg-white border-t border-slate-200 text-[11px] font-semibold text-slate-500">
+      <footer
+        className="flex-shrink-0 h-9 px-5 md:px-8 flex items-center justify-between text-[11px] font-semibold text-white shadow-[0_-2px_6px_rgba(0,0,0,0.12)] border-t border-orange-700/40"
+        style={{ background: '#f97316' }}
+      >
         <span className="flex items-center gap-2">
           ŞefPOS {APP_DISPLAY_VERSION}
-          <span className="inline-flex items-center gap-1 text-emerald-600">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-            Sistem çevrimiçi
+          <span className="inline-flex items-center gap-1 text-white/95">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-300" />
+            Çevrimiçi
           </span>
         </span>
-        <span className="hidden md:inline capitalize">
-          {dateFooter} | {timeFooter}
+        <span className="hidden md:inline capitalize text-white/90">
+          {dateFooter} · {timeFooter}
         </span>
-        <a href="tel:+905442449080" className="hover:text-orange-600 transition">
-          Destek: 0544 244 90 80
+        <a href="tel:+905442449080" className="hover:text-white transition text-white/95">
+          0544 244 90 80
         </a>
       </footer>
+    </div>
+  );
+}
+
+function PanelTitle({
+  title,
+  subtitle,
+  icon: Icon,
+}: {
+  title: string;
+  subtitle?: string;
+  icon?: LucideIcon;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-2">
+      <p className="text-[10px] font-black uppercase tracking-wider text-orange-600 flex items-center gap-1.5">
+        {Icon ? <Icon className="w-3.5 h-3.5" /> : null}
+        {title}
+      </p>
+      {subtitle ? <span className="text-[9px] font-bold text-slate-400">{subtitle}</span> : null}
     </div>
   );
 }
@@ -412,11 +496,27 @@ function SectionLabel({ title }: { title: string }) {
   );
 }
 
-function StatChip({ label, value }: { label: string; value: string }) {
+function StatChip({
+  label,
+  value,
+  accent,
+}: {
+  label: string;
+  value: string;
+  accent?: boolean;
+}) {
   return (
-    <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white border border-slate-200 shadow-sm">
+    <div
+      className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border shadow-sm ${
+        accent
+          ? 'bg-orange-50 border-orange-200'
+          : 'bg-slate-50 border-slate-200'
+      }`}
+    >
       <span className="text-xs font-bold text-slate-500">{label}:</span>
-      <span className="text-sm font-black text-slate-900">{value}</span>
+      <span className={`text-sm font-black tabular-nums ${accent ? 'text-orange-700' : 'text-slate-900'}`}>
+        {value}
+      </span>
     </div>
   );
 }
@@ -427,12 +527,12 @@ function PrimaryActionCard({ tile, onClick }: { tile: PosMenuTile; onClick: () =
     <button
       type="button"
       onClick={onClick}
-      className="group flex items-start gap-4 p-5 rounded-2xl bg-white border border-slate-200 shadow-sm hover:shadow-md hover:border-orange-300 transition-all text-left active:scale-[0.99]"
+      className="group flex items-center gap-4 p-4 md:p-5 rounded-2xl bg-white border-2 border-orange-200/80 shadow-md hover:shadow-lg hover:border-orange-400 transition-all text-left active:scale-[0.99]"
     >
-      <span className="flex-shrink-0 w-14 h-14 rounded-2xl border-2 border-orange-200 bg-orange-50 flex items-center justify-center group-hover:bg-orange-100 transition">
-        <Icon className="w-7 h-7 text-orange-600" strokeWidth={2} />
+      <span className="flex-shrink-0 w-14 h-14 rounded-2xl bg-gradient-to-br from-amber-400 via-orange-500 to-red-500 flex items-center justify-center shadow-md border border-orange-600 group-hover:scale-[1.02] transition">
+        <Icon className="w-7 h-7 text-white" strokeWidth={2.2} />
       </span>
-      <span className="min-w-0 pt-1">
+      <span className="min-w-0 pt-0.5">
         <span className="block text-lg font-extrabold text-slate-900">{tile.label}</span>
         {tile.description && (
           <span className="block text-sm text-slate-500 font-medium mt-0.5">{tile.description}</span>
@@ -448,17 +548,40 @@ function ModuleCard({ tile, onClick }: { tile: PosMenuTile; onClick: () => void 
     <button
       type="button"
       onClick={onClick}
-      className="flex flex-col items-center justify-center gap-2 p-4 rounded-xl bg-white border border-slate-200 hover:border-orange-300 hover:shadow-sm transition active:scale-[0.98] min-h-[100px]"
+      className="flex flex-col items-center justify-center gap-2 p-4 rounded-xl bg-white border border-slate-200 shadow-sm hover:border-orange-300 hover:shadow-md transition active:scale-[0.98] min-h-[96px]"
     >
-      <Icon className="w-6 h-6 text-slate-500" strokeWidth={1.8} />
+      <span className="w-11 h-11 rounded-xl bg-orange-50 border border-orange-200 flex items-center justify-center">
+        <Icon className="w-5 h-5 text-orange-600" strokeWidth={2} />
+      </span>
       <span className="text-xs font-bold text-slate-800 text-center leading-tight">{tile.label}</span>
     </button>
   );
 }
 
+function TopSellerRow({ rank, row }: { rank: number; row: TopSellerRow }) {
+  return (
+    <div className="flex items-center gap-2 rounded-lg bg-slate-50 border border-slate-100 px-2 py-1.5">
+      <span
+        className={`w-6 h-6 rounded-md flex items-center justify-center text-[10px] font-black shrink-0 ${
+          rank <= 3 ? 'bg-orange-500 text-white' : 'bg-slate-200 text-slate-600'
+        }`}
+      >
+        {rank}
+      </span>
+      <span className="min-w-0 flex-1">
+        <p className="text-xs font-bold text-slate-800 truncate">{row.name}</p>
+        <p className="text-[10px] text-slate-500 tabular-nums">{row.quantity} adet</p>
+      </span>
+      <span className="text-xs font-black text-emerald-700 tabular-nums shrink-0">
+        {formatMoneyTr(row.revenue)}
+      </span>
+    </div>
+  );
+}
+
 function MiniMetric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg bg-slate-50 border border-slate-100 px-2.5 py-2">
+    <div className="rounded-lg bg-orange-50/50 border border-orange-100 px-2.5 py-2">
       <p className="text-[9px] font-bold text-slate-500 uppercase">{label}</p>
       <p className="text-sm font-black text-slate-800 tabular-nums truncate">{value}</p>
     </div>
@@ -481,14 +604,16 @@ function RecentRow({ row, onOpen }: { row: RecentActivityRow; onOpen: () => void
     <button
       type="button"
       onClick={onOpen}
-      className="w-full flex items-center gap-2.5 p-2.5 rounded-xl hover:bg-slate-50 border border-transparent hover:border-slate-200 transition text-left"
+      className="w-full flex items-center gap-2.5 p-2.5 rounded-xl bg-white border border-slate-100 hover:border-orange-200 hover:bg-orange-50/40 transition text-left"
     >
-      <span className="w-9 h-9 rounded-lg bg-slate-100 flex items-center justify-center shrink-0">
-        <KindIcon className="w-4 h-4 text-slate-600" />
+      <span className="w-9 h-9 rounded-lg bg-orange-50 border border-orange-100 flex items-center justify-center shrink-0">
+        <KindIcon className="w-4 h-4 text-orange-600" />
       </span>
       <span className="min-w-0 flex-1">
         <p className="text-xs font-bold text-slate-800 truncate">{row.title}</p>
-        <p className="text-[10px] text-slate-500">{formatRelativeTr(row.created_at)}</p>
+        <p className="text-[10px] text-slate-500">
+          {row.subtitle} · {formatRelativeTr(row.created_at)}
+        </p>
       </span>
       <span className="text-right shrink-0">
         <p className="text-xs font-black text-slate-800 tabular-nums">{formatMoneyTr(row.amount)}</p>

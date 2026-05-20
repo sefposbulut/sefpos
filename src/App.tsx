@@ -7,6 +7,7 @@ import { AykaLogin } from './components/AykaLogin';
 import { ElectronAuth } from './components/ElectronAuth';
 import { ElectronConnectionMenu, type ElectronConnectMode } from './components/electron/ElectronConnectionMenu';
 import { ElectronDesktopHome } from './components/electron/ElectronDesktopHome';
+import { preloadElectronHomeData } from './lib/electronDashboardData';
 import { SqlServerSettings } from './components/SqlServerSettings';
 import { LandingPage } from './components/landing/LandingPage';
 import { isLandingPath } from './components/landing/landingRoutes';
@@ -305,6 +306,12 @@ function App() {
     if (!tenant?.id) return;
     void queryCache.hydrateForTenant(tenant.id);
   }, [tenant?.id]);
+
+  /** Electron ana sayfa verisi masalar ekranina gecmeden once yuklensin (cache). */
+  useEffect(() => {
+    if (!isElectron || !tenant?.id || !activeBranch?.id || dbMode === 'loading') return;
+    preloadElectronHomeData(tenant.id, activeBranch.id);
+  }, [isElectron, tenant?.id, activeBranch?.id, dbMode]);
 
   useEffect(() => {
     if (!tenant || !user) return;
