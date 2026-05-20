@@ -34,6 +34,15 @@ import {
   persistOrderItemsSnapshot,
   warmOrderItemsForPanel,
 } from '../lib/orderPanelWarm';
+import {
+  PAYMENT_LOCK_TTL_MS,
+  getPaymentLockTabSession,
+  clearOwnSessionPaymentLock,
+  clearTablePaymentLock,
+  unlockStalePaymentLocksRpc,
+  canManualUnlockPaymentLock,
+  manualUnlockTablePayment,
+} from '../lib/paymentLock';
 
 /** 767px eşiğinde scrollbar/DPI kayması mobil↔masaüstü düzeni gidip getiriyordu (özellikle Electron). Ölü bant ile sabitlenir. */
 const ORDER_PANEL_MOBILE_MAX_PX = 767;
@@ -43,23 +52,6 @@ function orderPanelMobileFromWidth(prev: boolean, width: number): boolean {
   if (width <= ORDER_PANEL_MOBILE_MAX_PX) return true;
   if (width >= ORDER_PANEL_DESKTOP_MIN_PX) return false;
   return prev;
-}
-
-/** Ödeme modalı açıkken periyodik uzatılır; yenileme/crash sonrası en geç ~4 dk içinde kilit sunucu tarafından düşer. */
-const PAYMENT_LOCK_TTL_MS = 4 * 60 * 1000;
-
-function getPaymentLockTabSession(): string {
-  try {
-    const k = 'sefpos.payment-lock-tab';
-    let s = sessionStorage.getItem(k);
-    if (!s) {
-      s = crypto.randomUUID();
-      sessionStorage.setItem(k, s);
-    }
-    return s;
-  } catch {
-    return `fallback-${Date.now()}`;
-  }
 }
 
 interface ScaleBarcodeResult {
@@ -426,6 +418,10 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
 
   const lockTableForPayment = async (): Promise<boolean> => {
     if (table.table_number === 0 || !table.id) return true;
+
+    await unlockStalePaymentLocksRpc();
+
+    const mySession = getPaymentLockTabSession();
     const { data } = await supabase
       .from('restaurant_tables')
       .select('payment_locked, payment_locked_at, payment_lock_expires_at, payment_locked_by_session')
@@ -436,26 +432,21 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
       const now = Date.now();
       const lockedAtMs = data.payment_locked_at ? new Date(data.payment_locked_at).getTime() : 0;
       const expiresMs = data.payment_lock_expires_at ? new Date(data.payment_lock_expires_at).getTime() : 0;
-      const staleWindowMs = 4 * 60 * 1000;
       const expiredByDeadline = expiresMs > 0 && expiresMs < now;
-      const staleByLockedAt = lockedAtMs > 0 && now - lockedAtMs > staleWindowMs;
+      const staleByLockedAt = lockedAtMs > 0 && now - lockedAtMs > PAYMENT_LOCK_TTL_MS;
       const orphanLock = !data.payment_locked_at && !data.payment_lock_expires_at;
-      if (expiredByDeadline || staleByLockedAt || orphanLock) {
-        await supabase
-          .from('restaurant_tables')
-          .update({
-            payment_locked: false,
-            payment_locked_at: null,
-            payment_locked_by_session: null,
-            payment_lock_expires_at: null,
-          })
-          .eq('id', table.id);
-        emitTableStateChanged({ id: table.id, payment_locked: false });
-      } else {
+      const sameSession = data.payment_locked_by_session === mySession;
+
+      if (!sameSession && !expiredByDeadline && !staleByLockedAt && !orphanLock) {
         setPaymentLockedWarning(true);
         return false;
       }
+      if (!sameSession) {
+        await clearTablePaymentLock(table.id);
+        emitTableStateChanged({ id: table.id, payment_locked: false });
+      }
     }
+
     const expiresIso = new Date(Date.now() + PAYMENT_LOCK_TTL_MS).toISOString();
     await supabase
       .from('restaurant_tables')
@@ -463,7 +454,7 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
         payment_locked: true,
         payment_locked_at: new Date().toISOString(),
         payment_lock_expires_at: expiresIso,
-        payment_locked_by_session: getPaymentLockTabSession(),
+        payment_locked_by_session: mySession,
       })
       .eq('id', table.id);
     emitTableStateChanged({ id: table.id, payment_locked: true });
@@ -472,15 +463,7 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
 
   const unlockTable = async () => {
     if (table.table_number === 0 || !table.id) return;
-    await supabase
-      .from('restaurant_tables')
-      .update({
-        payment_locked: false,
-        payment_locked_at: null,
-        payment_lock_expires_at: null,
-        payment_locked_by_session: null,
-      })
-      .eq('id', table.id);
+    await clearTablePaymentLock(table.id);
     emitTableStateChanged({ id: table.id, payment_locked: false });
   };
 
@@ -719,20 +702,17 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
     };
   }, []);
 
+  // Yenileme / sekme çökmesi: yalnızca bu oturumun bıraktığı kilidi kaldır (başka kasayı etkilemez).
   useEffect(() => {
-    if (table.id && table.table_number !== 0) {
-      supabase.from('restaurant_tables')
-        .update({ payment_locked: false, payment_locked_at: null })
-        .eq('id', table.id);
-    }
+    if (!table.id || table.table_number === 0) return;
+    void unlockStalePaymentLocksRpc();
+    void clearOwnSessionPaymentLock(table.id).then(() => {
+      emitTableStateChanged({ id: table.id, payment_locked: false });
+    });
     return () => {
-      if (table.id && table.table_number !== 0) {
-        supabase.from('restaurant_tables')
-          .update({ payment_locked: false, payment_locked_at: null })
-          .eq('id', table.id);
-      }
+      void clearOwnSessionPaymentLock(table.id);
     };
-  }, [table.id]);
+  }, [table.id, table.table_number, emitTableStateChanged]);
 
   const loadMenuData = useCallback(async (forceRefresh = false) => {
     if (!tenant) return;
@@ -2406,15 +2386,38 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
             </div>
             <h2 className="text-xl font-bold text-slate-800 mb-2">Masa Kilitli</h2>
             <p className="text-slate-600 mb-6">
-              Bu masa şu anda başka bir kasada ödeme alınıyor olabilir. Birkaç dakika bekleyin veya
-              Masalar ekranına dönüp yenileyin; ödeme ekranı kesilmiş eski kilitler otomatik düşer.
+              Bu masa başka bir kasada ödeme alınıyor olabilir. Sayfayı yenilediyseniz aşağıdaki
+              &quot;Bu cihazda kilidi kaldır&quot; ile devam edebilirsiniz; yönetici ise Ayarlar → Masalar
+              üzerinden de açabilir.
             </p>
-            <button
-              onClick={() => setPaymentLockedWarning(false)}
-              className="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-3 rounded-xl transition-all active:scale-95"
-            >
-              Tamam
-            </button>
+            <div className="flex flex-col gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  void (async () => {
+                    await unlockStalePaymentLocksRpc();
+                    await clearOwnSessionPaymentLock(table.id);
+                    if (canManualUnlockPaymentLock(profile?.role)) {
+                      await manualUnlockTablePayment(table.id, 'Payment screen — same device');
+                    }
+                    emitTableStateChanged({ id: table.id, payment_locked: false });
+                    setPaymentLockedWarning(false);
+                    const canPay = await lockTableForPayment();
+                    if (canPay) setShowPayment(true);
+                  })();
+                }}
+                className="w-full bg-orange-600 hover:bg-orange-700 text-white font-bold py-3 rounded-xl transition-all active:scale-95"
+              >
+                Bu cihazda kilidi kaldır
+              </button>
+              <button
+                type="button"
+                onClick={() => setPaymentLockedWarning(false)}
+                className="w-full bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold py-3 rounded-xl transition-all active:scale-95"
+              >
+                Tamam
+              </button>
+            </div>
           </div>
         </div>
       )}

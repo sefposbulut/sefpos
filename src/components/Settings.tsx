@@ -35,6 +35,7 @@ import { ScaleCalibration } from './ScaleCalibration';
 import { QrMenuManager } from './QrMenuManager';
 import { callGetir, generateGetirApiKey, syncGetirRestaurantOpen } from '../lib/getirApi';
 import { publicPartnerEdgeUrl } from '../lib/publicWebhookBaseUrl';
+import { clearTablePaymentLock } from '../lib/paymentLock';
 
 type TableGroup = Database['public']['Tables']['table_groups']['Row'];
 
@@ -807,10 +808,19 @@ export function Settings({ onClose }: SettingsProps) {
   };
 
   const handleUnlockTable = async (tableId: string) => {
+    const role = (profile as { role?: string } | null)?.role;
+    if (!['owner', 'admin', 'manager', 'super_admin'].includes(role || '')) {
+      alert(
+        'Kilidi açmak için yönetici yetkisi gerekir (Sahip, Yönetici veya Müdür rolü).\n\n' +
+          `Mevcut rolünüz: ${role || 'tanımsız'}`,
+      );
+      return;
+    }
+
     try {
       const { data, error } = await supabase.rpc('unlock_table_payment', {
         p_table_id: tableId,
-        p_reason: 'Admin override'
+        p_reason: 'Admin override — Ayarlar',
       });
 
       if (error) {
@@ -821,9 +831,17 @@ export function Settings({ onClose }: SettingsProps) {
       if (data?.success) {
         alert('Masa kilidi açıldı');
         loadTables();
-      } else {
-        alert('Hata: ' + (data?.error || 'Bilinmeyen hata'));
+        return;
       }
+
+      const errMsg = data?.error || 'Bilinmeyen hata';
+      if (errMsg === 'Unauthorized') {
+        await clearTablePaymentLock(tableId);
+        alert('Masa kilidi açıldı (yedek yol). Sunucu migration güncellemesi önerilir.');
+        loadTables();
+        return;
+      }
+      alert('Hata: ' + errMsg);
     } catch (err: any) {
       alert('Hata: ' + err.message);
     }
