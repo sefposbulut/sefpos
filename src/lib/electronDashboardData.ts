@@ -224,6 +224,28 @@ export async function fetchElectronRecentActivity(
     .slice(0, limit);
 }
 
+/** Masa (dine_in) + hızlı satış (counter) — online/paket hariç */
+const TOP_SELLER_ORDER_TYPES = ['dine_in', 'counter'] as const;
+
+async function fetchOrderItemsForTopSellers(
+  tenantId: string,
+  orderIds: string[],
+): Promise<Record<string, unknown>[]> {
+  const all: Record<string, unknown>[] = [];
+  const chunkSize = 80;
+  for (let i = 0; i < orderIds.length; i += chunkSize) {
+    const chunk = orderIds.slice(i, i + chunkSize);
+    const { data, error } = await supabase
+      .from('order_items')
+      .select('product_id, quantity, total_amount, products(name)')
+      .eq('tenant_id', tenantId)
+      .in('order_id', chunk);
+    if (error) break;
+    if (data?.length) all.push(...(data as Record<string, unknown>[]));
+  }
+  return all;
+}
+
 export async function fetchElectronTopSellers(
   tenantId: string,
   branchId: string | null,
@@ -232,34 +254,36 @@ export async function fetchElectronTopSellers(
   if (isSqlServerMode() || !branchId) return [];
 
   const today = dayBounds(0);
-  const { data: orders, error } = await supabase
+  const { data: orders, error: ordersErr } = await supabase
     .from('orders')
-    .select('order_items(product_id, quantity, total_amount, products(name))')
+    .select('id')
     .eq('tenant_id', tenantId)
     .eq('branch_id', branchId)
-    .eq('status', 'completed')
+    .in('order_type', [...TOP_SELLER_ORDER_TYPES])
+    .neq('status', 'cancelled')
     .gte('created_at', today.start)
     .lte('created_at', today.end);
 
-  if (error || !orders?.length) return [];
+  if (ordersErr || !orders?.length) return [];
+
+  const orderIds = orders.map((o) => String((o as { id: string }).id));
+  const items = await fetchOrderItemsForTopSellers(tenantId, orderIds);
+  if (!items.length) return [];
 
   const agg = new Map<string, TopSellerRow>();
-  for (const order of orders as { order_items?: unknown[] }[]) {
-    const items = (order.order_items || []) as Record<string, unknown>[];
-    for (const item of items) {
-      const productId = String(item.product_id || 'unknown');
-      const products = item.products as { name?: string } | null;
-      const name = products?.name || 'Ürün';
-      const key = productId;
-      const qty = Number(item.quantity) || 0;
-      const rev = Number(item.total_amount) || 0;
-      const prev = agg.get(key);
-      if (prev) {
-        prev.quantity += qty;
-        prev.revenue += rev;
-      } else {
-        agg.set(key, { productId: key, name, quantity: qty, revenue: rev });
-      }
+  for (const item of items) {
+    const productId = String(item.product_id || 'unknown');
+    const products = item.products as { name?: string } | null;
+    const name = products?.name || 'Ürün';
+    const qty = Number(item.quantity) || 0;
+    const rev = Number(item.total_amount) || 0;
+    if (qty <= 0 && rev <= 0) continue;
+    const prev = agg.get(productId);
+    if (prev) {
+      prev.quantity += qty;
+      prev.revenue += rev;
+    } else {
+      agg.set(productId, { productId, name, quantity: qty, revenue: rev });
     }
   }
 

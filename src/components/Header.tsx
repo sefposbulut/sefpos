@@ -17,6 +17,7 @@ import {
   notificationTypeLabel,
   type SupportNotificationRow,
 } from '../lib/supportNotifications';
+import { publicAsset } from '../lib/assetUrl';
 
 const isElectron = !!(window as any).electronAPI;
 
@@ -31,12 +32,10 @@ const roleLabels: Record<string, string> = {
   super_admin: 'Süper Admin',
 };
 
-// Header'da gosterilen ana logo. Kullanicinin atttigi yeni
-// "ŞefPOS chef-hat" logosu, sadece bu konumda kullanilir; Auth/Onboarding/Landing
-// hala /logo.png kullanir.
-const logoSrc = isElectron
-  ? new URL('../../public/logo-header.png', import.meta.url).href
-  : '/logo-header.png';
+// Web: yatay logo. Electron: turuncu barda kontrast icin yuvarlak logo (ana sayfa ile ayni).
+const logoSrc = isElectron ? publicAsset('sefpos-round.png') : '/logo-header.png';
+const electronLogoClass =
+  'h-10 w-10 md:h-11 md:w-11 rounded-full object-cover bg-white ring-2 ring-white/35 shadow-md shrink-0 select-none';
 
 interface HeaderProps {
   onOpenSettings: () => void;
@@ -293,16 +292,38 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
                   <img
                     src={logoSrc}
                     alt="ŞefPOS"
-                    className="h-9 w-auto object-contain select-none pointer-events-none"
+                    className={
+                      isElectron
+                        ? `${electronLogoClass} pointer-events-none`
+                        : 'h-9 w-auto object-contain select-none pointer-events-none'
+                    }
                     draggable={false}
+                    onError={
+                      isElectron
+                        ? (e) => {
+                            (e.currentTarget as HTMLImageElement).src = publicAsset('logo.png');
+                          }
+                        : undefined
+                    }
                   />
                 </button>
               ) : null}
               <img
                 src={logoSrc}
                 alt="ŞefPOS"
-                className={`h-9 md:h-12 w-auto object-contain flex-shrink-0 select-none ${onBackToTables ? 'hidden md:block' : ''}`}
+                className={
+                  isElectron
+                    ? `${electronLogoClass} ${onBackToTables ? 'hidden md:block' : ''}`
+                    : `h-9 md:h-12 w-auto object-contain flex-shrink-0 select-none ${onBackToTables ? 'hidden md:block' : ''}`
+                }
                 draggable={false}
+                onError={
+                  isElectron
+                    ? (e) => {
+                        (e.currentTarget as HTMLImageElement).src = publicAsset('logo.png');
+                      }
+                    : undefined
+                }
               />
 
               {/* Electron: ana sayfa; web: masalar — disindaki sayfalarda geri donus */}

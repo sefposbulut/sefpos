@@ -371,7 +371,7 @@ export function ElectronDesktopHome({
           )}
 
           <div className="p-4 border-b border-slate-100">
-            <PanelTitle icon={TrendingUp} title="En çok satanlar" subtitle="Bugün · max 10" />
+            <PanelTitle icon={TrendingUp} title="En çok satanlar" subtitle="Bugün · Masa & Hızlı Satış" />
             <div className="mt-2 space-y-1.5 min-h-[200px]">
               {topSellers.length === 0 ? (
                 <p className="text-xs text-slate-400 py-6 text-center">
