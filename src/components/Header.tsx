@@ -273,7 +273,13 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
 
   return (
     <>
-      <header className="fixed top-0 left-0 right-0 bg-white shadow-sm border-b border-slate-200 z-30">
+      <header
+        className={
+          isElectron
+            ? 'fixed top-0 left-0 right-0 z-30 bg-gradient-to-r from-orange-500 via-orange-600 to-orange-700 text-white shadow-lg border-b border-orange-800/30'
+            : 'fixed top-0 left-0 right-0 bg-white shadow-sm border-b border-slate-200 z-30'
+        }
+      >
         <div className="px-3 md:px-6">
           <div className="flex justify-between items-center h-14 md:h-20">
             <div className="flex items-center gap-2 md:gap-3 ml-12 md:ml-16 min-w-0">
@@ -320,10 +326,14 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
 
                   {/* Breadcrumb: hangi sayfadayim — masaüstü icin */}
                   {PAGE_LABELS[currentPage] && (
-                    <div className="hidden lg:flex items-center gap-1.5 text-xs text-slate-400 font-semibold pl-1">
-                      <ChevronDown className="w-3 h-3 -rotate-90" />
-                      <LayoutGrid className="w-3.5 h-3.5 text-slate-400" />
-                      <span className="text-slate-600">{PAGE_LABELS[currentPage]}</span>
+                    <div
+                      className={`hidden lg:flex items-center gap-1.5 text-xs font-semibold pl-1 ${
+                        isElectron ? 'text-white/80' : 'text-slate-400'
+                      }`}
+                    >
+                      <ChevronDown className={`w-3 h-3 -rotate-90 ${isElectron ? 'text-white/70' : ''}`} />
+                      <LayoutGrid className={`w-3.5 h-3.5 ${isElectron ? 'text-white/80' : 'text-slate-400'}`} />
+                      <span className={isElectron ? 'text-white' : 'text-slate-600'}>{PAGE_LABELS[currentPage]}</span>
                     </div>
                   )}
                 </>
@@ -356,7 +366,9 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
                       ? 'Deneme süreniz sona erdi — detay için tıklayın'
                       : `${formatTrialRemaining(trialInfo)} kaldı — detay için tıklayın`
                   }
-                  className="hidden sm:inline-flex items-center gap-2 pl-1 pr-3 py-1 rounded-full bg-transparent hover:bg-slate-100/70 transition active:scale-95"
+                  className={`hidden sm:inline-flex items-center gap-2 pl-1 pr-3 py-1 rounded-full transition active:scale-95 ${
+                    isElectron ? 'hover:bg-white/10' : 'bg-transparent hover:bg-slate-100/70'
+                  }`}
                 >
                   <span
                     className={`w-7 h-7 rounded-full flex items-center justify-center shadow-inner ${
@@ -370,18 +382,26 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
                   <span className="flex items-baseline gap-1.5 leading-none">
                     <span
                       className={`text-[9px] md:text-[10px] uppercase tracking-[0.12em] font-bold ${
-                        trialInfo.expired ? 'text-red-600' : 'text-slate-500'
+                        isElectron
+                          ? trialInfo.expired
+                            ? 'text-red-200'
+                            : 'text-white/80'
+                          : trialInfo.expired
+                            ? 'text-red-600'
+                            : 'text-slate-500'
                       }`}
                     >
                       Deneme
                     </span>
                     <span
                       className={`text-sm md:text-base font-extrabold whitespace-nowrap ${
-                        trialInfo.expired
-                          ? 'text-red-700'
-                          : trialUrgent
-                            ? 'text-orange-700'
-                            : 'text-slate-800'
+                        isElectron
+                          ? 'text-white'
+                          : trialInfo.expired
+                            ? 'text-red-700'
+                            : trialUrgent
+                              ? 'text-orange-700'
+                              : 'text-slate-800'
                       }`}
                     >
                       {trialInfo.expired ? 'Süre bitti' : formatTrialRemaining(trialInfo)}
@@ -402,14 +422,30 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
                 <div className="relative ml-1 md:ml-0">
                   <button
                     onClick={() => setShowBranchMenu(!showBranchMenu)}
-                    className="flex items-center gap-1 md:gap-1.5 px-1.5 py-1 md:px-3 md:py-2 bg-orange-50 hover:bg-orange-100 border border-orange-200 rounded-md md:rounded-lg transition-all active:scale-95 max-w-[88px] md:max-w-none"
+                    className={`flex items-center gap-1 md:gap-1.5 px-1.5 py-1 md:px-3 md:py-2 rounded-md md:rounded-lg transition-all active:scale-95 max-w-[88px] md:max-w-none ${
+                      isElectron
+                        ? 'bg-white/15 hover:bg-white/25 border border-white/25'
+                        : 'bg-orange-50 hover:bg-orange-100 border border-orange-200'
+                    }`}
                   >
-                    <MapPin className="w-3 h-3 md:w-4 md:h-4 text-orange-600 flex-shrink-0" />
-                    <span className="text-[10px] md:text-sm font-semibold text-orange-700 truncate leading-tight">
+                    <MapPin
+                      className={`w-3 h-3 md:w-4 md:h-4 flex-shrink-0 ${
+                        isElectron ? 'text-white' : 'text-orange-600'
+                      }`}
+                    />
+                    <span
+                      className={`text-[10px] md:text-sm font-semibold truncate leading-tight ${
+                        isElectron ? 'text-white' : 'text-orange-700'
+                      }`}
+                    >
                       {activeBranch?.name || 'Şube Seç'}
                     </span>
                     {branches.length > 1 && (
-                      <ChevronDown className={`w-2.5 h-2.5 md:w-3.5 md:h-3.5 text-orange-500 flex-shrink-0 transition-transform ${showBranchMenu ? 'rotate-180' : ''}`} />
+                      <ChevronDown
+                        className={`w-2.5 h-2.5 md:w-3.5 md:h-3.5 flex-shrink-0 transition-transform ${
+                          isElectron ? 'text-white/90' : 'text-orange-500'
+                        } ${showBranchMenu ? 'rotate-180' : ''}`}
+                      />
                     )}
                   </button>
 
@@ -464,11 +500,28 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
                 </div>
               )}
 
-              <div className="flex items-center gap-1.5 sm:gap-2 px-1.5 py-1.5 sm:px-2.5 md:px-3 bg-slate-50 rounded-lg max-w-[44px] sm:max-w-[160px] md:max-w-[240px] min-w-0 flex-shrink overflow-hidden" title={userLabel}>
-                <User className="w-4 h-4 text-slate-500 flex-shrink-0" />
+              <div
+                className={`flex items-center gap-1.5 sm:gap-2 px-1.5 py-1.5 sm:px-2.5 md:px-3 rounded-lg max-w-[44px] sm:max-w-[160px] md:max-w-[240px] min-w-0 flex-shrink overflow-hidden ${
+                  isElectron ? 'bg-white/10' : 'bg-slate-50'
+                }`}
+                title={userLabel}
+              >
+                <User className={`w-4 h-4 flex-shrink-0 ${isElectron ? 'text-white' : 'text-slate-500'}`} />
                 <div className="min-w-0 hidden sm:block">
-                  <p className="text-xs md:text-sm font-medium text-slate-700 truncate">{userLabel}</p>
-                  <p className="text-[10px] md:text-xs text-slate-500 truncate">{roleLabels[profile?.role || ''] || profile?.role}</p>
+                  <p
+                    className={`text-xs md:text-sm font-medium truncate ${
+                      isElectron ? 'text-white' : 'text-slate-700'
+                    }`}
+                  >
+                    {userLabel}
+                  </p>
+                  <p
+                    className={`text-[10px] md:text-xs truncate ${
+                      isElectron ? 'text-white/80' : 'text-slate-500'
+                    }`}
+                  >
+                    {roleLabels[profile?.role || ''] || profile?.role}
+                  </p>
                 </div>
               </div>
 
@@ -502,12 +555,20 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
                     })();
                   }
                 }}
-                className="relative p-1.5 md:p-2 text-slate-600 hover:text-slate-900 rounded-lg hover:bg-slate-100 transition-all active:scale-95"
+                className={`relative p-1.5 md:p-2 rounded-lg transition-all active:scale-95 ${
+                  isElectron
+                    ? 'text-white hover:bg-white/10'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                }`}
                 title="Bildirimler"
               >
                 <Bell className="w-4 h-4 md:w-5 md:h-5" />
                 {totalUnread > 0 && (
-                  <span className="absolute -top-0.5 -right-0.5 w-4 h-4 bg-red-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center">
+                  <span
+                    className={`absolute -top-0.5 -right-0.5 w-4 h-4 text-[10px] font-bold rounded-full flex items-center justify-center ${
+                      isElectron ? 'bg-white text-orange-700' : 'bg-red-500 text-white'
+                    }`}
+                  >
                     {totalUnread > 9 ? '9+' : totalUnread}
                   </span>
                 )}
@@ -515,7 +576,11 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
 
               <button
                 onClick={() => { setShowSupport(!showSupport); setShowNotifications(false); }}
-                className="hidden sm:inline-flex p-1.5 md:p-2 text-slate-600 hover:text-slate-900 rounded-lg hover:bg-slate-100 transition-all active:scale-95"
+                className={`hidden sm:inline-flex p-1.5 md:p-2 rounded-lg transition-all active:scale-95 ${
+                  isElectron
+                    ? 'text-white hover:bg-white/10'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                }`}
                 title="Destek"
               >
                 <HeadphonesIcon className="w-4 h-4 md:w-5 md:h-5" />
@@ -523,25 +588,41 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
 
               <button
                 onClick={onOpenSettings}
-                className="hidden sm:inline-flex p-1.5 md:p-2 text-slate-600 hover:text-slate-900 rounded-lg hover:bg-slate-100 transition-all active:scale-95"
+                className={`hidden sm:inline-flex p-1.5 md:p-2 rounded-lg transition-all active:scale-95 ${
+                  isElectron
+                    ? 'text-white hover:bg-white/10'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                }`}
                 title="Ayarlar"
               >
                 <Settings className="w-4 h-4 md:w-5 md:h-5" />
               </button>
 
               {/* Arayuz olcegi (her ortamda calisir, kalicidir). */}
-              <div className="hidden md:flex items-center gap-1 bg-slate-100 rounded-lg px-1 py-1">
+              <div
+                className={`hidden md:flex items-center gap-1 rounded-lg px-1 py-1 ${
+                  isElectron ? 'bg-white/15' : 'bg-slate-100'
+                }`}
+              >
                 <button
                   onClick={() => changeZoom(-UI_SCALE_STEP)}
                   disabled={zoom <= UI_SCALE_MIN + 0.001}
-                  className="p-1.5 rounded hover:bg-slate-200 transition-all active:scale-95 text-slate-600 disabled:opacity-40"
+                  className={`p-1.5 rounded transition-all active:scale-95 disabled:opacity-40 ${
+                    isElectron
+                      ? 'hover:bg-white/20 text-white'
+                      : 'hover:bg-slate-200 text-slate-600'
+                  }`}
                   title="Arayüzü küçült"
                 >
                   <ZoomOut className="w-4 h-4" />
                 </button>
                 <button
                   onClick={() => resetUiScale()}
-                  className="text-xs font-bold text-slate-600 w-12 text-center hover:bg-slate-200 rounded py-1 active:scale-95"
+                  className={`text-xs font-bold w-12 text-center rounded py-1 active:scale-95 ${
+                    isElectron
+                      ? 'text-white hover:bg-white/20'
+                      : 'text-slate-600 hover:bg-slate-200'
+                  }`}
                   title="%100'e döndür"
                 >
                   {Math.round(zoom * 100)}%
@@ -549,7 +630,11 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
                 <button
                   onClick={() => changeZoom(UI_SCALE_STEP)}
                   disabled={zoom >= UI_SCALE_MAX - 0.001}
-                  className="p-1.5 rounded hover:bg-slate-200 transition-all active:scale-95 text-slate-600 disabled:opacity-40"
+                  className={`p-1.5 rounded transition-all active:scale-95 disabled:opacity-40 ${
+                    isElectron
+                      ? 'hover:bg-white/20 text-white'
+                      : 'hover:bg-slate-200 text-slate-600'
+                  }`}
                   title="Arayüzü büyüt"
                 >
                   <ZoomIn className="w-4 h-4" />
@@ -559,7 +644,11 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
               {/* Tam Ekran POS — ust meunyu gizler, kalicidir. Sadece masaustu. */}
               <button
                 onClick={() => setHeaderHidden(true)}
-                className="hidden md:inline-flex p-1.5 md:p-2 text-slate-600 hover:text-slate-900 rounded-lg hover:bg-slate-100 transition-all active:scale-95"
+                className={`hidden md:inline-flex p-1.5 md:p-2 rounded-lg transition-all active:scale-95 ${
+                  isElectron
+                    ? 'text-white hover:bg-white/10'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                }`}
                 title="Tam Ekran POS modu (üst menüyü gizle)"
               >
                 <Minimize2 className="w-4 h-4 md:w-5 md:h-5" />
@@ -578,7 +667,11 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
                   }
                   signOut();
                 }}
-                className="flex items-center gap-1 md:gap-2 text-white bg-gradient-to-r from-red-600 to-red-700 px-2 py-1.5 md:px-4 md:py-2 rounded-lg hover:shadow-lg transition-all active:scale-95 flex-shrink-0"
+                className={`flex items-center gap-1 md:gap-2 text-white px-2 py-1.5 md:px-4 md:py-2 rounded-lg hover:shadow-lg transition-all active:scale-95 flex-shrink-0 ${
+                  isElectron
+                    ? 'bg-white/20 hover:bg-white/30 border border-white/30'
+                    : 'bg-gradient-to-r from-red-600 to-red-700'
+                }`}
                 title="Çıkış"
               >
                 <LogOut className="w-3.5 h-3.5 md:w-4 md:h-4" />

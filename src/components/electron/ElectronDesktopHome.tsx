@@ -163,8 +163,8 @@ export function ElectronDesktopHome({
 
   return (
     <div className="fixed inset-0 z-[30] flex flex-col bg-slate-100 text-slate-900 overflow-hidden">
-      {/* Üst bar — koyu lacivert (mockup) */}
-      <header className="flex-shrink-0 bg-gradient-to-r from-red-600 via-red-600 to-red-700 text-white shadow-lg">
+      {/* Üst bar — ŞefPOS turuncu */}
+      <header className="flex-shrink-0 bg-gradient-to-r from-orange-500 via-orange-600 to-orange-700 text-white shadow-lg">
         <div className="flex items-center justify-between gap-4 px-5 md:px-8 h-14 md:h-16">
           <div className="flex items-center gap-3 min-w-0">
             <img
@@ -175,7 +175,7 @@ export function ElectronDesktopHome({
                 (e.currentTarget as HTMLImageElement).src = publicAsset('logo.png');
               }}
             />
-            <span className="text-sm md:text-base font-black tracking-wide truncate uppercase">
+            <span className="text-sm md:text-base font-black tracking-wide truncate uppercase text-white">
               {tenantName}
             </span>
           </div>
@@ -188,9 +188,9 @@ export function ElectronDesktopHome({
                 className="relative p-2 rounded-lg hover:bg-white/10 transition"
                 title="Bildirimler"
               >
-                <Bell className="w-5 h-5" />
+                <Bell className="w-5 h-5 text-white" />
                 {unreadBell > 0 && (
-                  <span className="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-[10px] font-black flex items-center justify-center">
+                  <span className="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] px-1 rounded-full bg-white text-orange-700 text-[10px] font-black flex items-center justify-center">
                     {unreadBell > 9 ? '9+' : unreadBell}
                   </span>
                 )}
@@ -236,25 +236,25 @@ export function ElectronDesktopHome({
                 className="p-2 rounded-lg hover:bg-white/10 transition"
                 title="Ayarlar"
               >
-                <Settings className="w-5 h-5" />
+                <Settings className="w-5 h-5 text-white" />
               </button>
             )}
 
-            <div className="hidden sm:flex items-center gap-2 pl-2 border-l border-white/20">
-              <div className="text-right">
-                <p className="text-sm font-bold leading-tight">{displayName}</p>
-                <p className="text-[10px] text-slate-400 font-semibold">{roleLabel}</p>
+            <div className="hidden sm:flex items-center gap-2 pl-2 border-l border-white/25">
+              <div className="text-right text-white">
+                <p className="text-sm font-bold leading-tight text-white">{displayName}</p>
+                <p className="text-[10px] text-white/80 font-semibold">{roleLabel}</p>
               </div>
-              <div className="w-9 h-9 rounded-full bg-gradient-to-br from-orange-500 to-red-600 flex items-center justify-center text-sm font-black">
+              <div className="w-9 h-9 rounded-full bg-white/20 ring-2 ring-white/30 flex items-center justify-center text-sm font-black text-white">
                 {displayName.charAt(0).toUpperCase()}
               </div>
               <button
                 type="button"
                 onClick={() => void signOut()}
-                className="p-2 rounded-lg hover:bg-white/10 text-slate-400 hover:text-white"
+                className="p-2 rounded-lg hover:bg-white/10 text-white"
                 title="Çıkış"
               >
-                <LogOut className="w-4 h-4" />
+                <LogOut className="w-4 h-4 text-white" />
               </button>
             </div>
           </div>
