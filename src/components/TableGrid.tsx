@@ -3,7 +3,8 @@ import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { isModuleEnabled } from '../lib/modules';
 import { Database } from '../lib/supabase';
-import { Plus, Clock, Lock, ZoomIn, ZoomOut, ScanBarcode, Truck, Eye, EyeOff, Receipt } from 'lucide-react';
+import { Plus, Clock, Lock, ZoomIn, ZoomOut, ScanBarcode, Truck, Eye, EyeOff, Receipt, Maximize2 } from 'lucide-react';
+import { useUiPrefs, setHeaderHidden } from '../lib/uiPrefs';
 import { ReprintReceiptModal } from './ReprintReceiptModal';
 import { isLocalMode } from '../lib/sqlDb';
 import { warmOrderItemsForPanel, bulkWarmOrderItemsForOrders } from '../lib/orderPanelWarm';
@@ -73,6 +74,7 @@ function FooterSep() {
 }
 
 const FOOTER_AMOUNT_VISIBLE_KEY = 'sefpos.tableGrid.footerAmountVisible';
+const isElectronRuntime = !!(typeof window !== 'undefined' && (window as any).electronAPI);
 
 type Table = Database['public']['Tables']['restaurant_tables']['Row'] & {
   branch_id?: string | null;
@@ -164,6 +166,7 @@ function readPersistedCols(globalKey: string, legacyPrefix: string): number | nu
 
 export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayButton = true }: TableGridProps) {
   const { tenant, user, profile, activeBranch, permissions } = useAuth();
+  const { headerHidden } = useUiPrefs();
   const mobileColsStorageKey = MOBILE_COLS_KEY;
   const desktopColsStorageKey = DESKTOP_COLS_KEY;
 
@@ -855,6 +858,19 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
 
   return (
     <div className="h-full flex flex-col">
+      {isElectronRuntime && headerHidden && (
+        <div className="flex-shrink-0 flex justify-center px-3 pt-2 pb-1">
+          <button
+            type="button"
+            onClick={() => setHeaderHidden(false)}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-gradient-to-r from-orange-500 to-orange-600 text-white text-sm font-bold shadow-lg hover:from-orange-600 hover:to-orange-700 active:scale-95 border border-orange-700/40"
+            title="Üst menüyü tekrar göster"
+          >
+            <Maximize2 className="w-4 h-4" />
+            Üst menüyü göster
+          </button>
+        </div>
+      )}
       {tableGroups.length > 0 && (
         <div className="bg-white rounded-lg md:rounded-2xl shadow-md p-2 md:p-4 mb-3 md:mb-6">
           <div className="flex items-center gap-1.5 md:gap-3">
