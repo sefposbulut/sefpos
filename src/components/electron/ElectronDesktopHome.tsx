@@ -379,10 +379,20 @@ export function ElectronDesktopHome({
           )}
 
           <div className="p-4 border-b border-slate-100">
-            <PanelTitle icon={TrendingUp} title="En çok satanlar" subtitle="Bugün · salon satışları" />
-            <div className="mt-2 space-y-1.5 min-h-[200px]">
+            <PanelTitle
+              icon={TrendingUp}
+              title="En çok satanlar"
+              subtitle={topSellers.length > 5 ? `Bugün · ${topSellers.length} ürün` : 'Bugün · salon satışları'}
+            />
+            <div
+              className={`mt-2 space-y-1.5 pr-0.5 ${
+                topSellers.length === 0
+                  ? 'min-h-[120px] flex items-center justify-center'
+                  : 'max-h-[228px] overflow-y-auto overflow-x-hidden scroll-smooth [scrollbar-width:thin] [scrollbar-color:rgba(249,115,22,0.5)_transparent]'
+              }`}
+            >
               {topSellers.length === 0 ? (
-                <p className="text-xs text-slate-400 py-6 text-center">
+                <p className="text-xs text-slate-400 text-center">
                   {branchId ? (dataReady ? 'Bugün satış yok' : 'Yükleniyor…') : 'Şube seçin'}
                 </p>
               ) : (
