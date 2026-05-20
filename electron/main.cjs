@@ -30,14 +30,15 @@ if (!gotInstanceLock) {
   process.exit(0);
 }
 app.on('second-instance', () => {
-  if (!mainWindow) return;
-  try {
-    if (mainWindow.isMinimized()) mainWindow.restore();
-    if (!mainWindow.isVisible()) mainWindow.show();
-    mainWindow.focus();
-  } catch (_) {
-    /* yoksay */
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    try {
+      createWindow();
+    } catch (e) {
+      paLog('error', '[window] second-instance createWindow', { message: e?.message || String(e) });
+    }
+    return;
   }
+  revealMainWindow({ maximize: false, reason: 'second-instance' });
 });
 const fs = require('fs');
 const os = require('os');
@@ -1685,7 +1686,62 @@ function buildApplicationMenu(win) {
   return Menu.buildFromTemplate(template);
 }
 
+/** `show:false` + yalnizca `ready-to-show` ile acilan pencereler bazi Windows surumlerinde gorunmez kalabiliyor. */
+let _mainWindowRevealTimer = null;
+let _mainWindowRevealDone = false;
+
+function clearMainWindowRevealTimer() {
+  if (_mainWindowRevealTimer) {
+    clearTimeout(_mainWindowRevealTimer);
+    _mainWindowRevealTimer = null;
+  }
+}
+
+/**
+ * Ana pencereyi kullaniciya gosterir. ready-to-show gecikirse veya ikinci
+ * Sefpos.exe tiklamasi tek-instance lock ile mevcut prosesi one alirken
+ * pencere hala gizliyse bu fonksiyon devreye girer.
+ */
+function revealMainWindow(opts = {}) {
+  if (!mainWindow || mainWindow.isDestroyed()) return false;
+  try {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    if (!mainWindow.isVisible()) mainWindow.show();
+    if (opts.center !== false) mainWindow.center();
+    mainWindow.focus();
+    if (opts.maximize !== false && process.platform === 'win32') {
+      setImmediate(() => {
+        if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isMaximized()) {
+          mainWindow.maximize();
+        }
+      });
+    }
+    _mainWindowRevealDone = true;
+    clearMainWindowRevealTimer();
+    if (opts.reason) {
+      paLog('info', '[window] pencere gosterildi', { reason: opts.reason });
+    }
+    return true;
+  } catch (e) {
+    paLog('warn', '[window] revealMainWindow', { message: e?.message || String(e) });
+    return false;
+  }
+}
+
+function scheduleMainWindowRevealFallback() {
+  clearMainWindowRevealTimer();
+  _mainWindowRevealTimer = setTimeout(() => {
+    if (!mainWindow || mainWindow.isDestroyed() || _mainWindowRevealDone) return;
+    if (!mainWindow.isVisible()) {
+      paLog('warn', '[window] ready-to-show gecikti; pencere zorla aciliyor');
+      revealMainWindow({ maximize: true, reason: 'fallback-timeout' });
+    }
+  }, 10000);
+}
+
 function createWindow() {
+  _mainWindowRevealDone = false;
+  clearMainWindowRevealTimer();
   const settings = loadSettings();
   let mainLoadRetried = false;
   mainWindow = new BrowserWindow({
@@ -1751,22 +1807,43 @@ function createWindow() {
     });
   }
 
+  scheduleMainWindowRevealFallback();
+
   mainWindow.once('ready-to-show', () => {
     if (settings.zoomFactor) {
       mainWindow.webContents.setZoomFactor(settings.zoomFactor);
     }
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.show();
-      // Windows: önce show sonra maximize — DWM'de sık görülen titreme / çift boyama azalır
-      if (process.platform === 'win32') {
-        setImmediate(() => {
-          if (mainWindow && !mainWindow.isDestroyed()) mainWindow.maximize();
-        });
-      } else {
-        mainWindow.maximize();
-      }
-    }
+    revealMainWindow({ maximize: true, reason: 'ready-to-show' });
     watchConnectivity();
+  });
+
+  mainWindow.webContents.on('did-finish-load', () => {
+    if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) {
+      revealMainWindow({ maximize: true, reason: 'did-finish-load' });
+    }
+  });
+
+  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    paLog('error', '[window] render-process-gone', details || {});
+    revealMainWindow({ maximize: false, reason: 'render-process-gone' });
+    try {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        dialog.showMessageBox(mainWindow, {
+          type: 'error',
+          title: 'ŞefPOS',
+          message: 'Arayüz beklenmedik şekilde kapandı',
+          detail: 'Sayfa yeniden yüklenecek. Sorun sürerse uygulamayı kapatıp tekrar açın.',
+          buttons: ['Yeniden yükle', 'Tamam'],
+          defaultId: 0,
+        }).then((choice) => {
+          if (choice.response === 0 && mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.reloadIgnoringCache();
+          }
+        });
+      }
+    } catch (_) {
+      /* yoksay */
+    }
   });
 
   if (isDev) {
@@ -1796,11 +1873,27 @@ function createWindow() {
     } catch (_) { /* yoksay */ }
   });
 
-  mainWindow.webContents.on('did-fail-load', (_event, errorCode, _errorDescription) => {
+  mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription) => {
     if (!isDev && errorCode !== -3 && !mainLoadRetried) {
       mainLoadRetried = true;
       const indexPath = path.join(app.getAppPath(), 'dist', 'index.html');
       mainWindow.loadFile(indexPath);
+      return;
+    }
+    if (!isDev && errorCode !== -3) {
+      paLog('error', '[window] did-fail-load', { errorCode, errorDescription });
+      revealMainWindow({ maximize: true, reason: 'did-fail-load' });
+      try {
+        dialog.showMessageBox(mainWindow, {
+          type: 'error',
+          title: 'ŞefPOS açılamadı',
+          message: 'Uygulama dosyaları yüklenemedi',
+          detail: `Hata kodu: ${errorCode}\n${errorDescription || ''}\n\nKurulumu onarın veya destek ile iletişime geçin.`,
+          buttons: ['Tamam'],
+        });
+      } catch (_) {
+        /* yoksay */
+      }
     }
   });
 
@@ -1834,7 +1927,9 @@ function createWindow() {
   });
 
   mainWindow.on('closed', () => {
+    clearMainWindowRevealTimer();
     mainWindow = null;
+    _mainWindowRevealDone = false;
   });
 }
 
@@ -3281,13 +3376,12 @@ ipcMain.handle('scale-get-weight', () => {
 });
 
 app.on('window-all-closed', () => {
-  // Windows kasada pencere kapatılınca uygulama kapanmasın — Print Agent ve
-  // print_jobs kuyruğu arka planda çalışmaya devam etsin (www siparişleri).
+  // Windows: pencere gizlemek yerine uygulamayi tamamen kapat. Gizli proses
+  // (Gorev Yoneticisi'nde gorunur ama tiklayinca acilmaz) kullanici kafa
+  // karisikligina yol aciyordu; Print Agent yeniden baslatmayla gelir.
   if (process.platform === 'win32') {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.hide();
-    }
-    paLog('log', 'Ana pencere gizlendi; Print Agent ve fiş kuyruğu arka planda çalışıyor.');
+    quitConfirmed = true;
+    app.quit();
     return;
   }
 

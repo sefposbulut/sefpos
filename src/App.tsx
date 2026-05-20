@@ -6,6 +6,7 @@ import { Auth } from './components/Auth';
 import { AykaLogin } from './components/AykaLogin';
 import { ElectronAuth } from './components/ElectronAuth';
 import { ElectronConnectionMenu, type ElectronConnectMode } from './components/electron/ElectronConnectionMenu';
+import { ElectronDesktopHome } from './components/electron/ElectronDesktopHome';
 import { SqlServerSettings } from './components/SqlServerSettings';
 import { LandingPage } from './components/landing/LandingPage';
 import { isLandingPath } from './components/landing/landingRoutes';
@@ -148,7 +149,9 @@ function App() {
   }, []);
   const { user, profile, tenant, loading, refreshProfile, activeBranch, signOut, profileLoadFailed } = useAuth();
   const [selectedTable, setSelectedTable] = useState<Table | null>(null);
-  const [currentPage, setCurrentPage] = useState('tables');
+  const [currentPage, setCurrentPage] = useState(() =>
+    !!(window as any).electronAPI ? 'desktop-home' : 'tables',
+  );
   // Tenant'ın "Masalar" modülü kapalıysa açılış sayfası olarak ilk uygun
   // modülü seç (hızlı satış / paket servis / vs.). Bu sayede sadece "Hızlı
   // Satış" kullanan müşteri girer girmez doğru ekrana düşer.
@@ -172,7 +175,9 @@ function App() {
   // maliyetine eklenmez. Bu hook'lar Rules of Hooks geregi en uste konulmuştur.
   // online-orders: sayfa görünür olmasa da mount kalsın — Getir poll + realtime
   // ve mutfak fişi tetikleri masadayken de çalışsın.
-  const mountedPagesRef = useRef<Set<string>>(new Set(['tables', 'online-orders']));
+  const mountedPagesRef = useRef<Set<string>>(
+    new Set(isElectron ? ['online-orders'] : ['tables', 'online-orders']),
+  );
   const [, setMountedPagesVersion] = useState(0);
   if (currentPage && !mountedPagesRef.current.has(currentPage)) {
     mountedPagesRef.current.add(currentPage);
@@ -556,9 +561,10 @@ function App() {
 
   const show = (page: string) => currentPage === page;
   const wasMounted = (page: string) => mountedPagesRef.current.has(page);
+  const onElectronHome = isElectron && currentPage === 'desktop-home';
 
   // Mobilde efektif olarak her zaman header acik.
-  const headerHidden = uiPrefs.headerHidden && isDesktopViewport;
+  const headerHidden = (uiPrefs.headerHidden && isDesktopViewport) || onElectronHome;
 
   // CSS `zoom` Chromium/Electron'da gercek anlamda layout boyutlandirir
   // (tarayicinin Ctrl +/- kalitesinde, modal/positioning bozulmasiz).
@@ -582,9 +588,17 @@ function App() {
           currentPage={currentPage}
           onBackToTables={() => {
             setSelectedTable(null);
-            handleNavigate('tables');
+            handleNavigate(isElectron ? 'desktop-home' : 'tables');
           }}
           onOpenShifts={() => setShowShiftQuickClose(true)}
+        />
+      )}
+
+      {onElectronHome && (
+        <ElectronDesktopHome
+          onNavigate={handleNavigate}
+          onOpenSettings={() => setShowSettings(true)}
+          onLockScreen={() => setIsLocked(true)}
         />
       )}
 
@@ -693,7 +707,9 @@ function App() {
 
       {show('endofday') && <EndOfDay />}
 
-      {show('cancel-logs') && <CancelLogs onClose={() => setCurrentPage('tables')} />}
+      {show('cancel-logs') && (
+        <CancelLogs onClose={() => setCurrentPage(isElectron ? 'desktop-home' : 'tables')} />
+      )}
 
       {show('inventory') && (
         <div className="fixed inset-0 top-14 md:top-20 bg-gradient-to-br from-slate-50 to-slate-100 overflow-hidden">

@@ -66,6 +66,7 @@ interface Notification {
 
 /** Sayfa anahtari → kullanici dostu Turkce ad. Header breadcrumb'inda gosterilir. */
 const PAGE_LABELS: Record<string, string> = {
+  'desktop-home': 'Ana Sayfa',
   tables: 'Masalar',
   takeaway: 'Paket Servis',
   'online-orders': 'Online Siparişler',
@@ -281,7 +282,7 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
                   type="button"
                   onClick={onBackToTables}
                   className="md:hidden flex-shrink-0 rounded-lg active:opacity-80 focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-500"
-                  aria-label="Ana sayfa — Masalar"
+                  aria-label={isElectron ? 'Ana sayfa' : 'Ana sayfa — Masalar'}
                 >
                   <img
                     src={logoSrc}
@@ -298,23 +299,22 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
                 draggable={false}
               />
 
-              {/* "Masalara Dön" hizli yonlendirici — sadece tables disindaki sayfalarda
-                  ve **sadece tablet/desktop**ta gosteriliyor. Mobilde sube secici
-                  ile yan yana sigmadigi icin gizlendi; mobil kullanicisi MainMenu
-                  hamburger menusunden "Masalar"a tek tikla doner. */}
-              {currentPage && currentPage !== 'tables' && onBackToTables && (
+              {/* Electron: ana sayfa; web: masalar — disindaki sayfalarda geri donus */}
+              {currentPage &&
+                currentPage !== (isElectron ? 'desktop-home' : 'tables') &&
+                onBackToTables && (
                 <>
                   <button
                     type="button"
                     onClick={onBackToTables}
-                    title="Masalara dön"
+                    title={isElectron ? 'Ana sayfaya dön' : 'Masalara dön'}
                     className="group hidden md:inline-flex items-center gap-2 pl-2 pr-3.5 py-1.5 rounded-full bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-600 hover:to-green-700 text-white shadow-sm hover:shadow transition active:scale-95 flex-shrink-0"
                   >
                     <span className="w-7 h-7 rounded-full bg-white/20 flex items-center justify-center group-hover:-translate-x-0.5 transition-transform">
                       <ArrowLeft className="w-4 h-4" strokeWidth={2.5} />
                     </span>
                     <span className="text-sm font-extrabold tracking-tight whitespace-nowrap">
-                      Masalara Dön
+                      {isElectron ? 'Ana Sayfa' : 'Masalara Dön'}
                     </span>
                   </button>
 
