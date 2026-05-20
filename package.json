@@ -1,7 +1,7 @@
 {
   "name": "shefpos",
   "private": true,
-  "version": "1.0.154",
+  "version": "1.0.155",
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
@@ -15,8 +15,10 @@
     "electron:dev": "concurrently \"vite\" \"node ./scripts/electron-dev-wait.mjs\"",
     "electron:build": "vite build && electron-builder",
     "electron:build:win": "node scripts/electron-build-win-release.mjs",
-    "android:build": "vite build && npx cap sync android",
-    "android:apk": "vite build && npx cap sync android && cd android && gradlew.bat assembleDebug",
+    "mobile:sync-version": "node scripts/sync-mobile-version.mjs",
+    "android:build": "node scripts/sync-mobile-version.mjs && vite build && npx cap sync android",
+    "android:apk": "node scripts/sync-mobile-version.mjs && vite build && npx cap sync android && cd android && gradlew.bat assembleDebug",
+    "android:bundle": "node scripts/sync-mobile-version.mjs && vite build && npx cap sync android && cd android && gradlew.bat bundleRelease",
     "android:open": "npx cap open android",
     "ios:build": "vite build && npx cap sync ios",
     "ios:open": "npx cap open ios",
@@ -37,6 +39,7 @@
     "directories": {
       "output": "release"
     },
+    "npmRebuild": false,
     "afterPack": "scripts/embed-icon.cjs",
     "files": [
       "dist/**/*",

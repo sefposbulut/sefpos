@@ -2747,7 +2747,7 @@ export function Settings({ onClose }: SettingsProps) {
                   </div>
                   <div className="text-[11px] text-gray-400 pt-1 border-t border-gray-100">
                     Şu anki sürüm: <code className="text-gray-600">{appVersion}</code> · Otomatik
-                    kontrol uygulama açıldıktan 8 saniye sonra ve her 4 saatte bir yapılır.
+                    kontrol uygulama açıldıktan ~90 saniye sonra ve yaklaşık her 90 dakikada bir yapılır.
                   </div>
                 </div>
               )}
