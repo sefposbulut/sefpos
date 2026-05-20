@@ -5,7 +5,7 @@ import { publicAsset } from './lib/assetUrl';
 import { Auth } from './components/Auth';
 import { AykaLogin } from './components/AykaLogin';
 import { ElectronAuth } from './components/ElectronAuth';
-import { SetupWizard } from './components/SetupWizard';
+import { ElectronConnectionMenu, type ElectronConnectMode } from './components/electron/ElectronConnectionMenu';
 import { SqlServerSettings } from './components/SqlServerSettings';
 import { LandingPage } from './components/landing/LandingPage';
 import { isLandingPath } from './components/landing/landingRoutes';
@@ -360,23 +360,29 @@ function App() {
     return () => window.removeEventListener('sefpos-navigate', onSefposNavigate as EventListener);
   }, [handleNavigate]);
 
-  const handleDbModeSelect = async (mode: 'cloud' | 'sqlserver' | 'terminal') => {
+  const handleDbModeSelect = async (mode: ElectronConnectMode) => {
     if (mode === 'terminal') {
       localStorage.setItem('shefpos_pending_terminal', 'true');
       setTerminalSetup('login');
       return;
     }
     const api = (window as any).electronAPI;
-    await api.setDbMode(mode);
-    if (mode === 'sqlserver') {
-      localStorage.setItem('dbMode', 'sqlserver');
+    await api?.setDbMode?.(mode);
+
+    if (mode === 'local') {
+      localStorage.setItem('dbMode', 'local');
+      setDbMode('cloud');
+      return;
+    }
+    if (mode === 'sqlserver' || mode === 'postgres') {
+      localStorage.setItem('dbMode', mode);
       setDbMode('sqlserver');
       setSqlServerConfigured(false);
       setShowSqlServerSettings(true);
-    } else {
-      localStorage.removeItem('dbMode');
-      setDbMode('cloud');
+      return;
     }
+    localStorage.removeItem('dbMode');
+    setDbMode('cloud');
   };
 
   if (terminalSetup === 'login') {
@@ -422,7 +428,7 @@ function App() {
   }
 
   if (isElectron && dbMode === null) {
-    return <SetupWizard onModeSelect={handleDbModeSelect} />;
+    return <ElectronConnectionMenu onSelect={handleDbModeSelect} />;
   }
 
   if (isElectron && dbMode === 'sqlserver' && (showSqlServerSettings || !sqlServerConfigured)) {
@@ -480,11 +486,14 @@ function App() {
         <ElectronAuth
           onSwitchMode={() => {
             const api = (window as any).electronAPI;
-            api?.setDbMode(null);
+            api?.setDbMode?.(null);
             localStorage.removeItem('dbMode');
             setDbMode(null);
           }}
-          currentDbMode={dbMode as 'cloud' | 'sqlserver' | null}
+          currentDbMode={
+            (localStorage.getItem('dbMode') as 'cloud' | 'sqlserver' | 'postgres' | 'local' | null) ||
+            (dbMode as 'cloud' | 'sqlserver' | null)
+          }
         />
       );
     }

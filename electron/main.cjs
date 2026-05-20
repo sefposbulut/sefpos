@@ -1,4 +1,4 @@
-const { app, BrowserWindow, shell, ipcMain, net, dialog } = require('electron');
+const { app, BrowserWindow, shell, ipcMain, net, dialog, Menu } = require('electron');
 const path = require('path');
 
 /**
@@ -1610,6 +1610,81 @@ function watchConnectivity() {
   }, 15000);
 }
 
+/** Kurumsal masaüstü menü çubuğu (Alt tuşu ile görünür). */
+function buildApplicationMenu(win) {
+  const template = [
+    {
+      label: 'Dosya',
+      submenu: [{ role: 'quit', label: 'Çıkış' }],
+    },
+    {
+      label: 'Düzenle',
+      submenu: [
+        { role: 'undo', label: 'Geri Al' },
+        { role: 'redo', label: 'Yinele' },
+        { type: 'separator' },
+        { role: 'cut', label: 'Kes' },
+        { role: 'copy', label: 'Kopyala' },
+        { role: 'paste', label: 'Yapıştır' },
+        { role: 'selectAll', label: 'Tümünü Seç' },
+      ],
+    },
+    {
+      label: 'Görünüm',
+      submenu: [
+        { role: 'reload', label: 'Yenile' },
+        { type: 'separator' },
+        { role: 'resetZoom', label: 'Yakınlaştırmayı Sıfırla' },
+        { role: 'zoomIn', label: 'Yakınlaştır' },
+        { role: 'zoomOut', label: 'Uzaklaştır' },
+        { type: 'separator' },
+        { role: 'togglefullscreen', label: 'Tam Ekran' },
+        ...(isDev
+          ? [
+              { type: 'separator' },
+              { role: 'toggleDevTools', label: 'Geliştirici Araçları' },
+            ]
+          : []),
+      ],
+    },
+    {
+      label: 'Pencere',
+      submenu: [
+        { role: 'minimize', label: 'Küçült' },
+        { role: 'close', label: 'Kapat' },
+      ],
+    },
+    {
+      label: 'Yardım',
+      submenu: [
+        {
+          label: 'ŞefPOS Hakkında',
+          click: () => {
+            if (!win || win.isDestroyed()) return;
+            dialog.showMessageBox(win, {
+              type: 'info',
+              title: 'ŞefPOS',
+              message: 'ŞefPOS — Restoran POS',
+              detail: `Sürüm ${app.getVersion()}\nwww.sefpos.com.tr\nDestek: 0544 244 90 80`,
+              buttons: ['Tamam'],
+            });
+          },
+        },
+        { type: 'separator' },
+        {
+          label: 'Web sitesi',
+          click: () => shell.openExternal('https://www.sefpos.com.tr'),
+        },
+        {
+          label: 'Teknik destek',
+          click: () => shell.openExternal('tel:+905442449080'),
+        },
+      ],
+    },
+  ];
+  return Menu.buildFromTemplate(template);
+}
+
 function createWindow() {
   const settings = loadSettings();
   let mainLoadRetried = false;
@@ -1644,10 +1719,10 @@ function createWindow() {
     backgroundColor: '#ffffff',
   });
   try {
-    if (typeof mainWindow.removeMenu === 'function') {
-      mainWindow.removeMenu();
-    }
-  } catch (_) {}
+    Menu.setApplicationMenu(buildApplicationMenu(mainWindow));
+  } catch (e) {
+    console.warn('[menu] application menu set failed:', e?.message || e);
+  }
 
   // Kamera / mikrofon izinlerini Electron tarafında otomatik ver
   // (barkod tarayıcı, gelecekte sesli not vb. için gerekli)
