@@ -38,7 +38,7 @@ import { ShiftManager } from './components/ShiftManager';
 import { ShiftAutoStartPrompt } from './components/ShiftAutoStartPrompt';
 import { ShiftQuickClose } from './components/ShiftQuickClose';
 import { useUiPrefs, setHeaderHidden } from './lib/uiPrefs';
-import { Home, Maximize2, Menu as MenuIcon } from 'lucide-react';
+import { Maximize2, Menu as MenuIcon } from 'lucide-react';
 import { Database, supabase } from './lib/supabase';
 import { isSqlServerMode } from './lib/sqlDb';
 import { queryCache } from './lib/queryCache';
@@ -601,43 +601,23 @@ function App() {
         />
       )}
 
-      {/* Header gizliyken sag alt FAB: Electron → ana sayfa; web → MainMenu */}
-      {headerHidden && (
+      {/* Header gizliyken sag alt FAB — yalnizca web; Electron ana sayfaya Header ile doner */}
+      {headerHidden && !isElectron && (
         <div className="fixed bottom-3 right-3 z-[60] flex items-center gap-2">
-          {isElectron ? (
-            <button
-              type="button"
-              onClick={() => {
-                setSelectedTable(null);
-                handleNavigate('desktop-home');
-              }}
-              title="Ana sayfa"
-              aria-label="Ana sayfa"
-              className="group inline-flex items-center gap-1.5 h-11 pl-2.5 pr-3 rounded-full bg-gradient-to-br from-orange-500 to-red-600 hover:from-orange-600 hover:to-red-700 text-white shadow-2xl ring-1 ring-white/10 active:scale-95 transition-all"
-            >
-              <span className="w-7 h-7 rounded-full bg-white/20 flex items-center justify-center">
-                <Home className="w-4 h-4" />
-              </span>
-              <span className="text-[11px] font-black tracking-wide max-w-0 overflow-hidden opacity-0 group-hover:max-w-[72px] group-hover:opacity-100 group-hover:ml-0.5 transition-all duration-200 whitespace-nowrap">
-                ANA SAYFA
-              </span>
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={() => window.dispatchEvent(new CustomEvent('sefpos-open-main-menu'))}
-              title="Menü"
-              aria-label="Menü"
-              className="group inline-flex items-center gap-1.5 h-11 pl-2.5 pr-3 rounded-full bg-gradient-to-br from-orange-500 to-red-600 hover:from-orange-600 hover:to-red-700 text-white shadow-2xl ring-1 ring-white/10 active:scale-95 transition-all"
-            >
-              <span className="w-7 h-7 rounded-full bg-white/20 flex items-center justify-center">
-                <MenuIcon className="w-4 h-4" />
-              </span>
-              <span className="text-[11px] font-black tracking-wide max-w-0 overflow-hidden opacity-0 group-hover:max-w-[60px] group-hover:opacity-100 group-hover:ml-0.5 transition-all duration-200 whitespace-nowrap">
-                MENÜ
-              </span>
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={() => window.dispatchEvent(new CustomEvent('sefpos-open-main-menu'))}
+            title="Menü"
+            aria-label="Menü"
+            className="group inline-flex items-center gap-1.5 h-11 pl-2.5 pr-3 rounded-full bg-gradient-to-br from-orange-500 to-red-600 hover:from-orange-600 hover:to-red-700 text-white shadow-2xl ring-1 ring-white/10 active:scale-95 transition-all"
+          >
+            <span className="w-7 h-7 rounded-full bg-white/20 flex items-center justify-center">
+              <MenuIcon className="w-4 h-4" />
+            </span>
+            <span className="text-[11px] font-black tracking-wide max-w-0 overflow-hidden opacity-0 group-hover:max-w-[60px] group-hover:opacity-100 group-hover:ml-0.5 transition-all duration-200 whitespace-nowrap">
+              MENÜ
+            </span>
+          </button>
           <button
             type="button"
             onClick={() => setHeaderHidden(false)}

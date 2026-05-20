@@ -47,7 +47,7 @@ const roleLabels: Record<string, string> = {
   kitchen: 'Mutfak',
 };
 
-const PRIMARY_ORDER = ['tables', 'takeaway', 'online-orders', 'adisyons'] as const;
+const PRIMARY_ORDER = ['tables', 'takeaway', 'online-orders', 'quick-sale'] as const;
 
 export function ElectronDesktopHome({
   onNavigate,
@@ -61,7 +61,7 @@ export function ElectronDesktopHome({
   const [notifOpen, setNotifOpen] = useState(false);
 
   const canOpenSettings = !!permissions?.can_manage_settings;
-  const logoSrc = publicAsset('logo-header.png');
+  const roundLogoSrc = publicAsset('sefpos-round.png');
 
   const allTiles = useMemo(
     () =>
@@ -86,7 +86,7 @@ export function ElectronDesktopHome({
   const quickSaleTile = allTiles.find((t) => t.id === 'quick-sale');
 
   const moduleTiles = useMemo(() => {
-    const skip = new Set([...PRIMARY_ORDER, 'quick-sale']);
+    const skip = new Set<string>([...PRIMARY_ORDER]);
     const mods = allTiles.filter((t) => !skip.has(t.id as (typeof PRIMARY_ORDER)[number]));
     if (canOpenSettings && onOpenSettings) {
       mods.push({
@@ -164,15 +164,15 @@ export function ElectronDesktopHome({
   return (
     <div className="fixed inset-0 z-[30] flex flex-col bg-slate-100 text-slate-900 overflow-hidden">
       {/* Üst bar — koyu lacivert (mockup) */}
-      <header className="flex-shrink-0 bg-slate-900 text-white shadow-lg">
+      <header className="flex-shrink-0 bg-gradient-to-r from-red-600 via-red-600 to-red-700 text-white shadow-lg">
         <div className="flex items-center justify-between gap-4 px-5 md:px-8 h-14 md:h-16">
           <div className="flex items-center gap-3 min-w-0">
             <img
-              src={logoSrc}
+              src={roundLogoSrc}
               alt="ŞefPOS"
-              className="h-8 md:h-9 w-auto object-contain brightness-0 invert"
+              className="h-10 w-10 md:h-11 md:w-11 rounded-full object-cover bg-white ring-2 ring-white/30 shadow-md shrink-0"
               onError={(e) => {
-                (e.currentTarget as HTMLImageElement).style.display = 'none';
+                (e.currentTarget as HTMLImageElement).src = publicAsset('logo.png');
               }}
             />
             <span className="text-sm md:text-base font-black tracking-wide truncate uppercase">
@@ -273,14 +273,20 @@ export function ElectronDesktopHome({
                 {tenantName} yönetim paneline hoş geldiniz.
                 {activeBranch?.name ? ` (${activeBranch.name})` : ''}
               </p>
-              {stats && (
+              {activeBranch && stats && (
                 <div className="flex flex-wrap gap-3 mt-4">
-                  <StatChip label="Açık adisyon" value={String(stats.openTickets)} />
                   <StatChip
-                    label="Masa dolu"
+                    label={`Açık masa (${activeBranch.name})`}
+                    value={String(stats.openTablesWithOrder)}
+                  />
+                  <StatChip
+                    label="Dolu masa"
                     value={`${stats.occupiedTables} / ${stats.totalTables || '—'}`}
                   />
                 </div>
+              )}
+              {!activeBranch?.id && (
+                <p className="mt-3 text-sm text-amber-700 font-semibold">Özet için şube seçin.</p>
               )}
             </section>
 

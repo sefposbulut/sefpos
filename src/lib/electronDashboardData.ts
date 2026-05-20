@@ -2,7 +2,8 @@ import { supabase } from './supabase';
 import { isSqlServerMode } from './sqlDb';
 
 export type DashboardSnapshot = {
-  openTickets: number;
+  /** Aktif şubede `current_order_id` dolu masa sayısı */
+  openTablesWithOrder: number;
   occupiedTables: number;
   totalTables: number;
   todayRevenue: number;
@@ -38,14 +39,12 @@ function dayBounds(offsetDays = 0): { start: string; end: string; label: string 
   };
 }
 
-const OPEN_ORDER_STATUSES = ['open', 'active', 'pending'];
-
 export async function fetchElectronDashboardSnapshot(
   tenantId: string,
   branchId: string | null,
 ): Promise<DashboardSnapshot> {
   const empty: DashboardSnapshot = {
-    openTickets: 0,
+    openTablesWithOrder: 0,
     occupiedTables: 0,
     totalTables: 0,
     todayRevenue: 0,
@@ -55,7 +54,7 @@ export async function fetchElectronDashboardSnapshot(
     todayOnlineCount: 0,
     pendingOnlineCount: 0,
   };
-  if (isSqlServerMode()) return empty;
+  if (isSqlServerMode() || !branchId) return empty;
 
   const today = dayBounds(0);
   const yesterday = dayBounds(-1);
@@ -63,8 +62,8 @@ export async function fetchElectronDashboardSnapshot(
   let tablesQ = supabase
     .from('restaurant_tables')
     .select('id, status, current_order_id', { count: 'exact' })
-    .eq('tenant_id', tenantId);
-  if (branchId) tablesQ = tablesQ.eq('branch_id', branchId);
+    .eq('tenant_id', tenantId)
+    .eq('branch_id', branchId);
 
   let ordersTodayQ = supabase
     .from('orders')
@@ -72,39 +71,38 @@ export async function fetchElectronDashboardSnapshot(
     .eq('tenant_id', tenantId)
     .gte('created_at', today.start)
     .lte('created_at', today.end);
-  if (branchId) ordersTodayQ = ordersTodayQ.eq('branch_id', branchId);
+  ordersTodayQ = ordersTodayQ.eq('branch_id', branchId);
 
   let ordersYesterdayQ = supabase
     .from('orders')
     .select('total_amount, status')
     .eq('tenant_id', tenantId)
+    .eq('branch_id', branchId)
     .eq('status', 'completed')
     .gte('created_at', yesterday.start)
     .lte('created_at', yesterday.end);
-  if (branchId) ordersYesterdayQ = ordersYesterdayQ.eq('branch_id', branchId);
-
-  let openOrdersQ = supabase
-    .from('orders')
-    .select('id', { count: 'exact', head: true })
-    .eq('tenant_id', tenantId)
-    .in('status', OPEN_ORDER_STATUSES);
-  if (branchId) openOrdersQ = openOrdersQ.eq('branch_id', branchId);
 
   let onlinePendingQ = supabase
     .from('online_orders')
     .select('id', { count: 'exact', head: true })
     .eq('tenant_id', tenantId)
+    .eq('branch_id', branchId)
     .in('status', ['new', 'scheduled_new', 'verified', 'accepted', 'preparing']);
-  if (branchId) onlinePendingQ = onlinePendingQ.eq('branch_id', branchId);
 
-  const [tablesRes, ordersTodayRes, ordersYesterdayRes, openOrdersRes, onlinePendingRes] =
-    await Promise.all([tablesQ, ordersTodayQ, ordersYesterdayQ, openOrdersQ, onlinePendingQ]);
+  const [tablesRes, ordersTodayRes, ordersYesterdayRes, onlinePendingRes] = await Promise.all([
+    tablesQ,
+    ordersTodayQ,
+    ordersYesterdayQ,
+    onlinePendingQ,
+  ]);
 
   const tables = (tablesRes.data || []) as { id: string; status?: string; current_order_id?: string | null }[];
   const occupied = tables.filter(
     (t) => t.status === 'occupied' || (t.current_order_id != null && t.current_order_id !== ''),
   ).length;
-  const withOrder = tables.filter((t) => t.current_order_id).length;
+  const withOrder = tables.filter(
+    (t) => t.current_order_id != null && String(t.current_order_id).length > 0,
+  ).length;
 
   const todayOrders = ((ordersTodayRes.data || []) as { status: string; total_amount: number; order_type: string }[]);
   const completedToday = todayOrders.filter((o) => o.status === 'completed');
@@ -113,7 +111,7 @@ export async function fetchElectronDashboardSnapshot(
   const yesterdayRevenue = yesterdayRows.reduce((s, o) => s + Number(o.total_amount || 0), 0);
 
   return {
-    openTickets: Math.max(openOrdersRes.count ?? 0, withOrder),
+    openTablesWithOrder: withOrder,
     occupiedTables: occupied,
     totalTables: tablesRes.count ?? tables.length,
     todayRevenue,
@@ -130,23 +128,23 @@ export async function fetchElectronRecentActivity(
   branchId: string | null,
   limit = 5,
 ): Promise<RecentActivityRow[]> {
-  if (isSqlServerMode()) return [];
+  if (isSqlServerMode() || !branchId) return [];
 
   let ordersQ = supabase
     .from('orders')
     .select('id, order_number, status, total_amount, order_type, created_at, table_id, restaurant_tables(table_number)')
     .eq('tenant_id', tenantId)
+    .eq('branch_id', branchId)
     .order('created_at', { ascending: false })
     .limit(limit);
-  if (branchId) ordersQ = ordersQ.eq('branch_id', branchId);
 
   let onlineQ = supabase
     .from('online_orders')
     .select('id, customer_name, status, total_amount, created_at, platform_order_number')
     .eq('tenant_id', tenantId)
+    .eq('branch_id', branchId)
     .order('created_at', { ascending: false })
     .limit(limit);
-  if (branchId) onlineQ = onlineQ.eq('branch_id', branchId);
 
   const [{ data: orders }, { data: online }] = await Promise.all([ordersQ, onlineQ]);
 

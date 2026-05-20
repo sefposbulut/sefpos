@@ -2,7 +2,6 @@ import type { LucideIcon } from 'lucide-react';
 import {
   Ban,
   Boxes,
-  ClipboardList,
   Clock,
   Grid3x3,
   Layers,
@@ -72,24 +71,16 @@ export function buildPosMenuTiles({
       desktopPrimary: true,
     },
     {
-      id: 'adisyons',
-      label: 'Adisyonlar',
-      description: 'Açık adisyonları görüntüle',
-      icon: ClipboardList,
-      show: !!permissions.can_view_tables && mod('tables'),
-      page: 'tables',
-      desktopPrimary: true,
-    },
-    {
       id: 'quick-sale',
       label: 'Hızlı Satış',
-      description: 'Kasiyer — masa olmadan',
+      description: 'Kasiyer — masa olmadan satış',
       icon: Zap,
       show:
         !!permissions.can_take_orders &&
         !!permissions.can_process_payments &&
         mod('quick-sale'),
       page: 'quick-sale',
+      desktopPrimary: true,
     },
     {
       id: 'takeaway',
