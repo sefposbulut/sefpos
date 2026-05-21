@@ -7,7 +7,7 @@ import { Plus, Clock, Lock, ZoomIn, ZoomOut, ScanBarcode, Truck, Eye, EyeOff, Re
 import { useUiPrefs, setHeaderHidden } from '../lib/uiPrefs';
 import { ReprintReceiptModal } from './ReprintReceiptModal';
 import { isLocalMode } from '../lib/sqlDb';
-import { warmOrderItemsForPanel, bulkWarmOrderItemsForOrders } from '../lib/orderPanelWarm';
+import { warmOrderPanelBundle, bulkWarmOrderItemsForOrders } from '../lib/orderPanelWarm';
 import { LiveDuration } from './LiveDuration';
 import { getTrialInfo, formatTrialRemaining, type TenantTrialFields } from '../lib/tenantTrial';
 import { APP_DISPLAY_VERSION } from '../lib/appVersion';
@@ -486,7 +486,7 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
 
   const handleSelectTableInstant = useCallback((table: TableWithOrder) => {
     if (table.current_order_id) {
-      warmOrderItemsForPanel(table.current_order_id);
+      warmOrderPanelBundle(table.current_order_id);
     }
     onSelectTable(table);
   }, [onSelectTable]);

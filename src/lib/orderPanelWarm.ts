@@ -4,6 +4,29 @@ import { ORDER_ITEMS_PANEL_SELECT } from './orderOptimistic';
 const warmRows = new Map<string, { rows: any[] }>();
 const inflightItems = new Map<string, Promise<void>>();
 
+export type PanelWarmBundle = {
+  rows: any[];
+  order: Record<string, unknown> | null;
+  payments: any[];
+};
+
+const warmPanel = new Map<string, PanelWarmBundle>();
+const inflightPanel = new Map<string, Promise<void>>();
+
+const ORDER_PANEL_SELECT =
+  'id, order_number, subtotal, discount_amount, total_amount, payment_status, status, waiter_name, branch_id, table_id, order_type, customer_name, customer_phone, delivery_address, delivery_note, courier_name, estimated_delivery_minutes, paid_at, created_at, tenant_id';
+
+async function fetchPanelItems(orderId: string): Promise<any[]> {
+  let r = await supabase.from('order_items').select(ORDER_ITEMS_PANEL_SELECT).eq('order_id', orderId);
+  if (r.error) {
+    r = await supabase
+      .from('order_items')
+      .select('*, products(*, categories(*))')
+      .eq('order_id', orderId);
+  }
+  return (r.data || []) as any[];
+}
+
 const SNAPSHOT_PREFIX = 'sefpos:order_items_snap:v1:';
 
 /** F5 / sekme yenilemede senkron okunur — sepet ilk karede görünür (stale-while-revalidate) */
@@ -26,34 +49,53 @@ export function persistOrderItemsSnapshot(orderId: string, rows: any[]): void {
   }
 }
 
-/** Masa seçilir seçilmez sepet satırlarını çek; panel mount olunca `takeWarmOrderItems` ile anında boyanır */
-export function warmOrderItemsForPanel(orderId: string | null | undefined) {
-  if (!orderId || inflightItems.has(orderId)) return;
+/** Masa tıklanınca sepet + sipariş + ödemeleri tek seferde önbelleğe al */
+export function warmOrderPanelBundle(orderId: string | null | undefined) {
+  if (!orderId || inflightPanel.has(orderId)) return;
 
   const p = (async () => {
     try {
-      let r = await supabase.from('order_items').select(ORDER_ITEMS_PANEL_SELECT).eq('order_id', orderId);
-      if (r.error) {
-        r = await supabase.from('order_items').select('*, products(*, categories(*))').eq('order_id', orderId);
-      }
-      if (r.data) {
-        const rows = r.data as any[];
-        warmRows.set(orderId, { rows });
-        persistOrderItemsSnapshot(orderId, rows);
-      }
+      const [rows, orderRes, payRes] = await Promise.all([
+        fetchPanelItems(orderId),
+        supabase.from('orders').select(ORDER_PANEL_SELECT).eq('id', orderId).maybeSingle(),
+        supabase
+          .from('payment_transactions')
+          .select('id, tenant_id, order_id, payment_method, amount, created_by, created_at, customer_id')
+          .eq('order_id', orderId)
+          .order('created_at', { ascending: false }),
+      ]);
+      const bundle: PanelWarmBundle = {
+        rows,
+        order: (orderRes.data as Record<string, unknown>) || null,
+        payments: (payRes.data || []) as any[],
+      };
+      warmPanel.set(orderId, bundle);
+      warmRows.set(orderId, { rows });
+      persistOrderItemsSnapshot(orderId, rows);
     } finally {
-      inflightItems.delete(orderId);
+      inflightPanel.delete(orderId);
     }
   })();
 
-  inflightItems.set(orderId, p);
+  inflightPanel.set(orderId, p);
+}
+
+/** Geriye uyumluluk — tam panel warm */
+export function warmOrderItemsForPanel(orderId: string | null | undefined) {
+  warmOrderPanelBundle(orderId);
 }
 
 /** Önbellekte hazırsa satırları okur (silmez) — useLayoutEffect ile ilk karede sepet boyanır */
 export function peekWarmOrderItems(orderId: string): any[] | null {
+  const panel = warmPanel.get(orderId);
+  if (panel) return panel.rows;
   const e = warmRows.get(orderId);
   if (!e) return null;
   return e.rows;
+}
+
+export function peekWarmPanelBundle(orderId: string): PanelWarmBundle | null {
+  return warmPanel.get(orderId) ?? null;
 }
 
 /** Tek seferlik tüket; OrderPanel effect içinde sunucu ile hizalanır */
@@ -101,6 +143,7 @@ export function bulkWarmOrderItemsForOrders(orderIds: (string | null | undefined
         for (const oid of todo) {
           const rows = grouped.get(oid) || [];
           warmRows.set(oid, { rows });
+          warmPanel.set(oid, { rows, order: warmPanel.get(oid)?.order ?? null, payments: warmPanel.get(oid)?.payments ?? [] });
           persistOrderItemsSnapshot(oid, rows);
         }
       }

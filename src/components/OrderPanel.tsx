@@ -29,9 +29,10 @@ import { runWithRetry } from '../lib/outboundQueue';
 import { ensureCashRegisterRowForPayment } from '../lib/cashRegisterFallback';
 import {
   peekWarmOrderItems,
-  takeWarmOrderItems,
+  peekWarmPanelBundle,
   readPersistedOrderItemsSnapshot,
   persistOrderItemsSnapshot,
+  warmOrderPanelBundle,
   warmOrderItemsForPanel,
 } from '../lib/orderPanelWarm';
 import {
@@ -368,29 +369,33 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
       setOrderHydrating(false);
       return;
     }
-    setOrderHydrating(true);
-    const embed = table.order?.id === oid ? table.order : undefined;
-    setCurrentOrder(
-      buildGridSnapshotPlaceholderOrder({
-        orderId: oid,
-        tenantId: tenant.id,
-        branchId: activeBranch?.id ?? null,
-        restaurantTableId: table.id,
-        tableNumber: table.table_number,
-        waiterId: user?.id ?? null,
-        embed: embed ?? null,
-      })
-    );
+    const bundle = peekWarmPanelBundle(oid);
     const earlyLines = peekWarmOrderItems(oid);
-    if (earlyLines !== null) {
-      setExistingOrderItems(earlyLines);
-      setOrderHydrating(false);
+    const persisted = readPersistedOrderItemsSnapshot(oid);
+    const hasLocalLines = earlyLines !== null || persisted !== null || (bundle?.rows?.length ?? 0) > 0;
+    setOrderHydrating(!hasLocalLines);
+
+    const embed = table.order?.id === oid ? table.order : undefined;
+    if (bundle?.order) {
+      setCurrentOrder(bundle.order as Order);
     } else {
-      const persisted = readPersistedOrderItemsSnapshot(oid);
-      if (persisted !== null) {
-        setExistingOrderItems(persisted);
-        setOrderHydrating(false);
-      }
+      setCurrentOrder(
+        buildGridSnapshotPlaceholderOrder({
+          orderId: oid,
+          tenantId: tenant.id,
+          branchId: activeBranch?.id ?? null,
+          restaurantTableId: table.id,
+          tableNumber: table.table_number,
+          waiterId: user?.id ?? null,
+          embed: embed ?? null,
+        })
+      );
+    }
+    if (bundle?.payments?.length) {
+      setPaymentTransactions(bundle.payments as PaymentTransaction[]);
+    }
+    if (hasLocalLines) {
+      setExistingOrderItems(earlyLines ?? persisted ?? bundle!.rows);
     }
   }, [
     resetOrderSession,
@@ -418,8 +423,6 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
 
   const lockTableForPayment = async (): Promise<boolean> => {
     if (table.table_number === 0 || !table.id) return true;
-
-    await unlockStalePaymentLocksRpc();
 
     const mySession = getPaymentLockTabSession();
     const { data } = await supabase
@@ -936,7 +939,7 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
     let reloadTimer: ReturnType<typeof setTimeout> | null = null;
     const scheduleReload = () => {
       if (reloadTimer) clearTimeout(reloadTimer);
-      reloadTimer = setTimeout(() => loadExistingOrderRef.current?.(), 250);
+      reloadTimer = setTimeout(() => loadExistingOrderRef.current?.(), 180);
     };
 
     const ch = supabase
@@ -967,48 +970,57 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
       return;
     }
 
-    const warm = takeWarmOrderItems(currentOrderId);
-    const usedWarm = !!warm;
-    if (warm) {
-      setExistingOrderItems(warm.rows);
-      persistOrderItemsSnapshot(currentOrderId, warm.rows);
+    const bundle = peekWarmPanelBundle(currentOrderId);
+    const cachedLines = peekWarmOrderItems(currentOrderId);
+    const persisted = readPersistedOrderItemsSnapshot(currentOrderId);
+    const localLines = cachedLines ?? persisted ?? (bundle?.rows?.length ? bundle.rows : null);
+
+    if (localLines) {
+      setExistingOrderItems(localLines);
+      persistOrderItemsSnapshot(currentOrderId, localLines);
       setOrderHydrating(false);
     }
+    if (bundle?.order) setCurrentOrder(bundle.order as Order);
+    if (bundle?.payments?.length) setPaymentTransactions(bundle.payments as PaymentTransaction[]);
 
-    const runItems = async () => {
-      if (usedWarm) return;
-      let r = await supabase.from('order_items').select(ORDER_ITEMS_PANEL_SELECT).eq('order_id', currentOrderId);
-      if (r.error) {
-        r = await supabase
-          .from('order_items')
-          .select('*, products(*, categories(*))')
-          .eq('order_id', currentOrderId);
+    try {
+      const [itemsRes, orderRes, paymentsRes] = await Promise.all([
+        localLines
+          ? Promise.resolve({ data: localLines, error: null })
+          : supabase.from('order_items').select(ORDER_ITEMS_PANEL_SELECT).eq('order_id', currentOrderId),
+        supabase.from('orders').select('*').eq('id', currentOrderId).maybeSingle(),
+        supabase
+          .from('payment_transactions')
+          .select('*')
+          .eq('order_id', currentOrderId)
+          .order('created_at', { ascending: false }),
+      ]);
+
+      let rows = localLines as any[] | null;
+      if (!rows && itemsRes && 'data' in itemsRes) {
+        if ((itemsRes as { error?: unknown }).error) {
+          const fallback = await supabase
+            .from('order_items')
+            .select('*, products(*, categories(*))')
+            .eq('order_id', currentOrderId);
+          rows = (fallback.data || []) as any[];
+        } else {
+          rows = ((itemsRes as { data: any[] }).data || []) as any[];
+        }
       }
-      if (r.data) {
-        const rows = r.data as any[];
+      if (rows) {
         setExistingOrderItems(rows);
         persistOrderItemsSnapshot(currentOrderId, rows);
       }
-    };
-
-    const runOrderAndPayments = async () => {
-      const [orderRes, paymentsRes] = await Promise.all([
-        supabase.from('orders').select('*').eq('id', currentOrderId).maybeSingle(),
-        supabase.from('payment_transactions').select('*').eq('order_id', currentOrderId).order('created_at', { ascending: false }),
-      ]);
 
       if (orderRes.data) {
         setCurrentOrder(orderRes.data);
-      } else {
+      } else if (!localLines) {
         setCurrentOrder(null);
         setExistingOrderItems([]);
         setPaymentTransactions([]);
       }
       if (paymentsRes.data) setPaymentTransactions(paymentsRes.data as any);
-    };
-
-    try {
-      await Promise.all([runItems(), runOrderAndPayments()]);
     } finally {
       setOrderHydrating(false);
     }
@@ -1749,29 +1761,6 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
       return;
     }
 
-    // Hizli optimistik kapanis: nakit/kart ile yeterli odeme yapildiginda
-    // payment_transactions INSERT round-trip'ini beklemeden masa kutusunu
-    // ANLIK bosalt + paneli kapat. DB yazimi arka planda devam eder; hata
-    // olursa restaurant_tables realtime ile gercek state geri gelir.
-    if (method !== 'open_account' && table.table_number !== 0 && table.id) {
-      const currentPaid = paymentTransactions.reduce(
-        (s, p) => s + Number(p.amount || 0),
-        0,
-      );
-      const { total: orderTotal } = calculateTotal();
-      if (currentPaid + Number(amount || 0) + 0.01 >= orderTotal) {
-        emitTableStateChanged({
-          id: table.id,
-          status: 'available' as any,
-          current_order_id: null,
-          session_start: null,
-          payment_locked: false,
-          order: null,
-        });
-        queueMicrotask(() => onClose());
-      }
-    }
-
     if (method === 'open_account') {
       if (!customerId) {
         alert('Cari hesap ödemesi için müşteri seçin.');
@@ -1799,6 +1788,28 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
         );
         if (!ok) return;
       }
+    }
+
+    const currentPaid = paymentTransactions.reduce((s, p) => s + Number(p.amount || 0), 0);
+    const { total: orderTotal } = calculateTotal();
+    const willCloseTable =
+      table.table_number !== 0 &&
+      !!table.id &&
+      currentPaid + Number(amount || 0) + 0.01 >= orderTotal;
+
+    if (willCloseTable) {
+      flushSync(() => {
+        emitTableStateChanged({
+          id: table.id,
+          status: 'available' as any,
+          current_order_id: null,
+          session_start: null,
+          payment_locked: false,
+          order: null,
+        });
+      });
+      setShowPayment(false);
+      onClose();
     }
 
     const tempId = crypto.randomUUID();
@@ -1965,23 +1976,22 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
 
       if (totalPaid >= total) {
         // Kasa: her payment_transactions INSERT zaten log_payment_to_cash_register
-        // tetikleyicisiyle cash_register_transactions oluşturur. Sipariş kapanırken
-        // burada tekrar insert ETME — aynı tutar iki kez kasada görünür.
+        // tetikleyicisiyle cash_register_transactions oluşturur.
 
-        // Önce optimistik UI: masa anında "available" görünsün, panel kapansın.
-        // DB yazımı arka planda yapılır; hata olursa restaurant_tables realtime ile
-        // gerçek state geri gelir.
         if (table.table_number !== 0 && table.id) {
-          emitTableStateChanged({
-            id: table.id,
-            status: 'available' as any,
-            current_order_id: null,
-            session_start: null,
-            payment_locked: false,
-            order: null,
+          flushSync(() => {
+            emitTableStateChanged({
+              id: table.id,
+              status: 'available' as any,
+              current_order_id: null,
+              session_start: null,
+              payment_locked: false,
+              order: null,
+            });
           });
         }
-        queueMicrotask(() => onClose());
+        setShowPayment(false);
+        onClose();
 
       void Promise.all([
         supabase.from('orders').update({
@@ -2145,6 +2155,33 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
   }, [existingOrderItems, selectedItemIds, isItemPaid]);
   const partialPayActive = selectedItemIds.size > 0 && selectedItemsTotal > 0;
   const paymentModalAmount = partialPayActive ? selectedItemsTotal : remainingAmount;
+
+  /** Ödeme modalını anında aç; masa kilidi arka planda (önce RPC beklemez). */
+  const openPaymentFlow = useCallback(() => {
+    if (partialPayActive) {
+      partialPaymentItemIdsRef.current = Array.from(selectedItemIds);
+      partialPaymentMarkedRef.current = false;
+      partialPaymentRemainingRef.current = selectedItemsTotal;
+    } else {
+      partialPaymentItemIdsRef.current = [];
+      partialPaymentMarkedRef.current = false;
+      partialPaymentRemainingRef.current = 0;
+    }
+    setShowPayment(true);
+    if (cart.length > 0) void handleSubmitOrder();
+    if (table.table_number === 0 || !table.id) return;
+    void lockTableForPayment().then((canPay) => {
+      if (!canPay) setShowPayment(false);
+    });
+  }, [
+    partialPayActive,
+    selectedItemIds,
+    selectedItemsTotal,
+    cart.length,
+    table.table_number,
+    table.id,
+    handleSubmitOrder,
+  ]);
   const toggleItemSelection = useCallback((itemId: string) => {
     setSelectedItemIds((prev) => {
       const next = new Set(prev);
@@ -3153,12 +3190,7 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
                           partialPaymentMarkedRef.current = false;
                           partialPaymentRemainingRef.current = 0;
                         }
-                        void (async () => {
-                          const canPay = await lockTableForPayment();
-                          if (!canPay) return;
-                          setShowPayment(true);
-                          if (cart.length > 0) void handleSubmitOrder();
-                        })();
+                        openPaymentFlow();
                       }}
                       disabled={payButtonBlocked || submitBusy}
                       className={`flex-1 text-white font-black py-4 rounded-xl text-base active:scale-95 shadow-lg border disabled:opacity-50 disabled:pointer-events-none transition-colors duration-75 ${
@@ -3645,21 +3677,7 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
                               alert('Sipariş sunucuya yazılıyor; birkaç saniye bekleyin.');
                               return;
                             }
-                            if (partialPayActive) {
-                              partialPaymentItemIdsRef.current = Array.from(selectedItemIds);
-                              partialPaymentMarkedRef.current = false;
-                              partialPaymentRemainingRef.current = selectedItemsTotal;
-                            } else {
-                              partialPaymentItemIdsRef.current = [];
-                              partialPaymentMarkedRef.current = false;
-                              partialPaymentRemainingRef.current = 0;
-                            }
-                            void (async () => {
-                              const canPay = await lockTableForPayment();
-                              if (!canPay) return;
-                              setShowPayment(true);
-                              if (cart.length > 0) void handleSubmitOrder();
-                            })();
+                            openPaymentFlow();
                           }}
                           disabled={payButtonBlocked || submitBusy}
                           className={`flex-1 text-white font-bold py-4 rounded-xl transition-colors duration-75 shadow-lg text-base active:scale-95 disabled:opacity-50 disabled:pointer-events-none ${
