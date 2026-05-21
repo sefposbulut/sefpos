@@ -191,26 +191,28 @@ export function DeliveryOrderForm({ couriers, editOrder, prefillCustomer, onClos
 
   const loadLastOrdersForCari = async (cari: CariCustomerRow) => {
     if (!tenant) return;
-    const { data: byId } = await supabase
-      .from('orders')
-      .select(LAST_ORDERS_SELECT)
-      .eq('tenant_id', tenant.id)
-      .eq('customer_id', cari.id)
-      .in('order_type', ['takeaway', 'delivery'])
-      .order('created_at', { ascending: false })
-      .limit(3);
-    let data = byId;
-    if ((!data || data.length === 0) && cari.phone?.trim()) {
-      const p = cari.phone.trim().replace(/%/g, '');
-      const { data: byPhone } = await supabase
+    let data: typeof lastOrders | null = null;
+    const base = () =>
+      supabase
         .from('orders')
         .select(LAST_ORDERS_SELECT)
         .eq('tenant_id', tenant.id)
         .in('order_type', ['takeaway', 'delivery'])
-        .ilike('customer_phone', `%${p}%`)
         .order('created_at', { ascending: false })
         .limit(3);
+
+    if (cari.phone?.trim()) {
+      const p = cari.phone.trim().replace(/%/g, '');
+      const { data: byPhone } = await base().ilike('customer_phone', `%${p}%`);
       data = byPhone;
+    }
+    if (!data?.length) {
+      const { data: byCariKey } = await base().eq('customer_phone', `cari-${cari.id}`);
+      data = byCariKey;
+    }
+    if (!data?.length && cari.name?.trim()) {
+      const { data: byName } = await base().ilike('customer_name', cari.name.trim());
+      data = byName;
     }
     if (data) setLastOrders(data);
   };
@@ -321,21 +323,32 @@ export function DeliveryOrderForm({ couriers, editOrder, prefillCustomer, onClos
     setCart(prev => prev.map(i => i.product.id === productId ? { ...i, note } : i));
   };
 
-  const upsertCustomer = async (): Promise<string | null> => {
-    if (!tenant || !customerPhone.trim()) return null;
+  /** Telefonsuz cari için dahili anahtar: delivery_customers ile eşleşir. */
+  const cariDeliveryPhoneKey = (cari: CariCustomerRow) => `cari-${cari.id}`;
+
+  const upsertDeliveryCustomer = async (
+    name: string,
+    phone: string,
+    address: string,
+    cari: CariCustomerRow | null,
+  ): Promise<string | null> => {
+    if (!tenant) return null;
+    const phoneKey = phone.trim() || (cari ? cariDeliveryPhoneKey(cari) : '');
+    if (!phoneKey) return null;
+
     const { data: existing } = await supabase
       .from('delivery_customers')
       .select('id')
       .eq('tenant_id', tenant.id)
-      .eq('phone', customerPhone.trim())
+      .eq('phone', phoneKey)
       .maybeSingle();
 
     if (existing) {
       await supabase
         .from('delivery_customers')
         .update({
-          full_name: customerName.trim(),
-          address: deliveryAddress.trim(),
+          full_name: name,
+          address: address,
           last_order_at: new Date().toISOString(),
         })
         .eq('id', existing.id);
@@ -345,9 +358,9 @@ export function DeliveryOrderForm({ couriers, editOrder, prefillCustomer, onClos
     const { data: created } = await supabase.from('delivery_customers').insert({
       tenant_id: tenant.id,
       branch_id: activeBranch?.id || null,
-      full_name: customerName.trim(),
-      phone: customerPhone.trim(),
-      address: deliveryAddress.trim(),
+      full_name: name,
+      phone: phoneKey,
+      address: address,
       last_order_at: new Date().toISOString(),
       order_count: 1,
     }).select('id').single();
@@ -366,7 +379,12 @@ export function DeliveryOrderForm({ couriers, editOrder, prefillCustomer, onClos
     if (cart.length === 0) { alert('En az 1 ürün ekleyin'); return; }
     setSubmitting(true);
 
-    const customerId = phone ? await upsertCustomer() : null;
+    const deliveryCustomerId = await upsertDeliveryCustomer(
+      name,
+      phone,
+      address,
+      selectedCariCustomer,
+    );
     const courier = assignCourierId ? couriers.find(c => c.id === assignCourierId) : null;
 
     const orderPayload: Record<string, any> = {
@@ -378,7 +396,6 @@ export function DeliveryOrderForm({ couriers, editOrder, prefillCustomer, onClos
       order_subtype: subtype === 'gel_al' ? 'gel_al' : null,
       status: 'active',
       delivery_status: 'pending',
-      customer_id: selectedCariCustomer?.id || editOrder?.customer_id || null,
       customer_name: name,
       customer_phone: phone || null,
       delivery_address: address || null,
@@ -389,7 +406,7 @@ export function DeliveryOrderForm({ couriers, editOrder, prefillCustomer, onClos
       estimated_delivery_minutes: isDelivery ? parseInt(estimatedMinutes) || 30 : null,
       courier_id: courier?.id || null,
       courier_name: courier?.full_name || null,
-      delivery_customer_id: customerId,
+      delivery_customer_id: deliveryCustomerId,
       subtotal: cartTotal,
       total_amount: cartTotal,
     };
