@@ -17,6 +17,7 @@ import {
   type TakeawayCustomerSuggestion,
 } from '../lib/takeawayCustomerSearch';
 import { sendCourierAssignmentNotification } from '../lib/courierNotification';
+import { recordTakeawayPaymentIfNeeded } from '../lib/takeawayPayment';
 
 type CustomerSuggestion = TakeawayCustomerSuggestion;
 type CariCustomerRow = CariCustomerHit;
@@ -418,22 +419,25 @@ export function DeliveryOrderForm({ couriers, editOrder, prefillCustomer, onClos
     }
 
     let orderId: string;
+    let savedOrderNumber = editOrder?.order_number || '';
 
     if (editOrder) {
-      const { data: updated } = await supabase.from('orders').update(orderPayload).eq('id', editOrder.id).select('id').single();
+      const { data: updated } = await supabase.from('orders').update(orderPayload).eq('id', editOrder.id).select('id, order_number').single();
       if (!updated) { setSubmitting(false); return; }
       orderId = updated.id;
+      savedOrderNumber = updated.order_number || savedOrderNumber;
       await supabase.from('order_items').delete().eq('order_id', orderId);
     } else {
       const { data: created, error } = await supabase.from('orders').insert(orderPayload).select('id, order_number').single();
       if (error || !created) { alert('Hata: ' + error?.message); setSubmitting(false); return; }
       orderId = created.id;
+      savedOrderNumber = created.order_number || orderId.slice(0, 8).toUpperCase();
       if (courier) {
         await sendCourierAssignmentNotification(
           tenant.id,
           courier.id,
           orderId,
-          created.order_number || orderId.slice(0, 8).toUpperCase(),
+          savedOrderNumber,
           address || null,
         );
       }
@@ -455,6 +459,21 @@ export function DeliveryOrderForm({ couriers, editOrder, prefillCustomer, onClos
       };
     });
     await supabase.from('order_items').insert(items);
+
+    if (paymentCollected) {
+      await recordTakeawayPaymentIfNeeded({
+        tenantId: tenant.id,
+        branchId: activeBranch?.id ?? null,
+        orderId,
+        orderNumber: savedOrderNumber || orderId.slice(0, 8).toUpperCase(),
+        orderType: isDelivery ? 'delivery' : 'takeaway',
+        orderSubtype: subtype === 'gel_al' ? 'gel_al' : null,
+        paymentMethod,
+        amount: cartTotal,
+        createdBy: user.id,
+        shouldRecord: true,
+      });
+    }
 
     if (courier) await supabase.from('couriers').update({ status: 'busy' }).eq('id', courier.id);
 

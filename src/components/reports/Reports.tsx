@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { BarChart3, Package, Building2, Users } from 'lucide-react';
+import { BarChart3, Package, Building2, Users, Bike } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { supabase } from '../../lib/supabase';
 import { REPORTS_INITIAL_TAB_STORAGE_KEY, REPORTS_MENU_LAST_KEY } from '../../lib/reportsNav';
@@ -7,8 +7,9 @@ import { SalesReport } from './SalesReport';
 import { ProductReport } from './ProductReport';
 import { BranchReport } from './BranchReport';
 import { StaffReport } from './StaffReport';
+import { TakeawayReport } from './TakeawayReport';
 
-type ReportTab = 'sales' | 'products' | 'branches' | 'staff';
+type ReportTab = 'sales' | 'products' | 'takeaway' | 'branches' | 'staff';
 
 interface Branch {
   id: string;
@@ -63,6 +64,7 @@ export function Reports() {
   const tabs: { key: ReportTab; label: string; icon: typeof BarChart3; ownerOnly?: boolean }[] = [
     { key: 'sales', label: 'Satış Raporu', icon: BarChart3 },
     { key: 'products', label: 'Ürün Raporu', icon: Package },
+    { key: 'takeaway', label: 'Paket & Kurye', icon: Bike },
     { key: 'branches', label: 'Şube Raporu', icon: Building2, ownerOnly: true },
     { key: 'staff', label: 'Personel Raporu', icon: Users },
   ];
@@ -75,7 +77,7 @@ export function Reports() {
         <div className="mb-6">
           <h1 className="text-2xl md:text-3xl font-bold text-slate-900">Raporlar</h1>
           <p className="text-sm text-slate-500 mt-1">
-            Satış, ürün, şube ve personel performans raporları. Ürün sayımı geçmişi için menüden{' '}
+            Satış, ürün, paket/kurye, şube ve personel raporları. Ürün sayımı geçmişi için menüden{' '}
             <strong className="text-slate-700">Raporlar → Sayım raporu</strong>.
           </p>
         </div>
@@ -121,6 +123,7 @@ export function Reports() {
         <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
           {activeTab === 'sales' && <SalesReport selectedBranch={selectedBranch} />}
           {activeTab === 'products' && <ProductReport selectedBranch={selectedBranch} />}
+          {activeTab === 'takeaway' && <TakeawayReport selectedBranch={selectedBranch} />}
           {activeTab === 'branches' && isOwnerOrAdmin && <BranchReport />}
           {activeTab === 'staff' && <StaffReport selectedBranch={selectedBranch} />}
         </div>
