@@ -89,9 +89,19 @@ function SqlServerForm({ onSave, onBack, onClose, showBack = true, inline = fals
       setImportMessage('Sunucu ve kullanıcı adı zorunludur.');
       return;
     }
+    if (!(window as any).electronAPI?.importSqlServerSchema) {
+      setImportStatus('error');
+      setImportMessage('Veritabanı kurulumu yalnızca ŞefPOS masaüstü (Electron) uygulamasında çalışır. Tarayıcıdan değil, kurulu Sefpos.exe ile açın.');
+      return;
+    }
     setImportStatus('importing');
-    setImportMessage('');
+    setImportMessage('Veritabanı oluşturuluyor, bu işlem 1–3 dakika sürebilir…');
     const api = (window as any).electronAPI;
+    if (api?.setSqlServerConfig) {
+      try {
+        await api.setSqlServerConfig(config);
+      } catch { /* ignore */ }
+    }
     if (isPostgresMode) {
       if (!api?.postgresInitDatabase) {
         setImportStatus('error');
@@ -114,12 +124,23 @@ function SqlServerForm({ onSave, onBack, onClose, showBack = true, inline = fals
       setImportMessage('Bu özellik sadece Electron uygulamasında çalışır.');
       return;
     }
-    const result = await api.importSqlServerSchema(config);
+    const result = await Promise.race([
+      api.importSqlServerSchema(config),
+      new Promise<{ success: false; error: string }>((resolve) =>
+        window.setTimeout(
+          () => resolve({ success: false, error: 'Kurulum zaman aşımı (3 dk). SQL Server yanıt vermiyor olabilir.' }),
+          180_000,
+        ),
+      ),
+    ]);
     if (result.success) {
       setImportStatus('ok');
+      const hostHint = (result as { resolvedHost?: string }).resolvedHost
+        ? ` Bağlanılan: ${(result as { resolvedHost?: string }).resolvedHost}`
+        : '';
       setImportMessage(
-        result.output ||
-          'sefpos45 hazır. Giriş: kullanıcı adı ADMIN veya admin, şifre 1234',
+        (result.output ||
+          'sefpos45 hazır. Giriş: kullanıcı adı ADMIN veya admin, şifre 1234') + hostHint,
       );
     } else {
       setImportStatus('error');
@@ -162,10 +183,13 @@ function SqlServerForm({ onSave, onBack, onClose, showBack = true, inline = fals
       const extra = (result as { sqlVersion?: string }).sqlVersion
         ? ` Sürüm: ${(result as { sqlVersion?: string }).sqlVersion}`
         : '';
+      const hostHint = (result as { resolvedHost?: string }).resolvedHost
+        ? ` Bağlanılan adres: ${(result as { resolvedHost?: string }).resolvedHost}.`
+        : '';
       setTestMessage(
         isPostgresMode
           ? 'PostgreSQL bağlantısı başarılı.'
-          : `SQL Server bağlantısı başarılı.${extra} Sonra «sefpos45 Veritabanını Kur» ile şemayı yükleyin.`,
+          : `SQL Server bağlantısı başarılı.${extra}${hostHint} Sonra «sefpos45 Veritabanını Kur» ile şemayı yükleyin.`,
       );
     } else {
       setTestStatus('error');

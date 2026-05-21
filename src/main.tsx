@@ -124,8 +124,15 @@ if (import.meta.env.DEV && typeof navigator !== 'undefined' && navigator.service
   });
 }
 
-/** Prod: PWA kaydı (index.html inline script Vite build'de kaybolabiliyor) */
-if (import.meta.env.PROD && typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+/** Prod: PWA — Electron (file://) ve dev dışında */
+if (
+  import.meta.env.PROD &&
+  typeof navigator !== 'undefined' &&
+  'serviceWorker' in navigator &&
+  typeof window !== 'undefined' &&
+  window.location.protocol !== 'file:' &&
+  !(window as Window & { electronAPI?: unknown }).electronAPI
+) {
   window.addEventListener('load', () => {
     const base = import.meta.env.BASE_URL || '/';
     const swPath = `${base}sw.js`.replace(/\/{2,}/g, '/');

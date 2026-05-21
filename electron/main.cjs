@@ -299,20 +299,40 @@ function getTedious() {
   return null;
 }
 
+function normalizeSqlServerConfig(cfg) {
+  if (!cfg || typeof cfg !== 'object') {
+    throw new Error('SQL Server ayarlari bos');
+  }
+  let host = String(cfg.host || 'localhost').trim();
+  host = host.replace(/\//g, '\\');
+  if (/^\(local\)$/i.test(host) || host === '.') host = '.';
+  return {
+    host,
+    port: String(cfg.port ?? '').trim(),
+    database: String(cfg.database || 'sefpos45').trim() || 'sefpos45',
+    username: String(cfg.username || 'sa').trim(),
+    password: String(cfg.password ?? ''),
+    encrypt: cfg.encrypt === true,
+    trustServerCertificate: cfg.trustServerCertificate !== false,
+    instanceName: cfg.instanceName,
+  };
+}
+
 function buildTediousConfig(cfg, dbName) {
-  const rawHost = (cfg.host || 'localhost').trim();
+  const norm = normalizeSqlServerConfig(cfg);
+  const rawHost = norm.host;
   let server = rawHost;
-  let instanceName = cfg.instanceName || undefined;
+  let instanceName = norm.instanceName || undefined;
 
   const backslashIdx = rawHost.indexOf('\\');
   if (backslashIdx !== -1) {
     const left = rawHost.substring(0, backslashIdx).trim();
     const right = rawHost.substring(backslashIdx + 1).trim();
-    server = (left === '.' || left === '') ? 'localhost' : left;
+    server = (left === '.' || left === '' || left === '(local)') ? 'localhost' : left;
     if (right) instanceName = right;
   }
 
-  const portRaw = String(cfg.port || '').trim();
+  const portRaw = String(norm.port || '').trim();
   const portNum = portRaw ? parseInt(portRaw, 10) : undefined;
 
   return {
@@ -320,16 +340,16 @@ function buildTediousConfig(cfg, dbName) {
     authentication: {
       type: 'default',
       options: {
-        userName: cfg.username || 'sa',
-        password: cfg.password || '',
+        userName: norm.username || 'sa',
+        password: norm.password || '',
       },
     },
     options: {
       port: instanceName ? undefined : (Number.isFinite(portNum) ? portNum : 1433),
       instanceName: instanceName || undefined,
-      database: dbName || cfg.database || 'sefpos45',
-      encrypt: cfg.encrypt === true,
-      trustServerCertificate: cfg.trustServerCertificate !== false,
+      database: dbName || norm.database || 'sefpos45',
+      encrypt: norm.encrypt === true,
+      trustServerCertificate: norm.trustServerCertificate !== false,
       enableArithAbort: true,
       connectTimeout: 12000,
       requestTimeout: 60000,
@@ -1993,6 +2013,14 @@ ipcMain.handle('set-sqlserver-config', (_, config) => {
 });
 
 ipcMain.handle('import-sqlserver-schema', async (_, config) => {
+  let norm;
+  try {
+    norm = normalizeSqlServerConfig(config);
+  } catch (e) {
+    return { success: false, error: e.message || 'Gecersiz ayar' };
+  }
+  saveSettings({ sqlServerConfig: norm });
+
   const candidates = isDev
     ? [path.join(__dirname, '../shefpos_sqlserver.sql')]
     : [
@@ -2014,9 +2042,18 @@ ipcMain.handle('import-sqlserver-schema', async (_, config) => {
   }
 
   try {
-    const masterConn = await tediousConnect(config, 'master');
+    const tc = buildTediousConfig(norm, 'master');
+    const resolvedHost =
+      tc.server + (tc.options.instanceName ? '\\' + tc.options.instanceName : '') + (tc.options.port ? ':' + tc.options.port : '');
+
+    const masterConn = await tediousConnect(norm, 'master');
     try {
-      await tediousQuery(masterConn, `IF NOT EXISTS (SELECT name FROM sys.databases WHERE name = N'sefpos45') CREATE DATABASE [sefpos45]`, null);
+      const dbName = (norm.database || 'sefpos45').replace(/[^a-zA-Z0-9_]/g, '') || 'sefpos45';
+      await tediousQuery(
+        masterConn,
+        `IF NOT EXISTS (SELECT name FROM sys.databases WHERE name = N'${dbName}') CREATE DATABASE [${dbName}]`,
+        null,
+      );
     } finally {
       tediousClose(masterConn);
     }
@@ -2029,24 +2066,37 @@ ipcMain.handle('import-sqlserver-schema', async (_, config) => {
 
     let executed = 0;
     const errors = [];
-    for (const batch of goBatches) {
-      const batchConn = await tediousConnect(config, 'sefpos45');
-      try {
-        await tediousQuery(batchConn, batch, null);
-        executed++;
-      } catch (batchErr) {
-        const msg = batchErr.message || '';
-        const isAlreadyExists = /already an object|already exists|Cannot add.*already|Violation of PRIMARY KEY/i.test(msg);
-        if (!isAlreadyExists) {
-          errors.push(msg.slice(0, 200));
+    const schemaConn = await tediousConnect(norm, norm.database || 'sefpos45');
+    try {
+      for (const batch of goBatches) {
+        try {
+          await tediousQuery(schemaConn, batch, null);
+          executed++;
+        } catch (batchErr) {
+          const msg = batchErr.message || '';
+          const isAlreadyExists = /already an object|already exists|Cannot add.*already|Violation of PRIMARY KEY/i.test(msg);
+          if (!isAlreadyExists) {
+            errors.push(msg.slice(0, 200));
+          }
         }
-      } finally {
-        tediousClose(batchConn);
       }
+    } finally {
+      tediousClose(schemaConn);
     }
 
-    if (errors.length > 0 && executed === 0) {
-      return { success: false, error: errors.slice(0, 3).join(' | ') };
+    if (executed < 5) {
+      return {
+        success: false,
+        error: `Sema yuklenemedi (${executed} batch). Sunucu: ${resolvedHost}. Ilk hata: ${errors[0] || 'baglanti kopuk'}`,
+        resolvedHost,
+      };
+    }
+    if (errors.length > 0 && executed < 15) {
+      return {
+        success: false,
+        error: `Sema eksik kaldi (${executed} batch, ${errors.length} hata). ${errors.slice(0, 2).join(' | ')}`,
+        resolvedHost,
+      };
     }
 
     let adminCreated = false;
@@ -2059,8 +2109,8 @@ ipcMain.handle('import-sqlserver-schema', async (_, config) => {
            LEFT JOIN profiles p ON p.id = u.id
            WHERE u.email = @email OR LOWER(p.full_name) = 'admin'`,
           { email: { type: getTedious().TYPES.NVarChar, value: adminEmail } },
-          config,
-          'sefpos45'
+          norm,
+          norm.database || 'sefpos45',
         );
         const cnt = existing && existing[0] ? (Number(existing[0].cnt) || 0) : 0;
         if (cnt === 0) {
@@ -2074,16 +2124,16 @@ ipcMain.handle('import-sqlserver-schema', async (_, config) => {
               tenant_name: { type: getTedious().TYPES.NVarChar, value: 'Varsayilan Isletme' },
               tenant_slug: { type: getTedious().TYPES.NVarChar, value: 'varsayilan-isletme' },
             },
-            config,
-            'sefpos45'
+            norm,
+            norm.database || 'sefpos45',
           );
           adminCreated = true;
         } else {
           await runSql(
             `UPDATE profiles SET full_name = 'ADMIN' WHERE id IN (SELECT id FROM app_users WHERE email = @email)`,
             { email: { type: getTedious().TYPES.NVarChar, value: adminEmail } },
-            config,
-            'sefpos45',
+            norm,
+            norm.database || 'sefpos45',
           ).catch(() => {});
         }
       }
@@ -2094,10 +2144,17 @@ ipcMain.handle('import-sqlserver-schema', async (_, config) => {
     return {
       success: true,
       adminCreated,
-      output: `${executed} batch yuklendi.${adminCreated ? ' Varsayilan giris: ADMIN veya admin / sifre 1234' : ' Mevcut admin kullanici korundu (ADMIN / 1234).'}${errors.length > 0 ? ' ' + errors.length + ' uyari.' : ''}`,
+      resolvedHost,
+      output: `${executed} batch yuklendi (sunucu: ${resolvedHost}).${adminCreated ? ' Giris: ADMIN / 1234' : ' Giris: ADMIN / 1234 (mevcut).'}${errors.length > 0 ? ' ' + errors.length + ' uyari.' : ''}`,
     };
   } catch (err) {
-    return { success: false, error: err.message || 'Bilinmeyen hata' };
+    const msg = err.message || 'Bilinmeyen hata';
+    let hint = '';
+    try {
+      const tc = buildTediousConfig(norm, 'master');
+      hint = ' Cozulen adres: ' + tc.server + (tc.options.instanceName ? '\\' + tc.options.instanceName : '');
+    } catch { /* ignore */ }
+    return { success: false, error: msg + hint };
   }
 });
 
@@ -2207,12 +2264,16 @@ ipcMain.handle('sql-test-connection', async (_, config) => {
     return { success: false, error: 'tedious paketi yuklenemedi. Uygulamayi yeniden yukleyin.' };
   }
   try {
-    const testCfg = { ...config, encrypt: config.encrypt === true, trustServerCertificate: config.trustServerCertificate !== false };
-    const conn = await tediousConnect(testCfg, 'master');
+    const norm = normalizeSqlServerConfig(config);
+    saveSettings({ sqlServerConfig: norm });
+    const conn = await tediousConnect(norm, 'master');
     const rows = await tediousQuery(conn, 'SELECT @@VERSION AS ver', null);
     tediousClose(conn);
     const ver = rows && rows[0] ? String(rows[0].ver || '').split('\n')[0].trim() : '';
-    return { success: true, sqlVersion: ver.slice(0, 120) };
+    const tc = buildTediousConfig(norm, 'master');
+    const resolvedHost =
+      tc.server + (tc.options.instanceName ? '\\' + tc.options.instanceName : '') + (tc.options.port ? ':' + tc.options.port : '');
+    return { success: true, sqlVersion: ver.slice(0, 120), resolvedHost };
   } catch (err) {
     const msg = err.message || 'Baglanti basarisiz';
     if (/login failed|18456/i.test(msg)) {
