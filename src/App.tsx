@@ -12,6 +12,7 @@ import { SqlServerSettings } from './components/SqlServerSettings';
 import { LandingPage } from './components/landing/LandingPage';
 import { isLandingPath } from './components/landing/landingRoutes';
 import { CourierApp } from './components/CourierApp';
+import { WaiterApp } from './components/WaiterApp';
 import { Header } from './components/Header';
 import { MainMenu } from './components/MainMenu';
 import { TableGrid } from './components/TableGrid';
@@ -103,6 +104,12 @@ const BrandSplash = React.memo(function BrandSplash({ hint }: { hint?: string })
 const isCourierMode = () => {
   const params = new URLSearchParams(window.location.search);
   return params.has('courier') || !!localStorage.getItem('shefpos_courier_session');
+};
+
+const isWaiterAppRoute = () => {
+  if (typeof window === 'undefined') return false;
+  const params = new URLSearchParams(window.location.search);
+  return params.has('waiter') || params.has('garson') || !!localStorage.getItem('waiter_session');
 };
 
 // UpdateBanner kaldırıldı — ElectronDesktopShell (main.tsx, AuthProvider altinda)
@@ -467,6 +474,30 @@ function App() {
   }
 
   if (loading) return <BrandSplash hint="Oturum kontrol ediliyor..." />;
+
+  if (
+    user &&
+    profile &&
+    (profile.role === 'waiter' || isWaiterAppRoute())
+  ) {
+    return (
+      <WaiterApp
+        onLogout={async () => {
+          try {
+            localStorage.removeItem('waiter_session');
+          } catch {
+            /* ignore */
+          }
+          const url = new URL(window.location.href);
+          url.searchParams.delete('waiter');
+          url.searchParams.delete('garson');
+          window.history.replaceState({}, '', url.toString());
+          await signOut();
+          window.location.assign('/login?waiter=1');
+        }}
+      />
+    );
+  }
 
   if (user && !profile && profileLoadFailed) {
     const api = (window as any).electronAPI;

@@ -3,6 +3,7 @@ import { supabase, getEdgeFunctionInvokeUrl, getResolvedSupabaseAnonKey } from '
 import { Plus, Trash2, Eye, EyeOff, AlertCircle, RefreshCw, Save, X } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { getPhoneAuthEmailDomain } from '../lib/phoneAuthEmail';
+import { revokeWaiterAuthSessions } from '../lib/waiterRevoke';
 
 interface Waiter {
   id: string;
@@ -195,12 +196,44 @@ export function WaiterManagement({ tenantId }: { tenantId: string }) {
 
   const toggleStatus = async (waiter: Waiter) => {
     try {
+      const nextStatus = waiter.status === 'active' ? 'inactive' : 'active';
       const { error: err } = await supabase
         .from('waiters')
-        .update({ status: waiter.status === 'active' ? 'inactive' : 'active' })
+        .update({ status: nextStatus })
         .eq('id', waiter.id);
 
       if (err) throw err;
+
+      const { data: wrow } = await supabase
+        .from('waiters')
+        .select('auth_user_id')
+        .eq('id', waiter.id)
+        .maybeSingle();
+
+      const authUserId = (wrow as { auth_user_id?: string } | null)?.auth_user_id;
+
+      if (nextStatus === 'inactive') {
+        if (authUserId) {
+          await supabase.from('profiles').update({ is_active: false }).eq('id', authUserId);
+          await revokeWaiterAuthSessions(authUserId);
+        }
+        await Promise.all([
+          supabase
+            .from('device_bindings')
+            .update({ status: 'inactive' })
+            .eq('waiter_id', waiter.id)
+            .eq('tenant_id', tenantId),
+          supabase
+            .from('device_binding_requests')
+            .update({ status: 'rejected' })
+            .eq('waiter_id', waiter.id)
+            .eq('tenant_id', tenantId)
+            .in('status', ['pending', 'accepted']),
+        ]);
+      } else if (authUserId) {
+        await supabase.from('profiles').update({ is_active: true }).eq('id', authUserId);
+      }
+
       await fetchWaiters();
     } catch (err: any) {
       setError(err.message);

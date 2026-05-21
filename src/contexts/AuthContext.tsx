@@ -5,6 +5,11 @@ import { Database } from '../lib/supabase';
 import { isSqlServerMode, isLocalMode } from '../lib/sqlDb';
 import { prefetchCloudTableGrid } from '../lib/tableGridData';
 import {
+  verifyWaiterAccessByAuthUser,
+  persistWaiterLogoutReason,
+  clearWaiterLocalSession,
+} from '../lib/waiterAccessGuard';
+import {
   setPrintAgentBranchId,
   setPrintAgentTenantId,
   registerElectronPrinters,
@@ -222,6 +227,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       /* */
     }
     await supabase.auth.signOut();
+    clearWaiterLocalSession();
     localStorage.removeItem('shefpos_admin_tenant_impersonation');
     setImpersonationTenantId(null);
     setUser(null);
@@ -946,6 +952,88 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       document.removeEventListener('visibilitychange', onVisibility);
     };
   }, [user?.id]);
+
+  // Garson: pasif/silinmiş hesap, cihaz bağlama ve restoran dışı ağ — anında çıkış.
+  useEffect(() => {
+    if (!user?.id || !profile?.tenant_id || profile.role !== 'waiter') return;
+    if (isLocalMode() || isSqlServerMode()) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setInterval> | null = null;
+
+    const checkWaiterAccess = async () => {
+      if (cancelled) return;
+      try {
+        const { data: profRow } = await supabase
+          .from('profiles')
+          .select('is_active')
+          .eq('id', user.id)
+          .maybeSingle();
+        if (profRow === null || (profRow as { is_active?: boolean })?.is_active === false) {
+          persistWaiterLogoutReason('Hesap pasif', 'Garson hesabınız pasif duruma alındı. Erişim sonlandırıldı.');
+          await forceSignOutForBlockedProfile();
+          return;
+        }
+
+        const access = await verifyWaiterAccessByAuthUser(user.id, profile.tenant_id);
+        if (cancelled) return;
+        if (!access.allowed) {
+          persistWaiterLogoutReason(access.title, access.message);
+          await forceSignOutForBlockedProfile();
+        }
+      } catch {
+        /* geçici ağ hatası: oturumu koru */
+      }
+    };
+
+    const start = () => {
+      if (timer) return;
+      timer = setInterval(() => void checkWaiterAccess(), 8_000);
+    };
+    const stop = () => {
+      if (timer) {
+        clearInterval(timer);
+        timer = null;
+      }
+    };
+
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') {
+        void checkWaiterAccess();
+        start();
+      } else {
+        stop();
+      }
+    };
+
+    void checkWaiterAccess();
+    start();
+    document.addEventListener('visibilitychange', onVisible);
+
+    const ch = supabase
+      .channel(`auth-waiter-guard-${user.id}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'waiters', filter: `auth_user_id=eq.${user.id}` },
+        () => { void checkWaiterAccess(); },
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'device_bindings' },
+        () => { void checkWaiterAccess(); },
+      )
+      .subscribe();
+
+    return () => {
+      cancelled = true;
+      stop();
+      document.removeEventListener('visibilitychange', onVisible);
+      try {
+        supabase.removeChannel(ch);
+      } catch {
+        /* ignore */
+      }
+    };
+  }, [user?.id, profile?.tenant_id, profile?.role]);
 
   // Bulut: uzun süre açık kasada token yenileme sekmesi uyku/arka planda gecikince
   // oturum düşmesin diye görünürken periyodik refresh + sekmeye dönüşte bir kez.

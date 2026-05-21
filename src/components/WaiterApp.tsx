@@ -1,7 +1,10 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
-import { getDeviceBindingCode } from '../lib/deviceBinding';
-import { checkRestaurantIpGate } from '../lib/waiterRestaurantIpGate';
+import {
+  verifyWaiterAccess,
+  persistWaiterLogoutReason,
+  clearWaiterLocalSession,
+} from '../lib/waiterAccessGuard';
 import { LogOut, Plus, Minus, Check, X, AlertCircle, ShoppingCart, RefreshCw, Search, ArrowRightLeft } from 'lucide-react';
 
 interface WaiterSession {
@@ -97,13 +100,8 @@ export function WaiterApp({ onLogout }: { onLogout: () => void }) {
 
     const performExit = (title: string, message: string) => {
       if (!alive) return;
-      try {
-        localStorage.setItem('waiter_logout_reason', JSON.stringify({ title, message, at: Date.now() }));
-      } catch {
-        /* ignore */
-      }
-      // Önce localStorage'ı temizle: kullanıcı yenilerse de hemen login'e düşsün (yarış koşulu yok).
-      try { localStorage.removeItem('waiter_session'); } catch { /* ignore */ }
+      persistWaiterLogoutReason(title, message);
+      clearWaiterLocalSession();
       try { void supabase.auth.signOut(); } catch { /* ignore */ }
       setForcedExit({ title, message });
       // İlk doğrulama henüz bitmediyse UI hiç açılmasın.
@@ -118,61 +116,10 @@ export function WaiterApp({ onLogout }: { onLogout: () => void }) {
 
     const checkAccountState = async () => {
       if (!alive) return;
-      const deviceCode = getDeviceBindingCode();
-
-      const [waiterRes, bindingRes, acceptedReqRes] = await Promise.all([
-        supabase
-          .from('waiters')
-          .select('id, status')
-          .eq('id', session.id)
-          .maybeSingle(),
-        supabase
-          .from('device_bindings')
-          .select('id, status, allowed_ip_prefix')
-          .eq('device_id', deviceCode)
-          .eq('waiter_id', session.id)
-          .eq('tenant_id', session.tenant_id)
-          .maybeSingle(),
-        supabase
-          .from('device_binding_requests')
-          .select('device_info')
-          .eq('waiter_id', session.id)
-          .eq('device_id', deviceCode)
-          .eq('status', 'accepted')
-          .order('accepted_at', { ascending: false })
-          .limit(1)
-          .maybeSingle(),
-      ]);
-
+      const access = await verifyWaiterAccess(session.id, session.tenant_id);
       if (!alive) return;
-
-      const waiter = waiterRes.data as any;
-      if (!waiter || !waiter.id) {
-        performExit('Hesap silindi', 'Garson hesabınız sistemden kaldırıldı. Yöneticinizle görüşün.');
-        return;
-      }
-      if (String(waiter.status || '').toLowerCase() !== 'active') {
-        performExit('Hesap pasif', 'Garson hesabınız pasif duruma alındı. Erişim sonlandırıldı.');
-        return;
-      }
-
-      const binding = bindingRes.data as any;
-      if (!binding || !binding.id) {
-        performExit('Cihaz bağlama kaldırıldı', 'Bu cihazın bağlama kaydı bulunamadı. Yeniden bağlama isteği gönderin.');
-        return;
-      }
-      if (String(binding.status || '').toLowerCase() !== 'active') {
-        performExit('Cihaz erişimi kapalı', 'Bu cihazın erişimi yönetici tarafından durduruldu.');
-        return;
-      }
-
-      const gate = await checkRestaurantIpGate(
-        binding.allowed_ip_prefix,
-        (acceptedReqRes.data as any)?.device_info,
-      );
-      if (!alive) return;
-      if (!gate.ok) {
-        performExit('Yetkisiz ağ', gate.message);
+      if (!access.allowed) {
+        performExit(access.title, access.message);
         return;
       }
 
@@ -185,7 +132,7 @@ export function WaiterApp({ onLogout }: { onLogout: () => void }) {
     };
 
     void checkAccountState();
-    const interval = window.setInterval(() => void checkAccountState(), 15 * 1000);
+    const interval = window.setInterval(() => void checkAccountState(), 8 * 1000);
 
     const onVisible = () => {
       if (document.visibilityState === 'visible') void checkAccountState();

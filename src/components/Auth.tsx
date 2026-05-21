@@ -508,7 +508,7 @@ export function Auth({ onBackToLanding }: AuthProps = {}) {
     return (
       <WaiterLogin
         onLoginSuccess={() => {
-          window.location.href = '/';
+          window.location.href = '/?waiter=1';
         }}
         onBack={() => setAuthMode('main')}
       />

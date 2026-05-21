@@ -55,6 +55,7 @@ Deno.serve(async (req: Request) => {
       new_password?: string;
       allowed_ips?: string | null;
       delete_user?: boolean;
+      revoke_sessions?: boolean;
     };
     try {
       body = await req.json();
@@ -65,7 +66,7 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    const { target_user_id, new_password, allowed_ips, delete_user } = body;
+    const { target_user_id, new_password, allowed_ips, delete_user, revoke_sessions } = body;
 
     if (!target_user_id) {
       return new Response(
@@ -185,8 +186,8 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    // Sifre / IP guncellemesi icin de yetki + sube kontrolu
-    if (new_password || allowed_ips !== undefined) {
+    // Oturum kapatma / sifre / IP guncellemesi icin yetki + sube kontrolu
+    if (new_password || allowed_ips !== undefined || revoke_sessions === true) {
       const { data: callerProfX } = await supabaseAdmin
         .from('profiles')
         .select('tenant_id, role, branch_id, is_super_admin, role_id, roles(name, permissions)')
@@ -231,6 +232,13 @@ Deno.serve(async (req: Request) => {
       }
     }
 
+    if (revoke_sessions === true) {
+      const { error: signOutErr } = await supabaseAdmin.auth.admin.signOut(target_user_id, 'global');
+      if (signOutErr) {
+        throw signOutErr;
+      }
+    }
+
     if (new_password) {
       if (new_password.length < 6) {
         return new Response(
@@ -259,9 +267,9 @@ Deno.serve(async (req: Request) => {
       }
     }
 
-    if (!new_password && allowed_ips === undefined) {
+    if (!new_password && allowed_ips === undefined && revoke_sessions !== true) {
       return new Response(
-        JSON.stringify({ success: false, error: 'Yapılacak işlem belirtilmedi (şifre, IP veya silme)' }),
+        JSON.stringify({ success: false, error: 'Yapılacak işlem belirtilmedi (şifre, IP, oturum kapatma veya silme)' }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
