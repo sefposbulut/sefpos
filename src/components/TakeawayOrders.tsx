@@ -8,6 +8,7 @@ import {
   PhoneIncoming, Wifi, WifiOff, FlaskConical,
 } from 'lucide-react';
 import { DeliveryOrderForm } from './DeliveryOrderForm';
+import { sendCourierAssignmentNotification } from '../lib/courierNotification';
 import { CourierManagement } from './CourierManagement';
 import {
   isCallerIdAvailable,
@@ -330,19 +331,6 @@ export function TakeawayOrders({ isActive = true }: TakeawayOrdersProps) {
     };
   }, [tenant, activeBranch, isActive, handleOrderChange, debouncedCourierRefresh]);
 
-  const sendCourierNotification = async (courierId: string, orderId: string, orderNumber: string, address: string | null) => {
-    if (!tenant) return;
-    await supabase.from('courier_notifications').insert({
-      tenant_id: tenant.id,
-      courier_id: courierId,
-      order_id: orderId,
-      title: 'Yeni Teslimat',
-      message: `${orderNumber} numaralı sipariş size atandı.${address ? ` Adres: ${address}` : ''}`,
-      type: 'order_assigned',
-      is_read: false,
-    });
-  };
-
   const updateStatus = async (orderId: string, newStatus: string, courierId?: string, courierName?: string) => {
     const updates: Record<string, any> = { delivery_status: newStatus };
     if (courierId) {
@@ -357,8 +345,14 @@ export function TakeawayOrders({ isActive = true }: TakeawayOrdersProps) {
       if (order?.courier_id && order.courier_id !== courierId) {
         await supabase.from('couriers').update({ status: 'available' }).eq('id', order.courier_id);
       }
-      if (order) {
-        await sendCourierNotification(courierId, orderId, order.order_number, order.delivery_address);
+      if (order && tenant) {
+        await sendCourierAssignmentNotification(
+          tenant.id,
+          courierId,
+          orderId,
+          order.order_number,
+          order.delivery_address,
+        );
       }
     }
     if (newStatus === 'delivered') {
@@ -868,7 +862,12 @@ const OrderCard = memo(function OrderCard({
   const total = getTotal(order);
   const elapsed = getElapsed(order.created_at);
   const itemCount = takeawayItemCount(order);
-  const statusMap = isDelivery ? STATUS_NEXT_DELIVERY : STATUS_NEXT_TAKEAWAY;
+  const statusMap =
+    isDelivery
+      ? STATUS_NEXT_DELIVERY
+      : order.courier_id
+        ? { pending: 'preparing', preparing: 'ready', ready: 'on_the_way', on_the_way: 'delivered' }
+        : STATUS_NEXT_TAKEAWAY;
   const nextStatus = statusMap[order.delivery_status];
   const nextStatusInfo = nextStatus ? DELIVERY_STATUSES.find(s => s.key === nextStatus) : null;
   const payInfo = PAYMENT_LABELS[order.payment_method || 'cash'] || PAYMENT_LABELS.cash;
@@ -930,7 +929,7 @@ const OrderCard = memo(function OrderCard({
           </div>
         )}
 
-        {isDelivery && order.courier_name && (
+        {order.courier_id && order.courier_name && order.delivery_status !== 'delivered' && order.delivery_status !== 'cancelled' && (
           <CourierLocationBadge order={order} courierId={order.courier_id} couriers={couriers} />
         )}
 

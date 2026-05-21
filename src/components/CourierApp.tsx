@@ -189,6 +189,20 @@ function CourierDashboard({ courier, onLogout }: { courier: CourierData; onLogou
     setLoading(false);
   };
 
+  const playCourierAlert = () => {
+    if (!soundEnabled) return;
+    try {
+      if (!audioRef.current) {
+        audioRef.current = new Audio('/notification.mp3');
+        audioRef.current.volume = 0.85;
+      }
+      audioRef.current.currentTime = 0;
+      void audioRef.current.play().catch(() => {});
+    } catch {
+      /* ignore */
+    }
+  };
+
   const loadNotifications = async () => {
     const { data } = await supabase
       .from('courier_notifications')
@@ -197,14 +211,8 @@ function CourierDashboard({ courier, onLogout }: { courier: CourierData; onLogou
       .order('created_at', { ascending: false })
       .limit(30);
     if (data) {
-      if (prevNotifCount.current > 0 && data.length > prevNotifCount.current && soundEnabled) {
-        try {
-          if (!audioRef.current) {
-            audioRef.current = new Audio('/notification.mp3');
-          }
-          audioRef.current.currentTime = 0;
-          audioRef.current.play().catch(() => {});
-        } catch {}
+      if (prevNotifCount.current > 0 && data.length > prevNotifCount.current) {
+        playCourierAlert();
       }
       prevNotifCount.current = data.length;
       setNotifications(data as CourierNotification[]);
@@ -248,10 +256,11 @@ function CourierDashboard({ courier, onLogout }: { courier: CourierData; onLogou
         }
       })
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'courier_notifications', filter: `courier_id=eq.${courier.id}` }, (payload) => {
-        loadNotifications();
-        if (payload.new && payload.new.is_read === false) {
+        if (payload.new && (payload.new as CourierNotification).is_read === false) {
+          playCourierAlert();
           setTab('notifications');
         }
+        void loadNotifications();
       })
       .subscribe();
 

@@ -16,6 +16,7 @@ import {
   type DeliveryCustomerHit,
   type TakeawayCustomerSuggestion,
 } from '../lib/takeawayCustomerSearch';
+import { sendCourierAssignmentNotification } from '../lib/courierNotification';
 
 type CustomerSuggestion = TakeawayCustomerSuggestion;
 type CariCustomerRow = CariCustomerHit;
@@ -175,10 +176,13 @@ export function DeliveryOrderForm({ couriers, editOrder, prefillCustomer, onClos
     };
   }, []);
 
+  const LAST_ORDERS_SELECT =
+    'id, created_at, subtotal, total_amount, order_items(quantity, unit_price, products(name))';
+
   const loadLastOrdersForDeliveryCustomer = async (customer: DeliveryCustomerSearchRow) => {
     const { data } = await supabase
       .from('orders')
-      .select('*, order_items(quantity, unit_price, products(name))')
+      .select(LAST_ORDERS_SELECT)
       .eq('delivery_customer_id', customer.id)
       .order('created_at', { ascending: false })
       .limit(3);
@@ -186,9 +190,10 @@ export function DeliveryOrderForm({ couriers, editOrder, prefillCustomer, onClos
   };
 
   const loadLastOrdersForCari = async (cari: CariCustomerRow) => {
+    if (!tenant) return;
     const { data: byId } = await supabase
       .from('orders')
-      .select('*, order_items(quantity, unit_price, products(name))')
+      .select(LAST_ORDERS_SELECT)
       .eq('tenant_id', tenant.id)
       .eq('customer_id', cari.id)
       .in('order_type', ['takeaway', 'delivery'])
@@ -199,7 +204,7 @@ export function DeliveryOrderForm({ couriers, editOrder, prefillCustomer, onClos
       const p = cari.phone.trim().replace(/%/g, '');
       const { data: byPhone } = await supabase
         .from('orders')
-        .select('*, order_items(quantity, unit_price, products(name))')
+        .select(LAST_ORDERS_SELECT)
         .eq('tenant_id', tenant.id)
         .in('order_type', ['takeaway', 'delivery'])
         .ilike('customer_phone', `%${p}%`)
@@ -210,29 +215,59 @@ export function DeliveryOrderForm({ couriers, editOrder, prefillCustomer, onClos
     if (data) setLastOrders(data);
   };
 
-  const selectDeliveryCustomer = async (customer: DeliveryCustomerSearchRow) => {
+  const applyDeliveryCustomer = (customer: DeliveryCustomerSearchRow) => {
     setSelectedDeliveryCustomer(customer);
     setSelectedCariCustomer(null);
     setCustomerPhone(customer.phone);
     setCustomerName(customer.full_name);
     setDeliveryAddress(customer.address || '');
     setShowSuggestions(false);
-    await loadLastOrdersForDeliveryCustomer(customer);
+    setLoadingCustomer(false);
   };
 
-  const selectCariCustomer = async (cari: CariCustomerRow) => {
+  const applyCariCustomer = (cari: CariCustomerRow) => {
     setSelectedCariCustomer(cari);
     setSelectedDeliveryCustomer(null);
     setCustomerPhone(cari.phone?.trim() || '');
     setCustomerName(cari.name);
     setDeliveryAddress(cari.address || '');
     setShowSuggestions(false);
-    await loadLastOrdersForCari(cari);
+    setLoadingCustomer(false);
+  };
+
+  const selectDeliveryCustomer = async (customer: DeliveryCustomerSearchRow) => {
+    applyDeliveryCustomer(customer);
+    void loadLastOrdersForDeliveryCustomer(customer);
+  };
+
+  const selectCariCustomer = async (cari: CariCustomerRow) => {
+    applyCariCustomer(cari);
+    void loadLastOrdersForCari(cari);
   };
 
   const pickSuggestion = (s: CustomerSuggestion) => {
-    if (s.kind === 'delivery') void selectDeliveryCustomer(s.row);
-    else void selectCariCustomer(s.row);
+    if (s.kind === 'delivery') {
+      applyDeliveryCustomer(s.row);
+      void loadLastOrdersForDeliveryCustomer(s.row);
+    } else {
+      applyCariCustomer(s.row);
+      void loadLastOrdersForCari(s.row);
+    }
+  };
+
+  const resolveCustomerFields = () => {
+    const name = customerName.trim();
+    const phone = customerPhone.trim() || selectedCariCustomer?.phone?.trim() || '';
+    let address =
+      deliveryAddress.trim() ||
+      selectedCariCustomer?.address?.trim() ||
+      selectedDeliveryCustomer?.address?.trim() ||
+      '';
+    if (!address) {
+      if (subtype === 'gel_al') address = 'Gel-Al';
+      else if (!isDelivery) address = 'Paket Servis';
+    }
+    return { name, phone, address };
   };
 
   const reorderFromHistory = (order: any) => {
@@ -321,13 +356,17 @@ export function DeliveryOrderForm({ couriers, editOrder, prefillCustomer, onClos
 
   const handleSubmit = async () => {
     if (!tenant || !user) return;
-    if (!customerName.trim()) { alert('Müşteri adı zorunludur'); return; }
-    if (!customerPhone.trim()) { alert('Telefon zorunludur'); return; }
-    if (!deliveryAddress.trim()) { alert('Adres zorunludur'); return; }
+    const { name, phone, address } = resolveCustomerFields();
+    if (!name) { alert('Müşteri adı zorunludur'); return; }
+    if (!selectedCariCustomer && !phone) { alert('Telefon zorunludur'); return; }
+    if (isDelivery && !deliveryAddress.trim() && !selectedCariCustomer?.address?.trim()) {
+      alert('Teslimat için adres zorunludur');
+      return;
+    }
     if (cart.length === 0) { alert('En az 1 ürün ekleyin'); return; }
     setSubmitting(true);
 
-    const customerId = await upsertCustomer();
+    const customerId = phone ? await upsertCustomer() : null;
     const courier = assignCourierId ? couriers.find(c => c.id === assignCourierId) : null;
 
     const orderPayload: Record<string, any> = {
@@ -339,9 +378,10 @@ export function DeliveryOrderForm({ couriers, editOrder, prefillCustomer, onClos
       order_subtype: subtype === 'gel_al' ? 'gel_al' : null,
       status: 'active',
       delivery_status: 'pending',
-      customer_name: customerName.trim(),
-      customer_phone: customerPhone.trim() || null,
-      delivery_address: deliveryAddress.trim() || null,
+      customer_id: selectedCariCustomer?.id || editOrder?.customer_id || null,
+      customer_name: name,
+      customer_phone: phone || null,
+      delivery_address: address || null,
       delivery_note: deliveryNote.trim() || null,
       payment_method: paymentMethod,
       payment_collected: paymentCollected,
@@ -371,6 +411,15 @@ export function DeliveryOrderForm({ couriers, editOrder, prefillCustomer, onClos
       const { data: created, error } = await supabase.from('orders').insert(orderPayload).select('id, order_number').single();
       if (error || !created) { alert('Hata: ' + error?.message); setSubmitting(false); return; }
       orderId = created.id;
+      if (courier) {
+        await sendCourierAssignmentNotification(
+          tenant.id,
+          courier.id,
+          orderId,
+          created.order_number || orderId.slice(0, 8).toUpperCase(),
+          address || null,
+        );
+      }
     }
 
     const items = cart.map((i) => {
@@ -399,11 +448,9 @@ export function DeliveryOrderForm({ couriers, editOrder, prefillCustomer, onClos
           settings: printSettings,
           orderType: isDelivery ? 'delivery' : 'takeaway',
           orderNumber: '',
-          customerName: customerName.trim(),
-          customerPhone: customerPhone.trim(),
-          // Adres her durumda fişe basılır — paket / gel-al / kurye fark etmez.
-          // Müşteri adres yazdıysa termal fişte "MUSTERI ADRESI" kutusunda görünür.
-          deliveryAddress: deliveryAddress.trim(),
+          customerName: name,
+          customerPhone: phone,
+          deliveryAddress: address,
           deliveryNote: deliveryNote.trim(),
           courierName: courier?.full_name,
           estimatedMinutes: isDelivery ? parseInt(estimatedMinutes) || 30 : 0,
@@ -572,7 +619,7 @@ export function DeliveryOrderForm({ couriers, editOrder, prefillCustomer, onClos
 
             <div>
               <label className="text-xs font-bold text-slate-600 mb-1 block">
-                Adres <span className="text-red-500">*</span>
+                Adres {isDelivery ? <span className="text-red-500">*</span> : <span className="text-slate-400 font-normal">(opsiyonel)</span>}
               </label>
               <textarea
                 value={deliveryAddress}
@@ -630,24 +677,26 @@ export function DeliveryOrderForm({ couriers, editOrder, prefillCustomer, onClos
               </div>
             </div>
 
-            {isDelivery && (
+            {(isDelivery || subtype === 'takeaway') && (
               <div className="space-y-2">
-                <div>
-                  <label className="text-xs font-bold text-slate-600 mb-1 block flex items-center gap-1">
-                    <Clock className="w-3 h-3" /> Tahmini Süre
-                  </label>
-                  <div className="flex gap-1.5">
-                    {[15, 30, 45, 60].map(m => (
-                      <button
-                        key={m}
-                        onClick={() => setEstimatedMinutes(String(m))}
-                        className={`flex-1 py-2 rounded-xl text-xs font-bold transition ${estimatedMinutes === String(m) ? 'bg-blue-500 text-white' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}
-                      >
-                        {m}dk
-                      </button>
-                    ))}
+                {isDelivery && (
+                  <div>
+                    <label className="text-xs font-bold text-slate-600 mb-1 block flex items-center gap-1">
+                      <Clock className="w-3 h-3" /> Tahmini Süre
+                    </label>
+                    <div className="flex gap-1.5">
+                      {[15, 30, 45, 60].map(m => (
+                        <button
+                          key={m}
+                          onClick={() => setEstimatedMinutes(String(m))}
+                          className={`flex-1 py-2 rounded-xl text-xs font-bold transition ${estimatedMinutes === String(m) ? 'bg-blue-500 text-white' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}
+                        >
+                          {m}dk
+                        </button>
+                      ))}
+                    </div>
                   </div>
-                </div>
+                )}
 
                 <div>
                   <label className="text-xs font-bold text-slate-600 mb-1 block">Kurye (Opsiyonel)</label>
