@@ -312,7 +312,8 @@ function buildTediousConfig(cfg, dbName) {
     if (right) instanceName = right;
   }
 
-  const portNum = parseInt(cfg.port || '1433', 10);
+  const portRaw = String(cfg.port || '').trim();
+  const portNum = portRaw ? parseInt(portRaw, 10) : undefined;
 
   return {
     server,
@@ -324,14 +325,14 @@ function buildTediousConfig(cfg, dbName) {
       },
     },
     options: {
-      port: instanceName ? undefined : portNum,
+      port: instanceName ? undefined : (Number.isFinite(portNum) ? portNum : 1433),
       instanceName: instanceName || undefined,
       database: dbName || cfg.database || 'sefpos45',
       encrypt: cfg.encrypt === true,
-      trustServerCertificate: true,
+      trustServerCertificate: cfg.trustServerCertificate !== false,
       enableArithAbort: true,
-      connectTimeout: 20000,
-      requestTimeout: 30000,
+      connectTimeout: 12000,
+      requestTimeout: 60000,
       rowCollectionOnDone: true,
       useColumnNames: true,
     },
@@ -344,11 +345,31 @@ function tediousConnect(cfg, dbName) {
     if (!tedious) return reject(new Error('tedious paketi yuklenemedi. Uygulamayi yeniden yukleyin.'));
     const config = buildTediousConfig(cfg, dbName);
     const conn = new tedious.Connection(config);
-    conn.on('connect', (err) => {
+    let settled = false;
+    const finish = (fn) => (arg) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      fn(arg);
+    };
+    const ms = config.options.connectTimeout || 12000;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      try { conn.close(); } catch { /* ignore */ }
+      reject(
+        new Error(
+          `Baglanti zaman asimi (${Math.round(ms / 1000)} sn). Sunucu: ${config.server}` +
+            (config.options.instanceName ? `\\${config.options.instanceName}` : '') +
+            ' — SQL Browser acik mi? Encrypt kapali mi? SA sifresi dogru mu?',
+        ),
+      );
+    }, ms + 3000);
+    conn.on('connect', finish((err) => {
       if (err) return reject(err);
       resolve(conn);
-    });
-    conn.on('error', (err) => reject(err));
+    }));
+    conn.on('error', finish((err) => reject(err)));
     conn.connect();
   });
 }
@@ -2034,7 +2055,9 @@ ipcMain.handle('import-sqlserver-schema', async (_, config) => {
       if (bcrypt) {
         const adminEmail = 'admin@shefpos.local';
         const existing = await runSql(
-          `SELECT COUNT(*) AS cnt FROM app_users WHERE email = @email`,
+          `SELECT COUNT(*) AS cnt FROM app_users u
+           LEFT JOIN profiles p ON p.id = u.id
+           WHERE u.email = @email OR LOWER(p.full_name) = 'admin'`,
           { email: { type: getTedious().TYPES.NVarChar, value: adminEmail } },
           config,
           'sefpos45'
@@ -2047,7 +2070,7 @@ ipcMain.handle('import-sqlserver-schema', async (_, config) => {
             {
               email: { type: getTedious().TYPES.NVarChar, value: adminEmail },
               password_hash: { type: getTedious().TYPES.NVarChar, value: hash },
-              full_name: { type: getTedious().TYPES.NVarChar, value: 'Admin' },
+              full_name: { type: getTedious().TYPES.NVarChar, value: 'ADMIN' },
               tenant_name: { type: getTedious().TYPES.NVarChar, value: 'Varsayilan Isletme' },
               tenant_slug: { type: getTedious().TYPES.NVarChar, value: 'varsayilan-isletme' },
             },
@@ -2055,6 +2078,13 @@ ipcMain.handle('import-sqlserver-schema', async (_, config) => {
             'sefpos45'
           );
           adminCreated = true;
+        } else {
+          await runSql(
+            `UPDATE profiles SET full_name = 'ADMIN' WHERE id IN (SELECT id FROM app_users WHERE email = @email)`,
+            { email: { type: getTedious().TYPES.NVarChar, value: adminEmail } },
+            config,
+            'sefpos45',
+          ).catch(() => {});
         }
       }
     } catch (adminErr) {
@@ -2064,7 +2094,7 @@ ipcMain.handle('import-sqlserver-schema', async (_, config) => {
     return {
       success: true,
       adminCreated,
-      output: `${executed} batch yuklendi.${adminCreated ? ' Admin kullanici olusturuldu (admin / 1234).' : ''}${errors.length > 0 ? ' ' + errors.length + ' uyari.' : ''}`,
+      output: `${executed} batch yuklendi.${adminCreated ? ' Varsayilan giris: ADMIN veya admin / sifre 1234' : ' Mevcut admin kullanici korundu (ADMIN / 1234).'}${errors.length > 0 ? ' ' + errors.length + ' uyari.' : ''}`,
     };
   } catch (err) {
     return { success: false, error: err.message || 'Bilinmeyen hata' };
@@ -2177,12 +2207,21 @@ ipcMain.handle('sql-test-connection', async (_, config) => {
     return { success: false, error: 'tedious paketi yuklenemedi. Uygulamayi yeniden yukleyin.' };
   }
   try {
-    const conn = await tediousConnect(config, config.database || 'master');
-    await tediousQuery(conn, 'SELECT 1 AS ok', null);
+    const testCfg = { ...config, encrypt: config.encrypt === true, trustServerCertificate: config.trustServerCertificate !== false };
+    const conn = await tediousConnect(testCfg, 'master');
+    const rows = await tediousQuery(conn, 'SELECT @@VERSION AS ver', null);
     tediousClose(conn);
-    return { success: true };
+    const ver = rows && rows[0] ? String(rows[0].ver || '').split('\n')[0].trim() : '';
+    return { success: true, sqlVersion: ver.slice(0, 120) };
   } catch (err) {
-    return { success: false, error: err.message || 'Bağlantı başarısız' };
+    const msg = err.message || 'Baglanti basarisiz';
+    if (/login failed|18456/i.test(msg)) {
+      return { success: false, error: 'Giris basarisiz: kullanici adi veya sifre hatali (SA).' };
+    }
+    if (/cannot open database|4060/i.test(msg)) {
+      return { success: false, error: msg + ' — Once «Veritabanini Kur» ile sefpos45 olusturun.' };
+    }
+    return { success: false, error: msg };
   }
 });
 

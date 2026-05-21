@@ -123,7 +123,12 @@ export function ElectronAuth({ onCourierMode, onSwitchMode, currentDbMode }: Ele
       const api = (window as any).electronAPI;
       if (trimmed.includes('@')) return trimmed.toLowerCase();
       if (isPhoneInput(trimmed)) return phoneToAuthEmail(trimmed);
-      const sanitized = trimmed.toLowerCase().replace(/[^a-z0-9_.-]/g, '');
+      const sanitized = trimmed
+        .toLowerCase()
+        .replace(/ı/g, 'i')
+        .replace(/İ/g, 'i')
+        .replace(/[^a-z0-9_.-]/g, '');
+      if (sanitized === 'admin' || sanitized === 'adm') return 'admin@shefpos.local';
       if (api?.sqlFindProfileByUsername) {
         try {
           const result = await api.sqlFindProfileByUsername(sanitized);
