@@ -42,8 +42,20 @@ function beepSequence(): void {
   playTone(1320, ctx.currentTime + 0.3, 0.18);
 }
 
+export const COURIER_OPEN_ORDER_EVENT = 'sefpos:courier-open-order';
+
+export function dispatchCourierOpenOrder(orderId: string): void {
+  if (!orderId) return;
+  try {
+    sessionStorage.setItem('sefpos_courier_open_order', orderId);
+  } catch {
+    /* noop */
+  }
+  window.dispatchEvent(new CustomEvent(COURIER_OPEN_ORDER_EVENT, { detail: { orderId } }));
+}
+
 /** Yeni paket ataması — ses + titreşim + sistem bildirimi. */
-export function playCourierAssignmentAlert(title: string, body: string): void {
+export function playCourierAssignmentAlert(title: string, body: string, orderId?: string | null): void {
   try {
     (navigator as any)?.vibrate?.([120, 80, 120, 80, 200]);
   } catch {
@@ -69,7 +81,7 @@ export function playCourierAssignmentAlert(title: string, body: string): void {
     }
   }
 
-  showCourierNotification(title, body);
+  showCourierNotification(title, body, orderId ? `courier-order-${orderId}` : 'courier-assign', orderId);
 }
 
 export async function requestCourierNotificationPermission(): Promise<boolean> {
@@ -84,7 +96,12 @@ export async function requestCourierNotificationPermission(): Promise<boolean> {
   }
 }
 
-export function showCourierNotification(title: string, body: string, tag = 'courier-assign'): void {
+export function showCourierNotification(
+  title: string,
+  body: string,
+  tag = 'courier-assign',
+  orderId?: string | null,
+): void {
   if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
   try {
     const n = new Notification(title, {
@@ -93,9 +110,11 @@ export function showCourierNotification(title: string, body: string, tag = 'cour
       icon: './logo256.png',
       badge: './logo256.png',
       requireInteraction: true,
+      data: { orderId },
     });
     n.onclick = () => {
       window.focus();
+      if (orderId) dispatchCourierOpenOrder(orderId);
       n.close();
     };
   } catch {

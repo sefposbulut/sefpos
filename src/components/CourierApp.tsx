@@ -1,14 +1,15 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import {
   Bike, Bell, BellOff, Package, MapPin, Phone, Clock, CheckCircle2, ChevronRight, ChevronLeft,
-  LogOut, AlertCircle, Navigation, Download,
+  LogOut, AlertCircle, Navigation, Download, X,
 } from 'lucide-react';
 import {
   primeCourierAudio,
   playCourierAssignmentAlert,
   requestCourierNotificationPermission,
   isIosStandaloneHint,
+  COURIER_OPEN_ORDER_EVENT,
 } from '../lib/courierAlerts';
 import { applyCourierPwaMeta, startCourierTracking } from '../lib/courierTracking';
 
@@ -192,6 +193,7 @@ function CourierDashboard({ courier, onLogout }: { courier: CourierData; onLogou
   const hasDeliveryRef = useRef(false);
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [bgHint, setBgHint] = useState(false);
+  const [detailOrderId, setDetailOrderId] = useState<string | null>(null);
   const notifPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [installPrompt, setInstallPrompt] = useState<any>(null);
   const [showIosHint, setShowIosHint] = useState(isIosStandaloneHint());
@@ -228,9 +230,18 @@ function CourierDashboard({ courier, onLogout }: { courier: CourierData; onLogou
     return () => window.removeEventListener('beforeinstallprompt', onInstall);
   }, []);
 
-  const alertNewAssignment = (title: string, message: string) => {
-    if (!soundEnabled) return;
-    playCourierAssignmentAlert(title, message);
+  const openOrderDetail = useCallback((orderId: string) => {
+    if (!orderId) return;
+    setDetailOrderId(orderId);
+    setTab('active');
+    void loadOrders();
+  }, []);
+
+  const alertNewAssignment = (title: string, message: string, orderId?: string | null) => {
+    if (orderId) openOrderDetail(orderId);
+    if (soundEnabled) {
+      playCourierAssignmentAlert(title, message, orderId);
+    }
   };
 
   const loadNotifications = async () => {
@@ -270,11 +281,27 @@ function CourierDashboard({ courier, onLogout }: { courier: CourierData; onLogou
     onVisBg();
 
     pollIntervalRef.current = setInterval(loadOrders, 8000);
-    notifPollRef.current = setInterval(loadNotifications, 5000);
+    notifPollRef.current = setInterval(loadNotifications, 3000);
+
+    try {
+      const pending = sessionStorage.getItem('sefpos_courier_open_order');
+      if (pending) {
+        sessionStorage.removeItem('sefpos_courier_open_order');
+        openOrderDetail(pending);
+      }
+    } catch {
+      /* noop */
+    }
+
+    const onOpenOrder = (e: Event) => {
+      const id = (e as CustomEvent<{ orderId?: string }>).detail?.orderId;
+      if (id) openOrderDetail(id);
+    };
+    window.addEventListener(COURIER_OPEN_ORDER_EVENT, onOpenOrder);
 
     const onBip = (e: Event) => {
       const d = (e as CustomEvent).detail;
-      if (d?.title) alertNewAssignment(d.title, d.message || '');
+      if (d?.title) alertNewAssignment(d.title, d.message || '', d.orderId);
     };
     window.addEventListener('sefpos:courier-alert', onBip);
 
@@ -285,8 +312,12 @@ function CourierDashboard({ courier, onLogout }: { courier: CourierData; onLogou
         const o = payload.old as Record<string, unknown> | undefined;
         if (n?.courier_id === courier.id) {
           if (o?.courier_id !== courier.id) {
-            alertNewAssignment('Yeni paket', `${n.order_number || 'Sipariş'} size atandı`);
-            setTab('active');
+            const oid = String(n.id || '');
+            alertNewAssignment(
+              'Yeni paket',
+              `${n.order_number || 'Sipariş'} size atandı`,
+              oid,
+            );
           }
           loadOrders();
         }
@@ -294,8 +325,12 @@ function CourierDashboard({ courier, onLogout }: { courier: CourierData; onLogou
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'courier_notifications', filter: `courier_id=eq.${courier.id}` }, (payload) => {
         const row = payload.new as CourierNotification;
         if (row && !row.is_read) {
-          alertNewAssignment(row.title, row.message);
-          setTab('notifications');
+          if (row.type === 'order_assigned' && row.order_id) {
+            alertNewAssignment(row.title, row.message, row.order_id);
+          } else {
+            alertNewAssignment(row.title, row.message, row.order_id);
+            setTab('notifications');
+          }
         }
         void loadNotifications();
       })
@@ -303,13 +338,16 @@ function CourierDashboard({ courier, onLogout }: { courier: CourierData; onLogou
 
     return () => {
       window.removeEventListener('sefpos:courier-alert', onBip);
+      window.removeEventListener(COURIER_OPEN_ORDER_EVENT, onOpenOrder);
       document.removeEventListener('visibilitychange', onVisBg);
       stopTracking();
       supabase.removeChannel(ch);
       if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
       if (notifPollRef.current) clearInterval(notifPollRef.current);
     };
-  }, [courier.id, courier.tenant_id, soundEnabled]);
+  }, [courier.id, courier.tenant_id, soundEnabled, openOrderDetail]);
+
+  const detailOrder = detailOrderId ? orders.find((o) => o.id === detailOrderId) : null;
 
   const markPickedUp = async (orderId: string, orderNumber: string) => {
     await supabase.from('orders').update({
@@ -662,7 +700,11 @@ function CourierDashboard({ courier, onLogout }: { courier: CourierData; onLogou
               notifications.map(notif => (
                 <div
                   key={notif.id}
-                  onClick={() => markRead(notif.id)}
+                  onClick={() => {
+                    void markRead(notif.id);
+                    if (notif.order_id) openOrderDetail(notif.order_id);
+                    else setTab('notifications');
+                  }}
                   className={`bg-white rounded-2xl shadow-sm border-2 p-4 cursor-pointer transition active:scale-[0.98] ${notif.is_read ? 'border-slate-100 opacity-70' : 'border-blue-300'}`}
                 >
                   <div className="flex items-start gap-3">
@@ -688,6 +730,84 @@ function CourierDashboard({ courier, onLogout }: { courier: CourierData; onLogou
           </div>
         )}
       </div>
+
+      {detailOrder && (
+        <div className="fixed inset-0 z-[300] bg-slate-900/60 flex items-end sm:items-center justify-center p-0 sm:p-4">
+          <div className="bg-white w-full max-w-lg max-h-[92vh] overflow-y-auto rounded-t-3xl sm:rounded-3xl shadow-2xl">
+            <div className="sticky top-0 bg-gradient-to-r from-blue-600 to-blue-800 text-white px-4 py-4 flex items-center justify-between z-10">
+              <div>
+                <p className="text-xs text-blue-200 font-bold uppercase">Paket detayı</p>
+                <p className="font-black text-xl">{detailOrder.order_number}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDetailOrderId(null)}
+                className="p-2 rounded-xl bg-white/20 hover:bg-white/30"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-4 space-y-3">
+              {detailOrder.customer_name && (
+                <p className="font-bold text-lg text-slate-800">{detailOrder.customer_name}</p>
+              )}
+              {detailOrder.customer_phone && (
+                <a href={`tel:${detailOrder.customer_phone}`} className="flex items-center gap-2 text-blue-600 font-bold">
+                  <Phone className="w-5 h-5" />
+                  {detailOrder.customer_phone}
+                </a>
+              )}
+              {detailOrder.delivery_address && (
+                <div className="bg-orange-50 border-2 border-orange-300 rounded-2xl p-4">
+                  <p className="text-[10px] font-black text-orange-600 uppercase mb-1">Teslimat adresi</p>
+                  <p className="text-base font-bold text-slate-800 leading-snug">{detailOrder.delivery_address}</p>
+                  <a
+                    href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(detailOrder.delivery_address)}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="mt-3 inline-flex items-center gap-2 px-4 py-2.5 bg-orange-500 text-white rounded-xl font-black text-sm"
+                  >
+                    <Navigation className="w-4 h-4" />
+                    Navigasyona git
+                  </a>
+                </div>
+              )}
+              {detailOrder.delivery_note && (
+                <p className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-xl p-3">
+                  Not: {detailOrder.delivery_note}
+                </p>
+              )}
+              <p className="text-2xl font-black text-slate-800">{detailOrder.total_amount.toFixed(2)} ₺</p>
+              {(detailOrder.delivery_status === 'pending' ||
+                detailOrder.delivery_status === 'preparing' ||
+                detailOrder.delivery_status === 'ready') && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    void markPickedUp(detailOrder.id, detailOrder.order_number);
+                    setDetailOrderId(null);
+                  }}
+                  className="w-full py-3.5 bg-orange-500 text-white rounded-xl font-black"
+                >
+                  Paketi Aldım
+                </button>
+              )}
+              {detailOrder.delivery_status === 'on_the_way' && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    void markDelivered(detailOrder.id, detailOrder.order_number);
+                    setDetailOrderId(null);
+                  }}
+                  className="w-full py-3.5 bg-green-500 text-white rounded-xl font-black"
+                >
+                  Teslim Ettim
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

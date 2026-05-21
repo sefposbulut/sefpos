@@ -46,7 +46,8 @@ export function startCourierTracking(
   let lastCourierPush = 0;
   let lastHistoryPush = 0;
   let lastPos: { lat: number; lng: number } | null = null;
-  let inFlight = false;
+  let courierInflight = false;
+  let historyInflight = false;
 
   const acquireWakeLock = async () => {
     if (!callbacks.hasActiveDelivery()) return;
@@ -69,47 +70,52 @@ export function startCourierTracking(
     wakeLock = null;
   };
 
-  const pushOnce = async (lat: number, lng: number, force = false) => {
+  const pushOnce = (lat: number, lng: number, force = false) => {
     const now = Date.now();
     const moved = lastPos ? haversineM(lastPos, { lat, lng }) : 999;
-    const courierDue = force || now - lastCourierPush >= 2_500 || moved >= 4;
-    const historyDue = force || now - lastHistoryPush >= 12_000 || moved >= 25;
+    const courierDue = force || now - lastCourierPush >= 900 || moved >= 2;
+    const historyDue = force || now - lastHistoryPush >= 10_000 || moved >= 20;
 
     if (!courierDue && !historyDue) return;
-    if (inFlight) return;
-    inFlight = true;
 
-    try {
-      callbacks.onStatus('tracking');
-      const ts = new Date().toISOString();
+    callbacks.onStatus('tracking');
+    const ts = new Date().toISOString();
+    lastPos = { lat, lng };
 
-      if (courierDue) {
-        await supabase.from('couriers').update({
+    if (courierDue && !courierInflight) {
+      courierInflight = true;
+      void supabase
+        .from('couriers')
+        .update({
           latitude: lat,
           longitude: lng,
           location_updated_at: ts,
-        }).eq('id', courierId);
-        lastCourierPush = now;
-      }
+        })
+        .eq('id', courierId)
+        .then(() => { lastCourierPush = now; })
+        .finally(() => { courierInflight = false; });
+    }
 
-      if (historyDue) {
-        const orderId = callbacks.getActiveOrderId();
-        const { error: histErr } = await supabase.from('courier_location_history').insert({
+    if (historyDue && !historyInflight) {
+      historyInflight = true;
+      const orderId = callbacks.getActiveOrderId();
+      void supabase
+        .from('courier_location_history')
+        .insert({
           tenant_id: tenantId,
           courier_id: courierId,
           order_id: orderId,
           latitude: lat,
           longitude: lng,
-        });
-        if (histErr && !/does not exist|schema cache/i.test(histErr.message)) {
-          console.warn('[courierTracking] history:', histErr.message);
-        }
-        lastHistoryPush = now;
-      }
-
-      lastPos = { lat, lng };
-    } finally {
-      inFlight = false;
+        })
+        .then(({ error: histErr }) => {
+          if (histErr && !/does not exist|schema cache/i.test(histErr.message)) {
+            console.warn('[courierTracking] history:', histErr.message);
+          } else {
+            lastHistoryPush = now;
+          }
+        })
+        .finally(() => { historyInflight = false; });
     }
   };
 
@@ -131,7 +137,7 @@ export function startCourierTracking(
     );
   };
 
-  const tickMs = () => (document.visibilityState === 'visible' ? 6_000 : 10_000);
+  const tickMs = () => (document.visibilityState === 'visible' ? 4_000 : 8_000);
 
   const rescheduleTick = () => {
     if (tickTimer) clearInterval(tickTimer);
