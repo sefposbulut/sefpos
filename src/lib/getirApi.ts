@@ -87,6 +87,21 @@ export interface GetirActionResult {
 /** Ayni anda birden fazla getir-api istegi 429 uretir; sirayla gonder. */
 let getirApiChain: Promise<unknown> = Promise.resolve();
 
+/** Edge 429 sonrasi tum Getir cagrilarini gecici durdurur (burst onleme). */
+let getirCooldownUntil = 0;
+
+export function isGetirRateLimited(): boolean {
+  return Date.now() < getirCooldownUntil;
+}
+
+export function getGetirRateLimitedRemainingMs(): number {
+  return Math.max(0, getirCooldownUntil - Date.now());
+}
+
+export function markGetirRateLimited(cooldownMs = 90_000): void {
+  getirCooldownUntil = Math.max(getirCooldownUntil, Date.now() + cooldownMs);
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -125,6 +140,14 @@ async function ensureFreshSession(): Promise<{ access_token: string } | null> {
  */
 export async function callGetir(payload: GetirActionPayload): Promise<GetirActionResult> {
   const run = async (): Promise<GetirActionResult> => {
+    if (isGetirRateLimited()) {
+      const sec = Math.ceil(getGetirRateLimitedRemainingMs() / 1000);
+      return {
+        ok: false,
+        status: 429,
+        error: `Getir senkronu gecici durdu (${sec} sn). Cok sik istek atildi.`,
+      };
+    }
     try {
       let session = await ensureFreshSession();
       if (!session) return { ok: false, error: 'Oturum bulunamadi' };
@@ -137,11 +160,11 @@ export async function callGetir(payload: GetirActionPayload): Promise<GetirActio
         'apikey': (import.meta.env.VITE_SUPABASE_ANON_KEY as string) || '',
       });
 
-      const maxAttempts = 5;
+      const maxAttempts = 3;
       let triedRefreshOn401 = false;
       for (let attempt = 0; attempt < maxAttempts; attempt++) {
         if (attempt > 0) {
-          const backoff = Math.min(12_000, 900 * 2 ** (attempt - 1)) + Math.floor(Math.random() * 400);
+          const backoff = Math.min(20_000, 2_000 * 2 ** (attempt - 1)) + Math.floor(Math.random() * 500);
           await sleep(backoff);
         }
 
@@ -161,8 +184,9 @@ export async function callGetir(payload: GetirActionPayload): Promise<GetirActio
           return { ok: false, status: resp.status, error: raw || `HTTP ${resp.status}` };
         }
 
-        if (resp.status === 429 && attempt < maxAttempts - 1) {
-          continue;
+        if (resp.status === 429) {
+          markGetirRateLimited(90_000);
+          if (attempt < maxAttempts - 1) continue;
         }
 
         // 401 → bir kez session zorla refresh + tekrar dene (stale JWT senaryosu)
@@ -215,6 +239,7 @@ export async function callGetir(payload: GetirActionPayload): Promise<GetirActio
         }
         return { ok: resp.ok, status: resp.status, data, error: resp.ok ? undefined : `HTTP ${resp.status}` };
       }
+      markGetirRateLimited(90_000);
       return { ok: false, status: 429, error: 'Getir sunucusu meşgul (429). Bir süre sonra tekrar deneyin.' };
     } catch (err: any) {
       return { ok: false, error: err?.message || 'getir-api beklenmedik hata' };

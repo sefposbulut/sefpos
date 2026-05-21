@@ -20,7 +20,7 @@ import {
   syncGetirRestaurantOpen,
   syncGetirStoreStatusFromApi,
 } from '../lib/getirApi';
-import { GETIR_STORE_STATUS_EVENT } from './GlobalGetirSync';
+import { GETIR_STORE_STATUS_EVENT, GETIR_ORDERS_POLLED_EVENT } from './GlobalGetirSync';
 import { internalStatusLabelTr } from '../../supabase/functions/_shared/getirOrderStatus';
 import { PlatformLogo } from './PlatformLogo';
 import {
@@ -507,75 +507,19 @@ export function OnlineOrders() {
     return () => window.removeEventListener(GETIR_STORE_STATUS_EVENT, onStoreStatus);
   }, []);
 
-  // Getir API auto-poll — her tick'te HEM onay bekleyen (`poll-unapproved`) HEM
-  // aktif (`poll-active`) siparişleri çek. Webhook gecikse veya kaybolsa bile
-  // yeni siparişler 30 sn içinde mutlaka düşer. (Eski sürüm 45 sn aralıkla
-  // alternatif çağrı yapıyordu → yeni siparişler 90 sn beklerdi.)
+  // Getir API poll: yalnizca GlobalGetirSync (App kokunde) — cift poll 429 uretiyordu.
   useEffect(() => {
     if (!tenant) return;
-    let stopped = false;
-
-    const callOne = async (
-      platformId: string,
-      action: 'poll-unapproved' | 'poll-active' | 'poll-cancelled',
-    ): Promise<{ fetched: number; saved: number } | null> => {
-      const res = await callGetir({ platformId, action });
-      if (!res.ok) {
-        const dataObj = (res.data && typeof res.data === 'object') ? (res.data as Record<string, unknown>) : {};
-        const detail =
-          (dataObj.error as string | undefined) ||
-          (dataObj.message as string | undefined) ||
-          ((dataObj.data as any)?.message as string | undefined) ||
-          res.error ||
-          `HTTP ${res.status ?? '???'}`;
-        setGetirPollIssue(`${action}: ${detail}`);
-        setGetirPollInfo(null);
-        return null;
-      }
-      return { fetched: Number(res.fetched ?? 0), saved: Number(res.saved ?? 0) };
-    };
-
-    const tick = async () => {
-      if (stopped || document.visibilityState !== 'visible') return;
+    const onPolled = () => {
       if (busyOrderIdRef.current) return;
-      try {
-        const { data: platforms } = await supabase
-          .from('online_order_platforms')
-          .select('id, platform_code, is_active')
-          .eq('tenant_id', tenant.id)
-          .eq('is_active', true)
-          .eq('platform_code', 'getir');
-        for (const p of (platforms || []) as OnlinePlatformListRow[]) {
-          if (stopped || busyOrderIdRef.current) break;
-          // 1) Önce onay bekleyenler: yeni sipariş geciktirilmemeli
-          const unapproved = await callOne(p.id, 'poll-unapproved');
-          if (stopped || busyOrderIdRef.current) break;
-          // 2) Sonra aktifler: onaylı/hazırlık aşamasındakileri senkronla
-          const active = await callOne(p.id, 'poll-active');
-          if (unapproved && active) {
-            setGetirPollIssue(null);
-            const ts = new Date().toLocaleTimeString('tr-TR');
-            const totalFetched = unapproved.fetched + active.fetched;
-            const totalSaved = unapproved.saved + active.saved;
-            console.info(
-              `[OnlineOrders] auto-poll ok: unapproved=${unapproved.fetched}/${unapproved.saved} active=${active.fetched}/${active.saved} (${ts})`,
-            );
-            setGetirPollInfo({ fetched: totalFetched, saved: totalSaved, ts });
-          }
-        }
-      } catch (e) {
-        console.warn('[OnlineOrders] auto-poll uyari:', e);
-      }
+      void loadOrders();
+      const ts = new Date().toLocaleTimeString('tr-TR');
+      setGetirPollInfo({ fetched: 0, saved: 0, ts });
+      setGetirPollIssue(null);
     };
-
-    const firstId = window.setTimeout(tick, 500);
-    const intervalId = window.setInterval(tick, 15_000);
-    return () => {
-      stopped = true;
-      window.clearTimeout(firstId);
-      window.clearInterval(intervalId);
-    };
-  }, [tenant]);
+    window.addEventListener(GETIR_ORDERS_POLLED_EVENT, onPolled);
+    return () => window.removeEventListener(GETIR_ORDERS_POLLED_EVENT, onPolled);
+  }, [tenant, loadOrders]);
 
   // Realtime fallback: 20 sn'de bir hafif bir DB poll — id+status+updated_at
   // disinde alan cekmedigimiz icin neredeyse bedava. Realtime kacirirsa yine
@@ -608,7 +552,7 @@ export function OnlineOrders() {
     };
 
     const firstId = window.setTimeout(tick, 2000);
-    const intervalId = window.setInterval(tick, 10_000);
+    const intervalId = window.setInterval(tick, 25_000);
     return () => {
       stopped = true;
       window.clearTimeout(firstId);

@@ -17,6 +17,18 @@ import {
   type TableGridCachedRow,
   type TableGroupCached,
 } from '../lib/tableGridData';
+import { unlockStalePaymentLocksRpc } from '../lib/paymentLock';
+
+/** Her masa yenilemesinde RPC cagirmayalim — POS akisini yavaslatiyordu. */
+let lastStaleUnlockAt = 0;
+const STALE_UNLOCK_MIN_MS = 5 * 60 * 1000;
+
+async function maybeUnlockStalePaymentLocks(): Promise<void> {
+  const now = Date.now();
+  if (now - lastStaleUnlockAt < STALE_UNLOCK_MIN_MS) return;
+  lastStaleUnlockAt = now;
+  await unlockStalePaymentLocksRpc();
+}
 
 const PLAN_LABELS: Record<string, string> = {
   trial: 'Deneme',
@@ -307,11 +319,7 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
       return;
     }
 
-    try {
-      await (supabase as any).rpc('unlock_stale_payment_locks');
-    } catch {
-      /* migration yok / yetki yoksay */
-    }
+    await maybeUnlockStalePaymentLocks();
 
     let tableQ = supabase
       .from('restaurant_tables')
@@ -402,11 +410,7 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
       if (timer) clearTimeout(timer);
       timer = setTimeout(async () => {
         timer = null;
-        try {
-          await (supabase as any).rpc('unlock_stale_payment_locks');
-        } catch {
-          /* yoksay */
-        }
+        await maybeUnlockStalePaymentLocks();
         void loadAll(false);
       }, 600);
     };
@@ -537,7 +541,7 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
     // <LiveDuration> ile kendi başına yenilenir, masa state'i realtime gelir.
     let timer: ReturnType<typeof setInterval> | null = null;
     if (isLocalMode()) {
-      timer = setInterval(() => loadAll(), 30000);
+      timer = setInterval(() => loadAll(), 60_000);
       return () => {
         if (timer) clearInterval(timer);
         if (updateTimerRef.current) clearTimeout(updateTimerRef.current);
