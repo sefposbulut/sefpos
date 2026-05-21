@@ -6,7 +6,7 @@ import { Database } from '../lib/supabase';
 import { Plus, Clock, Lock, ZoomIn, ZoomOut, ScanBarcode, Truck, Eye, EyeOff, Receipt, Maximize2 } from 'lucide-react';
 import { useUiPrefs, setHeaderHidden } from '../lib/uiPrefs';
 import { ReprintReceiptModal } from './ReprintReceiptModal';
-import { isLocalMode } from '../lib/sqlDb';
+import { isLocalMode, isOfflineMode } from '../lib/sqlDb';
 import { warmOrderPanelBundle, bulkWarmOrderItemsForOrders } from '../lib/orderPanelWarm';
 import { LiveDuration } from './LiveDuration';
 import { getTrialInfo, formatTrialRemaining, type TenantTrialFields } from '../lib/tenantTrial';
@@ -18,6 +18,7 @@ import {
   type TableGroupCached,
 } from '../lib/tableGridData';
 import { unlockStalePaymentLocksRpc } from '../lib/paymentLock';
+import { subscribeLiveTick } from '../lib/liveTick';
 
 /** Her masa yenilemesinde RPC cagirmayalim — POS akisini yavaslatiyordu. */
 let lastStaleUnlockAt = 0;
@@ -207,10 +208,7 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
     }
   });
   const [now, setNow] = useState<Date>(() => new Date());
-  useEffect(() => {
-    const t = window.setInterval(() => setNow(new Date()), 30000);
-    return () => window.clearInterval(t);
-  }, []);
+  useEffect(() => subscribeLiveTick(() => setNow(new Date())), []);
   useEffect(() => {
     try {
       localStorage.setItem(FOOTER_AMOUNT_VISIBLE_KEY, footerAmountVisible ? '1' : '0');
@@ -540,8 +538,10 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
     // local mod dışında 30 sn'lik genel poll'a gerek yok; süre etiketleri
     // <LiveDuration> ile kendi başına yenilenir, masa state'i realtime gelir.
     let timer: ReturnType<typeof setInterval> | null = null;
-    if (isLocalMode()) {
-      timer = setInterval(() => loadAll(), 60_000);
+    if (isOfflineMode()) {
+      timer = setInterval(() => {
+        if (document.visibilityState === 'visible') void loadAll();
+      }, isLocalMode() ? 60_000 : 25_000);
       return () => {
         if (timer) clearInterval(timer);
         if (updateTimerRef.current) clearTimeout(updateTimerRef.current);

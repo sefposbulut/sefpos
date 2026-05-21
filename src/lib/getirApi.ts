@@ -8,6 +8,7 @@
 //   const res = await callGetir({ platformId, action: 'pos-status-set', status: 100 });
 
 import { supabase } from './supabase';
+import { isSqlServerMode } from './sqlDb';
 import {
   GETIR_NUMERIC_STATUS_MAP,
   INTERNAL_UNKNOWN_STATUS,
@@ -140,6 +141,29 @@ async function ensureFreshSession(): Promise<{ access_token: string } | null> {
  */
 export async function callGetir(payload: GetirActionPayload): Promise<GetirActionResult> {
   const run = async (): Promise<GetirActionResult> => {
+    if (isSqlServerMode()) {
+      const api = (window as any).electronAPI;
+      if (api?.sqlGetirCall) {
+        try {
+          const res = await api.sqlGetirCall(payload);
+          return {
+            ok: !!res?.ok,
+            status: res?.status,
+            error: res?.error,
+            data: res?.data,
+            fetched: res?.fetched,
+            saved: res?.saved,
+            newCount: res?.newCount,
+            storeClosed: res?.storeClosed,
+            restaurantOpen: res?.restaurantOpen,
+          };
+        } catch (e: any) {
+          return { ok: false, error: e?.message || 'SQL Getir hatasi' };
+        }
+      }
+      return { ok: false, error: 'SQL Getir koprusu bulunamadi (Electron gerekli)' };
+    }
+
     if (isGetirRateLimited()) {
       const sec = Math.ceil(getGetirRateLimitedRemainingMs() / 1000);
       return {

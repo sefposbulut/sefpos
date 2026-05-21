@@ -12,6 +12,7 @@ import {
   COURIER_OPEN_ORDER_EVENT,
 } from '../lib/courierAlerts';
 import { applyCourierPwaMeta, startCourierTracking } from '../lib/courierTracking';
+import { startAdaptivePoller } from '../lib/pollSchedule';
 
 interface CourierData {
   id: string;
@@ -191,10 +192,8 @@ function CourierDashboard({ courier, onLogout }: { courier: CourierData; onLogou
   const prevUnreadRef = useRef(0);
   const activeOrderIdRef = useRef<string | null>(null);
   const hasDeliveryRef = useRef(false);
-  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [bgHint, setBgHint] = useState(false);
   const [detailOrderId, setDetailOrderId] = useState<string | null>(null);
-  const notifPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [installPrompt, setInstallPrompt] = useState<any>(null);
   const [showIosHint, setShowIosHint] = useState(isIosStandaloneHint());
 
@@ -280,8 +279,20 @@ function CourierDashboard({ courier, onLogout }: { courier: CourierData; onLogou
     document.addEventListener('visibilitychange', onVisBg);
     onVisBg();
 
-    pollIntervalRef.current = setInterval(loadOrders, 8000);
-    notifPollRef.current = setInterval(loadNotifications, 3000);
+    const stopOrdersPoll = startAdaptivePoller({
+      baseMs: 12_000,
+      idleMs: 25_000,
+      hiddenMs: 0,
+      run: loadOrders,
+      immediate: false,
+    });
+    const stopNotifPoll = startAdaptivePoller({
+      baseMs: 8_000,
+      idleMs: 20_000,
+      hiddenMs: 0,
+      run: loadNotifications,
+      immediate: false,
+    });
 
     try {
       const pending = sessionStorage.getItem('sefpos_courier_open_order');
@@ -342,8 +353,8 @@ function CourierDashboard({ courier, onLogout }: { courier: CourierData; onLogou
       document.removeEventListener('visibilitychange', onVisBg);
       stopTracking();
       supabase.removeChannel(ch);
-      if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
-      if (notifPollRef.current) clearInterval(notifPollRef.current);
+      stopOrdersPoll();
+      stopNotifPoll();
     };
   }, [courier.id, courier.tenant_id, soundEnabled, openOrderDetail]);
 

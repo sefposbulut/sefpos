@@ -2624,6 +2624,59 @@ ipcMain.handle('sql-get-terminal-users', async () => {
   }
 });
 
+ipcMain.handle('sql-rpc', async (_, { fn, params }) => {
+  try {
+    const tedious = getTedious();
+    if (!tedious) return { data: null, error: 'tedious paketi yuklenemedi' };
+    const p = params || {};
+
+    if (fn === 'unlock_stale_payment_locks') {
+      await runSql(
+        `UPDATE restaurant_tables SET payment_locked = 0, payment_locked_at = NULL,
+         payment_locked_by_session = NULL, payment_lock_expires_at = NULL
+         WHERE payment_locked = 1 AND (
+           (payment_lock_expires_at IS NOT NULL AND payment_lock_expires_at < GETUTCDATE())
+           OR (payment_locked_at IS NOT NULL AND payment_locked_at < DATEADD(minute, -4, GETUTCDATE()))
+           OR (payment_locked_at IS NULL AND payment_lock_expires_at IS NULL)
+         )`,
+        {},
+      );
+      return { data: null, error: null };
+    }
+
+    if (fn === 'unlock_table_payment') {
+      const tableId = String(p.table_id || p.p_table_id || '');
+      if (!tableId) return { data: { success: false, error: 'table_id zorunlu' }, error: null };
+      await runSql(
+        `UPDATE restaurant_tables SET payment_locked = 0, payment_locked_at = NULL,
+         payment_locked_by_session = NULL, payment_lock_expires_at = NULL WHERE id = @id`,
+        { id: { type: tedious.TYPES.NVarChar, value: tableId } },
+      );
+      return { data: { success: true }, error: null };
+    }
+
+    if (fn === 'get_current_business_date') {
+      const rows = await runSql(`SELECT CONVERT(varchar(10), CAST(GETDATE() AS date), 23) AS d`, {});
+      const d = rows?.[0]?.d;
+      return { data: d || new Date().toISOString().slice(0, 10), error: null };
+    }
+
+    return { data: null, error: `Bilinmeyen RPC: ${fn}` };
+  } catch (err) {
+    return { data: null, error: err.message || String(err) };
+  }
+});
+
+const { handleSqlGetirCall } = require('./getirSqlBridge.cjs');
+
+ipcMain.handle('sql-getir-call', async (_, payload) => {
+  try {
+    return await handleSqlGetirCall(runSql, getTedious, payload);
+  } catch (err) {
+    return { ok: false, error: err.message || String(err) };
+  }
+});
+
 ipcMain.handle('sql-get-branches', async (_, { tenantId, userId, userRole }) => {
   try {
     const tedious = getTedious();

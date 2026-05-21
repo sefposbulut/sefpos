@@ -1,5 +1,4 @@
 import { supabase } from './supabase';
-import { isSqlServerMode } from './sqlDb';
 import { writeElectronHomeCache } from './electronHomeCache';
 
 export type DashboardSnapshot = {
@@ -68,7 +67,7 @@ export async function fetchElectronDashboardSnapshot(
     todayOnlineCount: 0,
     pendingOnlineCount: 0,
   };
-  if (isSqlServerMode() || !branchId) return empty;
+  if (!branchId) return empty;
 
   const today = dayBounds(0);
   const yesterday = dayBounds(-1);
@@ -150,7 +149,7 @@ export async function fetchElectronRecentActivity(
   branchId: string | null,
   limit = 8,
 ): Promise<RecentActivityRow[]> {
-  if (isSqlServerMode() || !branchId) return [];
+  if (!branchId) return [];
 
   const perSource = Math.max(limit, 8);
 
@@ -355,7 +354,7 @@ export async function fetchElectronTopSellers(
   branchId: string | null,
   limit = 10,
 ): Promise<TopSellerRow[]> {
-  if (isSqlServerMode() || !branchId) return [];
+  if (!branchId) return [];
 
   const today = dayBounds(0);
   let orders = await fetchTodayOrdersWithItems(tenantId, branchId, today.start, today.end);

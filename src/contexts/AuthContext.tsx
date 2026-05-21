@@ -9,6 +9,7 @@ import {
   persistWaiterLogoutReason,
   clearWaiterLocalSession,
 } from '../lib/waiterAccessGuard';
+import { startAdaptivePoller } from '../lib/pollSchedule';
 import {
   setPrintAgentBranchId,
   setPrintAgentTenantId,
@@ -398,6 +399,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           ? { id: '', tenant_id: profileData.tenant_id, name: profileData.role, permissions: rec.role_permissions, created_at: '' }
           : null;
         setPermissions(buildPermissionsFromRole(profileData, roleData));
+
+        const api = (window as any).electronAPI;
+        if (api?.sqlGetBranches) {
+          const brRes = await api.sqlGetBranches({
+            tenantId: profileData.tenant_id,
+            userId: profileData.id,
+            userRole: profileData.role,
+          });
+          const branchRows = (brRes?.data || []) as Branch[];
+          if (branchRows.length > 0) {
+            setBranches(branchRows);
+            const preferred =
+              branchRows.find((b) => b.id === profileData.branch_id) ||
+              branchRows.find((b) => b.is_main) ||
+              branchRows[0];
+            setActiveBranchState(preferred);
+            return;
+          }
+        }
 
         const fakeBranch: Branch = {
           id: rec.branch_id || profileData.tenant_id,
@@ -953,12 +973,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
   }, [user?.id]);
 
-  // Garson: pasif/silinmiş hesap, cihaz bağlama ve restoran dışı ağ — anında çıkış.
+  // Garson: Realtime birincil; 8 sn poll kaldırıldı (ölçek). Yedek: ~90 sn, yalnız görünür sekme.
   useEffect(() => {
     if (!user?.id || !profile?.tenant_id || profile.role !== 'waiter') return;
     if (isLocalMode() || isSqlServerMode()) return;
     let cancelled = false;
-    let timer: ReturnType<typeof setInterval> | null = null;
+    let bindingCh: ReturnType<typeof supabase.channel> | null = null;
+
+    const ensureBindingChannel = (waiterId: string) => {
+      if (bindingCh) return;
+      bindingCh = supabase
+        .channel(`auth-waiter-binding-${user.id}-${waiterId}`)
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'device_bindings', filter: `waiter_id=eq.${waiterId}` },
+          () => { void checkWaiterAccess(); },
+        )
+        .subscribe();
+    };
 
     const checkWaiterAccess = async () => {
       if (cancelled) return;
@@ -976,7 +1008,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
         const access = await verifyWaiterAccessByAuthUser(user.id, profile.tenant_id);
         if (cancelled) return;
-        if (!access.allowed) {
+        if (access.allowed) {
+          ensureBindingChannel(access.waiterId);
+        } else {
           persistWaiterLogoutReason(access.title, access.message);
           await forceSignOutForBlockedProfile();
         }
@@ -985,29 +1019,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     };
 
-    const start = () => {
-      if (timer) return;
-      timer = setInterval(() => void checkWaiterAccess(), 8_000);
-    };
-    const stop = () => {
-      if (timer) {
-        clearInterval(timer);
-        timer = null;
-      }
-    };
-
-    const onVisible = () => {
-      if (document.visibilityState === 'visible') {
-        void checkWaiterAccess();
-        start();
-      } else {
-        stop();
-      }
-    };
-
     void checkWaiterAccess();
-    start();
-    document.addEventListener('visibilitychange', onVisible);
+
+    const stopPoll = startAdaptivePoller({
+      baseMs: 90_000,
+      idleMs: 120_000,
+      hiddenMs: 0,
+      run: checkWaiterAccess,
+      immediate: false,
+    });
 
     const ch = supabase
       .channel(`auth-waiter-guard-${user.id}`)
@@ -1018,19 +1038,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       )
       .on(
         'postgres_changes',
-        { event: '*', schema: 'public', table: 'device_bindings' },
+        { event: '*', schema: 'public', table: 'profiles', filter: `id=eq.${user.id}` },
         () => { void checkWaiterAccess(); },
       )
       .subscribe();
 
     return () => {
       cancelled = true;
-      stop();
-      document.removeEventListener('visibilitychange', onVisible);
+      stopPoll();
       try {
         supabase.removeChannel(ch);
       } catch {
         /* ignore */
+      }
+      if (bindingCh) {
+        try {
+          supabase.removeChannel(bindingCh);
+        } catch {
+          /* ignore */
+        }
       }
     };
   }, [user?.id, profile?.tenant_id, profile?.role]);

@@ -7,7 +7,6 @@ import {
   stopContinuousAlert,
   unlockAudio,
 } from '../lib/notification';
-import { isSqlServerMode } from '../lib/sqlDb';
 import { PlatformLogo } from './PlatformLogo';
 import { callGetir } from '../lib/getirApi';
 import { GETIR_ORDERS_POLLED_EVENT } from './GlobalGetirSync';
@@ -68,8 +67,6 @@ export function OnlineOrderToast({ onOpenOnlineOrders, currentPage }: Props) {
 
   useEffect(() => {
     if (!tenant) return;
-    if (isSqlServerMode()) return;
-
     const fetchPlatform = async (
       platformId: string | null,
     ): Promise<{ code: string; name: string }> => {

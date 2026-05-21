@@ -1140,6 +1140,37 @@ BEGIN
 END;
 GO
 
+-- ============================================================
+-- SEMA GUNCELLEMELERI (mevcut kurulumlar icin guvenli ALTER)
+-- ============================================================
+IF COL_LENGTH('restaurant_tables', 'payment_locked_at') IS NULL
+    ALTER TABLE restaurant_tables ADD payment_locked_at DATETIME2 NULL;
+IF COL_LENGTH('restaurant_tables', 'payment_locked_by_session') IS NULL
+    ALTER TABLE restaurant_tables ADD payment_locked_by_session NVARCHAR(64) NULL;
+IF COL_LENGTH('restaurant_tables', 'payment_lock_expires_at') IS NULL
+    ALTER TABLE restaurant_tables ADD payment_lock_expires_at DATETIME2 NULL;
+IF COL_LENGTH('profiles', 'is_active') IS NULL
+    ALTER TABLE profiles ADD is_active BIT NOT NULL DEFAULT 1;
+IF COL_LENGTH('online_order_platforms', 'getir_environment') IS NULL
+    ALTER TABLE online_order_platforms ADD getir_environment NVARCHAR(20) NULL;
+IF COL_LENGTH('online_order_platforms', 'getir_app_secret_key') IS NULL
+    ALTER TABLE online_order_platforms ADD getir_app_secret_key NVARCHAR(500) NULL;
+IF COL_LENGTH('online_order_platforms', 'getir_restaurant_secret_key') IS NULL
+    ALTER TABLE online_order_platforms ADD getir_restaurant_secret_key NVARCHAR(500) NULL;
+IF COL_LENGTH('online_order_platforms', 'getir_restaurant_id') IS NULL
+    ALTER TABLE online_order_platforms ADD getir_restaurant_id NVARCHAR(100) NULL;
+IF COL_LENGTH('online_order_platforms', 'getir_token') IS NULL
+    ALTER TABLE online_order_platforms ADD getir_token NVARCHAR(MAX) NULL;
+IF COL_LENGTH('online_order_platforms', 'getir_token_expires_at') IS NULL
+    ALTER TABLE online_order_platforms ADD getir_token_expires_at DATETIME2 NULL;
+IF COL_LENGTH('online_order_platforms', 'getir_pos_status') IS NULL
+    ALTER TABLE online_order_platforms ADD getir_pos_status INT NULL;
+IF COL_LENGTH('online_order_platforms', 'getir_restaurant_open') IS NULL
+    ALTER TABLE online_order_platforms ADD getir_restaurant_open BIT NULL;
+IF COL_LENGTH('online_orders', 'branch_id') IS NULL
+    ALTER TABLE online_orders ADD branch_id UNIQUEIDENTIFIER NULL REFERENCES branches(id) ON DELETE NO ACTION;
+GO
+
 PRINT N'ShefPOS SQL Server veritabani semasiniz basariyla olusturuldu!';
 PRINT N'';
 PRINT N'Baslangic icin:';

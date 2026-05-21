@@ -11,7 +11,8 @@ import { ScaleWeighingModal } from './ScaleWeighingModal';
 import { loadPrintSettings, printKitchenReceipts, printToAdisyonPrinter, buildReceiptHtml, printTakeawayReceipt } from '../lib/printService';
 import { sendSaleToHugin } from '../lib/huginTps';
 import { queryCache } from '../lib/queryCache';
-import { isLocalMode } from '../lib/sqlDb';
+import { isOfflineMode } from '../lib/sqlDb';
+import { startAdaptivePoller } from '../lib/pollSchedule';
 import { useOrderSessionStore } from '../stores/orderSessionStore';
 import type { CartItem, ProductVariant } from '../types/posOrder';
 import type { PaymentTransactionRow } from '../stores/orderSessionStore';
@@ -934,7 +935,16 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
     if (!tenant?.id) return;
     const oid = currentOrder?.id || table.current_order_id;
     if (!oid) return;
-    if (isLocalMode()) return;
+    if (isOfflineMode()) {
+      const stopPoll = startAdaptivePoller({
+        baseMs: 12_000,
+        idleMs: 20_000,
+        hiddenMs: 0,
+        run: () => loadExistingOrderRef.current?.(),
+        immediate: true,
+      });
+      return stopPoll;
+    }
 
     let reloadTimer: ReturnType<typeof setTimeout> | null = null;
     const scheduleReload = () => {

@@ -491,10 +491,23 @@ export function DeviceManagement() {
   }, [tenant]);
 
   useEffect(() => {
-    if (activeTab === 'requests') {
-      const interval = setInterval(loadRequests, 3000);
-      return () => clearInterval(interval);
-    }
+    if (activeTab !== 'requests') return;
+    let stopped = false;
+    const tick = () => {
+      if (stopped || document.visibilityState !== 'visible') return;
+      void loadRequests();
+    };
+    tick();
+    const interval = setInterval(tick, 10_000);
+    const onVis = () => {
+      if (document.visibilityState === 'visible') tick();
+    };
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      stopped = true;
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVis);
+    };
   }, [activeTab, tenant]);
 
   const toggleDeviceStatus = async (deviceId: string, currentStatus: boolean) => {

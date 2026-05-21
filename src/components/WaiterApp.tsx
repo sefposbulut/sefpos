@@ -5,6 +5,7 @@ import {
   persistWaiterLogoutReason,
   clearWaiterLocalSession,
 } from '../lib/waiterAccessGuard';
+import { startAdaptivePoller } from '../lib/pollSchedule';
 import { LogOut, Plus, Minus, Check, X, AlertCircle, ShoppingCart, RefreshCw, Search, ArrowRightLeft } from 'lucide-react';
 
 interface WaiterSession {
@@ -132,7 +133,14 @@ export function WaiterApp({ onLogout }: { onLogout: () => void }) {
     };
 
     void checkAccountState();
-    const interval = window.setInterval(() => void checkAccountState(), 8 * 1000);
+
+    const stopPoll = startAdaptivePoller({
+      baseMs: 90_000,
+      idleMs: 120_000,
+      hiddenMs: 0,
+      run: checkAccountState,
+      immediate: false,
+    });
 
     const onVisible = () => {
       if (document.visibilityState === 'visible') void checkAccountState();
@@ -163,7 +171,7 @@ export function WaiterApp({ onLogout }: { onLogout: () => void }) {
 
     return () => {
       alive = false;
-      window.clearInterval(interval);
+      stopPoll();
       document.removeEventListener('visibilitychange', onVisible);
       window.removeEventListener('focus', onFocus);
       window.removeEventListener('online', onOnline);

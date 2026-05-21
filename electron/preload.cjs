@@ -19,6 +19,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   sqlHashPassword: (password) => ipcRenderer.invoke('sql-hash-password', password),
   sqlFindProfileByUsername: (username) => ipcRenderer.invoke('sql-find-profile-by-username', username),
   sqlQuery: (opts) => ipcRenderer.invoke('sql-query', opts),
+  sqlRpc: (opts) => ipcRenderer.invoke('sql-rpc', opts),
+  sqlGetirCall: (opts) => ipcRenderer.invoke('sql-getir-call', opts),
   sqlGetBranches: (opts) => ipcRenderer.invoke('sql-get-branches', opts),
   sqlGetTerminalUsers: () => ipcRenderer.invoke('sql-get-terminal-users'),
   localDbLogin: (opts) => ipcRenderer.invoke('local-db-login', opts),

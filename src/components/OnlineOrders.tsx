@@ -21,6 +21,7 @@ import {
   syncGetirStoreStatusFromApi,
 } from '../lib/getirApi';
 import { GETIR_STORE_STATUS_EVENT, GETIR_ORDERS_POLLED_EVENT } from './GlobalGetirSync';
+import { startAdaptivePoller } from '../lib/pollSchedule';
 import { internalStatusLabelTr } from '../../supabase/functions/_shared/getirOrderStatus';
 import { PlatformLogo } from './PlatformLogo';
 import {
@@ -377,6 +378,15 @@ export function OnlineOrders() {
 
     loadOrders(true);
 
+    let reloadTimer: ReturnType<typeof setTimeout> | null = null;
+    const scheduleReload = () => {
+      if (reloadTimer) clearTimeout(reloadTimer);
+      reloadTimer = setTimeout(() => {
+        reloadTimer = null;
+        void loadOrders();
+      }, 350);
+    };
+
     const channel = supabase
       .channel(`online-orders-${tenant.id}`)
       .on('postgres_changes', {
@@ -384,16 +394,19 @@ export function OnlineOrders() {
         schema: 'public',
         table: 'online_orders',
         filter: `tenant_id=eq.${tenant.id}`,
-      }, () => loadOrders())
+      }, scheduleReload)
       .on('postgres_changes', {
         event: 'UPDATE',
         schema: 'public',
         table: 'online_orders',
         filter: `tenant_id=eq.${tenant.id}`,
-      }, () => loadOrders())
+      }, scheduleReload)
       .subscribe();
 
-    return () => { supabase.removeChannel(channel); };
+    return () => {
+      if (reloadTimer) clearTimeout(reloadTimer);
+      supabase.removeChannel(channel);
+    };
   }, [tenant, loadOrders]);
 
   // Sayfa kapatildiginda / kullanici baska ekrana gectiğinde tum alarmlari durdur
@@ -521,9 +534,7 @@ export function OnlineOrders() {
     return () => window.removeEventListener(GETIR_ORDERS_POLLED_EVENT, onPolled);
   }, [tenant, loadOrders]);
 
-  // Realtime fallback: 20 sn'de bir hafif bir DB poll — id+status+updated_at
-  // disinde alan cekmedigimiz icin neredeyse bedava. Realtime kacirirsa yine
-  // sipariş düşer. Yeni id veya status degisikligi tespit edilirse loadOrders.
+  // Realtime birincil; hafif DB imza poll yedek (gizli sekme: yok, boşta: seyrek).
   useEffect(() => {
     if (!tenant) return;
     let stopped = false;
@@ -552,11 +563,17 @@ export function OnlineOrders() {
     };
 
     const firstId = window.setTimeout(tick, 2000);
-    const intervalId = window.setInterval(tick, 25_000);
+    const stopPoll = startAdaptivePoller({
+      baseMs: 30_000,
+      idleMs: 60_000,
+      hiddenMs: 0,
+      run: tick,
+      immediate: false,
+    });
     return () => {
       stopped = true;
       window.clearTimeout(firstId);
-      window.clearInterval(intervalId);
+      stopPoll();
     };
   }, [tenant, loadOrders]);
 

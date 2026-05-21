@@ -10,24 +10,24 @@ const listeners = new Set<Listener>();
 let timerHandle: ReturnType<typeof setInterval> | null = null;
 let visibilityHooked = false;
 
+function fireTick() {
+  const t = Date.now();
+  for (const fn of listeners) {
+    try { fn(t); } catch { /* abone hatası diğerlerini bozmasın */ }
+  }
+}
+
 function start() {
   if (timerHandle != null) return;
   timerHandle = setInterval(() => {
-    const t = Date.now();
-    for (const fn of listeners) {
-      try { fn(t); } catch { /* abone hatası diğerlerini bozmasın */ }
-    }
+    if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+    fireTick();
   }, TICK_MS);
 
   if (!visibilityHooked && typeof document !== 'undefined') {
     visibilityHooked = true;
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible') {
-        const t = Date.now();
-        for (const fn of listeners) {
-          try { fn(t); } catch { /* ignore */ }
-        }
-      }
+      if (document.visibilityState === 'visible') fireTick();
     });
   }
 }

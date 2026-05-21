@@ -40,6 +40,12 @@ const PRIMARY: {
     title: 'Yerel kasa',
     subtitle: 'İnternet gerekmez · tek bilgisayar · hızlı kurulum',
   },
+  {
+    key: 'sqlserver',
+    icon: Server,
+    title: 'SQL Server (şube sunucusu)',
+    subtitle: 'Kendi veritabanınız · çoklu kasa · buluta bağlı değil',
+  },
 ];
 
 const ADVANCED: {
@@ -51,8 +57,8 @@ const ADVANCED: {
   {
     key: 'postgres',
     icon: Server,
-    title: 'PostgreSQL (şube sunucusu)',
-    hint: 'Kurulum ve ağ yapılandırması gerekir',
+    title: 'PostgreSQL (gelişmiş)',
+    hint: 'SQL Server ile aynı altyapı · şema içe aktarımı gerekir',
   },
   {
     key: 'terminal',

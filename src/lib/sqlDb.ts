@@ -414,6 +414,16 @@ export const localDb = {
     return new LocalQueryBuilder(table);
   },
 
+  async rpc(fn: string, _params?: Record<string, unknown>) {
+    if (fn === 'get_current_business_date') {
+      return { data: new Date().toISOString().slice(0, 10), error: null };
+    }
+    if (fn === 'unlock_stale_payment_locks') {
+      return { data: null, error: null };
+    }
+    return { data: null, error: new Error(`RPC ${fn} yerel modda desteklenmiyor`) };
+  },
+
   channel(_name: string) {
     return noopChannel;
   },
@@ -487,6 +497,20 @@ export const localDb = {
 export const sqlDb = {
   from(table: string) {
     return new SqlQueryBuilder(table);
+  },
+
+  async rpc(fn: string, params?: Record<string, unknown>) {
+    const api = eApi();
+    if (!api?.sqlRpc) {
+      return { data: null, error: new Error('SQL RPC desteklenmiyor') };
+    }
+    try {
+      const result = await api.sqlRpc({ fn, params: params || {} });
+      if (result?.error) return { data: null, error: new Error(result.error) };
+      return { data: result.data ?? null, error: null };
+    } catch (err: any) {
+      return { data: null, error: err };
+    }
   },
 
   channel(_name: string) {

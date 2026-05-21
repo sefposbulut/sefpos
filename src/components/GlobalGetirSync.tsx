@@ -1,24 +1,27 @@
 import { useEffect, useRef } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
-import { isSqlServerMode } from '../lib/sqlDb';
 import {
   callGetir,
   syncGetirStoreStatusFromApi,
   isGetirRateLimited,
 } from '../lib/getirApi';
+import { isPageVisible, startAdaptivePoller } from '../lib/pollSchedule';
 
 export const GETIR_STORE_STATUS_EVENT = 'sefpos:getir-store-status';
 export const GETIR_ORDERS_POLLED_EVENT = 'sefpos:getir-orders-polled';
 
 /** Tek merkez: masalar ekranindayken de Getir; OnlineOrders ile cift poll yapilmaz. */
-const ORDER_TICK_MS = 40_000;
-const STORE_SYNC_MS = 90_000;
+const ORDER_BASE_MS = 35_000;
+const ORDER_IDLE_MS = 55_000;
+const STORE_BASE_MS = 90_000;
+const STORE_IDLE_MS = 180_000;
 
 /**
  * Tüm POS ekranlarında arka planda Getir senkronu:
- * - Mağaza açık/kapalı (~90 sn)
- * - Onay bekleyen / aktif siparişler sırayla (~40 sn'de bir aksiyon)
+ * - Mağaza açık/kapalı
+ * - Onay bekleyen / aktif siparişler sırayla
+ * Gizli sekme: durur. 2 dk etkileşimsiz: aralık uzar (429 riski düşer, kasa hafifler).
  */
 export function GlobalGetirSync() {
   const { tenant } = useAuth();
@@ -27,7 +30,6 @@ export function GlobalGetirSync() {
 
   useEffect(() => {
     if (!tenant?.id) return;
-    if (isSqlServerMode()) return;
 
     let stopped = false;
 
@@ -47,7 +49,7 @@ export function GlobalGetirSync() {
     };
 
     const syncStore = async () => {
-      if (stopped || document.visibilityState !== 'visible') return;
+      if (stopped || !isPageVisible()) return;
       if (isGetirRateLimited()) return;
       const platformId = await resolvePlatformId();
       if (!platformId) return;
@@ -69,7 +71,7 @@ export function GlobalGetirSync() {
     };
 
     const pollOrders = async () => {
-      if (stopped || document.visibilityState !== 'visible') return;
+      if (stopped || !isPageVisible()) return;
       if (isGetirRateLimited()) return;
       const platformId = await resolvePlatformId();
       if (!platformId) return;
@@ -110,7 +112,7 @@ export function GlobalGetirSync() {
     };
 
     const kick = () => {
-      if (document.visibilityState !== 'visible') return;
+      if (!isPageVisible()) return;
       void syncStore();
       void pollOrders();
     };
@@ -118,8 +120,20 @@ export function GlobalGetirSync() {
     const firstOrder = window.setTimeout(() => void pollOrders(), 2_500);
     const firstStore = window.setTimeout(() => void syncStore(), 1_000);
 
-    const orderTimer = window.setInterval(() => void pollOrders(), ORDER_TICK_MS);
-    const storeTimer = window.setInterval(() => void syncStore(), STORE_SYNC_MS);
+    const stopOrders = startAdaptivePoller({
+      baseMs: ORDER_BASE_MS,
+      idleMs: ORDER_IDLE_MS,
+      hiddenMs: 0,
+      run: pollOrders,
+      immediate: false,
+    });
+    const stopStore = startAdaptivePoller({
+      baseMs: STORE_BASE_MS,
+      idleMs: STORE_IDLE_MS,
+      hiddenMs: 0,
+      run: syncStore,
+      immediate: false,
+    });
 
     const onVisible = () => {
       if (document.visibilityState === 'visible') kick();
@@ -130,8 +144,8 @@ export function GlobalGetirSync() {
       stopped = true;
       window.clearTimeout(firstOrder);
       window.clearTimeout(firstStore);
-      window.clearInterval(orderTimer);
-      window.clearInterval(storeTimer);
+      stopOrders();
+      stopStore();
       document.removeEventListener('visibilitychange', onVisible);
       platformIdRef.current = null;
       orderTickRef.current = 0;

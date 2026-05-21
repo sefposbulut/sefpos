@@ -23,6 +23,8 @@ import {
   type RecentActivityRow,
   type TopSellerRow,
 } from '../../lib/electronDashboardData';
+import { startAdaptivePoller } from '../../lib/pollSchedule';
+import { subscribeLiveTick } from '../../lib/liveTick';
 import { readElectronHomeCache, writeElectronHomeCache } from '../../lib/electronHomeCache';
 import { buildPosMenuTiles, type PosMenuTile } from '../../lib/posMenuItems';
 import {
@@ -30,7 +32,6 @@ import {
   fetchSupportNotifications,
   type SupportNotificationRow,
 } from '../../lib/supportNotifications';
-import { isSqlServerMode } from '../../lib/sqlDb';
 import { INVENTORY_TAB_STORAGE_KEY } from '../../lib/inventoryNav';
 import { REPORTS_INITIAL_TAB_STORAGE_KEY, REPORTS_MENU_LAST_KEY } from '../../lib/reportsNav';
 import {
@@ -152,9 +153,11 @@ export function ElectronDesktopHome({
     if (!tenantId || !branchId) return;
     const bundle = await fetchElectronHomeBundle(tenantId, branchId);
     applyBundle(bundle);
-    if (!isSqlServerMode()) {
+    try {
       const notifs = await fetchSupportNotifications(tenantId);
       setSystemNotifs(notifs);
+    } catch {
+      setSystemNotifs([]);
     }
   }, [tenantId, branchId, applyBundle]);
 
@@ -170,11 +173,17 @@ export function ElectronDesktopHome({
       setDataReady(false);
     }
     void refreshData();
-    const t = setInterval(() => setNow(new Date()), 30_000);
-    const poll = setInterval(() => void refreshData(), 90_000);
+    const stopTick = subscribeLiveTick(() => setNow(new Date()));
+    const stopPoll = startAdaptivePoller({
+      baseMs: 90_000,
+      idleMs: 180_000,
+      hiddenMs: 0,
+      run: () => void refreshData(),
+      immediate: false,
+    });
     return () => {
-      clearInterval(t);
-      clearInterval(poll);
+      stopTick();
+      stopPoll();
     };
   }, [tenantId, branchId, applyBundle, refreshData]);
 
