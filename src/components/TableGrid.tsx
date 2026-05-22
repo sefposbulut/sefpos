@@ -963,27 +963,25 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
               )}
             </div>
 
+            <button
+              type="button"
+              onClick={() => setSelectedGroup(null)}
+              className={`px-4 py-2.5 md:px-7 md:py-3.5 rounded-xl font-black whitespace-nowrap transition-all active:scale-[0.98] border-2 shrink-0 text-sm md:text-lg tracking-tight shadow-md ${
+                selectedGroup === null
+                  ? 'bg-gradient-to-r from-green-500 to-green-600 text-white border-green-700 shadow-lg ring-2 ring-green-400/40 hover:from-green-600 hover:to-green-700'
+                  : 'bg-gradient-to-r from-green-500 to-green-600 text-white border-green-700 hover:from-green-600 hover:to-green-700 opacity-90'
+              }`}
+            >
+              AÇIK MASALAR
+              <span className="ml-2 md:ml-2.5 tabular-nums text-sm md:text-lg font-extrabold opacity-95">
+                ({groupStats.get(null)?.occupied ?? 0})
+              </span>
+            </button>
+
             <div
               className="flex gap-1 md:gap-1.5 p-1 md:p-1.5 flex-1 min-w-0 rounded-xl bg-slate-100/90 border border-slate-200/70"
               style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch' as any, scrollbarWidth: 'none' }}
             >
-              <button
-                onClick={() => setSelectedGroup(null)}
-                className={`px-3 py-2 md:px-4 md:py-2.5 rounded-lg font-bold whitespace-nowrap transition-all text-xs md:text-sm active:scale-[0.98] shrink-0 ${
-                  selectedGroup === null
-                    ? 'bg-white text-orange-700 shadow-sm ring-1 ring-orange-200/80'
-                    : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
-                }`}
-              >
-                Açık masalar
-                <span
-                  className={`ml-1.5 tabular-nums text-[11px] md:text-xs font-extrabold ${
-                    selectedGroup === null ? 'text-orange-600' : 'text-slate-400'
-                  }`}
-                >
-                  {groupStats.get(null)?.occupied ?? 0}
-                </span>
-              </button>
               {tableGroups.map((group) => {
                 const stats = groupStats.get(group.id) || { available: 0, occupied: 0, total: 0 };
                 const active = selectedGroup === group.id;
