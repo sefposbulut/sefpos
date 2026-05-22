@@ -7,6 +7,7 @@ import {
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { loadPrintSettings, PRINT_SETTINGS_REMOTE_UPDATED_EVENT, PRINT_SETTINGS_CONTEXT_EVENT } from '../lib/printService';
+import { HuginPaymentGate, type HuginPaymentGateProps } from './HuginPaymentGate';
 
 interface PickerCustomer {
   id: string;
@@ -29,6 +30,9 @@ interface PaymentModalProps {
   onPayment: (method: 'cash' | 'credit_card' | 'open_account', amount: number, printReceipt: boolean, customerId?: string) => Promise<void> | void;
   onClose: () => void;
   loading: boolean;
+  /** Yazarkasa beklerken modal kapanmasın */
+  disableDismiss?: boolean;
+  huginGate?: HuginPaymentGateProps | null;
 }
 
 const METHOD_LABELS: Record<PaymentSplit['method'], string> = {
@@ -271,6 +275,8 @@ export function PaymentModal({
   onPayment,
   onClose,
   loading,
+  disableDismiss = false,
+  huginGate = null,
 }: PaymentModalProps) {
   const { tenant } = useAuth();
   const [splits, setSplits] = useState<PaymentSplit[]>([
@@ -400,7 +406,6 @@ export function PaymentModal({
     const splitsSnapshot = splits.slice();
     const printOnComplete = printReceipt;
     setSubmitting(true);
-    onClose();
     void (async () => {
       try {
         for (let i = 0; i < splitsSnapshot.length; i++) {
@@ -437,8 +442,9 @@ export function PaymentModal({
           <h3 className="text-lg sm:text-xl font-bold text-white">Ödeme Al</h3>
           <button
             onClick={onClose}
+            disabled={disableDismiss}
             aria-label="Kapat"
-            className="text-white hover:bg-white/20 p-2 rounded-lg transition-all active:scale-95"
+            className="text-white hover:bg-white/20 p-2 rounded-lg transition-all active:scale-95 disabled:opacity-40 disabled:pointer-events-none"
           >
             <X className="w-5 h-5" />
           </button>
@@ -563,11 +569,16 @@ export function PaymentModal({
             )}
           </div>
 
+          {huginGate ? (
+            <HuginPaymentGate {...huginGate} />
+          ) : null}
+
           <button
             onClick={() => {
               printReceiptManuallyToggledRef.current = true;
               setPrintReceipt(v => !v);
             }}
+            disabled={disableDismiss}
             className={`w-full flex items-center justify-between px-4 py-2.5 rounded-xl border-2 transition-all active:scale-95 ${
               printReceipt
                 ? 'border-blue-500 bg-blue-50'
@@ -592,13 +603,14 @@ export function PaymentModal({
         >
           <button
             onClick={onClose}
-            className="flex-1 bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold py-3 rounded-xl transition-all active:scale-95"
+            disabled={disableDismiss}
+            className="flex-1 bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold py-3 rounded-xl transition-all active:scale-95 disabled:opacity-50"
           >
             İptal
           </button>
           <button
             onClick={handleSubmit}
-            disabled={loading || submitting || !isValid}
+            disabled={loading || submitting || !isValid || disableDismiss || !!huginGate}
             className={`flex-[2] font-bold py-3 px-4 sm:px-6 rounded-xl transition-all disabled:opacity-50 shadow-lg active:scale-95 ${
               isFullPayment
                 ? 'bg-gradient-to-r from-green-600 to-green-700 hover:from-green-700 hover:to-green-800 text-white'

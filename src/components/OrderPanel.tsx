@@ -11,12 +11,16 @@ import { ScaleWeighingModal } from './ScaleWeighingModal';
 import { loadPrintSettings, printKitchenReceipts, printToAdisyonPrinter, buildReceiptHtml, printTakeawayReceipt } from '../lib/printService';
 import {
   buildHuginItemsFromOrderLines,
+  cancelPcLinkDocument,
   isHuginSaleReady,
   loadHuginSettings,
   paymentsForHugin,
   sendSaleToHugin,
+  shouldSendHuginForPayments,
+  type HuginSaleResult,
 } from '../lib/huginTps';
 import { dispatchPrintToast } from '../lib/printToasts';
+import type { HuginPaymentGateProps } from './HuginPaymentGate';
 import { queryCache } from '../lib/queryCache';
 import { isOfflineMode, isSqlServerMode } from '../lib/sqlDb';
 import {
@@ -265,6 +269,16 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
   const [products, setProducts] = useState<Product[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [showPayment, setShowPayment] = useState(false);
+  const [huginGate, setHuginGate] = useState<HuginPaymentGateProps | null>(null);
+  const [huginGateBusy, setHuginGateBusy] = useState(false);
+  const huginOpenDocIdRef = useRef<string | null>(null);
+  const huginCtxRef = useRef<{
+    shouldPrintReceipt: boolean;
+    payments: PaymentTransaction[];
+    total: number;
+    discountAmount: number;
+    lastPaymentId: string | null;
+  } | null>(null);
   const [payOpening, setPayOpening] = useState(false);
   // Aktif şubenin "her satışa otomatik %X iskonto" ayarı (Settings → Şubeler).
   // Pasifse 0, aktifse şubenin yüzdesi. Yeni masa/sipariş açılışında bu değerle
@@ -1872,26 +1886,6 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
 
     const currentPaid = paymentTransactions.reduce((s, p) => s + Number(p.amount || 0), 0);
     const { total: orderTotal } = calculateTotal();
-    const willCloseTable =
-      table.table_number !== 0 &&
-      !!table.id &&
-      currentPaid + Number(amount || 0) + 0.01 >= orderTotal;
-
-    if (willCloseTable) {
-      flushSync(() => {
-        emitTableStateChanged({
-          id: table.id,
-          status: 'available' as any,
-          current_order_id: null,
-          session_start: null,
-          payment_locked: false,
-          order: null,
-        });
-      });
-      setShowPayment(false);
-      onClose();
-    }
-
     const tempId = crypto.randomUUID();
     const newPayment: PaymentTransaction = {
       id: tempId,
@@ -2031,7 +2025,7 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
         ...paymentTransactions.filter(p => p.id !== tempId),
         (insertedPayment as PaymentTransaction) || newPayment,
       ];
-      await checkAndCompleteOrder(printReceiptOnComplete, merged);
+      await checkAndCompleteOrder(printReceiptOnComplete, merged, insertedPaymentId);
     } catch (error: any) {
       if (insertedCariTxId) {
         await supabase.from('customer_transactions').delete().eq('id', insertedCariTxId);
@@ -2045,7 +2039,174 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
     }
   };
 
-  const checkAndCompleteOrder = async (shouldPrintReceipt = false, allPayments?: PaymentTransaction[]) => {
+  const huginCategoryMap = useMemo(
+    () =>
+      new Map(
+        categories.map((c) => [
+          c.id,
+          {
+            vat_rate: (c as { vat_rate?: number | null }).vat_rate ?? null,
+            hugin_department_id: (c as { hugin_department_id?: number | null }).hugin_department_id ?? null,
+          },
+        ]),
+      ),
+    [categories],
+  );
+
+  const runHuginFiscalSale = async (
+    payments: PaymentTransaction[],
+    total: number,
+    discountAmount: number,
+  ): Promise<HuginSaleResult> => {
+    if (!currentOrder) return { success: false, error: 'Sipariş yok', failureKind: 'generic' };
+    const huginPayments = paymentsForHugin(payments);
+    if (!shouldSendHuginForPayments(payments)) {
+      return { success: true, skipped: true };
+    }
+    if (!isHuginSaleReady()) {
+      return {
+        success: false,
+        error: 'Yazarkasa ayarı eksik (IP, VKN, MAC, bağlantı testi).',
+        failureKind: 'generic',
+      };
+    }
+
+    const tableLabel = table.table_number === 0 ? 'Paket' : `Masa ${table.table_number}`;
+    let lines = existingOrderItems as Array<Record<string, unknown>>;
+    if (lines.length === 0) {
+      lines = (await fetchOrderPanelItems(currentOrder.id)) as Array<Record<string, unknown>>;
+    }
+    const huginItems = buildHuginItemsFromOrderLines(lines, huginCategoryMap);
+    if (huginItems.length === 0) {
+      return {
+        success: false,
+        error: 'Yazarkasaya gönderilecek kalem yok.',
+        failureKind: 'generic',
+      };
+    }
+
+    return sendSaleToHugin({
+      orderNumber: currentOrder.order_number,
+      tableLabel,
+      items: huginItems,
+      totalAmount: total,
+      discountAmount,
+      payments: huginPayments,
+    });
+  };
+
+  const showHuginFailedGate = (
+    result: HuginSaleResult,
+    ctx: NonNullable<typeof huginCtxRef.current>,
+    handlers: Pick<HuginPaymentGateProps, 'onRetry' | 'onSwitchToCash' | 'onCancelFiscal' | 'onAbortPayment'>,
+  ) => {
+    const huginPayments = paymentsForHugin(ctx.payments);
+    setHuginGate({
+      phase: 'failed',
+      message: 'Yazarkasa fişi tamamlanamadı',
+      detail: result.error,
+      failureKind: result.failureKind,
+      hasCardPayment: huginPayments.some((p) => p.method === 'credit_card'),
+      busy: huginGateBusy,
+      ...handlers,
+    });
+  };
+
+  const finalizeCompletedOrder = async (
+    shouldPrintReceipt: boolean,
+    payments: PaymentTransaction[],
+    discountAmount: number,
+    total: number,
+  ) => {
+    if (!currentOrder) return;
+
+    if (table.table_number !== 0 && table.id) {
+      flushSync(() => {
+        emitTableStateChanged({
+          id: table.id,
+          status: 'available' as any,
+          current_order_id: null,
+          session_start: null,
+          payment_locked: false,
+          order: null,
+        });
+      });
+    }
+
+    const stockOrderId = currentOrder.id;
+    const stockItemsSnapshot = existingOrderItems;
+    const orderItemsSnapshot = existingOrderItems;
+
+    void Promise.all([
+      supabase.from('orders').update({
+        status: 'completed',
+        payment_status: 'paid',
+        paid_at: new Date().toISOString(),
+        discount_amount: discountAmount,
+        total_amount: total,
+      }).eq('id', currentOrder.id),
+      table.table_number !== 0
+        ? supabase.from('restaurant_tables').update({
+            status: 'available',
+            current_order_id: null,
+            session_start: null,
+            payment_locked: false,
+          }).eq('id', table.id)
+        : Promise.resolve(),
+    ]).catch((e) => {
+      console.error('Sipariş tamamlama (background):', e);
+    });
+
+    void applyOrderStockMovements(stockOrderId, stockItemsSnapshot).catch((e) => {
+      console.warn('Stok hareketi tamamlanamadı:', e);
+    });
+
+    if (shouldPrintReceipt) {
+      const printSettings = loadPrintSettings();
+      const tableLabel = table.table_number === 0 ? 'Paket' : `Masa ${table.table_number}`;
+      const payMethod = payments.length === 1 ? (payments[0] as any).payment_method : 'mixed';
+      const html = buildReceiptHtml({
+        restaurantName: printSettings.restaurantName || tenant?.name || 'ŞefPOS',
+        restaurantPhone: printSettings.restaurantPhone,
+        restaurantAddress: printSettings.restaurantAddress,
+        tableLabel,
+        orderNumber: currentOrder.order_number,
+        items: orderItemsSnapshot.map((item) => ({
+          productName: (item as any).products?.name || '',
+          variantName: (item as any).variant_name || null,
+          quantity: item.quantity,
+          unitPrice: item.unit_price,
+          totalAmount: item.total_amount,
+          notes: (item as any).notes || null,
+        })),
+        subtotal: currentOrder.subtotal,
+        taxAmount: currentOrder.tax_amount,
+        discountAmount,
+        total,
+        paymentMethod: payMethod,
+        footer: printSettings.receiptFooter,
+        waiterName: (currentOrder as any).waiter_name || undefined,
+        printStyle: printSettings.printStyle,
+      });
+      void printToAdisyonPrinter(printSettings, html).then((r) => {
+        if (!r.success) {
+          console.warn('[ŞefPOS] Adisyon yazdırılamadı:', r.error);
+        }
+      });
+    }
+
+    setHuginGate(null);
+    huginOpenDocIdRef.current = null;
+    huginCtxRef.current = null;
+    setShowPayment(false);
+    onClose();
+  };
+
+  const checkAndCompleteOrder = async (
+    shouldPrintReceipt = false,
+    allPayments?: PaymentTransaction[],
+    lastPaymentId: string | null = null,
+  ) => {
     if (!currentOrder) return;
     if (isTempOrderId(currentOrder.id)) return;
 
@@ -2055,165 +2216,219 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
       const { discountAmount, total } = calculateTotal();
 
       if (totalPaid >= total) {
-        // Kasa: her payment_transactions INSERT zaten log_payment_to_cash_register
-        // tetikleyicisiyle cash_register_transactions oluşturur.
+        const needsHugin = shouldSendHuginForPayments(payments);
+        const ctx = {
+          shouldPrintReceipt,
+          payments,
+          total,
+          discountAmount,
+          lastPaymentId,
+        };
+        huginCtxRef.current = ctx;
 
-        if (table.table_number !== 0 && table.id) {
-          flushSync(() => {
-            emitTableStateChanged({
-              id: table.id,
-              status: 'available' as any,
-              current_order_id: null,
-              session_start: null,
-              payment_locked: false,
-              order: null,
-            });
+        if (needsHugin) {
+          const huginPayments = paymentsForHugin(payments);
+          setHuginGate({
+            phase: 'waiting',
+            message: huginPayments.some((p) => p.method === 'credit_card')
+              ? 'Kart ödemesi — yazarkasa bekleniyor'
+              : 'Nakit fiş — yazarkasa bekleniyor',
+            hasCardPayment: huginPayments.some((p) => p.method === 'credit_card'),
           });
+
+          const result = await runHuginFiscalSale(payments, total, discountAmount);
+          if (result.documentId) huginOpenDocIdRef.current = result.documentId;
+
+          if (!result.success && !result.skipped) {
+            showHuginFailedGate(result, ctx, {
+              onRetry: () => void handleHuginRetry(),
+              onSwitchToCash: () => void handleHuginSwitchToCash(),
+              onCancelFiscal: () => void handleHuginCancelFiscal(),
+              onAbortPayment: () => void handleHuginAbortPayment(),
+            });
+            return;
+          }
+
+          if (!result.skipped) {
+            dispatchPrintToast({
+              kind: 'success',
+              message: 'Mali fiş yazarkasadan alındı',
+              target: 'Hugin',
+            });
+          }
         }
-        setShowPayment(false);
-        onClose();
 
-      void Promise.all([
-        supabase.from('orders').update({
-          status: 'completed',
-          payment_status: 'paid',
-          paid_at: new Date().toISOString(),
-          discount_amount: discountAmount,
-          total_amount: total
-        }).eq('id', currentOrder.id),
-        table.table_number !== 0
-          ? supabase.from('restaurant_tables').update({
-              status: 'available',
-              current_order_id: null,
-              session_start: null,
-              payment_locked: false,
-            }).eq('id', table.id)
-          : Promise.resolve(),
-      ]).catch((e) => {
-        console.error('Sipariş tamamlama (background):', e);
-      });
-
-      // Stok düşümü çok satırda onlarca sıralı DB çağrısı yapıyor; ödeme modalını bekletmemek için arka planda çalışır.
-      const stockOrderId = currentOrder.id;
-      const stockItemsSnapshot = existingOrderItems;
-      void applyOrderStockMovements(stockOrderId, stockItemsSnapshot).catch((e) => {
-        console.warn('Stok hareketi tamamlanamadı:', e);
-      });
-
-      const huginPayments = paymentsForHugin(payments);
-      const orderItemsSnapshot = existingOrderItems;
-      const huginCategoryMap = new Map(
-        categories.map((c) => [
-          c.id,
-          { vat_rate: c.vat_rate ?? null, hugin_department_id: (c as { hugin_department_id?: number | null }).hugin_department_id ?? null },
-        ]),
-      );
-      const orderIdForPost = currentOrder.id;
-      const orderNumberForPost = currentOrder.order_number;
-
-      if (huginPayments.length > 0 || shouldPrintReceipt) {
-        setTimeout(() => {
-          void (async () => {
-          if (huginPayments.length > 0 && loadHuginSettings().enabled) {
-            const tableLabel = table.table_number === 0 ? 'Paket' : `Masa ${table.table_number}`;
-            let lines = orderItemsSnapshot as Array<Record<string, unknown>>;
-            if (lines.length === 0 && orderIdForPost) {
-              lines = (await fetchOrderPanelItems(orderIdForPost)) as Array<Record<string, unknown>>;
-            }
-            const huginItems = buildHuginItemsFromOrderLines(lines, huginCategoryMap);
-            if (!isHuginSaleReady()) {
-              dispatchPrintToast({
-                kind: 'error',
-                message: 'Yazarkasa ayarı eksik',
-                detail:
-                  'Ayarlar → Yazarkasa: IP, VKN, MAC ve bağlantı testi. Ayarları Kaydet ile saklayın.',
-                target: 'Hugin',
-              });
-            } else if (huginItems.length === 0) {
-              dispatchPrintToast({
-                kind: 'error',
-                message: 'Yazarkasaya gönderilecek kalem yok',
-                detail: 'Sipariş satırları boş veya iptal edilmiş olabilir.',
-                target: 'Hugin',
-              });
-            } else {
-              const result = await sendSaleToHugin({
-                orderNumber: orderNumberForPost,
-                tableLabel,
-                items: huginItems,
-                totalAmount: total,
-                discountAmount,
-                payments: huginPayments,
-              });
-              if (result.skipped) {
-                /* kapalı */
-              } else if (result.success) {
-                dispatchPrintToast({
-                  kind: 'success',
-                  message: 'Mali fiş yazarkasaya gönderildi',
-                  target: 'Hugin',
-                });
-              } else {
-                console.warn('Hugin yazarkasa hatasi:', result.error);
-                dispatchPrintToast({
-                  kind: 'error',
-                  message: 'Yazarkasa fişi basılamadı',
-                  detail: result.error,
-                  target: 'Hugin',
-                });
-              }
-            }
-          }
-
-          if (shouldPrintReceipt) {
-            const printSettings = loadPrintSettings();
-            const tableLabel = table.table_number === 0 ? 'Paket' : `Masa ${table.table_number}`;
-            const payMethod = payments.length === 1 ? (payments[0] as any).payment_method : 'mixed';
-            const html = buildReceiptHtml({
-              restaurantName: printSettings.restaurantName || tenant?.name || 'ŞefPOS',
-              restaurantPhone: printSettings.restaurantPhone,
-              restaurantAddress: printSettings.restaurantAddress,
-              tableLabel,
-              orderNumber: currentOrder.order_number,
-              items: orderItemsSnapshot.map(item => ({
-                productName: (item as any).products?.name || '',
-                variantName: (item as any).variant_name || null,
-                quantity: item.quantity,
-                unitPrice: item.unit_price,
-                totalAmount: item.total_amount,
-                notes: (item as any).notes || null,
-              })),
-              subtotal: currentOrder.subtotal,
-              taxAmount: currentOrder.tax_amount,
-              discountAmount,
-              total,
-              paymentMethod: payMethod,
-              footer: printSettings.receiptFooter,
-              waiterName: (currentOrder as any).waiter_name || undefined,
-              printStyle: printSettings.printStyle,
-            });
-            void printToAdisyonPrinter(printSettings, html).then((r) => {
-              if (!r.success) {
-                console.warn('[ŞefPOS] Adisyon yazdırılamadı:', r.error);
-              }
-            });
-          }
-          })();
-        }, 50);
-      }
-      // Panel kapanışı yukarıda optimistik olarak tetiklendi.
+        await finalizeCompletedOrder(shouldPrintReceipt, payments, discountAmount, total);
       } else {
-        supabase.from('orders').update({
-          discount_amount: discountAmount,
-          total_amount: total,
-          payment_status: totalPaid > 0 ? 'partial' : 'unpaid',
-        }).eq('id', currentOrder.id).then();
+        setHuginGate(null);
+        huginCtxRef.current = null;
+        void supabase
+          .from('orders')
+          .update({
+            discount_amount: discountAmount,
+            total_amount: total,
+            payment_status: totalPaid > 0 ? 'partial' : 'unpaid',
+          })
+          .eq('id', currentOrder.id);
       }
     } catch (error: any) {
       await unlockTable();
       console.error('Order completion error:', error);
       alert('Sipariş güncellenirken hata: ' + error.message);
+      setHuginGate(null);
     }
+  };
+
+  const handleHuginRetry = async () => {
+    const ctx = huginCtxRef.current;
+    if (!ctx || !currentOrder) return;
+    setHuginGateBusy(true);
+    const huginPayments = paymentsForHugin(ctx.payments);
+    setHuginGate({
+      phase: 'waiting',
+      message: 'Yazarkasaya tekrar gönderiliyor…',
+      hasCardPayment: huginPayments.some((p) => p.method === 'credit_card'),
+    });
+    const result = await runHuginFiscalSale(ctx.payments, ctx.total, ctx.discountAmount);
+    if (result.documentId) huginOpenDocIdRef.current = result.documentId;
+    setHuginGateBusy(false);
+
+    if (!result.success && !result.skipped) {
+      showHuginFailedGate(result, ctx, {
+        onRetry: () => void handleHuginRetry(),
+        onSwitchToCash: () => void handleHuginSwitchToCash(),
+        onCancelFiscal: () => void handleHuginCancelFiscal(),
+        onAbortPayment: () => void handleHuginAbortPayment(),
+      });
+      return;
+    }
+    dispatchPrintToast({ kind: 'success', message: 'Mali fiş tamamlandı', target: 'Hugin' });
+    await finalizeCompletedOrder(ctx.shouldPrintReceipt, ctx.payments, ctx.discountAmount, ctx.total);
+  };
+
+  const handleHuginSwitchToCash = async () => {
+    const ctx = huginCtxRef.current;
+    if (!ctx || !currentOrder) return;
+    setHuginGateBusy(true);
+
+    const cardPay = ctx.payments.find((p) => p.payment_method === 'credit_card');
+    if (cardPay?.id && !isTempOrderId(cardPay.id)) {
+      await supabase.from('payment_transactions').update({ payment_method: 'cash' }).eq('id', cardPay.id);
+    }
+    const updated = ctx.payments.map((p) =>
+      p.payment_method === 'credit_card' ? { ...p, payment_method: 'cash' as const } : p,
+    );
+    setPaymentTransactions(updated);
+    huginCtxRef.current = { ...ctx, payments: updated };
+
+    if (huginOpenDocIdRef.current) {
+      await cancelPcLinkDocument(huginOpenDocIdRef.current);
+      huginOpenDocIdRef.current = null;
+    }
+
+    setHuginGate({
+      phase: 'waiting',
+      message: 'Nakit ödeme — yazarkasa bekleniyor',
+      hasCardPayment: false,
+    });
+    const result = await runHuginFiscalSale(updated, ctx.total, ctx.discountAmount);
+    if (result.documentId) huginOpenDocIdRef.current = result.documentId;
+    setHuginGateBusy(false);
+
+    if (!result.success && !result.skipped) {
+      showHuginFailedGate(result, huginCtxRef.current!, {
+        onRetry: () => void handleHuginRetry(),
+        onSwitchToCash: () => void handleHuginSwitchToCash(),
+        onCancelFiscal: () => void handleHuginCancelFiscal(),
+        onAbortPayment: () => void handleHuginAbortPayment(),
+      });
+      return;
+    }
+    dispatchPrintToast({ kind: 'success', message: 'Nakit mali fiş tamamlandı', target: 'Hugin' });
+    await finalizeCompletedOrder(ctx.shouldPrintReceipt, updated, ctx.discountAmount, ctx.total);
+  };
+
+  const handleHuginCancelFiscal = async () => {
+    const docId = huginOpenDocIdRef.current;
+    if (!docId) {
+      dispatchPrintToast({
+        kind: 'error',
+        message: 'Açık belge yok',
+        detail: 'Yazarkasada işlem zaten kapanmış olabilir.',
+        target: 'Hugin',
+      });
+      return;
+    }
+    setHuginGateBusy(true);
+    const cancel = await cancelPcLinkDocument(docId);
+    setHuginGateBusy(false);
+    if (!cancel.success) {
+      dispatchPrintToast({
+        kind: 'error',
+        message: 'Fiş iptal edilemedi',
+        detail: cancel.error,
+        target: 'Hugin',
+      });
+      return;
+    }
+    huginOpenDocIdRef.current = null;
+    dispatchPrintToast({ kind: 'success', message: 'Yazarkasa belgesi iptal edildi', target: 'Hugin' });
+    const ctx = huginCtxRef.current;
+    if (ctx) {
+      showHuginFailedGate(
+        { success: false, error: 'Belge iptal edildi. Tekrar deneyebilir veya ödemeyi geri alabilirsiniz.', failureKind: 'cancelled' },
+        ctx,
+        {
+          onRetry: () => void handleHuginRetry(),
+          onSwitchToCash: () => void handleHuginSwitchToCash(),
+          onCancelFiscal: () => void handleHuginCancelFiscal(),
+          onAbortPayment: () => void handleHuginAbortPayment(),
+        },
+      );
+    }
+  };
+
+  const handleHuginAbortPayment = async () => {
+    const ctx = huginCtxRef.current;
+    if (!ctx || !currentOrder) return;
+    setHuginGateBusy(true);
+
+    if (huginOpenDocIdRef.current) {
+      await cancelPcLinkDocument(huginOpenDocIdRef.current);
+      huginOpenDocIdRef.current = null;
+    }
+
+    const pid = ctx.lastPaymentId;
+    const remainingPayments = pid
+      ? ctx.payments.filter((p) => p.id !== pid)
+      : ctx.payments.slice();
+    if (pid) {
+      await supabase.from('payment_transactions').delete().eq('id', pid);
+      setPaymentTransactions(remainingPayments);
+    }
+
+    const { discountAmount, total } = calculateTotal();
+    const remaining = remainingPayments.reduce((s, p) => s + Number(p.amount), 0);
+
+    await supabase
+      .from('orders')
+      .update({
+        discount_amount: discountAmount,
+        total_amount: total,
+        payment_status: remaining > 0 ? 'partial' : 'unpaid',
+        status: 'active',
+      })
+      .eq('id', currentOrder.id);
+
+    setHuginGate(null);
+    huginCtxRef.current = null;
+    setHuginGateBusy(false);
+    dispatchPrintToast({
+      kind: 'queued',
+      message: 'Ödeme geri alındı',
+      detail: 'Masa açık; ödemeyi yeniden alabilirsiniz.',
+      target: 'Hugin',
+    });
   };
 
   const categoryMap = useMemo(() => new Map(categories.map(c => [c.id, c])), [categories]);
@@ -2581,6 +2796,8 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
           discount={discount}
           onDiscountChange={setDiscountSafely}
           onPayment={handleAddPayment}
+          disableDismiss={!!huginGate}
+          huginGate={huginGate}
           onClose={() => {
             // ÖNEMLİ: kısmi ödeme ref'lerini burada TEMİZLEME!
             // PaymentModal "Ödemeyi Tamamla"da önce onClose() çağırıyor, sonra
@@ -2588,10 +2805,13 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
             // satırlar "Ödendi" olarak işaretlenmiyor (paid_at DB'ye yazılmıyor).
             // Ref'ler zaten her ÖDE tıklamasında baştan set ediliyor; iptalde
             // de bir sonraki kullanım için sıfırlanacaklar.
+            if (huginGate) return;
             setShowPayment(false);
+            setHuginGate(null);
+            huginCtxRef.current = null;
             unlockTable();
           }}
-          loading={false}
+          loading={huginGateBusy}
         />
       )}
 

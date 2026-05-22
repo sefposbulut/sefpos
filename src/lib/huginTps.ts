@@ -51,6 +51,21 @@ export interface HuginHttpResult {
   error?: string;
 }
 
+export type HuginFailureKind =
+  | 'card_declined'
+  | 'cancelled'
+  | 'timeout'
+  | 'device_busy'
+  | 'generic';
+
+export interface HuginSaleResult {
+  success: boolean;
+  error?: string;
+  skipped?: boolean;
+  documentId?: string;
+  failureKind?: HuginFailureKind;
+}
+
 const SETTINGS_KEY = 'hugin_tps_settings';
 
 const DEFAULTS: HuginSettings = {
@@ -83,6 +98,15 @@ function normalizeSettings(raw: Partial<HuginSettings> | null | undefined): Hugi
 }
 
 /** Aktif ve masaüstünde yapılandırılmış mı (satış gönderilebilir). */
+/** Tam ödeme sonrası mali fiş gönderilmeli mi? */
+export function shouldSendHuginForPayments(
+  payments: Array<{ payment_method?: string | null; amount?: number | null }>,
+): boolean {
+  if (!loadHuginSettings().enabled) return false;
+  if (!isHuginSaleReady()) return false;
+  return paymentsForHugin(payments).length > 0;
+}
+
 export function isHuginSaleReady(): boolean {
   const settings = normalizeSettings(loadHuginSettings());
   if (!settings.enabled) return false;
@@ -280,6 +304,77 @@ function mapPaymentType(method: 'cash' | 'credit_card'): string {
   return method === 'cash' ? 'CASH' : 'EFT_POS';
 }
 
+export function classifyHuginFailure(
+  errText: string,
+  status = 0,
+  body = '',
+): HuginFailureKind {
+  const blob = `${errText} ${body}`.toLowerCase();
+  if (
+    /kart|card|pos|eft|declin|red|geçmedi|gecmedi|redded|onaylanmad|iptal.*kart|müşteri.*iptal|musteri.*iptal|pin|chip/i.test(
+      blob,
+    )
+  ) {
+    return 'card_declined';
+  }
+  if (/zaman\s*aşım|timeout|timed\s*out/i.test(blob) || status === 0) {
+    return 'timeout';
+  }
+  if (/iptal|cancel|abort|void|vazgeç|vazgec/i.test(blob)) {
+    return 'cancelled';
+  }
+  if (/meşgul|mesgul|busy|işlem\s*devam|locked|kilit/i.test(blob)) {
+    return 'device_busy';
+  }
+  return 'generic';
+}
+
+/** Açık kalmış PC Link belgesini iptal et (DELETE). */
+export async function cancelPcLinkDocument(
+  documentId: string,
+  settingsInput?: HuginSettings,
+): Promise<{ success: boolean; error?: string }> {
+  const settings = normalizeSettings(settingsInput || loadHuginSettings());
+  if (!documentId.trim()) return { success: true };
+  if (settings.apiMode !== 'pc_link') {
+    return { success: false, error: 'Belge iptali yalnızca PC Link (S1) modunda desteklenir.' };
+  }
+
+  const base = deviceBaseUrl(settings);
+  const headers = pcLinkHeaders(settings, true);
+  const url = `${base}/v1/documents/${encodeURIComponent(documentId)}`;
+
+  const del = await huginHttpRequest({
+    method: 'DELETE',
+    url,
+    headers,
+    timeoutMs: 12000,
+  });
+  if (del.ok || del.status === 204 || del.status === 404) {
+    return { success: true };
+  }
+
+  const cancelPut = await huginHttpRequest({
+    method: 'PUT',
+    url,
+    headers,
+    body: { status: 'CANCELLED', items: [], payments: [] },
+    timeoutMs: 12000,
+  });
+  if (cancelPut.ok) return { success: true };
+
+  const detail =
+    parseJsonSafe(del.body)?.message ||
+    parseJsonSafe(cancelPut.body)?.message ||
+    del.error ||
+    cancelPut.error ||
+    `HTTP ${del.status}`;
+  return {
+    success: false,
+    error: typeof detail === 'string' ? detail : 'Yazarkasa belgesi iptal edilemedi',
+  };
+}
+
 // ——— TPS (github.com/huginsdk/tps) ———
 
 function buildTpsSalePayload(req: HuginSaleRequest, settings: HuginSettings) {
@@ -309,7 +404,7 @@ function buildTpsSalePayload(req: HuginSaleRequest, settings: HuginSettings) {
   };
 }
 
-async function sendTpsSale(req: HuginSaleRequest, settings: HuginSettings): Promise<{ success: boolean; error?: string }> {
+async function sendTpsSale(req: HuginSaleRequest, settings: HuginSettings): Promise<HuginSaleResult> {
   const payload = buildTpsSalePayload(req, settings);
   const base = deviceBaseUrl(settings);
   const url = `${base}/TPSService/sale?okc_id=${encodeURIComponent(settings.okcId)}&password=${encodeURIComponent(settings.password)}`;
@@ -322,8 +417,9 @@ async function sendTpsSale(req: HuginSaleRequest, settings: HuginSettings): Prom
   });
 
   if (result.ok) return { success: true };
-  const detail = result.body?.slice(0, 200) || result.error;
-  return { success: false, error: `Yazarkasa hatası (HTTP ${result.status || '—'}): ${detail || 'Bilinmeyen'}` };
+  const detail = result.body?.slice(0, 200) || result.error || 'Bilinmeyen';
+  const err = `Yazarkasa hatası (HTTP ${result.status || '—'}): ${detail}`;
+  return { success: false, error: err, failureKind: classifyHuginFailure(err, result.status, result.body) };
 }
 
 async function testTpsConnection(settings: HuginSettings): Promise<{ success: boolean; error?: string; serialNo?: string }> {
@@ -343,7 +439,9 @@ async function testTpsConnection(settings: HuginSettings): Promise<{ success: bo
 
 // ——— PC Link (developer.hugin.com.tr) ———
 
-async function sendPcLinkSale(req: HuginSaleRequest, settings: HuginSettings): Promise<{ success: boolean; error?: string }> {
+async function sendPcLinkSale(req: HuginSaleRequest, settings: HuginSettings): Promise<HuginSaleResult> {
+  const hasCard = req.payments.some((p) => p.method === 'credit_card');
+  const completeTimeoutMs = hasCard ? 120_000 : 45_000;
   const base = deviceBaseUrl(settings);
   const headers = pcLinkHeaders(settings, true);
 
@@ -362,16 +460,22 @@ async function sendPcLinkSale(req: HuginSaleRequest, settings: HuginSettings): P
       create.body?.slice(0, 180) ||
       create.error ||
       'Belge başlatılamadı';
+    const err = `PC Link belge açma (HTTP ${create.status}): ${errText}`;
     return {
       success: false,
-      error: `PC Link belge açma (HTTP ${create.status}): ${errText}`,
+      error: err,
+      failureKind: classifyHuginFailure(err, create.status, create.body),
     };
   }
 
   const created = parseJsonSafe(create.body);
   const documentId = extractDocumentId(created);
   if (!documentId) {
-    return { success: false, error: 'PC Link yanıtında belge kimliği alınamadı. Cihaz eşleşmesini kontrol edin.' };
+    return {
+      success: false,
+      error: 'PC Link yanıtında belge kimliği alınamadı. Cihaz eşleşmesini kontrol edin.',
+      failureKind: 'generic',
+    };
   }
 
   const items = req.items.map((item) => {
@@ -405,10 +509,10 @@ async function sendPcLinkSale(req: HuginSaleRequest, settings: HuginSettings): P
     url: `${base}/v1/documents/${encodeURIComponent(documentId)}`,
     headers,
     body: completeBody,
-    timeoutMs: 20000,
+    timeoutMs: completeTimeoutMs,
   });
 
-  if (complete.ok) return { success: true };
+  if (complete.ok) return { success: true, documentId };
 
   const msg = parseJsonSafe(complete.body);
   const errText =
@@ -416,7 +520,13 @@ async function sendPcLinkSale(req: HuginSaleRequest, settings: HuginSettings): P
     complete.body?.slice(0, 180) ||
     complete.error ||
     'Satış tamamlanamadı';
-  return { success: false, error: `PC Link satış (HTTP ${complete.status}): ${errText}` };
+  const err = `PC Link satış (HTTP ${complete.status}): ${errText}`;
+  return {
+    success: false,
+    error: err,
+    documentId,
+    failureKind: classifyHuginFailure(err, complete.status, complete.body),
+  };
 }
 
 async function testPcLinkConnection(
@@ -458,9 +568,7 @@ function validateSettings(settings: HuginSettings): string | null {
   return null;
 }
 
-export async function sendSaleToHugin(
-  req: HuginSaleRequest,
-): Promise<{ success: boolean; error?: string; skipped?: boolean }> {
+export async function sendSaleToHugin(req: HuginSaleRequest): Promise<HuginSaleResult> {
   const settings = normalizeSettings(loadHuginSettings());
 
   if (!settings.enabled) {
