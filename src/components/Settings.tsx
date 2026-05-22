@@ -1104,7 +1104,7 @@ export function Settings({ onClose }: SettingsProps) {
     { id: 'manage', label: 'Masa Düzenle', icon: SettingsIcon, group: 'Masalar' },
     { id: 'platforms', label: 'Online Platformlar', icon: Globe, group: 'Siparişler' },
     { id: 'integrations', label: 'Entegrasyonlarımız', icon: Puzzle, group: 'Siparişler' },
-    { id: 'printers', label: 'Yazıcılar', icon: Printer, group: 'Sistem' },
+    { id: 'printers', label: 'Fiş & Yazıcı', icon: Receipt, group: 'Sistem' },
     { id: 'hugin', label: 'Yazarkasa (Hugin)', icon: Receipt, group: 'Sistem' },
     { id: 'scale', label: 'Terazi Testi', icon: Scale, group: 'Sistem' },
     { id: 'caller-id', label: 'Arayan No (Caller ID)', icon: PhoneIncoming, group: 'Sistem' },
