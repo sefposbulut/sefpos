@@ -640,8 +640,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (event === 'SIGNED_OUT') {
         void (async () => {
           if (cancelled) return;
-          await new Promise((r) => setTimeout(r, 200));
+          // GoTrue bazen gecici SIGNED_OUT yayinlar (uyku, ag, yarim refresh).
+          await new Promise((r) => setTimeout(r, 350));
           try {
+            const { data: refreshed } = await supabase.auth.refreshSession();
+            if (cancelled) return;
+            if (refreshed.session?.user) {
+              await applySession(refreshed.session, { force: false });
+              return;
+            }
             const { data: { session: recovered } } = await supabase.auth.getSession();
             if (cancelled) return;
             if (recovered?.user) {
@@ -958,6 +965,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!user || isLocalMode() || isSqlServerMode()) return;
     let cancelled = false;
     let timer: ReturnType<typeof setInterval> | null = null;
+    let missingProfileStreak = 0;
 
     const checkActive = async () => {
       if (cancelled) return;
@@ -969,10 +977,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           .maybeSingle();
         // Network/PostgREST hatasinda KESINLIKLE cikis yaptırma — geçici hata olabilir.
         if (error) return;
-        // data === null → satır silinmiş demektir (kullanici silinmiş).
-        if (data === null || (data as any)?.is_active === false) {
+        if ((data as any)?.is_active === false) {
           await forceSignOutForBlockedProfile();
+          return;
         }
+        // Profil satiri yok: tek seferlik bos cevap olabilir; iki ardışık kontrolde cik.
+        if (data === null) {
+          missingProfileStreak += 1;
+          if (missingProfileStreak >= 2) {
+            await forceSignOutForBlockedProfile();
+          }
+          return;
+        }
+        missingProfileStreak = 0;
       } catch {
         /* network hatası: sessizce geç, oturumu koru */
       }
@@ -1099,27 +1116,44 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
   }, [user?.id, profile?.tenant_id, profile?.role]);
 
-  // Bulut: uzun süre açık kasada token yenileme sekmesi uyku/arka planda gecikince
-  // oturum düşmesin diye görünürken periyodik refresh + sekmeye dönüşte bir kez.
+  // Bulut: uzun süre açık kasada JWT süresi dolmadan yenile (uyku/arka plan sonrası düşmesin).
   useEffect(() => {
     if (!user?.id || isLocalMode() || isSqlServerMode()) return;
     let cancelled = false;
-    const bump = () => {
+    const REFRESH_WHEN_LEFT_MS = 30 * 60 * 1000;
+    const TICK_MS = 5 * 60 * 1000;
+
+    const bump = async () => {
       if (cancelled || document.visibilityState !== 'visible') return;
-      void supabase.auth.refreshSession().catch(() => {});
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) return;
+        const expMs = session.expires_at ? session.expires_at * 1000 : 0;
+        const left = expMs ? expMs - Date.now() : 0;
+        if (left > REFRESH_WHEN_LEFT_MS) return;
+        const { error } = await supabase.auth.refreshSession();
+        if (error) {
+          await new Promise((r) => setTimeout(r, 2500));
+          if (!cancelled) await supabase.auth.refreshSession().catch(() => {});
+        }
+      } catch {
+        /* ag kesintisi: oturumu koru */
+      }
     };
+
     const onVis = () => {
-      if (document.visibilityState === 'visible') bump();
+      if (document.visibilityState === 'visible') void bump();
     };
+    const onFocus = () => void bump();
     document.addEventListener('visibilitychange', onVis);
-    window.addEventListener('focus', bump);
-    const iv = window.setInterval(bump, 20 * 60 * 1000);
-    if (document.visibilityState === 'visible') bump();
+    window.addEventListener('focus', onFocus);
+    const iv = window.setInterval(() => void bump(), TICK_MS);
+    if (document.visibilityState === 'visible') void bump();
     return () => {
       cancelled = true;
       window.clearInterval(iv);
       document.removeEventListener('visibilitychange', onVis);
-      window.removeEventListener('focus', bump);
+      window.removeEventListener('focus', onFocus);
     };
   }, [user?.id]);
 

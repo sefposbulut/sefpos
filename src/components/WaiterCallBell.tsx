@@ -46,7 +46,12 @@ const HISTORY_LIMIT = 60;
  * - Yeni çağrı geldiğinde: ses + titreşim + 3.5sn toast popup (sağ üstte).
  * - Realtime + SUBSCRIBED sonrası HTTP ile tam senkron; 12 sn yedek poll; sekme/odak/online yenileme.
  */
-export function WaiterCallBell() {
+type WaiterCallBellProps = {
+  /** Turuncu Electron ust barinda ikonlar beyaz gorunsun */
+  headerVariant?: 'default' | 'electron-bar';
+};
+
+export function WaiterCallBell({ headerVariant = 'default' }: WaiterCallBellProps) {
   const { tenant, activeBranch } = useAuth();
 
   const [calls, setCalls] = useState<WaiterCall[]>([]);
@@ -328,10 +333,14 @@ export function WaiterCallBell() {
       {/* Header butonu */}
       <button
         onClick={() => { setOpen(o => !o); setToast(null); }}
-        className={`relative p-1.5 md:p-2 rounded-lg transition-all active:scale-95 ${
+        className={`relative rounded-lg transition-all active:scale-95 ${
           pendingCount > 0
-            ? 'text-white bg-gradient-to-br from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 shadow-md animate-pulse'
-            : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+            ? headerVariant === 'electron-bar'
+              ? 'h-10 w-10 inline-flex items-center justify-center text-white bg-white/25 hover:bg-white/35 ring-2 ring-white/45 shadow-md animate-pulse'
+              : 'p-1.5 md:p-2 text-white bg-gradient-to-br from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 shadow-md animate-pulse'
+            : headerVariant === 'electron-bar'
+              ? 'h-10 w-10 inline-flex items-center justify-center text-white hover:text-white hover:bg-white/12'
+              : 'p-1.5 md:p-2 text-slate-600 hover:text-slate-900 hover:bg-slate-100'
         }`}
         title={pendingCount > 0 ? `${pendingCount} bekleyen garson çağrısı` : 'Garson çağrıları'}
         aria-label="Garson çağrıları"
