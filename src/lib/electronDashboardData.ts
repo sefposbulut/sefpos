@@ -30,7 +30,50 @@ export type RecentActivityRow = {
   orderNumber?: string | number | null;
   tableId?: string | null;
   rawStatus?: string;
+  /** Liste alt satırı için ödeme özeti */
+  paymentHint?: string;
 };
+
+/** Son işlem satırından gerçek UUID (önbellek eski satırlar için). */
+export function parseRecentActivityRefId(row: RecentActivityRow): {
+  orderId?: string;
+  onlineOrderId?: string;
+} {
+  if (row.onlineOrderId) return { onlineOrderId: row.onlineOrderId };
+  if (row.orderId) return { orderId: row.orderId };
+  if (row.id.startsWith('on-')) return { onlineOrderId: row.id.slice(3) };
+  if (row.id.startsWith('o-')) return { orderId: row.id.slice(2) };
+  return {};
+}
+
+export function formatPaymentMethodLabel(method: string | null | undefined): string {
+  const m = String(method || '').toLowerCase().trim();
+  if (!m) return '';
+  if (m === 'cash') return 'Nakit';
+  if (m === 'credit_card' || m === 'card') return 'Kart';
+  if (m === 'open_account') return 'Cari hesap';
+  if (m === 'online') return 'Online ödeme';
+  if (m === 'mixed') return 'Karma ödeme';
+  return method || '';
+}
+
+export function formatOrderPaymentStatus(status: string | null | undefined): string {
+  const s = String(status || '').toLowerCase().trim();
+  if (s === 'paid') return 'Ödendi';
+  if (s === 'partial') return 'Kısmi ödeme';
+  if (s === 'unpaid') return 'Ödenmedi';
+  return '';
+}
+
+function salonOrderPaymentHint(o: Record<string, unknown>): string {
+  const method = formatPaymentMethodLabel(o.payment_method as string);
+  if (method) return method;
+  const ps = formatOrderPaymentStatus(o.payment_status as string);
+  if (ps) return ps;
+  const st = String(o.status || '').toLowerCase();
+  if (st === 'active' || st === 'open') return 'Ödenmedi';
+  return '';
+}
 
 export type TopSellerRow = {
   productId: string;
@@ -163,7 +206,7 @@ export async function fetchElectronRecentActivity(
   const [ordersRes, onlineRes] = await Promise.all([
     supabase
       .from('orders')
-      .select('id, order_number, status, total_amount, order_type, created_at, table_id')
+      .select('id, order_number, status, total_amount, order_type, created_at, table_id, payment_method, payment_status')
       .eq('tenant_id', tenantId)
       .eq('branch_id', branchId)
       .neq('status', 'cancelled')
@@ -171,7 +214,7 @@ export async function fetchElectronRecentActivity(
       .limit(perSource),
     supabase
       .from('online_orders')
-      .select('id, customer_name, status, total_amount, created_at, platform_order_number')
+      .select('id, customer_name, status, total_amount, created_at, platform_order_number, payment_status')
       .eq('tenant_id', tenantId)
       .eq('branch_id', branchId)
       .order('created_at', { ascending: false })
@@ -201,11 +244,14 @@ export async function fetchElectronRecentActivity(
     const tableNum = o.table_id ? tableMap.get(String(o.table_id)) : null;
     const st = mapOrderStatus(String(o.status || ''));
     const orderType = String(o.order_type || '');
+    const baseSub = orderType === 'takeaway' ? 'Paket servis' : 'Salon';
+    const payHint = salonOrderPaymentHint(o);
     return {
       id: `o-${o.id}`,
       kind: orderType === 'takeaway' ? 'takeaway' : 'table',
       title: tableNum != null && tableNum !== '' ? `Masa ${tableNum}` : `Sipariş #${o.order_number || '—'}`,
-      subtitle: orderType === 'takeaway' ? 'Paket servis' : 'Salon',
+      subtitle: payHint ? `${baseSub} · ${payHint}` : baseSub,
+      paymentHint: payHint || undefined,
       amount: Number(o.total_amount) || 0,
       status: st.label,
       statusTone: st.tone,
@@ -223,11 +269,17 @@ export async function fetchElectronRecentActivity(
     if (raw === 'preparing' || raw === 'ready') st = { label: 'Hazırlanıyor', tone: 'preparing' };
     if (raw === 'delivered' || raw === 'completed') st = { label: 'Tamamlandı', tone: 'done' };
     if (raw === 'cancelled') st = { label: 'İptal', tone: 'neutral' };
+    const onlinePay =
+      raw === 'delivered' || raw === 'completed'
+        ? formatOrderPaymentStatus(String(o.payment_status || 'paid')) || 'Platform ödemeli'
+        : 'Platform';
+    const subBase = o.platform_order_number ? `#${o.platform_order_number}` : 'Platform';
     return {
       id: `on-${o.id}`,
       kind: 'online',
       title: String(o.customer_name || 'Online sipariş'),
-      subtitle: o.platform_order_number ? `#${o.platform_order_number}` : 'Platform',
+      subtitle: `${subBase} · ${onlinePay}`,
+      paymentHint: onlinePay,
       amount: Number(o.total_amount) || 0,
       status: st.label,
       statusTone: st.tone,

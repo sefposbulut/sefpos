@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { X, Printer, ExternalLink, Loader2 } from 'lucide-react';
+import { X, Printer, ExternalLink, Loader2, Banknote, CreditCard } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../contexts/AuthContext';
 import {
@@ -9,7 +9,14 @@ import {
   printToAdisyonPrinter,
 } from '../../lib/printService';
 import { dispatchPrintToast } from '../../lib/printToasts';
-import { formatMoneyTr, formatRelativeTr, type RecentActivityRow } from '../../lib/electronDashboardData';
+import {
+  formatMoneyTr,
+  formatOrderPaymentStatus,
+  formatPaymentMethodLabel,
+  formatRelativeTr,
+  parseRecentActivityRefId,
+  type RecentActivityRow,
+} from '../../lib/electronDashboardData';
 
 type DetailItem = {
   name: string;
@@ -19,10 +26,16 @@ type DetailItem = {
   notes?: string | null;
 };
 
+type PaymentLine = {
+  label: string;
+  amount?: number;
+};
+
 type DetailState = {
   orderNumber?: string;
   tableLabel?: string;
-  paymentMethod?: string;
+  paymentSummary: string;
+  paymentLines: PaymentLine[];
   subtotal?: number;
   tax?: number;
   discount?: number;
@@ -34,6 +47,71 @@ interface Props {
   row: RecentActivityRow;
   onClose: () => void;
   onNavigate?: (page: string) => void;
+}
+
+async function fetchOrderItems(orderId: string): Promise<{ data: Record<string, unknown>[] | null; error: string | null }> {
+  const baseSelect =
+    'product_name, variant_name, quantity, unit_price, total_amount, notes, cancelled_at';
+
+  const withCancel = await supabase
+    .from('order_items')
+    .select(baseSelect)
+    .eq('order_id', orderId)
+    .is('cancelled_at', null)
+    .order('created_at', { ascending: true });
+
+  if (!withCancel.error) {
+    return { data: (withCancel.data || []) as Record<string, unknown>[], error: null };
+  }
+
+  const plain = await supabase
+    .from('order_items')
+    .select('product_name, variant_name, quantity, unit_price, total_amount, notes')
+    .eq('order_id', orderId)
+    .order('created_at', { ascending: true });
+
+  if (plain.error) {
+    return { data: null, error: plain.error.message };
+  }
+  return { data: (plain.data || []) as Record<string, unknown>[], error: null };
+}
+
+function buildPaymentSummary(
+  txs: { payment_method: string; amount: number }[],
+  order?: {
+    payment_method?: string | null;
+    payment_status?: string | null;
+    status?: string | null;
+  },
+): { summary: string; lines: PaymentLine[] } {
+  if (txs.length > 0) {
+    const lines = txs.map((t) => ({
+      label: formatPaymentMethodLabel(t.payment_method) || 'Ödeme',
+      amount: Number(t.amount) || 0,
+    }));
+    const summary =
+      lines.length === 1
+        ? `${lines[0].label}${lines[0].amount ? ` · ${formatMoneyTr(lines[0].amount)}` : ''}`
+        : lines.map((l) => `${l.label} ${formatMoneyTr(l.amount || 0)}`).join(' + ');
+    return { summary, lines };
+  }
+
+  const method = formatPaymentMethodLabel(order?.payment_method);
+  if (method) {
+    return { summary: method, lines: [{ label: method }] };
+  }
+
+  const ps = formatOrderPaymentStatus(order?.payment_status);
+  if (ps) {
+    return { summary: ps, lines: [{ label: ps }] };
+  }
+
+  const st = String(order?.status || '').toLowerCase();
+  if (st === 'active' || st === 'open') {
+    return { summary: 'Ödenmedi', lines: [{ label: 'Ödenmedi' }] };
+  }
+
+  return { summary: 'Ödeme bilgisi yok', lines: [] };
 }
 
 export function RecentActivityDetailModal({ row, onClose, onNavigate }: Props) {
@@ -49,27 +127,54 @@ export function RecentActivityDetailModal({ row, onClose, onNavigate }: Props) {
     setLoadError(null);
     setDetail(null);
 
+    const refs = parseRecentActivityRefId(row);
+
     void (async () => {
       try {
-        if (row.kind === 'online' && row.onlineOrderId) {
-          const { data, error } = await supabase
+        if (row.kind === 'online') {
+          const onlineOrderId = refs.onlineOrderId || row.onlineOrderId;
+          if (!onlineOrderId) {
+            setLoadError('Sipariş bulunamadı');
+            return;
+          }
+
+          const { data: orderRow, error: orderErr } = await supabase
             .from('online_orders')
             .select(
-              'id, customer_name, total_amount, status, platform_order_number, items:online_order_items(platform_product_name, quantity, unit_price, total_amount, notes)',
+              'id, customer_name, total_amount, status, platform_order_number, payment_status',
             )
-            .eq('id', row.onlineOrderId)
+            .eq('id', onlineOrderId)
             .maybeSingle();
+
           if (cancelled) return;
-          if (error || !data) {
+          if (orderErr || !orderRow) {
+            console.warn('[ŞefPOS] online_orders detay:', orderErr?.message);
             setLoadError('Sipariş detayı yüklenemedi');
             return;
           }
-          const items = ((data as any).items || []) as Record<string, unknown>[];
+
+          const { data: itemRows, error: itemsErr } = await supabase
+            .from('online_order_items')
+            .select('platform_product_name, quantity, unit_price, total_amount, notes')
+            .eq('online_order_id', onlineOrderId)
+            .order('created_at', { ascending: true });
+
+          if (cancelled) return;
+          if (itemsErr) {
+            console.warn('[ŞefPOS] online_order_items:', itemsErr.message);
+          }
+
+          const payLabel =
+            formatOrderPaymentStatus(String((orderRow as any).payment_status || 'paid')) ||
+            'Platform ödemeli';
+
           setDetail({
-            orderNumber: String((data as any).platform_order_number || ''),
-            tableLabel: String((data as any).customer_name || 'Online'),
-            total: Number((data as any).total_amount) || row.amount,
-            items: items.map((it) => ({
+            orderNumber: String((orderRow as any).platform_order_number || ''),
+            tableLabel: String((orderRow as any).customer_name || 'Online'),
+            paymentSummary: payLabel,
+            paymentLines: [{ label: payLabel }],
+            total: Number((orderRow as any).total_amount) || row.amount,
+            items: (itemRows || []).map((it: Record<string, unknown>) => ({
               name: String(it.platform_product_name || 'Ürün'),
               qty: Number(it.quantity) || 1,
               total: Number(it.total_amount ?? it.unit_price) || 0,
@@ -79,7 +184,8 @@ export function RecentActivityDetailModal({ row, onClose, onNavigate }: Props) {
           return;
         }
 
-        if (!row.orderId) {
+        const orderId = refs.orderId || row.orderId;
+        if (!orderId) {
           setLoadError('Sipariş bulunamadı');
           return;
         }
@@ -87,33 +193,53 @@ export function RecentActivityDetailModal({ row, onClose, onNavigate }: Props) {
         const { data: order, error: orderErr } = await supabase
           .from('orders')
           .select(
-            'id, order_number, total_amount, subtotal, tax_amount, discount_amount, status, payment_method, order_type, table_id, tables(table_number)',
+            'id, order_number, total_amount, subtotal, tax_amount, discount_amount, status, payment_method, payment_status, order_type, table_id',
           )
-          .eq('id', row.orderId)
+          .eq('id', orderId)
           .maybeSingle();
 
         if (cancelled) return;
         if (orderErr || !order) {
+          console.warn('[ŞefPOS] orders detay:', orderErr?.message);
           setLoadError('Sipariş detayı yüklenemedi');
           return;
         }
 
-        const { data: items, error: itemsErr } = await supabase
-          .from('order_items')
-          .select('product_name, variant_name, quantity, unit_price, total_amount, notes, cancelled_at')
-          .eq('order_id', row.orderId)
-          .is('cancelled_at', null)
-          .order('created_at', { ascending: true });
+        const [itemsResult, payRes, tableRes] = await Promise.all([
+          fetchOrderItems(orderId),
+          supabase
+            .from('payment_transactions')
+            .select('payment_method, amount')
+            .eq('order_id', orderId)
+            .order('created_at', { ascending: true }),
+          (order as { table_id?: string | null }).table_id
+            ? supabase
+                .from('restaurant_tables')
+                .select('table_number')
+                .eq('id', (order as { table_id: string }).table_id)
+                .maybeSingle()
+            : Promise.resolve({ data: null, error: null }),
+        ]);
 
         if (cancelled) return;
-        if (itemsErr) {
+        if (itemsResult.error) {
           setLoadError('Kalemler okunamadı');
           return;
         }
 
         const o = order as Record<string, unknown>;
-        const tableNum = (o.tables as { table_number?: string | number } | null)?.table_number;
+        const tableNum = (tableRes.data as { table_number?: string | number } | null)?.table_number;
         const orderType = String(o.order_type || '');
+        const txs = ((payRes.data || []) as { payment_method: string; amount: number }[]).map((t) => ({
+          payment_method: String(t.payment_method),
+          amount: Number(t.amount) || 0,
+        }));
+        const { summary, lines } = buildPaymentSummary(txs, {
+          payment_method: o.payment_method as string | null,
+          payment_status: o.payment_status as string | null,
+          status: o.status as string | null,
+        });
+
         setDetail({
           orderNumber: String(o.order_number || ''),
           tableLabel:
@@ -121,13 +247,16 @@ export function RecentActivityDetailModal({ row, onClose, onNavigate }: Props) {
               ? 'Paket servis'
               : tableNum != null && tableNum !== ''
                 ? `Masa ${tableNum}`
-                : 'Salon',
-          paymentMethod: o.payment_method ? String(o.payment_method) : undefined,
+                : row.title.startsWith('Masa ')
+                  ? row.title
+                  : 'Salon',
+          paymentSummary: summary,
+          paymentLines: lines,
           subtotal: Number(o.subtotal) || undefined,
           tax: Number(o.tax_amount) || undefined,
           discount: Number(o.discount_amount) || undefined,
           total: Number(o.total_amount) || row.amount,
-          items: (items || []).map((it: Record<string, unknown>) => ({
+          items: (itemsResult.data || []).map((it) => ({
             name: String(it.product_name || 'Ürün'),
             variant: it.variant_name ? String(it.variant_name) : null,
             qty: Number(it.quantity) || 1,
@@ -135,7 +264,8 @@ export function RecentActivityDetailModal({ row, onClose, onNavigate }: Props) {
             notes: it.notes ? String(it.notes) : null,
           })),
         });
-      } catch {
+      } catch (e) {
+        console.warn('[ŞefPOS] işlem detayı:', e);
         if (!cancelled) setLoadError('Bağlantı hatası');
       } finally {
         if (!cancelled) setLoading(false);
@@ -145,14 +275,17 @@ export function RecentActivityDetailModal({ row, onClose, onNavigate }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [row.id, row.orderId, row.onlineOrderId, row.kind]);
+  }, [row]);
 
   const handlePrint = async () => {
     if (!tenant || !detail) return;
     setPrinting(true);
     try {
-      if (row.kind === 'online' && row.onlineOrderId) {
-        const result = await printOnlineOrderReceiptFromEdge(row.onlineOrderId, {
+      const refs = parseRecentActivityRefId(row);
+      if (row.kind === 'online') {
+        const id = refs.onlineOrderId || row.onlineOrderId;
+        if (!id) return;
+        const result = await printOnlineOrderReceiptFromEdge(id, {
           title: `Online fiş — ${row.title}`,
         });
         if (!result.success) {
@@ -161,10 +294,10 @@ export function RecentActivityDetailModal({ row, onClose, onNavigate }: Props) {
         return;
       }
 
-      if (!row.orderId) return;
+      const orderId = refs.orderId || row.orderId;
+      if (!orderId) return;
       const printSettings = loadPrintSettings();
-      const subtotal =
-        detail.subtotal ?? detail.items.reduce((s, r) => s + r.total, 0);
+      const subtotal = detail.subtotal ?? detail.items.reduce((s, r) => s + r.total, 0);
       const tax = detail.tax ?? 0;
       const discount = detail.discount ?? 0;
       const total = detail.total ?? subtotal + tax - discount;
@@ -174,7 +307,7 @@ export function RecentActivityDetailModal({ row, onClose, onNavigate }: Props) {
         restaurantPhone: printSettings.restaurantPhone,
         restaurantAddress: printSettings.restaurantAddress,
         tableLabel: detail.tableLabel || row.title,
-        orderNumber: detail.orderNumber || row.orderNumber || row.orderId.slice(0, 8),
+        orderNumber: detail.orderNumber || row.orderNumber || orderId.slice(0, 8),
         items: detail.items.map((r) => ({
           productName: r.name,
           variantName: r.variant || null,
@@ -187,7 +320,7 @@ export function RecentActivityDetailModal({ row, onClose, onNavigate }: Props) {
         taxAmount: tax,
         discountAmount: discount,
         total,
-        paymentMethod: detail.paymentMethod,
+        paymentMethod: detail.paymentSummary,
         footer: printSettings.receiptFooter,
         printStyle: printSettings.printStyle,
       });
@@ -220,6 +353,12 @@ export function RecentActivityDetailModal({ row, onClose, onNavigate }: Props) {
           ? 'bg-slate-100 text-slate-700'
           : 'bg-amber-100 text-amber-800';
 
+  const PayIcon =
+    detail?.paymentSummary.toLowerCase().includes('kart') ||
+    detail?.paymentSummary.toLowerCase().includes('kredi')
+      ? CreditCard
+      : Banknote;
+
   return (
     <div className="fixed inset-0 z-[70] bg-black/50 flex items-center justify-center p-3 md:p-6">
       <div className="bg-white w-full max-w-md rounded-2xl shadow-2xl flex flex-col max-h-[min(90vh,640px)] overflow-hidden">
@@ -241,9 +380,30 @@ export function RecentActivityDetailModal({ row, onClose, onNavigate }: Props) {
           </button>
         </div>
 
-        <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between gap-2">
-          <span className={`text-[10px] font-bold px-2 py-1 rounded-full ${toneClass}`}>{row.status}</span>
-          <span className="text-xl font-black text-slate-900 tabular-nums">{formatMoneyTr(row.amount)}</span>
+        <div className="px-4 py-3 border-b border-slate-100 space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <span className={`text-[10px] font-bold px-2 py-1 rounded-full ${toneClass}`}>{row.status}</span>
+            <span className="text-xl font-black text-slate-900 tabular-nums">{formatMoneyTr(row.amount)}</span>
+          </div>
+          {!loading && detail && (
+            <div className="flex items-start gap-2 rounded-lg bg-emerald-50 border border-emerald-100 px-3 py-2">
+              <PayIcon className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
+              <div className="min-w-0">
+                <p className="text-[10px] font-bold uppercase text-emerald-800/80">Ödeme</p>
+                <p className="text-sm font-bold text-emerald-900">{detail.paymentSummary}</p>
+                {detail.paymentLines.length > 1 && (
+                  <ul className="mt-1 space-y-0.5">
+                    {detail.paymentLines.map((p, i) => (
+                      <li key={i} className="text-[11px] text-emerald-800">
+                        {p.label}
+                        {p.amount != null && p.amount > 0 ? ` · ${formatMoneyTr(p.amount)}` : ''}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3">
