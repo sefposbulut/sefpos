@@ -40,6 +40,7 @@ import {
   ELECTRON_HEADER_PADDING,
   ELECTRON_HEADER_ROW_CLASS,
 } from '../../lib/electronLayout';
+import { RecentActivityDetailModal } from './RecentActivityDetailModal';
 
 interface ElectronDesktopHomeProps {
   onNavigate: (page: string) => void;
@@ -91,6 +92,7 @@ export function ElectronDesktopHome({
   const [systemNotifs, setSystemNotifs] = useState<SupportNotificationRow[]>([]);
   const [notifOpen, setNotifOpen] = useState(false);
   const [dataReady, setDataReady] = useState(() => !!initialCache);
+  const [selectedRecent, setSelectedRecent] = useState<RecentActivityRow | null>(null);
 
   const canOpenSettings = !!permissions?.can_manage_settings;
   const roundLogoSrc = publicAsset('sefpos-round.png');
@@ -459,11 +461,7 @@ export function ElectronDesktopHome({
                   <RecentRow
                     key={row.id}
                     row={row}
-                    onOpen={() => {
-                      if (row.kind === 'online') onNavigate('online-orders');
-                      else if (row.kind === 'takeaway') onNavigate('takeaway');
-                      else onNavigate('tables');
-                    }}
+                    onOpen={() => setSelectedRecent(row)}
                   />
                 ))
               )}
@@ -471,6 +469,14 @@ export function ElectronDesktopHome({
           </div>
         </aside>
       </div>
+
+      {selectedRecent && (
+        <RecentActivityDetailModal
+          row={selectedRecent}
+          onClose={() => setSelectedRecent(null)}
+          onNavigate={onNavigate}
+        />
+      )}
 
       <footer
         className="flex-shrink-0 h-9 px-5 md:px-8 flex items-center justify-between text-[11px] font-semibold text-white shadow-[0_-2px_6px_rgba(0,0,0,0.12)] border-t border-orange-700/40"

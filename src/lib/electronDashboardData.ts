@@ -23,6 +23,13 @@ export type RecentActivityRow = {
   status: string;
   statusTone: 'open' | 'preparing' | 'done' | 'neutral';
   created_at: string;
+  /** Salon / paket — `orders.id` */
+  orderId?: string;
+  /** Platform siparişi — `online_orders.id` */
+  onlineOrderId?: string;
+  orderNumber?: string | number | null;
+  tableId?: string | null;
+  rawStatus?: string;
 };
 
 export type TopSellerRow = {
@@ -203,6 +210,10 @@ export async function fetchElectronRecentActivity(
       status: st.label,
       statusTone: st.tone,
       created_at: String(o.created_at || ''),
+      orderId: String(o.id),
+      orderNumber: o.order_number as string | number | null,
+      tableId: o.table_id ? String(o.table_id) : null,
+      rawStatus: String(o.status || ''),
     };
   });
 
@@ -221,6 +232,8 @@ export async function fetchElectronRecentActivity(
       status: st.label,
       statusTone: st.tone,
       created_at: String(o.created_at || ''),
+      onlineOrderId: String(o.id),
+      rawStatus: raw,
     };
   });
 
