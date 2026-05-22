@@ -11,7 +11,8 @@ import {
   loadPrintSettings,
   printToAdisyonPrinter,
 } from '../lib/printService';
-import { sendSaleToHugin } from '../lib/huginTps';
+import { buildHuginItemsFromOrderLines, loadHuginSettings, paymentsForHugin, sendSaleToHugin } from '../lib/huginTps';
+import { dispatchPrintToast } from '../lib/printToasts';
 import { BarcodeScannerModal } from './BarcodeScannerModal';
 import { playScanSuccess, playScanError, primeAudio } from '../lib/beep';
 import { ensureCashRegisterRowForPayment } from '../lib/cashRegisterFallback';
@@ -482,22 +483,37 @@ export function QuickSale() {
 
       // 8) Hugin yazarkasa + fiş yazdırma (arka plan)
       const printSettings = loadPrintSettings();
-      if (method === 'cash' || method === 'credit_card') {
-        void sendSaleToHugin({
-          orderNumber: order.order_number,
-          tableLabel: 'Hızlı Satış',
-          items: cart.map((l) => ({
-            productName: l.product.name,
+      if (loadHuginSettings().enabled) {
+        const huginPay = paymentsForHugin([{ payment_method: method, amount }]);
+        const huginItems = buildHuginItemsFromOrderLines(
+          cart.map((l) => ({
             quantity: l.quantity,
-            unitPrice: Number(l.product.price),
-            totalPrice: Number(l.product.price) * l.quantity,
-            categoryVatRate: l.product.categories?.vat_rate ?? null,
-            categoryDepartmentId: l.product.categories?.hugin_department_id ?? null,
+            unit_price: Number(l.product.price),
+            total_amount: Number(l.product.price) * l.quantity,
+            products: {
+              name: l.product.name,
+              category_id: l.product.category_id,
+              categories: l.product.categories,
+            },
           })),
-          totalAmount: totalNow,
-          discountAmount: discountNow,
-          payments: [{ method, amount }],
-        }).then((r) => { if (!r.success) console.warn('Hugin:', r.error); });
+        );
+        if (huginPay.length > 0 && huginItems.length > 0) {
+          void sendSaleToHugin({
+            orderNumber: order.order_number,
+            tableLabel: 'Hızlı Satış',
+            items: huginItems,
+            totalAmount: totalNow,
+            discountAmount: discountNow,
+            payments: huginPay,
+          }).then((r) => {
+            if (r.skipped) return;
+            if (r.success) {
+              dispatchPrintToast({ kind: 'success', message: 'Mali fiş yazarkasaya gönderildi', target: 'Hugin' });
+            } else {
+              dispatchPrintToast({ kind: 'error', message: 'Yazarkasa fişi basılamadı', detail: r.error, target: 'Hugin' });
+            }
+          });
+        }
       }
 
       if (printReceipt) {

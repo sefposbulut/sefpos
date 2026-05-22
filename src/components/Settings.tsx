@@ -3271,7 +3271,13 @@ export function Settings({ onClose }: SettingsProps) {
                     <p className="text-sm text-slate-500 mt-0.5">Nakit ve kart ödemede otomatik fiş kesilir</p>
                   </div>
                   <button
-                    onClick={() => setHuginSettings(s => ({ ...s, enabled: !s.enabled }))}
+                    onClick={() => {
+                      setHuginSettings((s) => {
+                        const next = { ...s, enabled: !s.enabled };
+                        saveHuginSettings(next);
+                        return next;
+                      });
+                    }}
                     className={`relative w-12 h-7 rounded-full transition-all ${huginSettings.enabled ? 'bg-green-500' : 'bg-slate-300'}`}
                   >
                     <div className={`absolute top-1 w-5 h-5 rounded-full bg-white shadow transition-all ${huginSettings.enabled ? 'left-6' : 'left-1'}`} />

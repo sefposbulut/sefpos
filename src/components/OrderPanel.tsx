@@ -9,7 +9,14 @@ import { PaymentModal } from './PaymentModal';
 import { TableToPackageTransferModal } from './TableToPackageTransferModal';
 import { ScaleWeighingModal } from './ScaleWeighingModal';
 import { loadPrintSettings, printKitchenReceipts, printToAdisyonPrinter, buildReceiptHtml, printTakeawayReceipt } from '../lib/printService';
-import { sendSaleToHugin } from '../lib/huginTps';
+import {
+  buildHuginItemsFromOrderLines,
+  isHuginSaleReady,
+  loadHuginSettings,
+  paymentsForHugin,
+  sendSaleToHugin,
+} from '../lib/huginTps';
+import { dispatchPrintToast } from '../lib/printToasts';
 import { queryCache } from '../lib/queryCache';
 import { isOfflineMode, isSqlServerMode } from '../lib/sqlDb';
 import {
@@ -2093,34 +2100,69 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
         console.warn('Stok hareketi tamamlanamadı:', e);
       });
 
-      const huginPayments = payments
-        .filter((p: any) => p.payment_method === 'cash' || p.payment_method === 'credit_card')
-        .map((p: any) => ({ method: p.payment_method as 'cash' | 'credit_card', amount: p.amount }));
-
+      const huginPayments = paymentsForHugin(payments);
       const orderItemsSnapshot = existingOrderItems;
+      const huginCategoryMap = new Map(
+        categories.map((c) => [
+          c.id,
+          { vat_rate: c.vat_rate ?? null, hugin_department_id: (c as { hugin_department_id?: number | null }).hugin_department_id ?? null },
+        ]),
+      );
+      const orderIdForPost = currentOrder.id;
+      const orderNumberForPost = currentOrder.order_number;
+
       if (huginPayments.length > 0 || shouldPrintReceipt) {
         setTimeout(() => {
-          if (huginPayments.length > 0) {
+          void (async () => {
+          if (huginPayments.length > 0 && loadHuginSettings().enabled) {
             const tableLabel = table.table_number === 0 ? 'Paket' : `Masa ${table.table_number}`;
-            sendSaleToHugin({
-              orderNumber: currentOrder.order_number,
-              tableLabel,
-              items: orderItemsSnapshot.map(item => ({
-                productName: (item as any).products?.name || 'Urun',
-                quantity: item.quantity,
-                unitPrice: item.unit_price,
-                totalPrice: item.total_amount,
-                categoryVatRate: (item as any).products?.categories?.vat_rate ?? null,
-                categoryDepartmentId: (item as any).products?.categories?.hugin_department_id ?? null,
-              })),
-              totalAmount: total,
-              discountAmount,
-              payments: huginPayments,
-            }).then(result => {
-              if (!result.success) {
+            let lines = orderItemsSnapshot as Array<Record<string, unknown>>;
+            if (lines.length === 0 && orderIdForPost) {
+              lines = (await fetchOrderPanelItems(orderIdForPost)) as Array<Record<string, unknown>>;
+            }
+            const huginItems = buildHuginItemsFromOrderLines(lines, huginCategoryMap);
+            if (!isHuginSaleReady()) {
+              dispatchPrintToast({
+                kind: 'error',
+                message: 'Yazarkasa ayarı eksik',
+                detail:
+                  'Ayarlar → Yazarkasa: IP, VKN, MAC ve bağlantı testi. Ayarları Kaydet ile saklayın.',
+                target: 'Hugin',
+              });
+            } else if (huginItems.length === 0) {
+              dispatchPrintToast({
+                kind: 'error',
+                message: 'Yazarkasaya gönderilecek kalem yok',
+                detail: 'Sipariş satırları boş veya iptal edilmiş olabilir.',
+                target: 'Hugin',
+              });
+            } else {
+              const result = await sendSaleToHugin({
+                orderNumber: orderNumberForPost,
+                tableLabel,
+                items: huginItems,
+                totalAmount: total,
+                discountAmount,
+                payments: huginPayments,
+              });
+              if (result.skipped) {
+                /* kapalı */
+              } else if (result.success) {
+                dispatchPrintToast({
+                  kind: 'success',
+                  message: 'Mali fiş yazarkasaya gönderildi',
+                  target: 'Hugin',
+                });
+              } else {
                 console.warn('Hugin yazarkasa hatasi:', result.error);
+                dispatchPrintToast({
+                  kind: 'error',
+                  message: 'Yazarkasa fişi basılamadı',
+                  detail: result.error,
+                  target: 'Hugin',
+                });
               }
-            });
+            }
           }
 
           if (shouldPrintReceipt) {
@@ -2156,6 +2198,7 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
               }
             });
           }
+          })();
         }, 50);
       }
       // Panel kapanışı yukarıda optimistik olarak tetiklendi.

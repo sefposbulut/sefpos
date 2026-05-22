@@ -82,6 +82,70 @@ function normalizeSettings(raw: Partial<HuginSettings> | null | undefined): Hugi
   return base;
 }
 
+/** Aktif ve masaüstünde yapılandırılmış mı (satış gönderilebilir). */
+export function isHuginSaleReady(): boolean {
+  const settings = normalizeSettings(loadHuginSettings());
+  if (!settings.enabled) return false;
+  if (!huginRequiresDesktop()) return false;
+  return validateSettings(settings) === null;
+}
+
+export function paymentsForHugin(
+  payments: Array<{ payment_method?: string | null; amount?: number | null }>,
+): HuginPaymentSplit[] {
+  return payments
+    .map((p) => {
+      const raw = String(p.payment_method || '').toLowerCase();
+      const method: 'cash' | 'credit_card' | null =
+        raw === 'cash' ? 'cash' : raw === 'credit_card' || raw === 'card' ? 'credit_card' : null;
+      if (!method) return null;
+      const amount = Number(p.amount) || 0;
+      if (amount <= 0) return null;
+      return { method, amount };
+    })
+    .filter((x): x is HuginPaymentSplit => x !== null);
+}
+
+/** Sipariş paneli satırlarından Hugin kalemleri (iptal hariç). */
+export function buildHuginItemsFromOrderLines(
+  rows: Array<Record<string, unknown>>,
+  fallbackCategories?: Map<string, { vat_rate?: number | null; hugin_department_id?: number | null }>,
+): HuginSaleItem[] {
+  const out: HuginSaleItem[] = [];
+  for (const row of rows) {
+    if (row.cancelled_at) continue;
+    const qty = Number(row.quantity) || 0;
+    if (qty <= 0) continue;
+    const unitPrice = Number(row.unit_price) || 0;
+    let totalPrice = Number(row.total_amount) || 0;
+    if (totalPrice <= 0 && unitPrice > 0) totalPrice = unitPrice * qty;
+    if (totalPrice <= 0) continue;
+
+    const products = row.products as
+      | { name?: string; category_id?: string; categories?: { vat_rate?: number | null; hugin_department_id?: number | null } }
+      | undefined;
+    const catFromProduct = products?.categories;
+    const catId = products?.category_id as string | undefined;
+    const catFallback = catId && fallbackCategories ? fallbackCategories.get(catId) : undefined;
+
+    const name =
+      (products?.name && String(products.name)) ||
+      (row.product_name && String(row.product_name)) ||
+      'Ürün';
+
+    out.push({
+      productName: name,
+      quantity: qty,
+      unitPrice: unitPrice > 0 ? unitPrice : totalPrice / qty,
+      totalPrice,
+      categoryVatRate: catFromProduct?.vat_rate ?? catFallback?.vat_rate ?? null,
+      categoryDepartmentId:
+        catFromProduct?.hugin_department_id ?? catFallback?.hugin_department_id ?? null,
+    });
+  }
+  return out;
+}
+
 export function loadHuginSettings(): HuginSettings {
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
@@ -311,9 +375,12 @@ async function sendPcLinkSale(req: HuginSaleRequest, settings: HuginSettings): P
   }
 
   const items = req.items.map((item) => {
+    const qty = Math.max(1, Math.round(Number(item.quantity) || 1));
     const row: Record<string, string | number> = {
       name: item.productName.substring(0, 48),
+      quantity: qty,
       amount: formatMoney(item.totalPrice),
+      price: formatMoney(item.unitPrice > 0 ? item.unitPrice : item.totalPrice / qty),
       vatRate: item.categoryVatRate ?? settings.vatRate,
     };
     const dept = item.categoryDepartmentId ?? settings.departmentId;
@@ -391,15 +458,28 @@ function validateSettings(settings: HuginSettings): string | null {
   return null;
 }
 
-export async function sendSaleToHugin(req: HuginSaleRequest): Promise<{ success: boolean; error?: string }> {
+export async function sendSaleToHugin(
+  req: HuginSaleRequest,
+): Promise<{ success: boolean; error?: string; skipped?: boolean }> {
   const settings = normalizeSettings(loadHuginSettings());
 
   if (!settings.enabled) {
-    return { success: true };
+    return { success: true, skipped: true };
+  }
+
+  if (!req.items?.length) {
+    return { success: false, error: 'Yazarkasaya gönderilecek kalem yok.' };
   }
 
   const validation = validateSettings(settings);
   if (validation) return { success: false, error: validation };
+
+  if (settings.apiMode === 'pc_link' && !settings.serialNo.trim()) {
+    return {
+      success: false,
+      error: 'PC Link mali sicil (X-SerialNo) boş. Ayarlar → Yazarkasa → Bağlantı testi yapın veya sicili girin.',
+    };
+  }
 
   if (settings.apiMode === 'pc_link') {
     return sendPcLinkSale(req, settings);
