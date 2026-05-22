@@ -293,11 +293,18 @@ async function fetchOrderItemsForOrderIds(
   const chunkSize = 80;
   for (let i = 0; i < orderIds.length; i += chunkSize) {
     const chunk = orderIds.slice(i, i + chunkSize);
-    const { data, error } = await supabase
+    let { data, error } = await supabase
       .from('order_items')
-      .select('*, products(name)')
-      .eq('tenant_id', tenantId)
+      .select('order_id, product_id, quantity, total_amount, unit_price, cancelled_at')
       .in('order_id', chunk);
+    if (error) {
+      const fallback = await supabase
+        .from('order_items')
+        .select('order_id, quantity, total_amount, unit_price, cancelled_at')
+        .in('order_id', chunk);
+      data = fallback.data;
+      error = fallback.error;
+    }
     if (error) {
       console.warn('[fetchElectronTopSellers] order_items', error.message);
       break;

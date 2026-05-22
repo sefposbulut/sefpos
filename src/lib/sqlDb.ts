@@ -39,15 +39,19 @@ interface QueryState {
   limitVal?: number;
   data?: any;
   upsertOn?: string[];
+  countOnly?: boolean;
+  headOnly?: boolean;
 }
 
-async function execQuery(state: QueryState): Promise<{ data: any; error: any }> {
+async function execQuery(
+  state: QueryState,
+): Promise<{ data: any; error: any; count?: number | null }> {
   const api = eApi();
   if (!api) return { data: null, error: new Error('Electron API bulunamadi') };
   try {
     const result = await api.sqlQuery(state);
     if (result.error) return { data: null, error: new Error(result.error) };
-    return { data: result.data, error: null };
+    return { data: result.data, error: null, count: result.count ?? null };
   } catch (err: any) {
     return { data: null, error: err };
   }
@@ -66,8 +70,12 @@ class SqlQueryBuilder {
     };
   }
 
-  select(cols: string) {
+  select(cols: string, opts?: { count?: string; head?: boolean }) {
     this.state.select = cols;
+    if (opts?.count === 'exact') {
+      this.state.countOnly = true;
+      this.state.headOnly = !!opts.head;
+    }
     return this;
   }
 
@@ -159,7 +167,10 @@ class SqlQueryBuilder {
   }
 
   then(resolve: (val: any) => any, reject?: (err: any) => any): Promise<any> {
-    return execQuery(this.state).then(resolve, reject);
+    return execQuery(this.state).then(
+      (res) => resolve({ data: res.data, error: res.error, count: res.count }),
+      reject,
+    );
   }
 
   async single(): Promise<{ data: any; error: any }> {
@@ -504,8 +515,16 @@ export const sqlDb = {
     if (!api?.sqlRpc) {
       return { data: null, error: new Error('SQL RPC desteklenmiyor') };
     }
+    const session = getSqlSession();
+    const rec = session?._sqlRecord;
+    const merged = {
+      ...(params || {}),
+      p_tenant_id: (params as any)?.p_tenant_id ?? rec?.tenant_id,
+      p_opened_by: (params as any)?.p_opened_by ?? rec?.user_id,
+      p_closed_by: (params as any)?.p_closed_by ?? rec?.user_id,
+    };
     try {
-      const result = await api.sqlRpc({ fn, params: params || {} });
+      const result = await api.sqlRpc({ fn, params: merged });
       if (result?.error) return { data: null, error: new Error(result.error) };
       return { data: result.data ?? null, error: null };
     } catch (err: any) {

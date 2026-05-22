@@ -1,7 +1,7 @@
 {
   "name": "shefpos",
   "private": true,
-  "version": "1.0.171",
+  "version": "1.0.187",
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
@@ -60,6 +60,10 @@
       {
         "from": "shefpos_sqlserver.sql",
         "to": "shefpos_sqlserver.sql"
+      },
+      {
+        "from": "shefpos_sqlserver_patches.sql",
+        "to": "shefpos_sqlserver_patches.sql"
       }
     ],
     "win": {

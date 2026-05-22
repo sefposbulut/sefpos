@@ -1,5 +1,7 @@
 import { supabase } from './supabase';
-import { ORDER_ITEMS_PANEL_SELECT } from './orderOptimistic';
+import { isSqlServerMode } from './sqlDb';
+import { orderTotalsFromItems } from './orderOptimistic';
+import { fetchOrderPanelItems, fetchOrderPanelItemsBulk } from './sqlOrderItems';
 
 const warmRows = new Map<string, { rows: any[] }>();
 const inflightItems = new Map<string, Promise<void>>();
@@ -17,14 +19,7 @@ const ORDER_PANEL_SELECT =
   'id, order_number, subtotal, discount_amount, total_amount, payment_status, status, waiter_name, branch_id, table_id, order_type, customer_name, customer_phone, delivery_address, delivery_note, courier_name, estimated_delivery_minutes, paid_at, created_at, tenant_id';
 
 async function fetchPanelItems(orderId: string): Promise<any[]> {
-  let r = await supabase.from('order_items').select(ORDER_ITEMS_PANEL_SELECT).eq('order_id', orderId);
-  if (r.error) {
-    r = await supabase
-      .from('order_items')
-      .select('*, products(*, categories(*))')
-      .eq('order_id', orderId);
-  }
-  return (r.data || []) as any[];
+  return fetchOrderPanelItems(orderId);
 }
 
 const SNAPSHOT_PREFIX = 'sefpos:order_items_snap:v1:';
@@ -60,13 +55,21 @@ export function warmOrderPanelBundle(orderId: string | null | undefined) {
         supabase.from('orders').select(ORDER_PANEL_SELECT).eq('id', orderId).maybeSingle(),
         supabase
           .from('payment_transactions')
-          .select('id, tenant_id, order_id, payment_method, amount, created_by, created_at, customer_id')
+          .select(
+            isSqlServerMode()
+              ? 'id, tenant_id, order_id, payment_method, amount, created_by, created_at'
+              : 'id, tenant_id, order_id, payment_method, amount, created_by, created_at, customer_id',
+          )
           .eq('order_id', orderId)
           .order('created_at', { ascending: false }),
       ]);
+      let order = (orderRes.data as Record<string, unknown>) || null;
+      if (order && rows.length > 0) {
+        order = orderTotalsFromItems(order as any, rows) as Record<string, unknown>;
+      }
       const bundle: PanelWarmBundle = {
         rows,
-        order: (orderRes.data as Record<string, unknown>) || null,
+        order,
         payments: (payRes.data || []) as any[],
       };
       warmPanel.set(orderId, bundle);
@@ -125,27 +128,12 @@ export function bulkWarmOrderItemsForOrders(orderIds: (string | null | undefined
 
   const p = (async () => {
     try {
-      let r = await supabase.from('order_items').select(ORDER_ITEMS_PANEL_SELECT).in('order_id', todo);
-      if (r.error) {
-        r = await supabase
-          .from('order_items')
-          .select('*, products(*, categories(*))')
-          .in('order_id', todo);
-      }
-      if (r.data) {
-        const grouped = new Map<string, any[]>();
-        for (const row of r.data as any[]) {
-          const oid = String(row.order_id || '');
-          if (!oid) continue;
-          if (!grouped.has(oid)) grouped.set(oid, []);
-          grouped.get(oid)!.push(row);
-        }
-        for (const oid of todo) {
-          const rows = grouped.get(oid) || [];
-          warmRows.set(oid, { rows });
-          warmPanel.set(oid, { rows, order: warmPanel.get(oid)?.order ?? null, payments: warmPanel.get(oid)?.payments ?? [] });
-          persistOrderItemsSnapshot(oid, rows);
-        }
+      const grouped = await fetchOrderPanelItemsBulk(todo);
+      for (const oid of todo) {
+        const rows = grouped.get(oid) || [];
+        warmRows.set(oid, { rows });
+        warmPanel.set(oid, { rows, order: warmPanel.get(oid)?.order ?? null, payments: warmPanel.get(oid)?.payments ?? [] });
+        persistOrderItemsSnapshot(oid, rows);
       }
     } finally {
       inflightBulk.delete(key);

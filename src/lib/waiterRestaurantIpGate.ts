@@ -4,6 +4,8 @@
  * çalışan oturum sonlandırılır (mobil veri / ev WiFi gibi yetkisiz ağları engeller).
  */
 
+import { isSqlServerMode } from './sqlDb';
+
 const IP_LOOKUP_ENDPOINTS = [
   'https://api.ipify.org?format=json',
   'https://api64.ipify.org?format=json',
@@ -51,6 +53,8 @@ export async function checkRestaurantIpGate(
   bindingAllowedPrefix: string | null | undefined,
   fallbackDeviceInfo: Record<string, unknown> | null | undefined,
 ): Promise<IpGateResult> {
+  if (isSqlServerMode()) return { ok: true };
+
   const bindP = String(bindingAllowedPrefix || '').trim();
   const info = fallbackDeviceInfo || {};
   const reqP = String((info as any).ipPrefix || (info as any).ip_prefix || '').trim();

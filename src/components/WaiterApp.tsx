@@ -381,15 +381,23 @@ export function WaiterApp({ onLogout }: { onLogout: () => void }) {
 
     try {
       const movedOrderId = selectedTable.current_order_id;
-      await supabase
+      const { error: orderErr } = await supabase
+        .from('orders')
+        .update({ table_id: targetTable.id } as any)
+        .eq('id', movedOrderId);
+      if (orderErr) throw orderErr;
+
+      const { error: destErr } = await supabase
         .from('restaurant_tables')
         .update({ current_order_id: movedOrderId, status: 'occupied' })
         .eq('id', targetTable.id);
+      if (destErr) throw destErr;
 
-      await supabase
+      const { error: srcErr } = await supabase
         .from('restaurant_tables')
         .update({ current_order_id: null, status: 'available' })
         .eq('id', selectedTable.id);
+      if (srcErr) throw srcErr;
 
       setMoveTargetTableId('');
       setShowOrderPanel(false);

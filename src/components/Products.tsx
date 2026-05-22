@@ -4,6 +4,7 @@ import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { loadPrintSettings, savePrintSettings } from '../lib/printService';
 import { queryCache } from '../lib/queryCache';
+import { displayMetaText } from '../lib/displayText';
 import * as XLSX from 'xlsx';
 
 /** Bu tenant’ta `branch_product_stocks` yok (404) — React StrictMode çift mount’ta tekrar GET atılmaz. */
@@ -702,17 +703,26 @@ export function Products() {
     };
     setCategories(prev => [...prev, optimisticCategory]);
 
-    const { error } = await supabase.from('categories').insert({
+    const catPayload: Record<string, unknown> = {
       tenant_id: tenant.id,
       name: newCategory.name,
       color: newCategory.color,
       sort_order: categories.length,
-      vat_rate: newCategory.vat_rate,
-      hugin_department_id: newCategory.hugin_department_id,
-    });
+    };
+    if (newCategory.vat_rate != null) catPayload.vat_rate = newCategory.vat_rate;
+    if (newCategory.hugin_department_id != null) {
+      catPayload.hugin_department_id = newCategory.hugin_department_id;
+    }
+
+    const { error } = await supabase.from('categories').insert(catPayload);
 
     if (error) {
       setCategories(prev => prev.filter(c => c.id !== tempId));
+      alert('Kategori eklenemedi: ' + (error.message || String(error)));
+    } else {
+      queryCache.invalidate('categories', tenant.id);
+      queryCache.invalidate('products', tenant.id);
+      void loadCategories(true);
     }
 
     setNewCategory({ name: '', color: '#F97316', vat_rate: null, hugin_department_id: null });
@@ -770,7 +780,10 @@ export function Products() {
       .select()
       .single();
 
-    if (productError) return;
+    if (productError) {
+      alert('Ürün eklenemedi: ' + (productError.message || String(productError)));
+      return;
+    }
 
     if (productData && newProduct.variants.length > 0) {
       await supabase.from('product_variants').insert(
@@ -783,7 +796,11 @@ export function Products() {
       );
     }
 
+    queryCache.invalidate('categories', tenant.id);
+    queryCache.invalidate('products', tenant.id);
+    queryCache.invalidate('product_variants', tenant.id);
     await loadProducts(true);
+    await loadCategories(true);
     setNewProduct({
       name: '',
       category_id: '',
@@ -1670,7 +1687,7 @@ export function Products() {
                             className="inline-block px-2 py-0.5 rounded text-xs font-medium text-white mt-1"
                             style={{ backgroundColor: category?.color }}
                           >
-                            {category?.name}
+                            {displayMetaText(category?.name) || 'Kategorisiz'}
                           </span>
                         </div>
                         <div className="flex gap-1 ml-2">
@@ -1730,7 +1747,7 @@ export function Products() {
                               className="inline-block px-2 py-0.5 rounded text-xs font-medium text-white"
                               style={{ backgroundColor: category?.color }}
                             >
-                              {category?.name}
+                              {displayMetaText(category?.name) || 'Kategorisiz'}
                             </span>
                             {product.barcode && (
                               <span className="inline-block px-2 py-0.5 rounded text-xs font-mono bg-slate-100 text-slate-600">

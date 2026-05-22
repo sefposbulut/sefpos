@@ -15,6 +15,7 @@ import {
   Zap,
 } from 'lucide-react';
 import { isModuleEnabled } from './modules';
+import { isSqlServerMode } from './sqlDb';
 
 export type PosMenuTile = {
   id: string;
@@ -99,6 +100,7 @@ export function buildPosMenuTiles({
       description: 'Siparişleri yönet',
       icon: ShoppingBag,
       show:
+        !isSqlServerMode() &&
         !!(permissions.can_take_orders || permissions.can_view_tables) &&
         mod('online-orders'),
       page: 'online-orders',

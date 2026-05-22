@@ -1106,7 +1106,13 @@ BEGIN
         t.require_cancel_reason,
         t.onboarding_completed AS tenant_onboarding,
         t.printer_settings,
+        t.address AS tenant_address,
+        t.phone AS tenant_phone,
+        t.subscription_plan,
+        t.subscription_expires_at,
         b.name AS branch_name,
+        b.address AS branch_address,
+        b.phone AS branch_phone,
         b.is_main AS branch_is_main,
         r.permissions AS role_permissions
     FROM app_users u
@@ -1169,6 +1175,62 @@ IF COL_LENGTH('online_order_platforms', 'getir_restaurant_open') IS NULL
     ALTER TABLE online_order_platforms ADD getir_restaurant_open BIT NULL;
 IF COL_LENGTH('online_orders', 'branch_id') IS NULL
     ALTER TABLE online_orders ADD branch_id UNIQUEIDENTIFIER NULL REFERENCES branches(id) ON DELETE NO ACTION;
+GO
+
+IF COL_LENGTH('categories', 'vat_rate') IS NULL
+    ALTER TABLE categories ADD vat_rate INT NULL;
+IF COL_LENGTH('categories', 'hugin_department_id') IS NULL
+    ALTER TABLE categories ADD hugin_department_id INT NULL;
+IF COL_LENGTH('products', 'scale_enabled') IS NULL
+    ALTER TABLE products ADD scale_enabled BIT NOT NULL DEFAULT 0;
+IF COL_LENGTH('order_items', 'paid_quantity') IS NULL
+    ALTER TABLE order_items ADD paid_quantity DECIMAL(10,2) NOT NULL DEFAULT 0;
+IF COL_LENGTH('order_items', 'paid_at') IS NULL
+    ALTER TABLE order_items ADD paid_at DATETIME2 NULL;
+GO
+
+-- waiter_calls (QR garson çağırma)
+IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='waiter_calls' AND xtype='U')
+CREATE TABLE waiter_calls (
+    id UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+    tenant_id UNIQUEIDENTIFIER NOT NULL REFERENCES tenants(id) ON DELETE NO ACTION,
+    branch_id UNIQUEIDENTIFIER NOT NULL REFERENCES branches(id) ON DELETE NO ACTION,
+    table_label NVARCHAR(255) NOT NULL DEFAULT '',
+    call_type NVARCHAR(20) NOT NULL DEFAULT 'service'
+        CHECK (call_type IN ('service','bill','water','help')),
+    message NVARCHAR(MAX),
+    status NVARCHAR(20) NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending','seen','resolved','cancelled')),
+    created_at DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
+    resolved_at DATETIME2 NULL,
+    resolved_by UNIQUEIDENTIFIER NULL REFERENCES app_users(id) ON DELETE NO ACTION
+);
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'idx_waiter_calls_branch_status' AND object_id = OBJECT_ID(N'waiter_calls'))
+    CREATE INDEX idx_waiter_calls_branch_status ON waiter_calls(branch_id, status, created_at DESC);
+GO
+
+-- print_settings (yazıcı eşlemesi bulut senkronu yerine SQL)
+IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='print_settings' AND xtype='U')
+CREATE TABLE print_settings (
+    id UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+    tenant_id UNIQUEIDENTIFIER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    branch_id UNIQUEIDENTIFIER NULL REFERENCES branches(id) ON DELETE NO ACTION,
+    settings NVARCHAR(MAX) NOT NULL DEFAULT '{}',
+    updated_by UNIQUEIDENTIFIER NULL REFERENCES app_users(id) ON DELETE NO ACTION,
+    updated_at DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
+    created_at DATETIME2 NOT NULL DEFAULT GETUTCDATE()
+);
+GO
+
+IF COL_LENGTH('print_settings', 'branch_key') IS NULL
+    ALTER TABLE print_settings ADD branch_key AS
+        ISNULL(CONVERT(NVARCHAR(36), branch_id), '00000000-0000-0000-0000-000000000000') PERSISTED;
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'idx_print_settings_tenant_branch_unique' AND object_id = OBJECT_ID(N'print_settings'))
+    CREATE UNIQUE INDEX idx_print_settings_tenant_branch_unique ON print_settings(tenant_id, branch_key);
 GO
 
 PRINT N'ShefPOS SQL Server veritabani semasiniz basariyla olusturuldu!';

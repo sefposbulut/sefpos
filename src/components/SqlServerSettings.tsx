@@ -20,9 +20,9 @@ interface Props {
 }
 
 const defaultConfig: SqlServerConfig = {
-  host: '.\\SQLEXPRESS',
+  host: '.\\sqlexpressayka',
   port: '',
-  database: 'sefpos45',
+  database: 'aykasoft',
   username: 'sa',
   password: '',
   encrypt: false,
@@ -41,6 +41,15 @@ function SqlServerForm({ onSave, onBack, onClose, showBack = true, inline = fals
   const [importMessage, setImportMessage] = useState('');
   const [activeMode, setActiveMode] = useState<string | null>(null);
   const isPostgresMode = activeMode === 'postgres';
+  const [companyName, setCompanyName] = useState('');
+  const [companyAddress, setCompanyAddress] = useState('');
+  const [companyPhone, setCompanyPhone] = useState('');
+  const [companyEmail, setCompanyEmail] = useState('');
+  const [licenseExpires, setLicenseExpires] = useState(() => {
+    const d = new Date();
+    d.setFullYear(d.getFullYear() + 1);
+    return d.toISOString().slice(0, 10);
+  });
 
   useEffect(() => {
     const api = (window as any).electronAPI;
@@ -63,6 +72,39 @@ function SqlServerForm({ onSave, onBack, onClose, showBack = true, inline = fals
     setTestStatus('idle');
   };
 
+  const saveCompanyProfile = async () => {
+    const api = (window as any).electronAPI;
+    if (!api?.sqlUpdateTenantProfile || !companyName.trim()) return;
+    let tenantId = '';
+    let branchId = '';
+    try {
+      const s = localStorage.getItem('shefpos_sql_session');
+      if (s) {
+        const rec = JSON.parse(s)?._sqlRecord;
+        tenantId = rec?.tenant_id || '';
+        branchId = rec?.branch_id || '';
+      }
+    } catch { /* ignore */ }
+    if (!tenantId && api.sqlLogin) {
+      const lr = await api.sqlLogin({ email: 'admin@shefpos.local', password: '1234' });
+      if (lr?.success && lr.data) {
+        tenantId = lr.data.tenant_id;
+        branchId = lr.data.branch_id;
+      }
+    }
+    if (!tenantId) return;
+    await api.sqlUpdateTenantProfile({
+      tenantId,
+      branchId: branchId || undefined,
+      name: companyName.trim(),
+      address: companyAddress.trim() || null,
+      phone: companyPhone.trim() || null,
+      email: companyEmail.trim() || null,
+      branchName: companyName.trim(),
+      subscription_expires_at: licenseExpires || null,
+    });
+  };
+
   const handleSave = async () => {
     setSaving(true);
     try {
@@ -74,6 +116,9 @@ function SqlServerForm({ onSave, onBack, onClose, showBack = true, inline = fals
         const targetMode = isPostgresMode ? 'postgres' : 'sqlserver';
         await api.setDbMode(targetMode);
         setActiveMode(targetMode);
+      }
+      if (companyName.trim()) {
+        await saveCompanyProfile();
       }
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
@@ -197,6 +242,25 @@ function SqlServerForm({ onSave, onBack, onClose, showBack = true, inline = fals
     }
   };
 
+  const handleApplyPatches = async () => {
+    const api = (window as any).electronAPI;
+    if (!api?.sqlApplySchemaPatches) {
+      setImportStatus('error');
+      setImportMessage('Patch yalnızca Electron Sefpos.exe içinde çalışır.');
+      return;
+    }
+    setImportStatus('importing');
+    setImportMessage('Eksik tablolar ekleniyor (waiter_calls, print_settings)…');
+    const result = await api.sqlApplySchemaPatches(config);
+    if (result.success) {
+      setImportStatus('ok');
+      setImportMessage(result.output || 'Patch tamamlandı. Uygulamayı yeniden başlatın.');
+    } else {
+      setImportStatus('error');
+      setImportMessage(result.error || 'Patch başarısız.');
+    }
+  };
+
   const handleTestAndSetup = async () => {
     if (isPostgresMode) {
       await handleTest();
@@ -306,6 +370,13 @@ function SqlServerForm({ onSave, onBack, onClose, showBack = true, inline = fals
         </div>
       )}
 
+      {typeof window !== 'undefined' && !(window as any).electronAPI?.sqlTestConnection && (
+        <div className={`rounded-xl px-4 py-3 mb-4 text-sm ${inline ? 'bg-red-50 border-2 border-red-200 text-red-800' : 'bg-red-500/15 border border-red-500/40 text-red-200'}`}>
+          <strong>ŞefPOS masaüstü değil.</strong> «Veritabanı Ayarları / Online-Offline» ekranı başka programdır.
+          Kurulu <strong>Sefpos.exe</strong> ile açın; yeşil «SQL Server Ayarları» ve «Test Et» butonları görünmeli.
+        </div>
+      )}
+
       <div className={inline ? 'space-y-4' : 'bg-white/5 border border-white/10 rounded-2xl p-6 space-y-5'}>
         <div className="grid grid-cols-3 gap-4">
           <div className="col-span-2">
@@ -319,7 +390,7 @@ function SqlServerForm({ onSave, onBack, onClose, showBack = true, inline = fals
             />
             {!isPostgresMode && (
               <p className={`text-xs mt-1 ${inline ? 'text-gray-500' : 'text-slate-500'}`}>
-                İsimli örnek (Express): <code>.\SQLEXPRESS</code> — Port alanını boş bırakın. SQL 2017+ önerilir (2008 yavaş/uyumsuz olabilir).
+                Sizin sunucu gibi: <code>.\sqlexpressayka</code> — Port boş. ŞefPOS, SQL Browser olmadan doğrudan TCP portunu Windows kayıt defterinden bulur.
               </p>
             )}
           </div>
@@ -341,7 +412,7 @@ function SqlServerForm({ onSave, onBack, onClose, showBack = true, inline = fals
             type="text"
             value={config.database}
             onChange={e => handleChange('database', e.target.value)}
-            placeholder="ShefPOS"
+            placeholder="aykasoft veya sefpos45"
             className={inputCls}
           />
         </div>
@@ -412,6 +483,50 @@ function SqlServerForm({ onSave, onBack, onClose, showBack = true, inline = fals
             <span>{testStatus === 'testing' ? 'Bağlantı test ediliyor...' : testMessage}</span>
           </div>
         )}
+      </div>
+
+      <div className={`rounded-xl p-4 space-y-3 ${inline ? 'bg-amber-50 border-2 border-amber-200' : 'bg-white/5 border border-white/10'}`}>
+        <p className={`text-xs font-bold uppercase tracking-wide ${inline ? 'text-amber-800' : 'text-amber-200'}`}>
+          İşletme ve lisans (SQL Server)
+        </p>
+        <p className={`text-xs ${inline ? 'text-slate-600' : 'text-slate-400'}`}>
+          Firma bilgileri yerel veritabanına yazılır; lisans bitiş tarihine göre sistem çalışır (internet gerekmez).
+        </p>
+        <input
+          value={companyName}
+          onChange={(e) => setCompanyName(e.target.value)}
+          placeholder="Firma / restoran adı *"
+          className="w-full rounded-lg border px-3 py-2 text-sm"
+        />
+        <input
+          value={companyAddress}
+          onChange={(e) => setCompanyAddress(e.target.value)}
+          placeholder="Adres"
+          className="w-full rounded-lg border px-3 py-2 text-sm"
+        />
+        <div className="grid grid-cols-2 gap-2">
+          <input
+            value={companyPhone}
+            onChange={(e) => setCompanyPhone(e.target.value)}
+            placeholder="Telefon"
+            className="rounded-lg border px-3 py-2 text-sm"
+          />
+          <input
+            value={companyEmail}
+            onChange={(e) => setCompanyEmail(e.target.value)}
+            placeholder="E-posta"
+            className="rounded-lg border px-3 py-2 text-sm"
+          />
+        </div>
+        <label className={`text-xs font-medium ${inline ? 'text-slate-600' : 'text-slate-300'}`}>
+          Lisans bitiş tarihi
+          <input
+            type="date"
+            value={licenseExpires}
+            onChange={(e) => setLicenseExpires(e.target.value)}
+            className="mt-1 w-full rounded-lg border px-3 py-2 text-sm block"
+          />
+        </label>
       </div>
 
       <div className={`flex gap-3 ${inline ? 'mt-4' : 'mt-5'}`}>
@@ -488,6 +603,16 @@ function SqlServerForm({ onSave, onBack, onClose, showBack = true, inline = fals
               }`}
             >
               Test Et + Veritabanını Kur
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleApplyPatches()}
+              disabled={importStatus === 'importing'}
+              className={`w-full mt-2 flex items-center justify-center gap-2 rounded-xl py-2 text-sm font-medium transition-all disabled:opacity-50 ${
+                inline ? 'bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-300' : 'bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-500/40'
+              }`}
+            >
+              Eksik tabloları güncelle (garson çağrı / yazıcı ayarı)
             </button>
             <p className={`text-xs mt-2 ${inline ? 'text-slate-600' : 'text-slate-400'}`}>
               Varsayılan kasa girişi: <strong>ADMIN</strong> / <strong>1234</strong> (kurulumdan sonra)

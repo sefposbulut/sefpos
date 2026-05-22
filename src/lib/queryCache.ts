@@ -1,4 +1,5 @@
 import { supabase } from './supabase';
+import { isSqlServerMode } from './sqlDb';
 
 interface CacheEntry<T> {
   data: T[];
@@ -183,12 +184,17 @@ class QueryCache {
     const existing = this.pendingRequests.get(dedup);
     if (existing) return existing;
 
+    const productCols = isSqlServerMode()
+      ? 'id, name, price, cost, category_id, is_active, image_url, barcode, printer_name, unit, stock_quantity, tax_rate, scale_enabled'
+      : 'id, name, price, cost, category_id, is_active, image_url, barcode, printer_name, unit, stock_quantity, tax_rate, scale_enabled';
+    let productQ = supabase.from('products').select(productCols).eq('tenant_id', tenantId);
+    if (isSqlServerMode()) {
+      productQ = productQ.eq('is_active', 1);
+    } else {
+      productQ = productQ.or('is_active.eq.true,is_active.is.null');
+    }
     const promise = Promise.all([
-      supabase
-        .from('products')
-        .select('id, name, price, cost, category_id, is_active, image_url, barcode, printer_name, unit, stock_quantity, tax_rate, scale_enabled')
-        .eq('tenant_id', tenantId)
-        .or('is_active.eq.true,is_active.is.null'),
+      productQ,
       supabase
         .from('categories')
         .select('id, name, color, tenant_id, sort_order')
@@ -196,7 +202,7 @@ class QueryCache {
         .order('sort_order'),
       supabase
         .from('product_variants')
-        .select('*')
+        .select('id, tenant_id, product_id, name, price_modifier, sort_order, is_active')
         .eq('tenant_id', tenantId)
         .eq('is_active', true)
         .order('sort_order'),

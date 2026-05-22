@@ -5,6 +5,7 @@ const STATIC_ASSETS = [
 ];
 
 self.addEventListener('install', (event) => {
+  // Electron / file:// protokolünde Cache API çalışmaz
   if (self.location.protocol === 'file:') {
     event.waitUntil(self.skipWaiting());
     return;

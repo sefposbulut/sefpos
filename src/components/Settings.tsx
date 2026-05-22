@@ -29,6 +29,8 @@ import { isFeatureUnlocked, submitFeatureRequest, FEATURE_LABELS } from '../lib/
 import { Branch } from '../contexts/AuthContext';
 import { PrinterSettings } from './PrinterSettings';
 import { SqlServerSettings } from './SqlServerSettings';
+import { isSqlServerMode } from '../lib/sqlDb';
+import { insertRestaurantTablesSkipDuplicates } from '../lib/restaurantTableBulk';
 import { DeviceManagement } from './DeviceManagement';
 import { WaiterManagement } from './WaiterManagement';
 import { ScaleCalibration } from './ScaleCalibration';
@@ -646,7 +648,7 @@ export function Settings({ onClose }: SettingsProps) {
       return;
     }
 
-    alert('Grup başarıyla oluşturuldu!');
+    alert('Grup oluşturuldu. Masaların görünmesi için aynı ekranda «Toplu Masa Oluştur» ile masa ekleyin ve şube seçili olsun.');
     setGroupName('');
     setGroupPrefix('');
     setGroupBranchId('');
@@ -676,16 +678,22 @@ export function Settings({ onClose }: SettingsProps) {
       return;
     }
 
-    const { data: existingTables } = await supabase
+    const branchId = tableBranchId || activeBranch?.id || null;
+    let existQ = supabase
       .from('restaurant_tables')
       .select('table_number')
-      .eq('tenant_id', tenant.id)
-      .like('table_number', `${group.prefix}-%`);
+      .eq('tenant_id', tenant.id);
+    if (branchId) existQ = existQ.eq('branch_id', branchId);
+    else existQ = existQ.is('branch_id', null);
+    const { data: existingTables } = await existQ;
 
+    const prefixTag = `${group.prefix}-`;
     const usedNumbers = new Set(
       (existingTables || [])
-        .map(t => parseInt(String(t.table_number).split('-').pop() || '0'))
-        .filter(n => !isNaN(n))
+        .map((t) => String((t as { table_number: string }).table_number))
+        .filter((tn) => tn.startsWith(prefixTag))
+        .map((tn) => parseInt(tn.slice(prefixTag.length), 10))
+        .filter((n) => !isNaN(n)),
     );
 
     const tables = [];
@@ -694,7 +702,7 @@ export function Settings({ onClose }: SettingsProps) {
       if (!usedNumbers.has(num)) {
         tables.push({
           tenant_id: tenant.id,
-          branch_id: tableBranchId || null,
+          branch_id: branchId,
           table_number: `${group.prefix}-${num}`,
           capacity: capacity,
           status: 'available' as const,
@@ -704,15 +712,18 @@ export function Settings({ onClose }: SettingsProps) {
       num++;
     }
 
-    const { error } = await supabase
-      .from('restaurant_tables')
-      .insert(tables);
+    const { inserted, skipped, error } = await insertRestaurantTablesSkipDuplicates(tables);
 
     if (!error) {
-      alert(`${count} masa başarıyla oluşturuldu`);
+      const msg =
+        skipped > 0
+          ? `${inserted} masa eklendi, ${skipped} masa zaten vardı (atlandı).`
+          : `${inserted} masa başarıyla oluşturuldu`;
+      alert(msg);
       setTableCount('10');
+      window.dispatchEvent(new CustomEvent('sefpos:tables-changed'));
     } else {
-      alert('Hata: ' + error.message);
+      alert('Hata: ' + error);
     }
   };
 
@@ -745,19 +756,25 @@ export function Settings({ onClose }: SettingsProps) {
       nextNumber = Math.max(...numbers) + 1;
     }
 
-    const { error } = await supabase
-      .from('restaurant_tables')
-      .insert({
+    const branchId = tableBranchId || activeBranch?.id || null;
+    const { inserted, skipped, error } = await insertRestaurantTablesSkipDuplicates([
+      {
         tenant_id: tenant.id,
-        branch_id: tableBranchId || null,
+        branch_id: branchId,
         table_number: `${group.prefix}-${nextNumber}`,
         capacity: parseInt(tableCapacity),
         status: 'available',
         group_id: group.id,
-      });
+      },
+    ]);
 
-    if (!error) {
+    if (!error && inserted > 0) {
       alert(`Masa ${group.prefix}-${nextNumber} oluşturuldu`);
+      window.dispatchEvent(new CustomEvent('sefpos:tables-changed'));
+    } else if (!error && skipped > 0) {
+      alert(`Masa ${group.prefix}-${nextNumber} zaten kayıtlı.`);
+    } else if (error) {
+      alert('Hata: ' + error);
     }
   };
 
@@ -2670,11 +2687,27 @@ export function Settings({ onClose }: SettingsProps) {
               <div className="bg-white border-2 border-gray-200 rounded-xl p-5">
                 <div className="flex items-center justify-between mb-4">
                   <div className="flex items-center gap-2">
-                    {isOnline ? <Wifi className="w-5 h-5 text-green-500" /> : <WifiOff className="w-5 h-5 text-red-500" />}
+                    {isSqlServerMode() ? (
+                      <DatabaseIcon className="w-5 h-5 text-emerald-600" />
+                    ) : isOnline ? (
+                      <Wifi className="w-5 h-5 text-green-500" />
+                    ) : (
+                      <WifiOff className="w-5 h-5 text-red-500" />
+                    )}
                     <div>
-                      <h4 className="font-bold text-gray-800">İnternet Bağlantısı</h4>
-                      <p className={`text-sm font-semibold ${isOnline ? 'text-green-600' : 'text-red-600'}`}>
-                        {isOnline ? 'Bağlı' : 'Bağlantı Yok'}
+                      <h4 className="font-bold text-gray-800">
+                        {isSqlServerMode() ? 'Veri kaynağı (SQL Server)' : 'İnternet Bağlantısı'}
+                      </h4>
+                      <p
+                        className={`text-sm font-semibold ${
+                          isSqlServerMode() ? 'text-emerald-700' : isOnline ? 'text-green-600' : 'text-red-600'
+                        }`}
+                      >
+                        {isSqlServerMode()
+                          ? 'Yerel SQL Server — internet gerekmez'
+                          : isOnline
+                            ? 'Bağlı'
+                            : 'Bağlantı Yok'}
                       </p>
                     </div>
                   </div>

@@ -147,6 +147,20 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+function parseStoredRolePermissions(raw: unknown): Record<string, unknown> | null {
+  if (!raw) return null;
+  if (typeof raw === 'string') {
+    try {
+      const p = JSON.parse(raw);
+      return p && typeof p === 'object' ? (p as Record<string, unknown>) : null;
+    } catch {
+      return null;
+    }
+  }
+  if (typeof raw === 'object') return raw as Record<string, unknown>;
+  return null;
+}
+
 function buildPermissionsFromRole(profile: Profile | null, roleData?: Role | null): UserPermissions {
   if (!profile) return DEFAULT_WAITER_PERMISSIONS;
   if (profile.role === 'owner' || profile.role === 'admin') return DEFAULT_OWNER_PERMISSIONS;
@@ -327,8 +341,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setProfile(profileData);
         setTenant(fakeTenant);
 
-        const roleData: Role | null = rec2?.role_permissions
-          ? { id: '', tenant_id: profileData.tenant_id, name: profileData.role, permissions: rec2.role_permissions, created_at: '' }
+        const rp2 = parseStoredRolePermissions(rec2?.role_permissions);
+        const roleData: Role | null = rp2
+          ? { id: '', tenant_id: profileData.tenant_id, name: profileData.role, permissions: rp2 as Role['permissions'], created_at: '' }
           : null;
         setPermissions(buildPermissionsFromRole(profileData, roleData));
 
@@ -374,17 +389,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           name: rec?.tenant_name || profileData.tenant_id,
           slug: rec?.tenant_slug || profileData.tenant_id,
           subscription_status: rec?.subscription_status || 'active',
-          subscription_plan: null,
-          subscription_expires_at: null,
+          subscription_plan: rec?.subscription_plan || 'professional',
+          subscription_expires_at: rec?.subscription_expires_at || null,
           max_branches: null,
           notes: null,
           deployment_mode: 'sqlserver',
           onboarding_completed: rec?.tenant_onboarding === true ? true : (rec?.onboarding_completed === true ? true : false),
           created_at: new Date().toISOString(),
           logo_url: null,
-          address: null,
-          phone: null,
-          email: null,
+          address: rec?.tenant_address || null,
+          phone: rec?.tenant_phone || null,
+          email: rec?.email || null,
           printer_settings: null,
           require_cancel_reason: rec?.require_cancel_reason ?? false,
           lock_pin: rec?.lock_pin || null,
@@ -395,8 +410,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setProfile(profileData);
         setTenant(fakeTenant);
 
-        const roleData: Role | null = rec?.role_permissions
-          ? { id: '', tenant_id: profileData.tenant_id, name: profileData.role, permissions: rec.role_permissions, created_at: '' }
+        const rp = parseStoredRolePermissions(rec?.role_permissions);
+        const roleData: Role | null = rp
+          ? { id: '', tenant_id: profileData.tenant_id, name: profileData.role, permissions: rp as Role['permissions'], created_at: '' }
           : null;
         setPermissions(buildPermissionsFromRole(profileData, roleData));
 
@@ -842,6 +858,28 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // çekemez (RLS). İlk frame'de session henüz yoksa + token yenilenince
   // mutlaka `register-printers` tekrarlanmalı — aksi halde kasada fiş düşmez.
   useEffect(() => {
+    if (!isElectron() || !isSqlServerMode() || !tenant?.id) return;
+    const api = (window as any).electronAPI;
+    if (api?.sqlApplySchemaPatches) {
+      void api
+        .sqlApplySchemaPatches(null)
+        .then((result: { success?: boolean; error?: string; errors?: string[] }) => {
+          if (!result?.success) {
+            console.error('[ŞefPOS] SQL patch:', result?.error || result?.errors?.[0]);
+            window.alert(
+              'SQL tabloları otomatik güncellenemedi.\n\nAyarlar → SQL Server → «Eksik tabloları güncelle» butonuna basın, sonra uygulamayı yeniden başlatın.',
+            );
+          } else if (result?.errors?.length) {
+            console.warn('[ŞefPOS] SQL patch uyarıları:', result.errors);
+          }
+        })
+        .catch((err: unknown) => {
+          console.error('[ŞefPOS] SQL patch hata:', err);
+        });
+    }
+  }, [tenant?.id]);
+
+  useEffect(() => {
     if (!isElectron()) return;
     if (!tenant?.id) return;
     let cancelled = false;
@@ -864,8 +902,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         } catch {
           /* local/sql mod */
         }
-        if (jwt) {
-          await pushAgent(jwt);
+        if (jwt || isSqlServerMode()) {
+          await pushAgent(jwt || 'sqlserver-local');
           return;
         }
         await new Promise((r) => setTimeout(r, 600));

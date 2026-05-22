@@ -43,6 +43,7 @@ import { useUiPrefs, setHeaderHidden } from './lib/uiPrefs';
 import { Maximize2, Menu as MenuIcon } from 'lucide-react';
 import { Database, supabase } from './lib/supabase';
 import { isSqlServerMode } from './lib/sqlDb';
+import { isSqlOnlineOnlyPage, sqlOnlineOnlyPageMessage } from './lib/sqlServerCompat';
 import { queryCache } from './lib/queryCache';
 import { SystemNotificationContainer } from './components/SystemNotificationBanner';
 import {
@@ -365,6 +366,10 @@ function App() {
   const handleNavigate = useCallback((page: string) => {
     if (page === 'cashier') {
       setShowCashRegister(true);
+      return;
+    }
+    if (isSqlOnlineOnlyPage(page)) {
+      window.alert(sqlOnlineOnlyPageMessage(page));
       return;
     }
     setCurrentPage(page);

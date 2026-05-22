@@ -1,5 +1,6 @@
 const { app, BrowserWindow, shell, ipcMain, net, dialog, Menu } = require('electron');
 const path = require('path');
+const { execSync } = require('child_process');
 
 /**
  * Bazı sürücü + Windows DWM kombinasyonlarında ekranda sürekli titreme / yeniden boyama olur.
@@ -299,6 +300,135 @@ function getTedious() {
   return null;
 }
 
+function getMssql() {
+  const appPath = (() => { try { return app.getAppPath(); } catch { return __dirname; } })();
+  const resourcesPath = process.resourcesPath || path.join(appPath, '..');
+  const candidates = [
+    path.join(appPath, 'node_modules', 'mssql'),
+    path.join(appPath, '..', 'node_modules', 'mssql'),
+    path.join(resourcesPath, 'app.asar.unpacked', 'node_modules', 'mssql'),
+    path.join(__dirname, '..', 'node_modules', 'mssql'),
+    'mssql',
+  ];
+  for (const p of candidates) {
+    try { const m = require(p); if (m) return m; } catch {}
+  }
+  return null;
+}
+
+/** İsimli örnek (.\sqlexpressayka) için SQL Browser yerine doğrudan TCP portu (Windows kayıt defteri). */
+function resolveNamedInstanceTcpPort(instanceName) {
+  if (process.platform !== 'win32' || !instanceName) return null;
+  const inst = String(instanceName).trim();
+  if (!inst) return null;
+  try {
+    const namesOut = execSync(
+      'reg query "HKLM\\SOFTWARE\\Microsoft\\Microsoft SQL Server\\Instance Names\\SQL"',
+      { encoding: 'utf8', windowsHide: true, timeout: 8000 },
+    );
+    const esc = inst.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const nameRe = new RegExp(`^\\s*${esc}\\s+REG_SZ\\s+(\\S+)`, 'im');
+    const nameMatch = namesOut.match(nameRe);
+    if (!nameMatch) return null;
+    const regKey = nameMatch[1];
+    const tcpOut = execSync(
+      `reg query "HKLM\\SOFTWARE\\Microsoft\\Microsoft SQL Server\\${regKey}\\MSSQLServer\\SuperSocketNetLib\\Tcp\\IPAll"`,
+      { encoding: 'utf8', windowsHide: true, timeout: 8000 },
+    );
+    let m = tcpOut.match(/TcpDynamicPorts\s+REG_SZ\s+(\d+)/i);
+    if (m && m[1] && m[1] !== '0') return parseInt(m[1], 10);
+    m = tcpOut.match(/TcpPort\s+REG_SZ\s+(\d+)/i);
+    if (m && m[1]) return parseInt(m[1], 10);
+  } catch { /* ignore */ }
+  return null;
+}
+
+function formatSqlResolvedHost(cfg, dbName) {
+  const tc = buildTediousConfig(cfg, dbName);
+  let label = tc.server;
+  if (tc.options.instanceName) label += '\\' + tc.options.instanceName;
+  else if (tc.options.port) label += ':' + tc.options.port;
+  return label;
+}
+
+function buildMssqlConfig(cfg, dbName) {
+  const norm = normalizeSqlServerConfig(cfg);
+  const tc = buildTediousConfig(cfg, dbName);
+  const config = {
+    server: tc.server,
+    database: dbName || norm.database,
+    user: norm.username || 'sa',
+    password: norm.password ?? '',
+    options: {
+      encrypt: norm.encrypt === true,
+      trustServerCertificate: norm.trustServerCertificate !== false,
+      enableArithAbort: true,
+      connectTimeout: 12000,
+      requestTimeout: 120000,
+    },
+    pool: { max: 8, min: 0, idleTimeoutMillis: 30000 },
+  };
+  if (tc.options.instanceName && !tc.options.port) {
+    config.options.instanceName = tc.options.instanceName;
+  } else if (tc.options.port) {
+    config.options.port = tc.options.port;
+  }
+  return config;
+}
+
+function tediousTypeToMssql(sql, tediousType) {
+  if (!tediousType || !sql) return sql?.NVarChar;
+  const name = tediousType?.name || String(tediousType);
+  if (/UniqueIdentifier/i.test(name)) return sql.UniqueIdentifier;
+  if (/DateTime/i.test(name)) return sql.DateTime2;
+  if (/Bit/i.test(name)) return sql.Bit;
+  if (/BigInt/i.test(name)) return sql.BigInt;
+  if (/Int/i.test(name)) return sql.Int;
+  if (/Float|Real/i.test(name)) return sql.Float;
+  if (/Decimal|Numeric/i.test(name)) return sql.Decimal(18, 4);
+  return sql.NVarChar;
+}
+
+let mssqlPool = null;
+let mssqlPoolKey = null;
+
+async function closeMssqlPool() {
+  if (mssqlPool) {
+    try { await mssqlPool.close(); } catch {}
+    mssqlPool = null;
+    mssqlPoolKey = null;
+  }
+}
+
+async function mssqlConnect(cfg, dbName) {
+  const sql = getMssql();
+  if (!sql) throw new Error('mssql paketi yuklenemedi. Uygulamayi yeniden yukleyin.');
+  const config = buildMssqlConfig(cfg, dbName);
+  return sql.connect(config);
+}
+
+async function mssqlQuery(pool, sqlText, params) {
+  const sql = getMssql();
+  const req = pool.request();
+  if (params && sql) {
+    for (const [name, { type, value }] of Object.entries(params)) {
+      req.input(name, tediousTypeToMssql(sql, type), value);
+    }
+  }
+  const result = await req.query(sqlText);
+  return result.recordset || [];
+}
+
+async function mssqlTestConnection(norm) {
+  const pool = await mssqlConnect(norm, 'master');
+  try {
+    const rows = await mssqlQuery(pool, 'SELECT @@VERSION AS ver', null);
+    return { rows, resolvedHost: formatSqlResolvedHost(norm, 'master') };
+  } finally {
+    try { await pool.close(); } catch {}
+  }
+}
+
 function normalizeSqlServerConfig(cfg) {
   if (!cfg || typeof cfg !== 'object') {
     throw new Error('SQL Server ayarlari bos');
@@ -333,7 +463,16 @@ function buildTediousConfig(cfg, dbName) {
   }
 
   const portRaw = String(norm.port || '').trim();
-  const portNum = portRaw ? parseInt(portRaw, 10) : undefined;
+  let portNum = portRaw ? parseInt(portRaw, 10) : undefined;
+  let useInstanceName = instanceName || undefined;
+
+  if (instanceName && !portRaw) {
+    const resolvedPort = resolveNamedInstanceTcpPort(instanceName);
+    if (Number.isFinite(resolvedPort) && resolvedPort > 0) {
+      portNum = resolvedPort;
+      useInstanceName = undefined;
+    }
+  }
 
   return {
     server,
@@ -345,8 +484,8 @@ function buildTediousConfig(cfg, dbName) {
       },
     },
     options: {
-      port: instanceName ? undefined : (Number.isFinite(portNum) ? portNum : 1433),
-      instanceName: instanceName || undefined,
+      port: useInstanceName ? undefined : (Number.isFinite(portNum) ? portNum : 1433),
+      instanceName: useInstanceName,
       database: dbName || norm.database || 'sefpos45',
       encrypt: norm.encrypt === true,
       trustServerCertificate: norm.trustServerCertificate !== false,
@@ -410,7 +549,11 @@ function tediousQuery(conn, sql, params) {
     req.on('row', (cols) => {
       const row = {};
       for (const col of Object.values(cols)) {
-        row[col.metadata.colName] = col.value;
+        let v = col.value;
+        if (typeof v === 'string' && (v.toLowerCase() === 'null' || v.toLowerCase() === 'undefined')) {
+          v = null;
+        }
+        row[col.metadata.colName] = v;
       }
       rows.push(row);
     });
@@ -441,15 +584,30 @@ async function getSqlConn(config) {
 
 function closeSqlPool() {
   if (currentSqlConn) { tediousClose(currentSqlConn); currentSqlConn = null; currentSqlCfg = null; }
+  closeMssqlPool();
 }
 
-async function runSql(sql, params, config, dbName) {
+async function runSql(sqlText, params, config, dbName) {
   const settings = loadSettings();
   const cfg = config || settings.sqlServerConfig;
   if (!cfg) throw new Error('SQL Server yapılandırması bulunamadı');
-  const conn = await tediousConnect(cfg, dbName || cfg.database || 'sefpos45');
+  const targetDb = dbName || cfg.database || 'sefpos45';
+
+  if (getMssql()) {
+    let pool;
+    try {
+      pool = await mssqlConnect(cfg, targetDb);
+      return await mssqlQuery(pool, sqlText, params);
+    } finally {
+      if (pool) try { await pool.close(); } catch {}
+    }
+  }
+
+  const tedious = getTedious();
+  if (!tedious) throw new Error('SQL baglanti kutuphanesi yuklenemedi');
+  const conn = await tediousConnect(cfg, targetDb);
   try {
-    return await tediousQuery(conn, sql, params);
+    return await tediousQuery(conn, sqlText, params);
   } finally {
     tediousClose(conn);
   }
@@ -522,6 +680,9 @@ function parseSelectWithJoins(selectStr) {
 }
 
 const JOIN_FK_MAP = {
+  order_items: [
+    { childTable: 'products', fk: 'product_id', pk: 'id' },
+  ],
   restaurant_tables: [
     { childTable: 'orders', fk: 'current_order_id', pk: 'id' },
   ],
@@ -619,9 +780,13 @@ async function execSelectWithJoins(table, select, filters, orderBy, limitVal, cf
 
     const rel2 = getFkForJoin(j.table, 'categories');
     if (rel2) {
-      const alias2 = `j_${j.table}_categories`;
-      joinClauses.push(`LEFT JOIN categories ${alias2} ON ${alias}.${safeId(rel2.fk)} = ${alias2}.${safeId(rel2.pk)}`);
-      joinSelectParts.push(`${alias2}.* AS categories_star`);
+      const alias2 = `j_${j.table}_cat`;
+      joinClauses.push(
+        `LEFT JOIN categories ${alias2} ON ${alias}.${safeId(rel2.fk)} = ${alias2}.${safeId(rel2.pk)}`,
+      );
+      for (const cf of ['id', 'name', 'vat_rate', 'hugin_department_id', 'color', 'sort_order']) {
+        joinSelectParts.push(`${alias2}.${cf} AS [${j.table}__categories__${cf}]`);
+      }
     }
   }
 
@@ -638,6 +803,14 @@ async function execSelectWithJoins(table, select, filters, orderBy, limitVal, cf
     const nested = {};
 
     for (const [key, val] of Object.entries(row)) {
+      const catNest = key.match(/^(\w+)__categories__(\w+)$/);
+      if (catNest) {
+        const tbl = catNest[1];
+        if (!nested[tbl]) nested[tbl] = {};
+        if (!nested[tbl].categories) nested[tbl].categories = {};
+        nested[tbl].categories[catNest[2]] = val;
+        continue;
+      }
       const dblIdx = key.indexOf('__');
       if (dblIdx > -1) {
         const tbl = key.substring(0, dblIdx);
@@ -650,8 +823,14 @@ async function execSelectWithJoins(table, select, filters, orderBy, limitVal, cf
     }
 
     for (const [tbl, data] of Object.entries(nested)) {
-      const allNull = Object.values(data).every(v => v === null);
-      main[tbl] = allNull ? null : data;
+      const { categories: catSub, ...rest } = data;
+      const allNull = Object.values(rest).every((v) => v === null);
+      const base = allNull ? {} : rest;
+      if (catSub && !Object.values(catSub).every((v) => v === null)) {
+        base.categories = catSub;
+      }
+      const allEmpty = Object.keys(base).length === 0;
+      main[tbl] = allEmpty ? null : base;
     }
 
     return main;
@@ -670,7 +849,19 @@ function buildWhereTedious(filters, params, prefix) {
     const tedious = getTedious();
     const name = `${prefix || 'f'}${pi++}`;
     if (val === null || val === undefined) params[name] = { type: tedious.TYPES.NVarChar, value: null };
-    else if (typeof val === 'boolean') params[name] = { type: tedious.TYPES.Bit, value: val ? 1 : 0 };
+    else if (typeof val === 'string' && UUID_RE.test(val)) {
+      params[name] = { type: tedious.TYPES.UniqueIdentifier, value: val };
+      return `@${name}`;
+    }
+    const dt = parseSqlDateTime(val);
+    if (dt) {
+      params[name] = { type: tedious.TYPES.DateTime2, value: dt };
+      return `@${name}`;
+    }
+    if (typeof val === 'boolean') params[name] = { type: tedious.TYPES.Bit, value: val ? 1 : 0 };
+    else if (typeof val === 'string' && /^(true|false)$/i.test(val)) {
+      params[name] = { type: tedious.TYPES.Bit, value: val.toLowerCase() === 'true' ? 1 : 0 };
+    }
     else if (typeof val === 'number' && Number.isInteger(val)) params[name] = { type: tedious.TYPES.Int, value: val };
     else if (typeof val === 'number') params[name] = { type: tedious.TYPES.Decimal, value: val };
     else params[name] = { type: tedious.TYPES.NVarChar, value: String(val) };
@@ -705,10 +896,34 @@ function buildWhereTedious(filters, params, prefix) {
   return `WHERE ${parts.join(' AND ')}`;
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function parseSqlDateTime(val) {
+  if (val instanceof Date && !Number.isNaN(val.getTime())) return val;
+  if (typeof val === 'string' && /^\d{4}-\d{2}-\d{2}/.test(val)) {
+    const d = new Date(val);
+    if (!Number.isNaN(d.getTime())) return d;
+  }
+  return null;
+}
+
 function addTediousParam(params, name, val) {
   const tedious = getTedious();
   if (val === null || val === undefined) params[name] = { type: tedious.TYPES.NVarChar, value: null };
-  else if (typeof val === 'boolean') params[name] = { type: tedious.TYPES.Bit, value: val ? 1 : 0 };
+  else if (typeof val === 'string' && UUID_RE.test(val)) {
+    params[name] = { type: tedious.TYPES.UniqueIdentifier, value: val };
+  }
+  else {
+    const dt = parseSqlDateTime(val);
+    if (dt) {
+      params[name] = { type: tedious.TYPES.DateTime2, value: dt };
+      return;
+    }
+  }
+  if (typeof val === 'boolean') params[name] = { type: tedious.TYPES.Bit, value: val ? 1 : 0 };
+  else if (typeof val === 'string' && /^(true|false)$/i.test(val)) {
+    params[name] = { type: tedious.TYPES.Bit, value: val.toLowerCase() === 'true' ? 1 : 0 };
+  }
   else if (typeof val === 'number' && Number.isInteger(val)) params[name] = { type: tedious.TYPES.Int, value: val };
   else if (typeof val === 'number') params[name] = { type: tedious.TYPES.Decimal, value: val };
   else params[name] = { type: tedious.TYPES.NVarChar, value: String(val) };
@@ -828,7 +1043,20 @@ const DEFAULT_PERMISSIONS = {
   can_view_cancel_logs: true,
   can_manage_users: true,
   can_manage_settings: true,
+  can_use_shifts: true,
 };
+
+function parseSqlRolePermissions(raw) {
+  if (raw == null || raw === '') return null;
+  if (typeof raw === 'object' && !Buffer.isBuffer(raw)) return raw;
+  const s = String(raw).trim();
+  if (!s) return null;
+  try {
+    return JSON.parse(s);
+  } catch {
+    return null;
+  }
+}
 
 async function localDbCreateTenantAndUser({ email, password, fullName, tenantName }) {
   const bcrypt = getBcrypt();
@@ -1239,8 +1467,28 @@ function supabaseFetch(endpoint, options = {}) {
   });
 }
 
+function isElectronSqlServerMode() {
+  const s = loadSettings();
+  return s.dbMode === 'sqlserver' && !!s.sqlServerConfig;
+}
+
 async function updatePrintJobStatus(jobId, status, error) {
   try {
+    if (isElectronSqlServerMode()) {
+      const cfg = loadSettings().sqlServerConfig;
+      const tedious = getTedious();
+      const errVal = error !== undefined && error !== null ? String(error).slice(0, 4000) : '';
+      await runSql(
+        `UPDATE print_jobs SET status = @status, error = @err, updated_at = GETUTCDATE() WHERE id = @id`,
+        {
+          status: { type: tedious?.TYPES?.NVarChar, value: status },
+          err: { type: tedious?.TYPES?.NVarChar, value: errVal },
+          id: { type: tedious?.TYPES?.UniqueIdentifier, value: jobId },
+        },
+        cfg,
+      );
+      return;
+    }
     const body = JSON.stringify({ status, updated_at: new Date().toISOString(), ...(error !== undefined ? { error } : {}) });
     await supabaseFetch(`/rest/v1/print_jobs?id=eq.${jobId}`, {
       method: 'PATCH',
@@ -1314,10 +1562,46 @@ async function processPrintJob(job) {
   }
 }
 
+async function fetchPendingJobsSql() {
+  if (!currentTenantId) return;
+  const cfg = loadSettings().sqlServerConfig;
+  if (!cfg) return;
+  const tedious = getTedious();
+  const params = {
+    tenant_id: { type: tedious?.TYPES?.UniqueIdentifier, value: currentTenantId },
+    max_age: { type: tedious?.TYPES?.Int, value: PRINT_JOB_MAX_AGE_MINUTES },
+  };
+  let branchClause = '(branch_id IS NULL)';
+  if (currentBranchId) {
+    params.branch_id = { type: tedious?.TYPES?.UniqueIdentifier, value: currentBranchId };
+    branchClause = '(branch_id = @branch_id OR branch_id IS NULL)';
+  }
+  const rows = await runSql(
+    `SELECT TOP 8 id, tenant_id, branch_id, html, printer_name, status, error, created_at, updated_at
+     FROM print_jobs
+     WHERE tenant_id = @tenant_id AND status = N'pending'
+       AND ${branchClause}
+       AND created_at >= DATEADD(minute, -@max_age, GETUTCDATE())
+     ORDER BY created_at ASC`,
+    params,
+    cfg,
+  );
+  if (Array.isArray(rows) && rows.length > 0) {
+    paLog('log', `fetchPendingJobs(SQL): ${rows.length} bekleyen job.`);
+    for (const job of rows) {
+      await processPrintJob(job);
+    }
+  }
+}
+
 async function fetchPendingJobs() {
   try {
     if (!currentTenantId) {
       paLog('warn', 'fetchPendingJobs: currentTenantId YOK — register-printers henüz çağrılmadı, polling skip.');
+      return;
+    }
+    if (isElectronSqlServerMode()) {
+      await fetchPendingJobsSql();
       return;
     }
     if (!currentUserJwt) {
@@ -1373,7 +1657,30 @@ let lastDoPrintAt = 0;
  * register-printers sonrası bir kez çağrılır.
  */
 async function expireStalePendingJobsForTenant(tenantId, userJwt) {
-  if (!tenantId || !userJwt) return;
+  if (!tenantId) return;
+  if (isElectronSqlServerMode()) {
+    try {
+      const cfg = loadSettings().sqlServerConfig;
+      const tedious = getTedious();
+      await runSql(
+        `UPDATE print_jobs SET status = N'failed',
+           error = N'Suresi doldu (otomatik iptal)',
+           updated_at = GETUTCDATE()
+         WHERE tenant_id = @tenant_id AND status = N'pending'
+           AND created_at < DATEADD(minute, -@mins, GETUTCDATE())`,
+        {
+          tenant_id: { type: tedious?.TYPES?.UniqueIdentifier, value: tenantId },
+          mins: { type: tedious?.TYPES?.Int, value: PRINT_JOB_MAX_AGE_MINUTES },
+        },
+        cfg,
+      );
+      paLog('log', 'Eski bekleyen print joblar iptal edildi (SQL).');
+    } catch (e) {
+      paLog('warn', 'expireStalePendingJobsForTenant SQL: ' + (e?.message || e));
+    }
+    return;
+  }
+  if (!userJwt) return;
   try {
     const cutoff = new Date(Date.now() - PRINT_JOB_MAX_AGE_MINUTES * 60 * 1000).toISOString();
     const q = `/rest/v1/print_jobs?tenant_id=eq.${tenantId}&status=eq.pending&created_at=lt.${encodeURIComponent(cutoff)}`;
@@ -1428,10 +1735,10 @@ function pickDefaultKitchenPrinter() {
 function startPendingJobsPolling() {
   if (pendingJobsPollTimer) return;
   pendingJobsPollTimer = setInterval(() => {
-    if (currentTenantId && currentUserJwt) {
+    const sqlMode = isElectronSqlServerMode();
+    if (currentTenantId && (sqlMode || currentUserJwt)) {
       fetchPendingJobs().catch(() => {});
-      // Realtime düşmüşse otomatik reconnect tetikle.
-      if (!realtimeConnected && currentTenantId && currentUserJwt) {
+      if (!sqlMode && !realtimeConnected && currentTenantId && currentUserJwt) {
         try { connectRealtimePrintAgent(); } catch {}
       }
     }
@@ -1445,6 +1752,7 @@ function stopPendingJobsPolling() {
 }
 
 function connectRealtimePrintAgent() {
+  if (isElectronSqlServerMode()) return;
   // Do not open realtime socket before authenticated tenant context exists.
   if (!currentTenantId || !currentUserJwt) return;
 
@@ -2012,6 +2320,73 @@ ipcMain.handle('set-sqlserver-config', (_, config) => {
   return true;
 });
 
+function getSqlPatchFilePath() {
+  const candidates = isDev
+    ? [path.join(__dirname, '../shefpos_sqlserver_patches.sql')]
+    : [
+        path.join(process.resourcesPath, 'shefpos_sqlserver_patches.sql'),
+        path.join(process.resourcesPath, 'app', 'shefpos_sqlserver_patches.sql'),
+        path.join(app.getAppPath(), 'shefpos_sqlserver_patches.sql'),
+        path.join(__dirname, '../shefpos_sqlserver_patches.sql'),
+      ];
+  return candidates.find((p) => fs.existsSync(p)) || null;
+}
+
+async function applySqlSchemaPatches(norm) {
+  const patchFile = getSqlPatchFilePath();
+  if (!patchFile) return { executed: 0, errors: ['shefpos_sqlserver_patches.sql bulunamadi'] };
+  const dbName = (norm.database || 'sefpos45').replace(/[^a-zA-Z0-9_]/g, '') || 'sefpos45';
+  const content = fs.readFileSync(patchFile, 'utf8');
+  const batches = content
+    .split(/^\s*GO\s*$/im)
+    .map((b) => b.trim())
+    .filter((b) => b.length > 0 && !/^USE\s+/i.test(b));
+  let executed = 0;
+  const errors = [];
+  const pool = getMssql()
+    ? await mssqlConnect(norm, dbName)
+    : await tediousConnect(norm, dbName);
+  const useMssql = !!getMssql() && pool.request;
+  try {
+    for (const batch of batches) {
+      try {
+        if (useMssql) await mssqlQuery(pool, batch, null);
+        else await tediousQuery(pool, batch, null);
+        executed++;
+      } catch (batchErr) {
+        const msg = batchErr.message || '';
+        if (!/already an object|already exists|already have/i.test(msg)) {
+          errors.push(msg.slice(0, 180));
+        }
+      }
+    }
+  } finally {
+    if (useMssql) {
+      try { await pool.close(); } catch {}
+    } else {
+      tediousClose(pool);
+    }
+  }
+  return { executed, errors };
+}
+
+ipcMain.handle('sql-apply-schema-patches', async (_, config) => {
+  try {
+    const norm = normalizeSqlServerConfig(config || loadSettings().sqlServerConfig);
+    if (!getMssql() && !getTedious()) {
+      return { success: false, error: 'SQL kutuphanesi yuklenemedi' };
+    }
+    const patch = await applySqlSchemaPatches(norm);
+    return {
+      success: patch.executed > 0 || patch.errors.length === 0,
+      output: `${patch.executed} patch batch (waiter_calls, print_settings).`,
+      errors: patch.errors,
+    };
+  } catch (err) {
+    return { success: false, error: err.message || String(err) };
+  }
+});
+
 ipcMain.handle('import-sqlserver-schema', async (_, config) => {
   let norm;
   try {
@@ -2037,25 +2412,31 @@ ipcMain.handle('import-sqlserver-schema', async (_, config) => {
     return { success: false, error: 'Schema dosyasi bulunamadi. Aranan konumlar: ' + candidates.join(', ') };
   }
 
-  if (!getTedious()) {
-    return { success: false, error: 'tedious paketi yuklenemedi. Uygulamayi yeniden yukleyin.' };
+  if (!getMssql() && !getTedious()) {
+    return { success: false, error: 'SQL Server kutuphanesi yuklenemedi. Uygulamayi yeniden yukleyin.' };
   }
 
   try {
-    const tc = buildTediousConfig(norm, 'master');
-    const resolvedHost =
-      tc.server + (tc.options.instanceName ? '\\' + tc.options.instanceName : '') + (tc.options.port ? ':' + tc.options.port : '');
+    const resolvedHost = formatSqlResolvedHost(norm, 'master');
 
-    const masterConn = await tediousConnect(norm, 'master');
+    const dbName = (norm.database || 'sefpos45').replace(/[^a-zA-Z0-9_]/g, '') || 'sefpos45';
+    const masterPool = getMssql()
+      ? await mssqlConnect(norm, 'master')
+      : await tediousConnect(norm, 'master');
+    const useMssql = !!getMssql() && masterPool.request;
     try {
-      const dbName = (norm.database || 'sefpos45').replace(/[^a-zA-Z0-9_]/g, '') || 'sefpos45';
-      await tediousQuery(
-        masterConn,
-        `IF NOT EXISTS (SELECT name FROM sys.databases WHERE name = N'${dbName}') CREATE DATABASE [${dbName}]`,
-        null,
-      );
+      const createSql = `IF NOT EXISTS (SELECT name FROM sys.databases WHERE name = N'${dbName}') CREATE DATABASE [${dbName}]`;
+      if (useMssql) {
+        await mssqlQuery(masterPool, createSql, null);
+      } else {
+        await tediousQuery(masterPool, createSql, null);
+      }
     } finally {
-      tediousClose(masterConn);
+      if (useMssql) {
+        try { await masterPool.close(); } catch {}
+      } else {
+        tediousClose(masterPool);
+      }
     }
 
     const schemaContent = fs.readFileSync(sqlFile, 'utf8');
@@ -2066,11 +2447,18 @@ ipcMain.handle('import-sqlserver-schema', async (_, config) => {
 
     let executed = 0;
     const errors = [];
-    const schemaConn = await tediousConnect(norm, norm.database || 'sefpos45');
+    const schemaConn = getMssql()
+      ? await mssqlConnect(norm, dbName)
+      : await tediousConnect(norm, dbName);
+    const schemaMssql = !!getMssql() && schemaConn.request;
     try {
       for (const batch of goBatches) {
         try {
-          await tediousQuery(schemaConn, batch, null);
+          if (schemaMssql) {
+            await mssqlQuery(schemaConn, batch, null);
+          } else {
+            await tediousQuery(schemaConn, batch, null);
+          }
           executed++;
         } catch (batchErr) {
           const msg = batchErr.message || '';
@@ -2081,7 +2469,11 @@ ipcMain.handle('import-sqlserver-schema', async (_, config) => {
         }
       }
     } finally {
-      tediousClose(schemaConn);
+      if (schemaMssql) {
+        try { await schemaConn.close(); } catch {}
+      } else {
+        tediousClose(schemaConn);
+      }
     }
 
     if (executed < 5) {
@@ -2141,11 +2533,19 @@ ipcMain.handle('import-sqlserver-schema', async (_, config) => {
       errors.push('Admin kullanici olusturulamadi: ' + (adminErr.message || '').slice(0, 150));
     }
 
+    const patch = await applySqlSchemaPatches(norm);
+    const patchNote =
+      patch.executed > 0
+        ? ` Ek tablolar: ${patch.executed} patch.`
+        : patch.errors.length > 0
+          ? ` Patch uyari: ${patch.errors[0]}`
+          : '';
+
     return {
       success: true,
       adminCreated,
       resolvedHost,
-      output: `${executed} batch yuklendi (sunucu: ${resolvedHost}).${adminCreated ? ' Giris: ADMIN / 1234' : ' Giris: ADMIN / 1234 (mevcut).'}${errors.length > 0 ? ' ' + errors.length + ' uyari.' : ''}`,
+      output: `${executed} batch yuklendi (sunucu: ${resolvedHost}).${adminCreated ? ' Giris: ADMIN / 1234' : ' Giris: ADMIN / 1234 (mevcut).'}${patchNote}${errors.length > 0 ? ' ' + errors.length + ' uyari.' : ''}`,
     };
   } catch (err) {
     const msg = err.message || 'Bilinmeyen hata';
@@ -2183,8 +2583,54 @@ ipcMain.handle('register-printers', async (_, { tenantId, branchId, userJwt }) =
       branchId: branchId || null,
       printerNames: (printers || []).map((p) => (typeof p === 'string' ? p : (p?.name || p?.deviceName || ''))).filter(Boolean),
       hasJwt: !!userJwt,
+      sqlMode: isElectronSqlServerMode(),
       anonKeyLen: SUPABASE_ANON_KEY?.length || 0,
     });
+
+    if (isElectronSqlServerMode()) {
+      const cfg = loadSettings().sqlServerConfig;
+      const tedious = getTedious();
+      const printersJson = JSON.stringify(printers || []);
+      const existing = await runSql(
+        `SELECT TOP 1 id FROM printer_registrations WHERE tenant_id = @tenant_id
+         AND (branch_id = @branch_id OR (@branch_id IS NULL AND branch_id IS NULL))`,
+        {
+          tenant_id: { type: tedious?.TYPES?.UniqueIdentifier, value: tenantId },
+          branch_id: { type: tedious?.TYPES?.UniqueIdentifier, value: branchId || null },
+        },
+        cfg,
+      );
+      if (existing?.length > 0) {
+        await runSql(
+          `UPDATE printer_registrations SET printers = @printers, last_seen_at = GETUTCDATE(), branch_id = @branch_id
+           WHERE tenant_id = @tenant_id AND id = @id`,
+          {
+            printers: { type: tedious?.TYPES?.NVarChar, value: printersJson },
+            branch_id: { type: tedious?.TYPES?.UniqueIdentifier, value: branchId || null },
+            tenant_id: { type: tedious?.TYPES?.UniqueIdentifier, value: tenantId },
+            id: { type: tedious?.TYPES?.UniqueIdentifier, value: existing[0].id },
+          },
+          cfg,
+        );
+      } else {
+        await runSql(
+          `INSERT INTO printer_registrations (id, tenant_id, branch_id, printers, last_seen_at)
+           VALUES (NEWID(), @tenant_id, @branch_id, @printers, GETUTCDATE())`,
+          {
+            tenant_id: { type: tedious?.TYPES?.UniqueIdentifier, value: tenantId },
+            branch_id: { type: tedious?.TYPES?.UniqueIdentifier, value: branchId || null },
+            printers: { type: tedious?.TYPES?.NVarChar, value: printersJson },
+          },
+          cfg,
+        );
+      }
+      paLog('log', 'register-printers: SQL Server modu — yazıcılar yerel DB kaydedildi.');
+      await expireStalePendingJobsForTenant(tenantId, null);
+      processingJobIds.clear();
+      fetchPendingJobs().catch(() => {});
+      startPendingJobsPolling();
+      return { success: true, count: printers.length, mode: 'sqlserver' };
+    }
 
     const checkRes = await supabaseFetch(
       `/rest/v1/printer_registrations?tenant_id=eq.${tenantId}&select=id`,
@@ -2240,12 +2686,14 @@ ipcMain.handle('register-printers', async (_, { tenantId, branchId, userJwt }) =
       paLog('warn', 'print-agent-session yazılamadı: ' + (sessErr?.message || sessErr));
     }
 
-    if (tenantChanged || branchChanged || !realtimeConnected) {
-      console.log('Tenant/branch değişti, Realtime yeniden bağlanıyor...');
-      processingJobIds.clear();
-      connectRealtimePrintAgent();
-    } else {
-      fetchPendingJobs();
+    if (!isElectronSqlServerMode()) {
+      if (tenantChanged || branchChanged || !realtimeConnected) {
+        console.log('Tenant/branch değişti, Realtime yeniden bağlanıyor...');
+        processingJobIds.clear();
+        connectRealtimePrintAgent();
+      } else {
+        fetchPendingJobs();
+      }
     }
 
     // Realtime sigortası: 20sn'lik polling fallback (Realtime düşse veya
@@ -2260,19 +2708,32 @@ ipcMain.handle('register-printers', async (_, { tenantId, branchId, userJwt }) =
 
 ipcMain.handle('sql-test-connection', async (_, config) => {
   closeSqlPool();
-  if (!getTedious()) {
-    return { success: false, error: 'tedious paketi yuklenemedi. Uygulamayi yeniden yukleyin.' };
+  if (!getMssql() && !getTedious()) {
+    return { success: false, error: 'SQL Server kutuphanesi yuklenemedi. Uygulamayi yeniden yukleyin.' };
   }
   try {
     const norm = normalizeSqlServerConfig(config);
     saveSettings({ sqlServerConfig: norm });
-    const conn = await tediousConnect(norm, 'master');
-    const rows = await tediousQuery(conn, 'SELECT @@VERSION AS ver', null);
-    tediousClose(conn);
-    const ver = rows && rows[0] ? String(rows[0].ver || '').split('\n')[0].trim() : '';
+    let rows;
+    let resolvedHost;
+    if (getMssql()) {
+      const r = await mssqlTestConnection(norm);
+      rows = r.rows;
+      resolvedHost = r.resolvedHost;
+    } else {
+      const conn = await tediousConnect(norm, 'master');
+      try {
+        rows = await tediousQuery(conn, 'SELECT @@VERSION AS ver', null);
+      } finally {
+        tediousClose(conn);
+      }
+      resolvedHost = formatSqlResolvedHost(norm, 'master');
+    }
     const tc = buildTediousConfig(norm, 'master');
-    const resolvedHost =
-      tc.server + (tc.options.instanceName ? '\\' + tc.options.instanceName : '') + (tc.options.port ? ':' + tc.options.port : '');
+    if (tc.options.port && !String(norm.port || '').trim()) {
+      resolvedHost = `${tc.server}:${tc.options.port}`;
+    }
+    const ver = rows && rows[0] ? String(rows[0].ver || '').split('\n')[0].trim() : '';
     return { success: true, sqlVersion: ver.slice(0, 120), resolvedHost };
   } catch (err) {
     const msg = err.message || 'Baglanti basarisiz';
@@ -2280,7 +2741,15 @@ ipcMain.handle('sql-test-connection', async (_, config) => {
       return { success: false, error: 'Giris basarisiz: kullanici adi veya sifre hatali (SA).' };
     }
     if (/cannot open database|4060/i.test(msg)) {
-      return { success: false, error: msg + ' — Once «Veritabanini Kur» ile sefpos45 olusturun.' };
+      return { success: false, error: msg + ' — Once «Veritabanini Kur» ile veritabanini olusturun.' };
+    }
+    if (/ETIMEOUT|timeout|zaman asimi/i.test(msg)) {
+      return {
+        success: false,
+        error:
+          msg +
+          ' — Sunucu: .\\ornek (Port bos). SQL Browser kapaliysa port kayittan okunur; yine olmazsa SSMS ile TCP portunu yazin.',
+      };
     }
     return { success: false, error: msg };
   }
@@ -2408,6 +2877,10 @@ ipcMain.handle('sql-login', async (_, { email, password }) => {
       allowed_ips: row.allowed_ips,
       tenant_name: row.tenant_name,
       tenant_slug: row.tenant_slug,
+      tenant_address: row.tenant_address || null,
+      tenant_phone: row.tenant_phone || null,
+      subscription_plan: row.subscription_plan || 'professional',
+      subscription_expires_at: row.subscription_expires_at || null,
       subscription_status: row.subscription_status,
       deployment_mode: row.deployment_mode,
       lock_pin: row.lock_pin,
@@ -2416,11 +2889,62 @@ ipcMain.handle('sql-login', async (_, { email, password }) => {
       printer_settings: row.printer_settings,
       branch_name: row.branch_name,
       branch_is_main: row.branch_is_main === true || row.branch_is_main === 1,
-      role_permissions: row.role_permissions,
+      role_permissions: parseSqlRolePermissions(row.role_permissions) || DEFAULT_PERMISSIONS,
     };
     return { success: true, data: userRecord };
   } catch (err) {
     return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('sql-update-tenant-profile', async (_, payload) => {
+  try {
+    const tedious = getTedious();
+    if (!tedious) return { success: false, error: 'tedious paketi yuklenemedi' };
+    const p = payload || {};
+    const tenantId = String(p.tenantId || '');
+    if (!tenantId) return { success: false, error: 'tenant_id zorunlu' };
+    const params = {
+      tid: { type: tedious.TYPES.UniqueIdentifier, value: tenantId },
+      name: { type: tedious.TYPES.NVarChar, value: p.name ?? null },
+      address: { type: tedious.TYPES.NVarChar, value: p.address ?? null },
+      phone: { type: tedious.TYPES.NVarChar, value: p.phone ?? null },
+      email: { type: tedious.TYPES.NVarChar, value: p.email ?? null },
+      expires: p.subscription_expires_at
+        ? { type: tedious.TYPES.DateTime2, value: new Date(p.subscription_expires_at) }
+        : { type: tedious.TYPES.DateTime2, value: null },
+    };
+    await runSql(
+      `UPDATE tenants SET
+         name = COALESCE(@name, name),
+         address = COALESCE(@address, address),
+         phone = COALESCE(@phone, phone),
+         email = COALESCE(@email, email),
+         subscription_expires_at = COALESCE(@expires, subscription_expires_at),
+         subscription_status = N'active',
+         deployment_mode = N'offline',
+         subscription_plan = COALESCE(subscription_plan, N'professional')
+       WHERE id = @tid`,
+      params,
+    );
+    if (p.branchId) {
+      await runSql(
+        `UPDATE branches SET
+           name = COALESCE(@bn, name),
+           address = COALESCE(@ba, address),
+           phone = COALESCE(@bp, phone)
+         WHERE id = @bid`,
+        {
+          bid: { type: tedious.TYPES.UniqueIdentifier, value: String(p.branchId) },
+          bn: { type: tedious.TYPES.NVarChar, value: p.branchName ?? null },
+          ba: { type: tedious.TYPES.NVarChar, value: p.branchAddress ?? null },
+          bp: { type: tedious.TYPES.NVarChar, value: p.branchPhone ?? null },
+        },
+      );
+    }
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err.message || String(err) };
   }
 });
 
@@ -2608,9 +3132,150 @@ ipcMain.handle('sql-find-profile-by-username', async (_, username) => {
   }
 });
 
-ipcMain.handle('sql-query', async (_, { table, operation, select, filters, orderBy, limitVal, data }) => {
+/** INSERT/UPDATE: bilinmeyen kolonlari at (PostgREST fazla alan gonderir, SQL Server reddeder). */
+const SQL_ROW_ALLOWLIST = {
+  categories: ['id', 'tenant_id', 'name', 'color', 'sort_order', 'display_order', 'vat_rate', 'hugin_department_id', 'hugin_vat_department', 'created_at'],
+  products: ['id', 'tenant_id', 'category_id', 'name', 'description', 'barcode', 'price', 'cost', 'stock_quantity', 'unit', 'tax_rate', 'is_active', 'is_available', 'image_url', 'printer_name', 'scale_enabled', 'plu_code', 'scale_prefix', 'created_at', 'updated_at'],
+  product_variants: ['id', 'tenant_id', 'product_id', 'name', 'price_modifier', 'sort_order', 'is_active', 'created_at', 'updated_at'],
+  order_items: ['id', 'order_id', 'tenant_id', 'product_id', 'variant_id', 'quantity', 'unit_price', 'tax_rate', 'discount_amount', 'total_amount', 'notes', 'variant_name', 'status', 'cancellation_reason', 'cancelled_by', 'cancelled_at', 'paid_quantity', 'paid_at', 'created_at'],
+  tenants: ['id', 'name', 'slug', 'address', 'phone', 'email', 'logo_url', 'subscription_status', 'subscription_plan', 'subscription_expires_at', 'max_branches', 'notes', 'onboarding_completed', 'deployment_mode', 'printer_settings', 'require_cancel_reason', 'lock_pin', 'ip_lock_enabled', 'created_at'],
+  branches: ['id', 'tenant_id', 'name', 'address', 'phone', 'is_active', 'is_main', 'created_at'],
+  orders: ['id', 'tenant_id', 'branch_id', 'table_id', 'order_number', 'order_type', 'order_subtype', 'status', 'payment_status', 'payment_method', 'subtotal', 'tax_amount', 'discount_amount', 'total_amount', 'notes', 'waiter_id', 'waiter_name', 'created_by', 'created_at', 'updated_at', 'completed_at', 'paid_at', 'session_id', 'customer_id', 'customer_name', 'customer_phone', 'customer_address', 'delivery_address', 'delivery_note', 'courier_id', 'courier_name', 'estimated_delivery_minutes'],
+  payment_transactions: ['id', 'tenant_id', 'order_id', 'payment_method', 'amount', 'notes', 'created_at', 'created_by'],
+  customer_transactions: ['id', 'tenant_id', 'customer_id', 'order_id', 'type', 'amount', 'description', 'created_by', 'created_at'],
+  customers: ['id', 'tenant_id', 'name', 'phone', 'email', 'address', 'tax_number', 'credit_limit', 'current_balance', 'is_active', 'notes', 'created_at', 'updated_at'],
+  cash_register_transactions: ['id', 'tenant_id', 'branch_id', 'transaction_type', 'payment_method', 'amount', 'reference_id', 'reference_type', 'description', 'order_number', 'table_name', 'notes', 'created_at', 'created_by', 'shift_id'],
+  restaurant_tables: ['id', 'tenant_id', 'branch_id', 'table_number', 'status', 'capacity', 'size', 'group_id', 'current_order_id', 'session_start', 'payment_locked', 'payment_locked_at', 'payment_locked_by_session', 'payment_lock_expires_at', 'created_at'],
+  table_groups: ['id', 'tenant_id', 'branch_id', 'name', 'prefix', 'color', 'created_at'],
+  print_settings: ['id', 'tenant_id', 'branch_id', 'settings', 'updated_by', 'updated_at', 'created_at'],
+  branch_product_stocks: ['id', 'tenant_id', 'branch_id', 'product_id', 'quantity', 'updated_at'],
+  stock_movements: ['id', 'tenant_id', 'product_id', 'movement_type', 'quantity', 'unit_cost', 'total_cost', 'supplier_name', 'note', 'created_by', 'source_branch_id', 'target_branch_id', 'reference_type', 'reference_no', 'created_at'],
+  order_cancel_logs: ['id', 'tenant_id', 'branch_id', 'order_id', 'order_item_id', 'order_number', 'product_name', 'quantity', 'unit_price', 'cancel_reason', 'cancelled_by', 'cancelled_by_name', 'created_at'],
+  roles: ['id', 'tenant_id', 'name', 'permissions', 'created_at'],
+  profiles: ['id', 'tenant_id', 'branch_id', 'role_id', 'email', 'full_name', 'role', 'avatar_url', 'is_super_admin', 'onboarding_completed', 'allowed_ips', 'created_at'],
+  app_users: ['id', 'email', 'password_hash', 'tenant_id', 'created_at'],
+  shift_definitions: ['id', 'tenant_id', 'branch_id', 'shift_no', 'name', 'start_time', 'end_time', 'color', 'is_active', 'created_at', 'updated_at'],
+  shifts: ['id', 'tenant_id', 'branch_id', 'shift_definition_id', 'shift_no', 'shift_name', 'business_date', 'terminal_id', 'terminal_name', 'opened_by', 'opened_at', 'opening_cash', 'opening_cash_breakdown', 'opening_notes', 'closed_by', 'closed_at', 'closing_cash', 'closing_cash_breakdown', 'closing_notes', 'cash_revenue', 'card_revenue', 'open_account_revenue', 'total_revenue', 'expense_total', 'cash_in_total', 'cash_out_total', 'expected_cash', 'cash_difference', 'order_count', 'status', 'created_at', 'updated_at'],
+  shift_definitions: ['id', 'tenant_id', 'branch_id', 'shift_no', 'name', 'start_time', 'end_time', 'color', 'is_active', 'created_at', 'updated_at'],
+  daily_closures: ['id', 'tenant_id', 'branch_id', 'business_date', 'closed_by', 'closed_at', 'notes', 'status'],
+  ingredients: ['id', 'tenant_id', 'branch_id', 'name', 'unit', 'current_stock', 'min_stock', 'unit_cost', 'default_supplier_id', 'barcode', 'notes', 'is_active', 'created_by', 'created_at', 'updated_at'],
+  recipes: ['id', 'tenant_id', 'product_id', 'variant_id', 'ingredient_id', 'quantity', 'unit', 'note', 'created_at'],
+  suppliers: ['id', 'tenant_id', 'branch_id', 'name', 'contact_name', 'phone', 'email', 'address', 'tax_no', 'current_balance', 'notes', 'is_active', 'created_by', 'created_at', 'updated_at'],
+  purchase_invoices: ['id', 'tenant_id', 'branch_id', 'supplier_id', 'invoice_no', 'invoice_date', 'subtotal', 'tax_amount', 'total_amount', 'paid_amount', 'payment_method', 'notes', 'status', 'created_by', 'created_at', 'updated_at'],
+  purchase_invoice_items: ['id', 'invoice_id', 'tenant_id', 'ingredient_id', 'quantity', 'unit_cost', 'total', 'created_at'],
+  ingredient_movements: ['id', 'tenant_id', 'ingredient_id', 'movement_type', 'quantity', 'unit_cost', 'reference_type', 'reference_id', 'note', 'created_by', 'created_at'],
+  waiters: ['id', 'tenant_id', 'phone', 'pin', 'name', 'status', 'created_at', 'updated_at'],
+  waiter_calls: ['id', 'tenant_id', 'branch_id', 'table_label', 'call_type', 'message', 'status', 'created_at', 'resolved_at', 'resolved_by'],
+  delivery_customers: ['id', 'tenant_id', 'name', 'phone', 'address', 'notes', 'created_at'],
+  couriers: ['id', 'tenant_id', 'branch_id', 'full_name', 'phone', 'pin', 'status', 'is_active', 'latitude', 'longitude', 'created_at'],
+  online_orders: ['id', 'tenant_id', 'branch_id', 'platform_id', 'external_id', 'status', 'customer_name', 'customer_phone', 'delivery_address', 'total_amount', 'notes', 'created_at'],
+  online_order_platforms: ['id', 'tenant_id', 'branch_id', 'platform', 'is_active', 'settings', 'created_at'],
+  online_order_items: ['id', 'order_id', 'tenant_id', 'product_name', 'quantity', 'unit_price', 'total_price', 'notes'],
+  expenses: ['id', 'tenant_id', 'branch_id', 'amount', 'description', 'category', 'created_by', 'created_at'],
+  cash_registers: ['id', 'tenant_id', 'branch_id', 'name', 'is_active', 'created_at'],
+  cash_movements: ['id', 'tenant_id', 'cash_register_id', 'movement_type', 'amount', 'description', 'created_by', 'created_at'],
+  tenant_licenses: ['id', 'tenant_id', 'license_key', 'status', 'expires_at', 'created_at'],
+};
+
+function pickSqlRow(table, row) {
+  if (!row || typeof row !== 'object') return row;
+  const src = { ...row };
+  if (table === 'customer_transactions') {
+    if (src.note != null && src.description == null) src.description = src.note;
+    delete src.note;
+  }
+  const allowed = SQL_ROW_ALLOWLIST[table];
+  if (!allowed) return src;
+  const set = new Set(allowed);
+  const out = {};
+  for (const [k, v] of Object.entries(src)) {
+    if (v === undefined || !set.has(k)) continue;
+    // INSERT: opsiyonel null kolonlari gonderme (DB'de kolon yoksa patch oncesi hata verir)
+    if (v === null && (k === 'hugin_department_id' || k === 'vat_rate' || k === 'variant_id' || k === 'description' || k === 'image_url' || k === 'barcode' || k === 'printer_name' || k === 'plu_code' || k === 'scale_prefix')) {
+      continue;
+    }
+    out[k] = v;
+  }
+  return out;
+}
+
+/**
+ * SQL Server: orders / payment_transactions uzerinde trigger varken
+ * OUTPUT INSERTED.* kullanilamaz. Bulut (Supabase) bu kodu kullanmaz.
+ */
+async function sqlSelectRowById(table, id, cfg) {
+  const safeTable = table.replace(/[^a-zA-Z0-9_]/g, '');
+  const tedious = getTedious();
+  const params = { rid: { type: tedious?.TYPES?.UniqueIdentifier, value: id } };
+  const rows = await runSql(`SELECT * FROM ${safeTable} WHERE id = @rid`, params, cfg);
+  return rows && rows[0] ? rows[0] : null;
+}
+
+async function sqlInsertRowSafe(table, filteredRow, cfg) {
+  const safeTable = table.replace(/[^a-zA-Z0-9_]/g, '');
+  const safeId = (c) => c.replace(/[^a-zA-Z0-9_]/g, '');
+  const keys = Object.keys(filteredRow);
+  const params = {};
+  keys.forEach((k, i) => addTediousParam(params, `i${i}`, filteredRow[k]));
+  const colList = keys.map((k) => safeId(k)).join(', ');
+  const valList = keys.map((_, i) => `@i${i}`).join(', ');
+  await runSql(`INSERT INTO ${safeTable} (${colList}) VALUES (${valList})`, params, cfg);
+  return sqlSelectRowById(safeTable, filteredRow.id, cfg);
+}
+
+async function sqlUpdateRowsSafe(table, data, filters, cfg) {
+  const safeTable = table.replace(/[^a-zA-Z0-9_]/g, '');
+  const safeId = (c) => c.replace(/[^a-zA-Z0-9_]/g, '');
+  const params = {};
+  const entries = Object.entries(data || {}).filter(([, v]) => v !== undefined);
+  entries.forEach(([k, v], i) => addTediousParam(params, `u${i}`, v));
+  const setClauses = entries.map(([k], i) => `${safeId(k)} = @u${i}`).join(', ');
+  if (!setClauses) return [];
+  const where = buildWhereTedious(filters, params, 'w');
+  const idRows = await runSql(`SELECT id FROM ${safeTable} ${where}`.trim(), params, cfg);
+  if (!idRows || idRows.length === 0) return [];
+  await runSql(`UPDATE ${safeTable} SET ${setClauses} ${where}`.trim(), params, cfg);
+  const inParams = {};
+  const placeholders = idRows.map((row, i) => {
+    addTediousParam(inParams, `rid${i}`, row.id);
+    return `@rid${i}`;
+  });
+  return runSql(`SELECT * FROM ${safeTable} WHERE id IN (${placeholders.join(', ')})`, inParams, cfg);
+}
+
+async function sqlDeleteRowsSafe(table, filters, cfg) {
+  const safeTable = table.replace(/[^a-zA-Z0-9_]/g, '');
+  const params = {};
+  const where = buildWhereTedious(filters, params, 'w');
+  const snapshot = await runSql(`SELECT * FROM ${safeTable} ${where}`.trim(), params, cfg);
+  await runSql(`DELETE FROM ${safeTable} ${where}`.trim(), params, cfg);
+  return snapshot || [];
+}
+
+async function sqlUpsertRowSafe(table, clean, cfg) {
+  const safeTable = table.replace(/[^a-zA-Z0-9_]/g, '');
+  const tedious = getTedious();
+  const exists = await runSql(
+    `SELECT TOP 1 id FROM ${safeTable} WHERE id = @id`,
+    { id: { type: tedious?.TYPES?.UniqueIdentifier, value: clean.id } },
+    cfg,
+  );
+  if (exists && exists.length > 0) {
+    return (
+      await sqlUpdateRowsSafe(
+        safeTable,
+        clean,
+        [{ col: 'id', op: 'eq', val: clean.id }],
+        cfg,
+      )
+    )[0] || null;
+  }
+  return sqlInsertRowSafe(safeTable, clean, cfg);
+}
+
+ipcMain.handle('sql-query', async (_, { table, operation, select, filters, orderBy, limitVal, data, countOnly, headOnly }) => {
   try {
-    if (!getTedious()) return { data: null, error: 'tedious paketi yuklenemedi' };
+    if (!getMssql() && !getTedious()) return { data: null, error: 'SQL kutuphanesi yuklenemedi' };
     const safeIdentifier = (c) => c.replace(/[^a-zA-Z0-9_]/g, '');
     const safeSelectCols = (s) => {
       if (!s || s === '*') return '*';
@@ -2625,6 +3290,14 @@ ipcMain.handle('sql-query', async (_, { table, operation, select, filters, order
     if (!cfg) return { data: null, error: 'SQL Server yapılandırması bulunamadı' };
 
     if (operation === 'select') {
+      if (countOnly) {
+        const params = {};
+        const where = buildWhereTedious(filters, params, 'w');
+        const q = `SELECT COUNT(*) AS cnt FROM ${safeIdentifier(table)} ${where}`.trim();
+        const rows = await runSql(q, params, cfg);
+        const cnt = rows && rows[0] ? Number(rows[0].cnt ?? rows[0].CNT ?? 0) : 0;
+        return { data: headOnly ? null : [], count: cnt, error: null };
+      }
       const hasJoin = select && /\w+\s*\(/.test(select);
       if (hasJoin) {
         const rows = await execSelectWithJoins(table, select, filters, orderBy, limitVal, cfg);
@@ -2647,38 +3320,22 @@ ipcMain.handle('sql-query', async (_, { table, operation, select, filters, order
       const rowArr = Array.isArray(data) ? data : [data];
       const results = [];
       for (const row of rowArr) {
-        const params = {};
-        const filteredRow = {};
-        for (const [k, v] of Object.entries(row)) { if (v !== undefined) filteredRow[k] = v; }
+        const filteredRow = pickSqlRow(table, row) || {};
         if (!filteredRow.id) filteredRow.id = require('crypto').randomUUID();
-        const keys = Object.keys(filteredRow);
-        keys.forEach((k, i) => addTediousParam(params, `i${i}`, filteredRow[k]));
-        const colList = keys.map(k => safeIdentifier(k)).join(', ');
-        const valList = keys.map((_, i) => `@i${i}`).join(', ');
-        const q = `INSERT INTO ${safeIdentifier(table)} (${colList}) OUTPUT INSERTED.* VALUES (${valList})`;
-        const rows = await runSql(q, params, cfg);
-        if (rows && rows[0]) results.push(rows[0]);
+        const inserted = await sqlInsertRowSafe(table, filteredRow, cfg);
+        if (inserted) results.push(inserted);
       }
       return { data: rowArr.length === 1 ? results[0] || null : results, error: null };
     }
 
     if (operation === 'update') {
-      const params = {};
-      const entries = Object.entries(data).filter(([, v]) => v !== undefined);
-      entries.forEach(([k, v], i) => addTediousParam(params, `u${i}`, v));
-      const setClauses = entries.map(([k], i) => `${safeIdentifier(k)} = @u${i}`).join(', ');
-      if (!setClauses) return { data: [], error: null };
-      const where = buildWhereTedious(filters, params, 'w');
-      const q = `UPDATE ${safeIdentifier(table)} SET ${setClauses} OUTPUT INSERTED.* ${where}`.trim();
-      const rows = await runSql(q, params, cfg);
+      const picked = pickSqlRow(table, data) || {};
+      const rows = await sqlUpdateRowsSafe(table, picked, filters, cfg);
       return { data: rows || [], error: null };
     }
 
     if (operation === 'delete') {
-      const params = {};
-      const where = buildWhereTedious(filters, params, 'w');
-      const q = `DELETE FROM ${safeIdentifier(table)} OUTPUT DELETED.* ${where}`.trim();
-      const rows = await runSql(q, params, cfg);
+      const rows = await sqlDeleteRowsSafe(table, filters, cfg);
       return { data: rows || [], error: null };
     }
 
@@ -2686,22 +3343,10 @@ ipcMain.handle('sql-query', async (_, { table, operation, select, filters, order
       const rowArr = Array.isArray(data) ? data : [data];
       const results = [];
       for (const row of rowArr) {
-        if (!row.id) row.id = require('crypto').randomUUID();
-        const params = {};
-        const keys = Object.keys(row);
-        keys.forEach((k, i) => addTediousParam(params, `p${i}`, row[k]));
-        const colList = keys.map(k => safeIdentifier(k)).join(', ');
-        const valList = keys.map((_, i) => `@p${i}`).join(', ');
-        const idIdx = keys.indexOf('id');
-        const updateSet = keys.filter(k => k !== 'id').map((k) => `${safeIdentifier(k)} = @p${keys.indexOf(k)}`).join(', ');
-        const q = `
-          IF EXISTS (SELECT 1 FROM ${safeIdentifier(table)} WHERE id = @p${idIdx})
-            UPDATE ${safeIdentifier(table)} SET ${updateSet} OUTPUT INSERTED.* WHERE id = @p${idIdx}
-          ELSE
-            INSERT INTO ${safeIdentifier(table)} (${colList}) OUTPUT INSERTED.* VALUES (${valList})
-        `;
-        const rows = await runSql(q, params, cfg);
-        if (rows && rows[0]) results.push(rows[0]);
+        const clean = pickSqlRow(table, row) || {};
+        if (!clean.id) clean.id = require('crypto').randomUUID();
+        const upserted = await sqlUpsertRowSafe(table, clean, cfg);
+        if (upserted) results.push(upserted);
       }
       return { data: rowArr.length === 1 ? results[0] || null : results, error: null };
     }
@@ -2728,6 +3373,8 @@ ipcMain.handle('sql-rpc', async (_, { fn, params }) => {
   try {
     const tedious = getTedious();
     if (!tedious) return { data: null, error: 'tedious paketi yuklenemedi' };
+    const settings = loadSettings();
+    const cfg = settings.sqlServerConfig;
     const p = params || {};
 
     if (fn === 'unlock_stale_payment_locks') {
@@ -2759,6 +3406,153 @@ ipcMain.handle('sql-rpc', async (_, { fn, params }) => {
       const rows = await runSql(`SELECT CONVERT(varchar(10), CAST(GETDATE() AS date), 23) AS d`, {});
       const d = rows?.[0]?.d;
       return { data: d || new Date().toISOString().slice(0, 10), error: null };
+    }
+
+    if (fn === 'start_shift') {
+      const branchId = String(p.p_branch_id || '');
+      const tenantId = String(p.p_tenant_id || '');
+      const openedBy = String(p.p_opened_by || '');
+      if (!branchId || !tenantId) {
+        return { data: null, error: 'branch_id ve tenant_id zorunlu' };
+      }
+      const bizRows = await runSql(
+        `SELECT CONVERT(varchar(10), CAST(GETDATE() AS date), 23) AS d`,
+        {},
+      );
+      const businessDate = bizRows?.[0]?.d || new Date().toISOString().slice(0, 10);
+      const existing = await runSql(
+        `SELECT TOP 1 * FROM shifts WHERE tenant_id = @tid AND branch_id = @bid AND status = N'open' ORDER BY opened_at DESC`,
+        {
+          tid: { type: tedious.TYPES.UniqueIdentifier, value: tenantId },
+          bid: { type: tedious.TYPES.UniqueIdentifier, value: branchId },
+        },
+      );
+      if (existing && existing[0]) {
+        return { data: existing[0], error: null };
+      }
+      let shiftNo = Number(p.p_shift_no) || 1;
+      let shiftName = `Vardiya ${shiftNo}`;
+      let defId = p.p_shift_definition_id || null;
+      if (defId) {
+        const defs = await runSql(
+          `SELECT TOP 1 id, shift_no, name FROM shift_definitions WHERE id = @id AND tenant_id = @tid`,
+          {
+            id: { type: tedious.TYPES.UniqueIdentifier, value: defId },
+            tid: { type: tedious.TYPES.UniqueIdentifier, value: tenantId },
+          },
+        );
+        if (defs && defs[0]) {
+          shiftNo = Number(defs[0].shift_no) || shiftNo;
+          shiftName = defs[0].name || shiftName;
+          defId = defs[0].id;
+        }
+      }
+      const newId = require('crypto').randomUUID();
+      const openingCash = Number(p.p_opening_cash) || 0;
+      await runSql(
+        `INSERT INTO shifts (id, tenant_id, branch_id, shift_definition_id, shift_no, shift_name, business_date,
+          terminal_id, terminal_name, opened_by, opening_cash, opening_notes, status)
+         VALUES (@id, @tid, @bid, @defid, @sno, @sname, @bdate, @termid, @tname, @oby, @ocash, @onotes, N'open')`,
+        {
+          id: { type: tedious.TYPES.UniqueIdentifier, value: newId },
+          tid: { type: tedious.TYPES.UniqueIdentifier, value: tenantId },
+          bid: { type: tedious.TYPES.UniqueIdentifier, value: branchId },
+          defid: defId
+            ? { type: tedious.TYPES.UniqueIdentifier, value: defId }
+            : { type: tedious.TYPES.NVarChar, value: null },
+          sno: { type: tedious.TYPES.Int, value: shiftNo },
+          sname: { type: tedious.TYPES.NVarChar, value: shiftName },
+          bdate: { type: tedious.TYPES.NVarChar, value: businessDate },
+          termid: { type: tedious.TYPES.NVarChar, value: p.p_terminal_id || null },
+          tname: { type: tedious.TYPES.NVarChar, value: p.p_terminal_name || null },
+          oby: openedBy
+            ? { type: tedious.TYPES.UniqueIdentifier, value: openedBy }
+            : { type: tedious.TYPES.NVarChar, value: null },
+          ocash: { type: tedious.TYPES.Decimal, value: openingCash },
+          onotes: { type: tedious.TYPES.NVarChar, value: p.p_notes || null },
+        },
+      );
+      const row = await sqlSelectRowById('shifts', newId, cfg);
+      return { data: row, error: null };
+    }
+
+    if (fn === 'close_shift') {
+      const shiftId = String(p.p_shift_id || '');
+      if (!shiftId) return { data: null, error: 'p_shift_id zorunlu' };
+      const closingCash = Number(p.p_closing_cash) || 0;
+      const closedBy = String(p.p_closed_by || '');
+      const payRows = await runSql(
+        `SELECT payment_method, SUM(amount) AS total FROM payment_transactions pt
+         INNER JOIN orders o ON o.id = pt.order_id
+         INNER JOIN shifts s ON s.id = @sid
+         WHERE pt.created_at >= s.opened_at AND o.branch_id = s.branch_id
+         GROUP BY payment_method`,
+        { sid: { type: tedious.TYPES.UniqueIdentifier, value: shiftId } },
+      );
+      let cashRev = 0;
+      let cardRev = 0;
+      let openRev = 0;
+      for (const pr of payRows || []) {
+        const m = String(pr.payment_method || '');
+        const t = Number(pr.total) || 0;
+        if (m === 'cash') cashRev += t;
+        else if (m === 'credit_card') cardRev += t;
+        else if (m === 'open_account') openRev += t;
+      }
+      const totalRev = cashRev + cardRev + openRev;
+      await runSql(
+        `UPDATE shifts SET status = N'closed', closed_at = GETUTCDATE(), closing_cash = @ccash,
+          closed_by = @cby, cash_revenue = @cash, card_revenue = @card, open_account_revenue = @open,
+          total_revenue = @tot, expected_cash = opening_cash + @cash, cash_difference = @ccash - (opening_cash + @cash),
+          order_count = (SELECT COUNT(*) FROM orders o WHERE o.branch_id = shifts.branch_id AND o.created_at >= shifts.opened_at)
+         WHERE id = @sid`,
+        {
+          sid: { type: tedious.TYPES.UniqueIdentifier, value: shiftId },
+          ccash: { type: tedious.TYPES.Decimal, value: closingCash },
+          cby: closedBy
+            ? { type: tedious.TYPES.UniqueIdentifier, value: closedBy }
+            : { type: tedious.TYPES.NVarChar, value: null },
+          cash: { type: tedious.TYPES.Decimal, value: cashRev },
+          card: { type: tedious.TYPES.Decimal, value: cardRev },
+          open: { type: tedious.TYPES.Decimal, value: openRev },
+          tot: { type: tedious.TYPES.Decimal, value: totalRev },
+        },
+      );
+      const row = await sqlSelectRowById('shifts', shiftId, cfg);
+      return { data: row, error: null };
+    }
+
+    if (fn === 'close_business_day') {
+      const branchId = String(p.p_branch_id || '');
+      const tenantId = String(p.p_tenant_id || '');
+      const closedBy = String(p.p_closed_by || '');
+      const biz =
+        p.p_business_date ||
+        (await runSql(`SELECT CONVERT(varchar(10), CAST(GETDATE() AS date), 23) AS d`, {}))?.[0]?.d;
+      const openCnt = await runSql(
+        `SELECT COUNT(*) AS cnt FROM shifts WHERE branch_id = @bid AND status = N'open'`,
+        { bid: { type: tedious.TYPES.UniqueIdentifier, value: branchId } },
+      );
+      if (openCnt && openCnt[0] && Number(openCnt[0].cnt) > 0) {
+        return { data: null, error: 'Acik vardiya var; once vardiyalari kapatin' };
+      }
+      const newId = require('crypto').randomUUID();
+      await runSql(
+        `INSERT INTO daily_closures (id, tenant_id, branch_id, business_date, closed_by, notes, status)
+         VALUES (@id, @tid, @bid, @bdate, @cby, @notes, N'closed')`,
+        {
+          id: { type: tedious.TYPES.UniqueIdentifier, value: newId },
+          tid: { type: tedious.TYPES.UniqueIdentifier, value: tenantId },
+          bid: { type: tedious.TYPES.UniqueIdentifier, value: branchId },
+          bdate: { type: tedious.TYPES.NVarChar, value: biz },
+          cby: closedBy
+            ? { type: tedious.TYPES.UniqueIdentifier, value: closedBy }
+            : { type: tedious.TYPES.NVarChar, value: null },
+          notes: { type: tedious.TYPES.NVarChar, value: p.p_notes || null },
+        },
+      );
+      const row = await sqlSelectRowById('daily_closures', newId, cfg);
+      return { data: row, error: null };
     }
 
     return { data: null, error: `Bilinmeyen RPC: ${fn}` };
@@ -3044,6 +3838,22 @@ ipcMain.handle('get-device-fingerprint', async () => {
 
 app.whenReady().then(() => {
   startPrintAgent();
+  if (isElectronSqlServerMode()) {
+    try {
+      const norm = normalizeSqlServerConfig(loadSettings().sqlServerConfig);
+      void applySqlSchemaPatches(norm)
+        .then((patch) => {
+          paLog(
+            'info',
+            `[sql-patch] acilis: ${patch.executed} batch` +
+              (patch.errors.length ? `, ${patch.errors.length} uyari` : ''),
+          );
+        })
+        .catch((e) => paLog('error', '[sql-patch] acilis hata', e?.message || e));
+    } catch (e) {
+      paLog('error', '[sql-patch] acilis config', e?.message || e);
+    }
+  }
   createWindow();
   setupAutoUpdater();
   initCidListener();

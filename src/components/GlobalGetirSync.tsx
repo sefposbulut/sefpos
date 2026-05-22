@@ -7,6 +7,7 @@ import {
   isGetirRateLimited,
 } from '../lib/getirApi';
 import { isPageVisible, startAdaptivePoller } from '../lib/pollSchedule';
+import { isSqlServerMode } from '../lib/sqlDb';
 
 export const GETIR_STORE_STATUS_EVENT = 'sefpos:getir-store-status';
 export const GETIR_ORDERS_POLLED_EVENT = 'sefpos:getir-orders-polled';
@@ -29,7 +30,7 @@ export function GlobalGetirSync() {
   const orderTickRef = useRef(0);
 
   useEffect(() => {
-    if (!tenant?.id) return;
+    if (!tenant?.id || isSqlServerMode()) return;
 
     let stopped = false;
 

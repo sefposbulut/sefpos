@@ -313,9 +313,10 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
         group_id: groupId,
       }));
 
-      const tableInsertResult = await supabase.from('restaurant_tables').insert(tables);
-      if (tableInsertResult.error) {
-        setError('Masalar oluşturulamadı: ' + tableInsertResult.error.message);
+      const { insertRestaurantTablesSkipDuplicates } = await import('../lib/restaurantTableBulk');
+      const tableResult = await insertRestaurantTablesSkipDuplicates(tables);
+      if (tableResult.error) {
+        setError('Masalar oluşturulamadı: ' + tableResult.error);
         setLoading(false);
         return;
       }

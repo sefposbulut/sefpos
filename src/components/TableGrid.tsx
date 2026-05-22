@@ -6,7 +6,7 @@ import { Database } from '../lib/supabase';
 import { Plus, Clock, Lock, ZoomIn, ZoomOut, ScanBarcode, Truck, Eye, EyeOff, Receipt, Maximize2 } from 'lucide-react';
 import { useUiPrefs, setHeaderHidden } from '../lib/uiPrefs';
 import { ReprintReceiptModal } from './ReprintReceiptModal';
-import { isLocalMode, isOfflineMode } from '../lib/sqlDb';
+import { isLocalMode, isOfflineMode, isSqlServerMode } from '../lib/sqlDb';
 import { warmOrderPanelBundle, bulkWarmOrderItemsForOrders } from '../lib/orderPanelWarm';
 import { LiveDuration } from './LiveDuration';
 import { getTrialInfo, formatTrialRemaining, type TenantTrialFields } from '../lib/tenantTrial';
@@ -14,10 +14,15 @@ import { APP_DISPLAY_VERSION } from '../lib/appVersion';
 import {
   tableGridRuntimeCache,
   readPersistedTableGridSnapshot,
+  TABLE_GRID_TABLE_COLS,
+  enrichTableGridOrders,
+  fetchRestaurantTablesForBranch,
   type TableGridCachedRow,
   type TableGroupCached,
+  type TableGridOrderEmbed,
 } from '../lib/tableGridData';
 import { unlockStalePaymentLocksRpc } from '../lib/paymentLock';
+import { insertRestaurantTablesSkipDuplicates } from '../lib/restaurantTableBulk';
 import { subscribeLiveTick } from '../lib/liveTick';
 
 /** Her masa yenilemesinde RPC cagirmayalim — POS akisini yavaslatiyordu. */
@@ -253,7 +258,8 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
     if (!tenant || !activeBranch) return;
     const cacheKey = `${tenant.id}:${activeBranch.id}`;
     // RAM yoksa sessionStorage'dan dene (ilk login + sekme yenilemesi icin kritik).
-    const snap = readSnapshotForKey(cacheKey);
+    // SQL modunda eski (bos) cloud onbellegini kullanma — Ayarlar’da 32 masa varken grid bos kalmasin.
+    const snap = isSqlServerMode() ? null : readSnapshotForKey(cacheKey);
     if (snap) {
       setTableGroups(snap.groups);
       setTables(snap.tables);
@@ -319,19 +325,6 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
 
     await maybeUnlockStalePaymentLocks();
 
-    let tableQ = supabase
-      .from('restaurant_tables')
-      .select(`
-        id, table_number, status, current_order_id, session_start,
-        group_id, tenant_id, branch_id, created_at, capacity, size, payment_locked,
-        orders!restaurant_tables_current_order_id_fkey(
-          id, total_amount, order_number, payment_status
-        )
-      `)
-      .eq('tenant_id', tenant.id)
-      .eq('branch_id', activeBranch.id)
-      .order('table_number');
-
     const groupQ = supabase
       .from('table_groups')
       .select('id, name, color, branch_id, prefix')
@@ -339,11 +332,10 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
       .or(`branch_id.eq.${activeBranch.id},branch_id.is.null`)
       .order('name');
 
-    const [groupsRes, tablesRes] = await Promise.all([groupQ, tableQ]);
-
-    if (import.meta.env.DEV && tablesRes.error) {
-      console.error('[ŞefPOS] restaurant_tables sorgu hatası:', tablesRes.error.message, tablesRes.error);
-    }
+    const [groupsRes, tableRows] = await Promise.all([
+      groupQ,
+      fetchRestaurantTablesForBranch(tenant.id, activeBranch.id),
+    ]);
 
     if (groupsRes.data) {
       setTableGroups(groupsRes.data as TableGroup[]);
@@ -355,10 +347,10 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
       }
     }
 
-    if (tablesRes.data) {
-      const mapped: TableWithOrder[] = tablesRes.data.map((t: any) => ({
+    if (tableRows.length > 0) {
+      const mapped: TableWithOrder[] = tableRows.map((t: any) => ({
         ...t,
-        order: t.orders ? t.orders : undefined,
+        order: t.order ? t.order : undefined,
       }));
       // Sadece kısmi ödemeli siparişler için payment_transactions çek;
       // tam ödenmiş veya boş masalar gereksiz round-trip yapmasın.
@@ -393,15 +385,31 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
       });
       // Aktif siparişleri TEK sorguda warm cache'e al; masaya tıklandığında sepet anında boyanır.
       bulkWarmOrderItemsForOrders(mapped.map((t) => t.current_order_id));
-    } else {
+    } else if (!groupsRes.error) {
       setTables([]);
     }
 
     setLoading(false);
   }, [tenant, activeBranch]);
 
+  const tablesReloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
-    if (!tenant?.id || !activeBranch?.id || isLocalMode()) return;
+    const onTablesChanged = () => {
+      if (tablesReloadTimerRef.current) clearTimeout(tablesReloadTimerRef.current);
+      tablesReloadTimerRef.current = setTimeout(() => {
+        tablesReloadTimerRef.current = null;
+        void loadAll(false);
+      }, 800);
+    };
+    window.addEventListener('sefpos:tables-changed', onTablesChanged);
+    return () => {
+      window.removeEventListener('sefpos:tables-changed', onTablesChanged);
+      if (tablesReloadTimerRef.current) clearTimeout(tablesReloadTimerRef.current);
+    };
+  }, [loadAll]);
+
+  useEffect(() => {
+    if (!tenant?.id || !activeBranch?.id || isLocalMode() || isSqlServerMode()) return;
     let timer: ReturnType<typeof setTimeout> | null = null;
     const onVis = () => {
       if (document.visibilityState !== 'visible') return;
@@ -423,6 +431,52 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
     if (pendingUpdatesRef.current.size === 0) return;
     const ids = Array.from(pendingUpdatesRef.current);
     pendingUpdatesRef.current.clear();
+
+    if (isSqlServerMode()) {
+      const { data: tableRows } = await supabase
+        .from('restaurant_tables')
+        .select(TABLE_GRID_TABLE_COLS)
+        .in('id', ids);
+      if (!tableRows?.length) return;
+
+      const orderIds = [
+        ...new Set(
+          (tableRows as any[])
+            .map((t) => String(t.current_order_id || ''))
+            .filter((id) => id.length > 8),
+        ),
+      ];
+      const orderMap = new Map<string, TableGridOrderEmbed>();
+      if (orderIds.length > 0) {
+        const { data: orders } = await supabase
+          .from('orders')
+          .select('id, total_amount, order_number, payment_status')
+          .in('id', orderIds);
+        for (const o of orders || []) {
+          const row = o as Record<string, unknown>;
+          orderMap.set(String(row.id), {
+            id: String(row.id),
+            total_amount: Number(row.total_amount ?? 0),
+            order_number: String(row.order_number ?? ''),
+            payment_status: (row.payment_status as string | null) ?? null,
+          });
+        }
+        await enrichTableGridOrders(orderMap);
+      }
+
+      const updatedRows: TableWithOrder[] = (tableRows as any[]).map((t) => {
+        const oid = t.current_order_id ? String(t.current_order_id) : '';
+        const status = oid && t.status !== 'occupied' ? 'occupied' : t.status;
+        return {
+          ...t,
+          status,
+          order: oid ? orderMap.get(oid) : undefined,
+        };
+      });
+      const updatedMap = new Map(updatedRows.map((t) => [t.id, t]));
+      setTables((prev) => prev.map((t) => (updatedMap.has(t.id) ? (updatedMap.get(t.id) as TableWithOrder) : t)));
+      return;
+    }
 
     const { data } = await supabase
       .from('restaurant_tables')
@@ -538,12 +592,17 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
     // local mod dışında 30 sn'lik genel poll'a gerek yok; süre etiketleri
     // <LiveDuration> ile kendi başına yenilenir, masa state'i realtime gelir.
     let timer: ReturnType<typeof setInterval> | null = null;
-    if (isOfflineMode()) {
+    if (isLocalMode()) {
       timer = setInterval(() => {
         if (document.visibilityState === 'visible') void loadAll();
-      }, isLocalMode() ? 60_000 : 25_000);
+      }, 60_000);
       return () => {
         if (timer) clearInterval(timer);
+        if (updateTimerRef.current) clearTimeout(updateTimerRef.current);
+      };
+    }
+    if (isSqlServerMode()) {
+      return () => {
         if (updateTimerRef.current) clearTimeout(updateTimerRef.current);
       };
     }
@@ -739,10 +798,13 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
       num++;
     }
 
-    const { error } = await supabase.from('restaurant_tables').insert(tablesToCreate);
+    const { inserted, skipped, error } = await insertRestaurantTablesSkipDuplicates(tablesToCreate);
     if (error) {
-      alert('Hata: ' + error.message);
+      alert('Hata: ' + error);
       return;
+    }
+    if (inserted === 0 && skipped > 0) {
+      alert('Masalar zaten mevcut.');
     }
     loadAll();
   };

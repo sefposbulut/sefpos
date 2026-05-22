@@ -18,6 +18,43 @@ export function isTempOrderId(id: string | undefined): boolean {
   return !!id && id.startsWith(TEMP_ORDER_PREFIX);
 }
 
+/** Masa zaten dolu iken ilave urun: store bos olsa bile masadaki siparis id */
+export function resolveActiveOrderId(
+  orderFromStore: { id?: string } | null | undefined,
+  tableCurrentOrderId: string | null | undefined,
+): string | undefined {
+  const fromStore = orderFromStore?.id;
+  if (fromStore && !isTempOrderId(fromStore)) return fromStore;
+  const fromTable = tableCurrentOrderId ? String(tableCurrentOrderId) : '';
+  if (fromTable && !isTempOrderId(fromTable)) return fromTable;
+  return undefined;
+}
+
+/** Masa satırlarından sipariş tutarı (SQL'de orders.subtotal bazen 0 kalır). */
+export function sumOrderItemsSubtotal(
+  items: Array<{ total_amount?: number | null; unit_price?: number; quantity?: number }>,
+): number {
+  return items.reduce((sum, i) => {
+    const ta = Number(i.total_amount);
+    if (Number.isFinite(ta) && ta > 0) return sum + ta;
+    return sum + Number(i.unit_price || 0) * Number(i.quantity || 0);
+  }, 0);
+}
+
+export function orderTotalsFromItems<T extends Order>(
+  order: T,
+  items: Array<{ total_amount?: number | null; unit_price?: number; quantity?: number }>,
+): T {
+  const subtotal = sumOrderItemsSubtotal(items);
+  const discountAmount = Number(order.discount_amount) || 0;
+  return {
+    ...order,
+    subtotal,
+    tax_amount: 0,
+    total_amount: Math.max(0, subtotal - discountAmount),
+  } as T;
+}
+
 export function buildOptimisticOrderItem(
   item: CartItem,
   tenantId: string,
