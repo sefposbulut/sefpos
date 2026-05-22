@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { LogOut, User, Settings, ChevronDown, MapPin, Check, Building2, Zap, ZoomIn, ZoomOut, Bell, Headphones as HeadphonesIcon, X, Send, Sparkles, Phone, Mail, ArrowLeft, LayoutGrid, PlayCircle, Lock, Minimize2, UserCheck, Trash2 } from 'lucide-react';
+import { LogOut, User, Settings, ChevronDown, MapPin, Check, Building2, Zap, ZoomIn, ZoomOut, Bell, Headphones as HeadphonesIcon, X, Send, Sparkles, Phone, Mail, ArrowLeft, LayoutGrid, PlayCircle, Lock, Minimize2, UserCheck, Trash2, Home, ChevronRight } from 'lucide-react';
 import { WaiterCallBell } from './WaiterCallBell';
 import { supabase } from '../lib/supabase';
 import { getTrialInfo, formatTrialRemaining } from '../lib/tenantTrial';
@@ -20,6 +20,8 @@ import {
 import { publicAsset } from '../lib/assetUrl';
 import {
   ELECTRON_HEADER_BAR_CLASS,
+  ELECTRON_HEADER_CHIP_CLASS,
+  ELECTRON_HEADER_ICON_BTN_CLASS,
   ELECTRON_HEADER_LOGO_CLASS,
 } from '../lib/electronLayout';
 
@@ -268,6 +270,16 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
   };
 
   const totalUnread = unreadCount + systemUnreadCount;
+  const homePageKey = isElectron ? 'desktop-home' : 'tables';
+  const onTablesHub = isElectron && currentPage === 'tables';
+  const showBackNav =
+    !!currentPage &&
+    !!onBackToTables &&
+    (isElectron
+      ? currentPage !== 'desktop-home' && currentPage !== 'tables'
+      : currentPage !== 'tables');
+  const pageLabel = currentPage ? PAGE_LABELS[currentPage] : null;
+
   const userLabel = profile?.role === 'waiter'
     ? `Garson: ${profile?.full_name || user?.email?.split('@')[0] || 'Kullanıcı'}`
     : (profile?.full_name || user?.email?.split('@')[0] || 'Kullanıcı');
@@ -330,42 +342,83 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
                 }
               />
 
-              {/* Electron: ana sayfa; web: masalar — disindaki sayfalarda geri donus */}
-              {currentPage &&
-                currentPage !== (isElectron ? 'desktop-home' : 'tables') &&
-                onBackToTables && (
+              {onTablesHub && onBackToTables && (
+                <button
+                  type="button"
+                  onClick={onBackToTables}
+                  title="Ana sayfa"
+                  className={`hidden md:inline-flex ${ELECTRON_HEADER_CHIP_CLASS} px-2.5 py-2`}
+                >
+                  <Home className="w-4 h-4 opacity-90" strokeWidth={2.25} />
+                </button>
+              )}
+
+              {showBackNav && onBackToTables && (
                 <>
                   <button
                     type="button"
                     onClick={onBackToTables}
                     title={isElectron ? 'Ana sayfaya dön' : 'Masalara dön'}
-                    className="group hidden md:inline-flex items-center gap-2 pl-2 pr-3.5 py-1.5 rounded-full bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-600 hover:to-green-700 text-white shadow-sm hover:shadow transition active:scale-95 flex-shrink-0"
+                    className={
+                      isElectron
+                        ? `group hidden md:inline-flex ${ELECTRON_HEADER_CHIP_CLASS} pl-2 pr-3 py-1.5 flex-shrink-0`
+                        : 'group hidden md:inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-200 transition active:scale-95 flex-shrink-0'
+                    }
                   >
-                    <span className="w-7 h-7 rounded-full bg-white/20 flex items-center justify-center group-hover:-translate-x-0.5 transition-transform">
-                      <ArrowLeft className="w-4 h-4" strokeWidth={2.5} />
-                    </span>
-                    <span className="text-sm font-extrabold tracking-tight whitespace-nowrap">
-                      {isElectron ? 'Ana Sayfa' : 'Masalara Dön'}
+                    <ArrowLeft
+                      className={`w-4 h-4 flex-shrink-0 ${
+                        isElectron ? 'opacity-90 group-hover:-translate-x-0.5 transition-transform' : 'text-slate-600'
+                      }`}
+                      strokeWidth={2.25}
+                    />
+                    <span className="text-sm font-bold tracking-tight whitespace-nowrap">
+                      {isElectron ? 'Ana Sayfa' : 'Masalar'}
                     </span>
                   </button>
 
-                  {/* Breadcrumb: hangi sayfadayim — masaüstü icin */}
-                  {PAGE_LABELS[currentPage] && (
+                  {pageLabel && (
                     <div
-                      className={`hidden lg:flex items-center gap-1.5 text-xs font-semibold pl-1 ${
-                        isElectron ? 'text-white/80' : 'text-slate-400'
+                      className={`hidden lg:flex items-center gap-1 text-sm font-semibold min-w-0 ${
+                        isElectron ? 'text-white/85' : 'text-slate-500'
                       }`}
                     >
-                      <ChevronDown className={`w-3 h-3 -rotate-90 ${isElectron ? 'text-white/70' : ''}`} />
-                      <LayoutGrid className={`w-3.5 h-3.5 ${isElectron ? 'text-white/80' : 'text-slate-400'}`} />
-                      <span className={isElectron ? 'text-white' : 'text-slate-600'}>{PAGE_LABELS[currentPage]}</span>
+                      <ChevronRight className="w-3.5 h-3.5 opacity-60 flex-shrink-0" />
+                      <span className={isElectron ? 'text-white truncate' : 'text-slate-800 truncate'}>
+                        {pageLabel}
+                      </span>
                     </div>
                   )}
                 </>
               )}
+
+              {!showBackNav && !onTablesHub && pageLabel && currentPage !== homePageKey && (
+                <div
+                  className={`hidden md:flex items-center gap-2 pl-1 min-w-0 ${
+                    isElectron ? 'text-white' : 'text-slate-800'
+                  }`}
+                >
+                  <LayoutGrid className={`w-4 h-4 flex-shrink-0 ${isElectron ? 'text-white/80' : 'text-orange-500'}`} />
+                  <span className="text-sm font-bold truncate">{pageLabel}</span>
+                </div>
+              )}
+
+              {onTablesHub && (
+                <div className="hidden md:flex items-center gap-2 pl-0.5 min-w-0">
+                  <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-white/55">
+                    Salon
+                  </span>
+                  <span className="text-base font-extrabold text-white tracking-tight truncate">
+                    Masalar
+                  </span>
+                </div>
+              )}
             </div>
 
-            <div className="flex items-center space-x-1.5 md:space-x-2">
+            <div
+              className={`flex items-center gap-1 md:gap-1.5 ${
+                isElectron ? 'md:gap-2' : 'space-x-1.5 md:space-x-2'
+              }`}
+            >
               {impersonationTenantId && (
                 <div
                   className="flex items-center gap-1.5 max-w-[min(100%,14rem)] sm:max-w-xs rounded-lg border border-amber-200 bg-amber-50 px-2 py-1 text-[10px] sm:text-xs font-bold text-amber-950"
@@ -447,9 +500,9 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
                 <div className="relative ml-1 md:ml-0">
                   <button
                     onClick={() => setShowBranchMenu(!showBranchMenu)}
-                    className={`flex items-center gap-1 md:gap-1.5 px-1.5 py-1 md:px-3 md:py-2 rounded-md md:rounded-lg transition-all active:scale-95 max-w-[88px] md:max-w-none ${
+                    className={`flex items-center gap-1 md:gap-1.5 px-1.5 py-1 md:px-2.5 md:py-1.5 rounded-lg transition-all active:scale-95 max-w-[88px] md:max-w-none ${
                       isElectron
-                        ? 'bg-white/15 hover:bg-white/25 border border-white/25'
+                        ? ELECTRON_HEADER_CHIP_CLASS
                         : 'bg-orange-50 hover:bg-orange-100 border border-orange-200'
                     }`}
                   >
@@ -527,7 +580,7 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
 
               <div
                 className={`flex items-center gap-1.5 sm:gap-2 px-1.5 py-1.5 sm:px-2.5 md:px-3 rounded-lg max-w-[44px] sm:max-w-[160px] md:max-w-[240px] min-w-0 flex-shrink overflow-hidden ${
-                  isElectron ? 'bg-white/10' : 'bg-slate-50'
+                  isElectron ? `${ELECTRON_HEADER_CHIP_CLASS} !bg-white/8` : 'bg-slate-50 border border-slate-200'
                 }`}
                 title={userLabel}
               >
@@ -553,7 +606,11 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
               {(profile?.role === 'owner' || profile?.role === 'admin') && onOpenOnboarding && (
                 <button
                   onClick={onOpenOnboarding}
-                  className="hidden md:flex items-center gap-1.5 px-2.5 py-1.5 text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg transition-all active:scale-95 text-xs font-semibold"
+                  className={
+                    isElectron
+                      ? `hidden md:inline-flex ${ELECTRON_HEADER_CHIP_CLASS} px-2.5 py-1.5 text-xs font-semibold`
+                      : 'hidden md:flex items-center gap-1.5 px-2.5 py-1.5 text-orange-700 bg-orange-50 hover:bg-orange-100 border border-orange-200 rounded-lg transition-all active:scale-95 text-xs font-semibold'
+                  }
                   title="Hızlı Kurulum"
                 >
                   <Zap className="w-3.5 h-3.5" />
@@ -561,6 +618,13 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
                 </button>
               )}
 
+              <div
+                className={
+                  isElectron
+                    ? 'hidden sm:flex items-center rounded-lg bg-black/10 border border-white/10'
+                    : 'hidden sm:contents'
+                }
+              >
               <WaiterCallBell />
 
               <button
@@ -582,7 +646,7 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
                 }}
                 className={`relative p-1.5 md:p-2 rounded-lg transition-all active:scale-95 ${
                   isElectron
-                    ? 'text-white hover:bg-white/10'
+                    ? ELECTRON_HEADER_ICON_BTN_CLASS
                     : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
                 }`}
                 title="Bildirimler"
@@ -603,7 +667,7 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
                 onClick={() => { setShowSupport(!showSupport); setShowNotifications(false); }}
                 className={`hidden sm:inline-flex p-1.5 md:p-2 rounded-lg transition-all active:scale-95 ${
                   isElectron
-                    ? 'text-white hover:bg-white/10'
+                    ? ELECTRON_HEADER_ICON_BTN_CLASS
                     : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
                 }`}
                 title="Destek"
@@ -615,7 +679,7 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
                 onClick={onOpenSettings}
                 className={`hidden sm:inline-flex p-1.5 md:p-2 rounded-lg transition-all active:scale-95 ${
                   isElectron
-                    ? 'text-white hover:bg-white/10'
+                    ? ELECTRON_HEADER_ICON_BTN_CLASS
                     : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
                 }`}
                 title="Ayarlar"
@@ -625,8 +689,8 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
 
               {/* Arayuz olcegi (her ortamda calisir, kalicidir). */}
               <div
-                className={`hidden md:flex items-center gap-1 rounded-lg px-1 py-1 ${
-                  isElectron ? 'bg-white/15' : 'bg-slate-100'
+                className={`hidden md:flex items-center gap-0.5 rounded-lg px-0.5 py-0.5 ${
+                  isElectron ? 'border-l border-white/10 ml-0.5 pl-0.5' : 'bg-slate-100'
                 }`}
               >
                 <button
@@ -671,13 +735,14 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
                 onClick={() => setHeaderHidden(true)}
                 className={`hidden md:inline-flex p-1.5 md:p-2 rounded-lg transition-all active:scale-95 ${
                   isElectron
-                    ? 'text-white hover:bg-white/10'
+                    ? ELECTRON_HEADER_ICON_BTN_CLASS
                     : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
                 }`}
                 title="Tam Ekran POS modu (üst menüyü gizle)"
               >
                 <Minimize2 className="w-4 h-4 md:w-5 md:h-5" />
               </button>
+              </div>
 
               <button
                 onClick={() => {
@@ -692,10 +757,10 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
                   }
                   signOut();
                 }}
-                className={`flex items-center gap-1 md:gap-2 text-white px-2 py-1.5 md:px-4 md:py-2 rounded-lg hover:shadow-lg transition-all active:scale-95 flex-shrink-0 ${
+                className={`flex items-center gap-1 md:gap-2 px-2 py-1.5 md:px-3 md:py-2 rounded-lg transition-all active:scale-95 flex-shrink-0 ${
                   isElectron
-                    ? 'bg-white/20 hover:bg-white/30 border border-white/30'
-                    : 'bg-gradient-to-r from-red-600 to-red-700'
+                    ? `${ELECTRON_HEADER_CHIP_CLASS} hover:bg-white/22`
+                    : 'text-white bg-gradient-to-r from-red-600 to-red-700 hover:shadow-lg'
                 }`}
                 title="Çıkış"
               >

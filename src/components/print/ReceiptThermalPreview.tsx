@@ -1,6 +1,6 @@
 import { Eye, Printer, ZoomIn } from 'lucide-react';
 
-export type ReceiptPreviewSize = 'card' | 'editor';
+export type ReceiptPreviewSize = 'editor';
 
 type Props = {
   html: string;
@@ -16,9 +16,8 @@ export function ReceiptThermalPreview({
   offsetMm = 0,
   className = '',
 }: Props) {
-  const isEditor = size === 'editor';
   const paperMm = 72;
-  const zoom = isEditor ? 1.22 : 0.9;
+  const zoom = 1.15;
 
   return (
     <div
@@ -49,7 +48,7 @@ export function ReceiptThermalPreview({
 
       <div
         className="flex items-stretch justify-center gap-1 px-2 py-5 md:px-4 md:py-8 overflow-auto"
-        style={{ minHeight: isEditor ? 'min(78vh, 680px)' : 340 }}
+        style={{ minHeight: 'min(75vh, 640px)' }}
       >
         <div className="hidden md:flex w-6 shrink-0 items-center justify-center">
           <span className="text-[9px] font-bold text-slate-500 -rotate-90 whitespace-nowrap tracking-widest">
@@ -68,7 +67,7 @@ export function ReceiptThermalPreview({
               className="bg-white text-black shadow-2xl ring-2 ring-white/20"
               style={{
                 width: `${paperMm}mm`,
-                minHeight: isEditor ? '140mm' : '100mm',
+                minHeight: '130mm',
               }}
               dangerouslySetInnerHTML={{ __html: html }}
             />

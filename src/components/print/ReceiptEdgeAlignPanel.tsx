@@ -7,6 +7,8 @@ type Props = {
   /** Paket fişinde ek −1 mm sol düzeltme uygulanır */
   paketExtraMm?: number;
   accent?: 'orange' | 'emerald' | 'amber';
+  /** Ana menü «details» içinde — çift çerçeve olmasın */
+  embedded?: boolean;
 };
 
 const ACCENT = {
@@ -26,6 +28,7 @@ export function ReceiptEdgeAlignPanel({
   patchPrintStyle,
   paketExtraMm = 0,
   accent = 'orange',
+  embedded = false,
 }: Props) {
   const base = settings.printStyle.paperOffsetMm;
   const effective = base + paketExtraMm;
@@ -35,7 +38,13 @@ export function ReceiptEdgeAlignPanel({
   };
 
   return (
-    <div className={`rounded-xl border-2 p-4 md:p-5 space-y-4 ${ACCENT[accent]}`}>
+    <div
+      className={
+        embedded
+          ? 'space-y-4 pt-2'
+          : `rounded-xl border-2 p-4 md:p-5 space-y-4 ${ACCENT[accent]}`
+      }
+    >
       <div className="flex items-start gap-3">
         <div className="p-2 rounded-lg bg-white border border-slate-200 shadow-sm">
           <AlignHorizontalJustifyCenter className="w-5 h-5 text-slate-700" />

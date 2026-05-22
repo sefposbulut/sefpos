@@ -15,6 +15,7 @@ import {
   PRINT_SETTINGS_REMOTE_UPDATED_EVENT,
 } from '../lib/printService';
 import { ReceiptThermalPreview } from './print/ReceiptThermalPreview';
+import { ReceiptHubCard } from './print/ReceiptHubCard';
 import { ReceiptEdgeAlignPanel } from './print/ReceiptEdgeAlignPanel';
 import { ReceiptLiveStylePanel, type ReceiptEditorKind } from './print/ReceiptLiveStylePanel';
 import { previewAdisyonHtml, previewKitchenHtml, previewPaketHtml } from './print/receiptPreviewUtils';
@@ -385,67 +386,56 @@ export function PrinterSettings() {
 
       {view === 'hub' && (
         <>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {([
-              {
-                id: 'kitchen' as const,
-                title: 'Mutfak fişi',
-                sub: 'Sipariş gönderince mutfağa',
-                icon: <ChefHat className="w-5 h-5" />,
-                accent: 'border-orange-200 hover:border-orange-400 ring-orange-100',
-                html: previewKitchenHtml(settings),
-              },
-              {
-                id: 'adisyon' as const,
-                title: 'Adisyon fişi',
-                sub: 'Ödeme / müşteri fişi',
-                icon: <Receipt className="w-5 h-5" />,
-                accent: 'border-emerald-200 hover:border-emerald-400 ring-emerald-100',
-                html: previewAdisyonHtml(settings),
-              },
-              {
-                id: 'paket' as const,
-                title: 'Paket / kurye fişi',
-                sub: 'Paket servis ve teslimat',
-                icon: <ShoppingBag className="w-5 h-5" />,
-                accent: 'border-amber-200 hover:border-amber-400 ring-amber-100',
-                html: previewPaketHtml(settings),
-              },
-            ]).map((card) => (
-              <button
-                key={card.id}
-                type="button"
-                onClick={() => setView(card.id)}
-                className={`text-left rounded-2xl border-2 bg-white p-3 transition shadow-sm hover:shadow-md hover:ring-2 ${card.accent}`}
-              >
-                <div className="flex items-center justify-between mb-2">
-                  <span className="flex items-center gap-2 text-sm font-bold text-slate-800">
-                    {card.icon}
-                    {card.title}
-                  </span>
-                  <span className="text-[10px] font-bold uppercase text-orange-600">Ayarla →</span>
-                </div>
-                <ReceiptThermalPreview
-                  html={card.html}
-                  size="card"
-                  offsetMm={
-                    card.id === 'paket'
-                      ? settings.printStyle.paperOffsetMm - 1
-                      : settings.printStyle.paperOffsetMm
-                  }
-                />
-                <p className="text-[11px] text-slate-500 mt-2">{card.sub}</p>
-              </button>
-            ))}
+          <p className="text-sm text-slate-600 -mt-1 mb-1">
+            Bir fiş türüne tıklayın — büyük önizleme ve canlı ayarlar açılır. Aşağıdaki küçük önizlemeler kaydırılabilir.
+          </p>
+
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 xl:gap-6 items-stretch">
+            <ReceiptHubCard
+              title="Mutfak fişi"
+              subtitle="Sipariş gönderince mutfağa"
+              icon={<ChefHat className="w-5 h-5 text-white" />}
+              accent="orange"
+              html={previewKitchenHtml(settings)}
+              onClick={() => setView('kitchen')}
+            />
+            <ReceiptHubCard
+              title="Adisyon fişi"
+              subtitle="Ödeme ve müşteri fişi"
+              icon={<Receipt className="w-5 h-5 text-white" />}
+              accent="emerald"
+              html={previewAdisyonHtml(settings)}
+              onClick={() => setView('adisyon')}
+            />
+            <ReceiptHubCard
+              title="Paket / kurye fişi"
+              subtitle="Paket servis ve teslimat"
+              icon={<ShoppingBag className="w-5 h-5 text-white" />}
+              accent="amber"
+              html={previewPaketHtml(settings)}
+              onClick={() => setView('paket')}
+            />
           </div>
 
-          <ReceiptEdgeAlignPanel
-            settings={settings}
-            patchPrintStyle={patchPrintStyle}
-            accent="orange"
-          />
+          <div className="lg:hidden rounded-xl bg-slate-50 border border-dashed border-slate-300 px-4 py-3 text-center text-xs text-slate-600">
+            İpucu: Daha rahat ayar için bir fiş kartına dokunun — tam ekran önizleme ve kaydırıcılar açılır.
+          </div>
 
-          <div className="bg-white rounded-xl border border-slate-200 p-4 md:p-5">
+          <details className="rounded-xl border border-slate-200 bg-white overflow-hidden">
+            <summary className="cursor-pointer px-4 py-3 text-sm font-bold text-slate-700 hover:bg-slate-50">
+              Tüm fişler için kenar hizalama (yatay kayma)
+            </summary>
+            <div className="px-4 pb-4 border-t border-slate-100">
+              <ReceiptEdgeAlignPanel
+                settings={settings}
+                patchPrintStyle={patchPrintStyle}
+                accent="orange"
+                embedded
+              />
+            </div>
+          </details>
+
+          <div className="bg-white rounded-xl border border-slate-200 p-4 md:p-5 shadow-sm">
             <h4 className="text-sm font-bold text-slate-800 mb-3 flex items-center gap-2">
               <LayoutGrid className="w-4 h-4 text-slate-500" />
               Diğer ayarlar

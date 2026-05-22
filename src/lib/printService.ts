@@ -1439,7 +1439,7 @@ export async function printHtml(
           return { success: true };
         }
         lastErr = result.errorType || result.error || undefined;
-      } catch (err: any) {
+    } catch (err: any) {
         lastErr = err?.message;
       }
     }
@@ -1501,11 +1501,11 @@ export async function printHtml(
       const { data, error } = await supabase
         .from('print_jobs')
         .insert({
-          tenant_id: _currentTenantId || null,
-          branch_id: _currentBranchId || null,
-          html,
-          printer_name: printerName || '',
-          status: 'pending',
+        tenant_id: _currentTenantId || null,
+        branch_id: _currentBranchId || null,
+        html,
+        printer_name: printerName || '',
+        status: 'pending',
         })
         .select('id')
         .maybeSingle();

@@ -938,91 +938,102 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
         </div>
       )}
       {tableGroups.length > 0 && (
-        <div className="bg-white rounded-lg md:rounded-2xl shadow-md p-2 md:p-4 mb-3 md:mb-6">
-          <div className="flex items-center gap-1.5 md:gap-3">
-            <div
-              className="flex gap-2 md:gap-3 pb-0.5 md:pb-1 flex-1 min-w-0"
-              style={{ overflowX: 'scroll', WebkitOverflowScrolling: 'touch' as any, scrollbarWidth: 'none' }}
-            >
+        <div className="bg-white/90 backdrop-blur-sm rounded-xl md:rounded-2xl border border-slate-200/80 shadow-sm p-2 md:p-3 mb-3 md:mb-5">
+          <div className="flex items-center gap-2 md:gap-3">
+            <div className="flex items-center gap-1.5 shrink-0">
               {permissions.can_take_orders && permissions.can_process_payments && onNavigate && isModuleEnabled('quick-sale', tenant as any) && (
                 <button
                   onClick={() => onNavigate('quick-sale')}
                   title="Hızlı Satış / Barkod Oku"
                   aria-label="Hızlı Satış"
-                  className="p-2.5 md:p-3 rounded-lg md:rounded-xl flex items-center justify-center transition-all active:scale-95 border-2 bg-gradient-to-br from-amber-400 via-orange-500 to-red-500 text-white shadow-lg border-orange-600 hover:from-amber-500 hover:via-orange-600 hover:to-red-600 shrink-0"
+                  className="p-2.5 md:p-2.5 rounded-xl flex items-center justify-center transition-all active:scale-95 bg-orange-600 hover:bg-orange-700 text-white shadow-sm shrink-0"
                 >
-                  <ScanBarcode className="w-5 h-5 md:w-6 md:h-6" strokeWidth={2.5} />
+                  <ScanBarcode className="w-5 h-5 md:w-5 md:h-5" strokeWidth={2.25} />
                 </button>
               )}
               {showTakeawayButton && isModuleEnabled('takeaway', tenant as any) && (
                 <button
                   onClick={() => onNavigate ? onNavigate('takeaway') : createTakeawayOrder()}
-                  className="p-2.5 md:p-3 rounded-lg md:rounded-xl flex items-center justify-center transition-all active:scale-95 border-2 bg-gradient-to-br from-amber-400 via-orange-500 to-red-500 text-white shadow-lg border-orange-600 hover:from-amber-500 hover:via-orange-600 hover:to-red-600 shrink-0"
+                  className="p-2.5 md:p-2.5 rounded-xl flex items-center justify-center transition-all active:scale-95 bg-slate-800 hover:bg-slate-900 text-white shadow-sm shrink-0"
                   aria-label="Paket Servis"
                   title="Paket Servis"
                 >
-                  <Truck className="w-5 h-5 md:w-6 md:h-6" strokeWidth={2.2} />
+                  <Truck className="w-5 h-5 md:w-5 md:h-5" strokeWidth={2.2} />
                 </button>
               )}
+            </div>
+
+            <div
+              className="flex gap-1 md:gap-1.5 p-1 md:p-1.5 flex-1 min-w-0 rounded-xl bg-slate-100/90 border border-slate-200/70"
+              style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch' as any, scrollbarWidth: 'none' }}
+            >
               <button
                 onClick={() => setSelectedGroup(null)}
-                className={`px-4 py-2.5 md:px-6 md:py-3.5 rounded-lg md:rounded-xl font-black whitespace-nowrap transition-all text-sm md:text-base active:scale-95 border-2 shrink-0 ${
+                className={`px-3 py-2 md:px-4 md:py-2.5 rounded-lg font-bold whitespace-nowrap transition-all text-xs md:text-sm active:scale-[0.98] shrink-0 ${
                   selectedGroup === null
-                    ? 'bg-gradient-to-r from-green-500 to-green-600 text-white shadow-lg border-green-700 hover:from-green-600 hover:to-green-700'
-                    : 'bg-gradient-to-r from-green-500 to-green-600 text-white shadow-lg border-green-700 hover:from-green-600 hover:to-green-700 opacity-90'
+                    ? 'bg-white text-orange-700 shadow-sm ring-1 ring-orange-200/80'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
                 }`}
               >
-                AÇIK MASALAR
-                <span className="ml-1.5 md:ml-2 text-xs md:text-sm opacity-90">
-                  ({groupStats.get(null)?.occupied ?? 0})
+                Açık masalar
+                <span
+                  className={`ml-1.5 tabular-nums text-[11px] md:text-xs font-extrabold ${
+                    selectedGroup === null ? 'text-orange-600' : 'text-slate-400'
+                  }`}
+                >
+                  {groupStats.get(null)?.occupied ?? 0}
                 </span>
               </button>
               {tableGroups.map((group) => {
                 const stats = groupStats.get(group.id) || { available: 0, occupied: 0, total: 0 };
+                const active = selectedGroup === group.id;
                 return (
                   <button
                     key={group.id}
                     onClick={() => setSelectedGroup(group.id)}
-                    className={`px-4 py-2.5 md:px-6 md:py-3.5 rounded-lg md:rounded-xl font-bold whitespace-nowrap transition-all text-sm md:text-base active:scale-95 shrink-0 ${
-                      selectedGroup === group.id
-                        ? 'text-white shadow-lg'
-                        : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                    className={`px-3 py-2 md:px-4 md:py-2.5 rounded-lg font-bold whitespace-nowrap transition-all text-xs md:text-sm active:scale-[0.98] shrink-0 ${
+                      active
+                        ? 'text-white shadow-sm'
+                        : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
                     }`}
-                    style={{ backgroundColor: selectedGroup === group.id ? group.color : undefined }}
+                    style={
+                      active
+                        ? { backgroundColor: group.color, boxShadow: '0 1px 3px rgba(0,0,0,0.12)' }
+                        : undefined
+                    }
                   >
                     {group.name}
-                    <span className="ml-1.5 md:ml-2 text-xs md:text-sm opacity-90">
-                      ({stats.available} / {stats.total})
+                    <span className={`ml-1.5 tabular-nums text-[11px] md:text-xs font-semibold ${active ? 'text-white/90' : 'text-slate-400'}`}>
+                      {stats.available}/{stats.total}
                     </span>
                   </button>
                 );
               })}
             </div>
 
-
             <button
               onClick={() => setShowReprintModal(true)}
-              className="hidden md:flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-white border border-orange-300 text-orange-600 hover:bg-orange-50 shrink-0 active:scale-95 text-xs font-bold shadow-sm"
+              className="hidden md:flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white border border-slate-200 text-slate-700 hover:border-orange-300 hover:text-orange-700 hover:bg-orange-50/80 shrink-0 active:scale-95 text-xs font-bold transition-colors"
               title="Geçmiş siparişlerin adisyonunu yeniden bas"
             >
-              <Receipt className="w-3.5 h-3.5" />
-              Adisyon Yazdır
+              <Receipt className="w-3.5 h-3.5 text-orange-600" />
+              Adisyon
             </button>
 
-            <div className="hidden md:flex items-center gap-1 bg-gray-100 rounded-lg p-1 shrink-0">
+            <div className="hidden md:flex items-center gap-0.5 bg-slate-100 rounded-xl p-1 border border-slate-200/80 shrink-0">
               <button
                 onClick={() => { setDesktopColsTouched(true); setDesktopTableCols(prev => Math.min(12, prev + 1)); }}
                 disabled={desktopTableCols >= 12}
-                className="w-7 h-7 flex items-center justify-center rounded-md bg-white shadow text-gray-600 hover:bg-gray-50 active:scale-90 disabled:opacity-30"
+                className="w-8 h-8 flex items-center justify-center rounded-lg bg-white text-slate-600 hover:bg-white shadow-sm active:scale-90 disabled:opacity-30"
                 title="Küçült"
               >
                 <ZoomOut className="w-3.5 h-3.5" />
               </button>
-              <span className="text-xs font-bold text-gray-600 w-4 text-center">{desktopTableCols}</span>
+              <span className="text-xs font-bold text-slate-600 w-5 text-center tabular-nums">{desktopTableCols}</span>
               <button
                 onClick={() => { setDesktopColsTouched(true); setDesktopTableCols(prev => Math.max(3, prev - 1)); }}
                 disabled={desktopTableCols <= 3}
-                className="w-7 h-7 flex items-center justify-center rounded-md bg-white shadow text-gray-600 hover:bg-gray-50 active:scale-90 disabled:opacity-30"
+                className="w-8 h-8 flex items-center justify-center rounded-lg bg-white text-slate-600 hover:bg-white shadow-sm active:scale-90 disabled:opacity-30"
                 title="Büyüt"
               >
                 <ZoomIn className="w-3.5 h-3.5" />
