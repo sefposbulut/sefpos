@@ -8,6 +8,7 @@ import {
   printOnlineOrderReceiptFromEdge,
   printToAdisyonPrinter,
 } from '../../lib/printService';
+import { fetchOrderPanelItems } from '../../lib/sqlOrderItems';
 import { dispatchPrintToast } from '../../lib/printToasts';
 import {
   formatMoneyTr,
@@ -47,33 +48,6 @@ interface Props {
   row: RecentActivityRow;
   onClose: () => void;
   onNavigate?: (page: string) => void;
-}
-
-async function fetchOrderItems(orderId: string): Promise<{ data: Record<string, unknown>[] | null; error: string | null }> {
-  const baseSelect =
-    'product_name, variant_name, quantity, unit_price, total_amount, notes, cancelled_at';
-
-  const withCancel = await supabase
-    .from('order_items')
-    .select(baseSelect)
-    .eq('order_id', orderId)
-    .is('cancelled_at', null)
-    .order('created_at', { ascending: true });
-
-  if (!withCancel.error) {
-    return { data: (withCancel.data || []) as Record<string, unknown>[], error: null };
-  }
-
-  const plain = await supabase
-    .from('order_items')
-    .select('product_name, variant_name, quantity, unit_price, total_amount, notes')
-    .eq('order_id', orderId)
-    .order('created_at', { ascending: true });
-
-  if (plain.error) {
-    return { data: null, error: plain.error.message };
-  }
-  return { data: (plain.data || []) as Record<string, unknown>[], error: null };
 }
 
 function buildPaymentSummary(
@@ -205,8 +179,8 @@ export function RecentActivityDetailModal({ row, onClose, onNavigate }: Props) {
           return;
         }
 
-        const [itemsResult, payRes, tableRes] = await Promise.all([
-          fetchOrderItems(orderId),
+        const [panelItems, payRes, tableRes] = await Promise.all([
+          fetchOrderPanelItems(orderId),
           supabase
             .from('payment_transactions')
             .select('payment_method, amount')
@@ -222,12 +196,11 @@ export function RecentActivityDetailModal({ row, onClose, onNavigate }: Props) {
         ]);
 
         if (cancelled) return;
-        if (itemsResult.error) {
-          setLoadError('Kalemler okunamadı');
-          return;
-        }
 
         const o = order as Record<string, unknown>;
+        const activeItems = (panelItems || []).filter(
+          (it: { cancelled_at?: string | null }) => !it.cancelled_at,
+        );
         const tableNum = (tableRes.data as { table_number?: string | number } | null)?.table_number;
         const orderType = String(o.order_type || '');
         const txs = ((payRes.data || []) as { payment_method: string; amount: number }[]).map((t) => ({
@@ -256,13 +229,16 @@ export function RecentActivityDetailModal({ row, onClose, onNavigate }: Props) {
           tax: Number(o.tax_amount) || undefined,
           discount: Number(o.discount_amount) || undefined,
           total: Number(o.total_amount) || row.amount,
-          items: (itemsResult.data || []).map((it) => ({
-            name: String(it.product_name || 'Ürün'),
-            variant: it.variant_name ? String(it.variant_name) : null,
-            qty: Number(it.quantity) || 1,
-            total: Number(it.total_amount) || 0,
-            notes: it.notes ? String(it.notes) : null,
-          })),
+          items: activeItems.map((it: Record<string, unknown>) => {
+            const products = it.products as { name?: string } | null | undefined;
+            return {
+              name: String(products?.name || 'Ürün'),
+              variant: it.variant_name ? String(it.variant_name) : null,
+              qty: Number(it.quantity) || 1,
+              total: Number(it.total_amount) || 0,
+              notes: it.notes ? String(it.notes) : null,
+            };
+          }),
         });
       } catch (e) {
         console.warn('[ŞefPOS] işlem detayı:', e);

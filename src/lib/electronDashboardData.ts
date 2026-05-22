@@ -145,11 +145,11 @@ export async function fetchElectronDashboardSnapshot(
     .gte('created_at', yesterday.start)
     .lte('created_at', yesterday.end);
 
+  // online_orders şemasında branch_id yok — yalnızca tenant
   let onlinePendingQ = supabase
     .from('online_orders')
     .select('id', { count: 'exact', head: true })
     .eq('tenant_id', tenantId)
-    .eq('branch_id', branchId)
     .in('status', ['new', 'scheduled_new', 'verified', 'accepted', 'preparing']);
 
   const [tablesRes, ordersTodayRes, ordersYesterdayRes, onlinePendingRes] = await Promise.all([
@@ -216,7 +216,6 @@ export async function fetchElectronRecentActivity(
       .from('online_orders')
       .select('id, customer_name, status, total_amount, created_at, platform_order_number, payment_status')
       .eq('tenant_id', tenantId)
-      .eq('branch_id', branchId)
       .order('created_at', { ascending: false })
       .limit(perSource),
   ]);
