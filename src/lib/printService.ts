@@ -25,6 +25,16 @@ export interface PrintStyleSettings {
   kitchenFooterExtra: string;
   receiptFooterExtra: string;
   showKitchenOrderNumber: boolean;
+  /** Mutfak: restoran adı ve masa başlığı kalın */
+  kitchenTitleBold: boolean;
+  /** Mutfak: ürün satırı kalın */
+  kitchenProductBold: boolean;
+  /** Adisyon / paket: üst başlık kalın */
+  receiptTitleBold: boolean;
+  /** Adisyon / paket: ürün adı ve tutar kolonu kalın */
+  receiptProductBold: boolean;
+  /** Adisyon / paket: TOPLAM satırı kalın */
+  receiptTotalBold: boolean;
   /**
    * 80 mm termal kağıtta yatay yazı kayması (mm).
    *
@@ -182,8 +192,18 @@ export const DEFAULT_PRINT_STYLE: PrintStyleSettings = {
   kitchenFooterExtra: '',
   receiptFooterExtra: '',
   showKitchenOrderNumber: true,
+  kitchenTitleBold: true,
+  kitchenProductBold: true,
+  receiptTitleBold: true,
+  receiptProductBold: true,
+  receiptTotalBold: true,
   paperOffsetMm: 0,
 };
+
+function printWeight(bold: boolean, extra = false): number {
+  if (!bold) return 500;
+  return extra ? 900 : 800;
+}
 
 /**
  * `paperOffsetMm` değerini güvenli aralıkta tutar (-15 mm … +15 mm).
@@ -234,6 +254,11 @@ function normalizePrintSettings(raw: Partial<PrintSettings> & Record<string, unk
     printStyle: (() => {
       const merged = { ...DEFAULT_PRINT_STYLE, ...(ps.printStyle && typeof ps.printStyle === 'object' ? ps.printStyle : {}) };
       merged.paperOffsetMm = clampOffsetMm(merged.paperOffsetMm);
+      if (merged.kitchenTitleBold === undefined) merged.kitchenTitleBold = true;
+      if (merged.kitchenProductBold === undefined) merged.kitchenProductBold = true;
+      if (merged.receiptTitleBold === undefined) merged.receiptTitleBold = true;
+      if (merged.receiptProductBold === undefined) merged.receiptProductBold = true;
+      if (merged.receiptTotalBold === undefined) merged.receiptTotalBold = true;
       return merged;
     })(),
   };
@@ -908,19 +933,21 @@ function kitchenStyleBlock(st: PrintStyleSettings): string {
   const noteFs = Math.max(st.kitchenBodyPx + 2, 14);
   const optFs = Math.max(st.kitchenBodyPx + 1, 12);
   const off = clampOffsetMm(st.paperOffsetMm);
+  const wTitle = printWeight(st.kitchenTitleBold, true);
+  const wProduct = printWeight(st.kitchenProductBold, true);
   // Termal yazıcılarda siyah dolgu (background:#000) sönük/silik basıyor.
   // Bu yüzden notlar artık BEYAZ arka plan + KALIN SİYAH ÇERÇEVE + SİYAH YAZI
   // olarak basılır. Hem net okunur hem termal şerit ekonomik kullanılır.
   return `<style>
   ${scope} { font-family: Arial, Helvetica, "Segoe UI", sans-serif; font-size: ${st.kitchenBodyPx}px !important; line-height: 1.3; color:#000; -webkit-print-color-adjust: exact; print-color-adjust: exact; margin-left: ${off}mm; margin-right: ${-off}mm; }
-  ${scope} .xlarge { font-size: ${st.kitchenTitlePx}px !important; }
-  ${scope} .large { font-size: ${Math.max(st.kitchenBodyPx + 1, 13)}px !important; }
-  ${scope} .row.bold.xlarge { font-size: ${st.kitchenItemPx}px !important; }
+  ${scope} .xlarge { font-size: ${st.kitchenTitlePx}px !important; font-weight: ${wTitle} !important; }
+  ${scope} .large { font-size: ${Math.max(st.kitchenBodyPx + 1, 13)}px !important; font-weight: ${wTitle} !important; }
+  ${scope} .row.bold.xlarge { font-size: ${st.kitchenItemPx}px !important; font-weight: ${wTitle} !important; }
   ${scope} .subtitle { font-size: ${Math.max(st.kitchenBodyPx - 1, 10)}px !important; text-align: center; margin: 2px 0; }
   ${scope} .header-meta { font-size: ${Math.max(st.kitchenBodyPx - 1, 10)}px !important; }
   ${scope} .item-block { padding: 4px 0 6px 0; }
-  ${scope} .item-row .name { width: 80% !important; font-size: ${st.kitchenItemPx}px !important; font-weight: 900 !important; color:#000 !important; }
-  ${scope} .item-row .qty  { width: 20% !important; text-align: right !important; font-size: ${st.kitchenItemPx}px !important; font-weight: 900 !important; color:#000 !important; }
+  ${scope} .item-row .name { width: 80% !important; font-size: ${st.kitchenItemPx}px !important; font-weight: ${wProduct} !important; color:#000 !important; }
+  ${scope} .item-row .qty  { width: 20% !important; text-align: right !important; font-size: ${st.kitchenItemPx}px !important; font-weight: ${printWeight(st.kitchenProductBold)} !important; color:#000 !important; }
   ${scope} .opt-line { font-size: ${optFs}px !important; font-weight: 800; color:#000; padding: 3px 0 3px 10px; border-left: 4px solid #000; margin: 4px 0 4px 6px; }
   ${scope} .note-line { font-size: ${noteFs}px !important; font-weight: 900 !important; color:#000 !important; background:#fff; border: 2px solid #000; padding: 5px 7px; margin: 5px 0 5px 4px; border-radius: 2px; letter-spacing: 0.3px; }
   ${scope} .item-sep { border: 0; border-top: 1px dashed #000; margin: 4px 0 0 0; }
@@ -933,17 +960,22 @@ function kitchenStyleBlock(st: PrintStyleSettings): string {
 function receiptStyleBlock(st: PrintStyleSettings): string {
   const scope = '.sefpos-receipt-scope';
   const off = clampOffsetMm(st.paperOffsetMm);
+  const wTitle = printWeight(st.receiptTitleBold, true);
+  const wBody = printWeight(st.receiptProductBold);
+  const wTotal = printWeight(st.receiptTotalBold, true);
   return `<style>
   ${scope} { font-family: Arial, Helvetica, "Segoe UI", sans-serif; font-size: ${st.receiptBodyPx}px !important; line-height: 1.3; color:#000; margin-left: ${off}mm; margin-right: ${-off}mm; }
-  ${scope} .xlarge { font-size: ${st.receiptTitlePx}px !important; }
-  ${scope} .large { font-size: ${Math.max(st.receiptBodyPx + 2, 13)}px !important; }
+  ${scope} .xlarge { font-size: ${st.receiptTitlePx}px !important; font-weight: ${wTitle} !important; }
+  ${scope} .large { font-size: ${Math.max(st.receiptBodyPx + 2, 13)}px !important; font-weight: ${wTitle} !important; }
+  ${scope} .bold { font-weight: ${wBody} !important; }
   ${scope} .subtitle { font-size: ${Math.max(st.receiptBodyPx - 1, 10)}px !important; text-align: center; margin: 2px 0; }
   ${scope} .row { display: flex; justify-content: space-between; width: 100%; }
   ${scope} .total-row { display: flex; justify-content: space-between; width: 100%; }
   ${scope} .note { font-size: ${Math.max(st.receiptBodyPx, 11)}px !important; font-weight: 700; color:#000; }
   ${scope} .footer { font-size: ${Math.max(st.receiptBodyPx - 2, 9)}px !important; }
   ${scope} .extra-line { font-size: ${Math.max(st.receiptBodyPx - 1, 10)}px !important; text-align: center; margin: 4px 0; }
-  ${scope} .total-row { font-size: ${Math.max(st.receiptBodyPx + 2, 14)}px !important; }
+  ${scope} .total-row { font-size: ${Math.max(st.receiptBodyPx + 2, 14)}px !important; font-weight: ${wTotal} !important; }
+  ${scope} .total-row span { font-weight: ${wTotal} !important; }
 </style>`;
 }
 
@@ -951,21 +983,23 @@ function receiptStyleBlock(st: PrintStyleSettings): string {
  * Paket/kurye fişi: tutar ve iki sütunlu satırlar (tarih, sipariş no) sağa yapışmasın.
  * Electron yazdırıcı sarmalayıcısı `display:table-cell` kullanır; yüzde genişlikler buna göre.
  */
-function takeawayReceiptAlignStyles(): string {
+function takeawayReceiptAlignStyles(st: PrintStyleSettings): string {
+  const wProduct = printWeight(st.receiptProductBold);
+  const wTotal = printWeight(st.receiptTotalBold, true);
   return `<style>
     .sefpos-receipt-scope .row { width: 100% !important; }
-    .sefpos-receipt-scope .row .name  { width: 60% !important; font-weight: 800 !important; color: #000 !important; padding-right: 1mm !important; }
-    .sefpos-receipt-scope .row .qty   { width: 14% !important; font-weight: 700 !important; color: #000 !important; text-align: center !important; }
-    .sefpos-receipt-scope .row .price { width: 26% !important; font-weight: 800 !important; color: #000 !important; text-align: right !important; padding-right: 2mm !important; }
+    .sefpos-receipt-scope .row .name  { width: 60% !important; font-weight: ${wProduct} !important; color: #000 !important; padding-right: 1mm !important; }
+    .sefpos-receipt-scope .row .qty   { width: 14% !important; font-weight: ${printWeight(st.receiptProductBold)} !important; color: #000 !important; text-align: center !important; }
+    .sefpos-receipt-scope .row .price { width: 26% !important; font-weight: ${wProduct} !important; color: #000 !important; text-align: right !important; padding-right: 2mm !important; }
     .sefpos-receipt-scope .row > span:first-child:not(.name):not(.qty):not(.price) {
-      width: 74% !important; text-align: left !important; font-weight: 700 !important; color: #000 !important;
+      width: 74% !important; text-align: left !important; font-weight: ${printWeight(st.receiptProductBold)} !important; color: #000 !important;
     }
     .sefpos-receipt-scope .row > span:last-child:not(.name):not(.qty):not(.price) {
-      width: 26% !important; text-align: right !important; font-weight: 800 !important; color: #000 !important; padding-right: 2mm !important;
+      width: 26% !important; text-align: right !important; font-weight: ${wProduct} !important; color: #000 !important; padding-right: 2mm !important;
     }
-    .sefpos-receipt-scope .total-row { width: 100% !important; }
-    .sefpos-receipt-scope .total-row span:first-child { width: 74% !important; text-align: left !important; }
-    .sefpos-receipt-scope .total-row span:last-child  { width: 26% !important; text-align: right !important; padding-right: 2mm !important; }
+    .sefpos-receipt-scope .total-row { width: 100% !important; font-weight: ${wTotal} !important; }
+    .sefpos-receipt-scope .total-row span:first-child { width: 74% !important; text-align: left !important; font-weight: ${wTotal} !important; }
+    .sefpos-receipt-scope .total-row span:last-child  { width: 26% !important; text-align: right !important; padding-right: 2mm !important; font-weight: ${wTotal} !important; }
   </style>`;
 }
 
@@ -1632,7 +1666,7 @@ export function buildTakeawayHtml(opts: {
   // Paket fişi çoğu yazıcıda hafif sağa kaçar; -1 mm varsayılan sol düzeltme (Ayarlar’daki kayma üstüne).
   const stTakeaway = { ...st, paperOffsetMm: clampOffsetMm(st.paperOffsetMm - 1) };
   let html = receiptStyleBlock(stTakeaway);
-  html += takeawayReceiptAlignStyles();
+  html += takeawayReceiptAlignStyles(st);
   html += `<style>
     .sefpos-receipt-scope .item-divider { border-top: 1px dashed #000; margin: 3px 0; width: 100%; opacity: 0.85; }
     .sefpos-receipt-scope .cust-section { margin: 6px 0; padding: 4px 0; border-top: 1px dashed #000; border-bottom: 1px dashed #000; }

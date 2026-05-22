@@ -15,6 +15,8 @@ import {
   PRINT_SETTINGS_REMOTE_UPDATED_EVENT,
 } from '../lib/printService';
 import { ReceiptThermalPreview } from './print/ReceiptThermalPreview';
+import { ReceiptEdgeAlignPanel } from './print/ReceiptEdgeAlignPanel';
+import { ReceiptLiveStylePanel, type ReceiptEditorKind } from './print/ReceiptLiveStylePanel';
 import { previewAdisyonHtml, previewKitchenHtml, previewPaketHtml } from './print/receiptPreviewUtils';
 
 type PrinterSettingsView =
@@ -39,49 +41,6 @@ const PRINTER_TYPES = [
   { value: 'takeaway', label: 'Paket / Kurye', color: 'bg-amber-100 text-amber-700' },
   { value: 'custom', label: 'Özel', color: 'bg-slate-100 text-slate-700' },
 ];
-
-function PaperOffsetControl({
-  settings,
-  patchPrintStyle,
-  paketHint,
-}: {
-  settings: PrintSettings;
-  patchPrintStyle: (partial: Partial<PrintStyleSettings>) => void;
-  paketHint?: boolean;
-}) {
-  return (
-    <div>
-      <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Yatay kayma (mm)</label>
-      <div className="flex items-stretch gap-1">
-        <input
-          type="number"
-          min={-15}
-          max={15}
-          step={0.5}
-          value={settings.printStyle.paperOffsetMm}
-          onChange={(e) =>
-            patchPrintStyle({
-              paperOffsetMm: Math.min(15, Math.max(-15, Number(e.target.value) || 0)),
-            })
-          }
-          className="flex-1 px-2 py-2 rounded-lg border border-slate-200 text-sm"
-        />
-        <button
-          type="button"
-          onClick={() => patchPrintStyle({ paperOffsetMm: 0 })}
-          className="px-2 py-2 rounded-lg border border-slate-200 text-xs font-semibold text-slate-500 hover:bg-slate-50"
-          title="Sıfırla"
-        >
-          0
-        </button>
-      </div>
-      <p className="text-[10px] text-slate-400 mt-1">
-        Negatif: sola · Pozitif: sağa.
-        {paketHint ? ' Paket fişinde ek −1 mm sol hizalama uygulanır.' : ''}
-      </p>
-    </div>
-  );
-}
 
 export function PrinterSettings() {
   const { tenant, activeBranch } = useAuth();
@@ -466,11 +425,25 @@ export function PrinterSettings() {
                   </span>
                   <span className="text-[10px] font-bold uppercase text-orange-600">Ayarla →</span>
                 </div>
-                <ReceiptThermalPreview html={card.html} compact />
+                <ReceiptThermalPreview
+                  html={card.html}
+                  size="card"
+                  offsetMm={
+                    card.id === 'paket'
+                      ? settings.printStyle.paperOffsetMm - 1
+                      : settings.printStyle.paperOffsetMm
+                  }
+                />
                 <p className="text-[11px] text-slate-500 mt-2">{card.sub}</p>
               </button>
             ))}
           </div>
+
+          <ReceiptEdgeAlignPanel
+            settings={settings}
+            patchPrintStyle={patchPrintStyle}
+            accent="orange"
+          />
 
           <div className="bg-white rounded-xl border border-slate-200 p-4 md:p-5">
             <h4 className="text-sm font-bold text-slate-800 mb-3 flex items-center gap-2">
@@ -487,275 +460,199 @@ export function PrinterSettings() {
         </>
       )}
 
-      {(view === 'kitchen' || view === 'adisyon' || view === 'paket') && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-          <div className="lg:sticky lg:top-4 self-start">
-            <ReceiptThermalPreview
-              html={
-                view === 'kitchen'
-                  ? previewKitchenHtml(settings)
-                  : view === 'adisyon'
-                    ? previewAdisyonHtml(settings)
-                    : previewPaketHtml(settings)
-              }
-            />
-            <button
-              type="button"
-              onClick={() => void runPreviewTestPrint(view === 'adisyon' ? 'receipt' : view === 'paket' ? 'takeaway' : 'kitchen')}
-              className="mt-3 w-full py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold transition"
-            >
-              Bu önizlemeyi yazıcıya gönder (test)
-            </button>
-          </div>
+      {(view === 'kitchen' || view === 'adisyon' || view === 'paket') && (() => {
+        const editorKind = view as ReceiptEditorKind;
+        const previewHtml =
+          view === 'kitchen'
+            ? previewKitchenHtml(settings)
+            : view === 'adisyon'
+              ? previewAdisyonHtml(settings)
+              : previewPaketHtml(settings);
+        const offsetMm =
+          view === 'paket' ? settings.printStyle.paperOffsetMm - 1 : settings.printStyle.paperOffsetMm;
+        const borderCls =
+          view === 'adisyon'
+            ? 'border-emerald-200'
+            : view === 'paket'
+              ? 'border-amber-200'
+              : 'border-orange-200';
+
+        return (
           <div className="space-y-4">
-            {view === 'kitchen' && (
-              <div className="bg-white rounded-xl border border-orange-200 p-4 md:p-5 space-y-4">
-                <h4 className="font-bold text-slate-800 border-b border-slate-100 pb-2">Mutfak fişi ayarları</h4>
-                <div className="grid grid-cols-3 gap-2">
-                  {([
-                    ['kitchenTitlePx', 'Başlık (px)'],
-                    ['kitchenBodyPx', 'Gövde (px)'],
-                    ['kitchenItemPx', 'Ürün satırı (px)'],
-                  ] as const).map(([key, label]) => (
-                    <div key={key}>
-                      <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">{label}</label>
-                      <input
-                        type="number"
-                        min={8}
-                        max={28}
-                        value={settings.printStyle[key]}
-                        onChange={(e) =>
-                          patchPrintStyle({
-                            [key]: Math.min(28, Math.max(8, Number(e.target.value) || 12)),
-                          } as Partial<PrintStyleSettings>)
-                        }
-                        className="w-full px-2 py-2 rounded-lg border border-slate-200 text-sm"
-                      />
-                    </div>
-                  ))}
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-slate-600 mb-1">Alt başlık (logo altı)</label>
-                  <input
-                    type="text"
-                    value={settings.printStyle.kitchenSubtitle}
-                    onChange={(e) => patchPrintStyle({ kitchenSubtitle: e.target.value })}
-                    className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"
-                    placeholder="Örn: Sipariş hazırlanıyor"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-slate-600 mb-1">Ek alt satır</label>
-                  <input
-                    type="text"
-                    value={settings.printStyle.kitchenFooterExtra}
-                    onChange={(e) => patchPrintStyle({ kitchenFooterExtra: e.target.value })}
-                    className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"
-                  />
-                </div>
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={settings.printStyle.showKitchenOrderNumber}
-                    onChange={(e) => patchPrintStyle({ showKitchenOrderNumber: e.target.checked })}
-                    className="rounded border-slate-300"
-                  />
-                  <span className="text-sm text-slate-700">Sipariş numarası göster</span>
-                </label>
-                <div>
-                  <label className="block text-xs font-bold text-slate-600 mb-1">Varsayılan mutfak yazıcısı</label>
-                  <select
-                    value={settings.defaultKitchenPrinter}
-                    onChange={(e) => setSettings((p) => ({ ...p, defaultKitchenPrinter: e.target.value }))}
-                    className="w-full px-3 py-2.5 rounded-lg border border-slate-200 text-sm"
-                  >
-                    <option value="">Seçilmedi</option>
-                    {availablePrinters.map((p) => (
-                      <option key={`k2-${p.name}`} value={p.name}>{p.name}</option>
-                    ))}
-                  </select>
-                </div>
-                <div className="flex items-center justify-between bg-slate-50 rounded-xl p-3 border border-slate-100">
-                  <div>
-                    <p className="font-semibold text-slate-800 text-sm">Otomatik mutfak fişi</p>
-                    <p className="text-xs text-slate-500">Sipariş gönderilince yaz</p>
-                  </div>
-                  <button type="button" onClick={() => setSettings((p) => ({ ...p, autoPrintKitchen: !p.autoPrintKitchen }))}>
-                    {settings.autoPrintKitchen ? (
-                      <ToggleRight className="w-10 h-10 text-orange-500" />
-                    ) : (
-                      <ToggleLeft className="w-10 h-10 text-slate-300" />
-                    )}
-                  </button>
-                </div>
+            <ReceiptEdgeAlignPanel
+              settings={settings}
+              patchPrintStyle={patchPrintStyle}
+              accent={view === 'adisyon' ? 'emerald' : view === 'paket' ? 'amber' : 'orange'}
+              paketExtraMm={view === 'paket' ? -1 : 0}
+            />
+
+            <div className="grid grid-cols-1 2xl:grid-cols-12 gap-5">
+              <div className="2xl:col-span-8 space-y-4">
+                <ReceiptThermalPreview size="editor" offsetMm={offsetMm} html={previewHtml} />
+
+                <ReceiptLiveStylePanel
+                  kind={editorKind}
+                  settings={settings}
+                  patchPrintStyle={patchPrintStyle}
+                  onRestaurantPatch={(p) => setSettings((prev) => ({ ...prev, ...p }))}
+                />
+
                 <button
                   type="button"
-                  onClick={() => setView('kategori')}
-                  className="text-sm font-semibold text-orange-700 hover:underline"
+                  onClick={() =>
+                    void runPreviewTestPrint(
+                      view === 'adisyon' ? 'receipt' : view === 'paket' ? 'takeaway' : 'kitchen',
+                    )
+                  }
+                  className="w-full py-3.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-base font-bold transition shadow-lg"
                 >
-                  Kategori → yazıcı eşlemesine git →
+                  Yazıcıya test gönder
                 </button>
               </div>
-            )}
 
-            {view === 'adisyon' && (
-              <div className="bg-white rounded-xl border border-emerald-200 p-4 md:p-5 space-y-4">
-                <h4 className="font-bold text-slate-800 border-b border-slate-100 pb-2">Adisyon fişi ayarları</h4>
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Başlık (px)</label>
-                    <input
-                      type="number"
-                      min={8}
-                      max={28}
-                      value={settings.printStyle.receiptTitlePx}
-                      onChange={(e) =>
-                        patchPrintStyle({ receiptTitlePx: Math.min(28, Math.max(8, Number(e.target.value) || 16)) })
-                      }
-                      className="w-full px-2 py-2 rounded-lg border border-slate-200 text-sm"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Gövde (px)</label>
-                    <input
-                      type="number"
-                      min={8}
-                      max={22}
-                      value={settings.printStyle.receiptBodyPx}
-                      onChange={(e) =>
-                        patchPrintStyle({ receiptBodyPx: Math.min(22, Math.max(8, Number(e.target.value) || 12)) })
-                      }
-                      className="w-full px-2 py-2 rounded-lg border border-slate-200 text-sm"
-                    />
-                  </div>
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-slate-600 mb-1">Alt başlık</label>
-                  <input
-                    type="text"
-                    value={settings.printStyle.receiptSubtitle}
-                    onChange={(e) => patchPrintStyle({ receiptSubtitle: e.target.value })}
-                    className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-slate-600 mb-1">Ek satır (teşekkür üstü)</label>
-                  <input
-                    type="text"
-                    value={settings.printStyle.receiptFooterExtra}
-                    onChange={(e) => patchPrintStyle({ receiptFooterExtra: e.target.value })}
-                    className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"
-                  />
-                </div>
-                <PaperOffsetControl settings={settings} patchPrintStyle={patchPrintStyle} />
-                <div>
-                  <label className="block text-xs font-bold text-slate-600 mb-1">Adisyon yazıcısı</label>
-                  <select
-                    value={settings.defaultReceiptPrinter}
-                    onChange={(e) => setSettings((p) => ({ ...p, defaultReceiptPrinter: e.target.value }))}
-                    className="w-full px-3 py-2.5 rounded-lg border border-slate-200 text-sm"
-                  >
-                    <option value="">Seçilmedi</option>
-                    {availablePrinters.map((p) => (
-                      <option key={`r2-${p.name}`} value={p.name}>{p.name}</option>
-                    ))}
-                  </select>
-                </div>
-                <div className="flex items-center justify-between bg-slate-50 rounded-xl p-3 border border-slate-100">
-                  <div>
-                    <p className="font-semibold text-slate-800 text-sm">Otomatik müşteri fişi</p>
-                    <p className="text-xs text-slate-500">Ödeme alınınca yaz</p>
-                  </div>
-                  <button type="button" onClick={() => setSettings((p) => ({ ...p, autoPrintReceipt: !p.autoPrintReceipt }))}>
-                    {settings.autoPrintReceipt ? (
-                      <ToggleRight className="w-10 h-10 text-orange-500" />
-                    ) : (
-                      <ToggleLeft className="w-10 h-10 text-slate-300" />
-                    )}
-                  </button>
-                </div>
-                <div className="flex items-center justify-between bg-amber-50 rounded-xl p-3 border border-amber-200">
-                  <div className="pr-2">
-                    <p className="font-semibold text-amber-900 text-sm">Ödemede adisyon varsayılan açık</p>
-                    <p className="text-xs text-amber-800/80">Kapalı: garson isterse açar</p>
-                  </div>
-                  <button type="button" onClick={() => setSettings((p) => ({ ...p, receiptPrintDefaultOn: !p.receiptPrintDefaultOn }))}>
-                    {settings.receiptPrintDefaultOn ? (
-                      <ToggleRight className="w-10 h-10 text-amber-500" />
-                    ) : (
-                      <ToggleLeft className="w-10 h-10 text-slate-300" />
-                    )}
-                  </button>
-                </div>
-              </div>
-            )}
+              <div className={`2xl:col-span-4 space-y-4 bg-white rounded-xl border-2 ${borderCls} p-4 md:p-5 shadow-sm`}>
+                <h4 className="font-bold text-slate-800 border-b border-slate-100 pb-2">Yazıcı ve otomasyon</h4>
 
-            {view === 'paket' && (
-              <div className="bg-white rounded-xl border border-amber-200 p-4 md:p-5 space-y-4">
-                <h4 className="font-bold text-slate-800 border-b border-slate-100 pb-2">Paket / kurye fişi ayarları</h4>
-                <p className="text-xs text-slate-500">
-                  Punto adisyon ile aynı ayarları kullanır; ek olarak paket fişinde otomatik −1 mm sol hizalama uygulanır.
-                </p>
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Başlık (px)</label>
+                {view === 'kitchen' && (
+                  <>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={settings.printStyle.showKitchenOrderNumber}
+                        onChange={(e) => patchPrintStyle({ showKitchenOrderNumber: e.target.checked })}
+                        className="rounded border-slate-300"
+                      />
+                      <span className="text-sm text-slate-700">Sipariş numarası göster</span>
+                    </label>
                     <input
-                      type="number"
-                      min={8}
-                      max={28}
-                      value={settings.printStyle.receiptTitlePx}
-                      onChange={(e) =>
-                        patchPrintStyle({ receiptTitlePx: Math.min(28, Math.max(8, Number(e.target.value) || 16)) })
-                      }
-                      className="w-full px-2 py-2 rounded-lg border border-slate-200 text-sm"
+                      type="text"
+                      value={settings.printStyle.kitchenFooterExtra}
+                      onChange={(e) => patchPrintStyle({ kitchenFooterExtra: e.target.value })}
+                      placeholder="Mutfak ek alt satır"
+                      className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"
                     />
-                  </div>
-                  <div>
-                    <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Gövde (px)</label>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-600 mb-1">Varsayılan mutfak yazıcısı</label>
+                      <select
+                        value={settings.defaultKitchenPrinter}
+                        onChange={(e) => setSettings((p) => ({ ...p, defaultKitchenPrinter: e.target.value }))}
+                        className="w-full px-3 py-2.5 rounded-lg border border-slate-200 text-sm"
+                      >
+                        <option value="">Seçilmedi</option>
+                        {availablePrinters.map((p) => (
+                          <option key={`k2-${p.name}`} value={p.name}>{p.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="flex items-center justify-between bg-slate-50 rounded-xl p-3 border border-slate-100">
+                      <div>
+                        <p className="font-semibold text-slate-800 text-sm">Otomatik mutfak fişi</p>
+                        <p className="text-xs text-slate-500">Sipariş gönderilince</p>
+                      </div>
+                      <button type="button" onClick={() => setSettings((p) => ({ ...p, autoPrintKitchen: !p.autoPrintKitchen }))}>
+                        {settings.autoPrintKitchen ? (
+                          <ToggleRight className="w-10 h-10 text-orange-500" />
+                        ) : (
+                          <ToggleLeft className="w-10 h-10 text-slate-300" />
+                        )}
+                      </button>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setView('kategori')}
+                      className="text-sm font-semibold text-orange-700 hover:underline w-full text-left"
+                    >
+                      Kategori → yazıcı eşlemesi →
+                    </button>
+                  </>
+                )}
+
+                {view === 'adisyon' && (
+                  <>
                     <input
-                      type="number"
-                      min={8}
-                      max={22}
-                      value={settings.printStyle.receiptBodyPx}
-                      onChange={(e) =>
-                        patchPrintStyle({ receiptBodyPx: Math.min(22, Math.max(8, Number(e.target.value) || 12)) })
-                      }
-                      className="w-full px-2 py-2 rounded-lg border border-slate-200 text-sm"
+                      type="text"
+                      value={settings.printStyle.receiptFooterExtra}
+                      onChange={(e) => patchPrintStyle({ receiptFooterExtra: e.target.value })}
+                      placeholder="Teşekkür üstü ek satır"
+                      className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"
                     />
-                  </div>
-                </div>
-                <PaperOffsetControl settings={settings} patchPrintStyle={patchPrintStyle} paketHint />
-                <div>
-                  <label className="block text-xs font-bold text-slate-600 mb-1">Paket / kurye yazıcısı</label>
-                  <select
-                    value={settings.defaultTakeawayPrinter || ''}
-                    onChange={(e) => setSettings((p) => ({ ...p, defaultTakeawayPrinter: e.target.value }))}
-                    className="w-full px-3 py-2.5 rounded-lg border border-slate-200 text-sm"
-                  >
-                    <option value="">Önce Paket tipi satır, sonra adisyon</option>
-                    {availablePrinters.map((p) => (
-                      <option key={`t2-${p.name}`} value={p.name}>{p.name}</option>
-                    ))}
-                  </select>
-                </div>
-                <div className="flex items-center justify-between bg-slate-50 rounded-xl p-3 border border-slate-100">
-                  <div>
-                    <p className="font-semibold text-slate-800 text-sm">Otomatik paket fişi</p>
-                    <p className="text-xs text-slate-500">Paket siparişinde yaz</p>
-                  </div>
-                  <button type="button" onClick={() => setSettings((p) => ({ ...p, autoPrintTakeaway: !p.autoPrintTakeaway }))}>
-                    {settings.autoPrintTakeaway !== false ? (
-                      <ToggleRight className="w-10 h-10 text-orange-500" />
-                    ) : (
-                      <ToggleLeft className="w-10 h-10 text-slate-300" />
-                    )}
-                  </button>
-                </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-600 mb-1">Adisyon yazıcısı</label>
+                      <select
+                        value={settings.defaultReceiptPrinter}
+                        onChange={(e) => setSettings((p) => ({ ...p, defaultReceiptPrinter: e.target.value }))}
+                        className="w-full px-3 py-2.5 rounded-lg border border-slate-200 text-sm"
+                      >
+                        <option value="">Seçilmedi</option>
+                        {availablePrinters.map((p) => (
+                          <option key={`r2-${p.name}`} value={p.name}>{p.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="flex items-center justify-between bg-slate-50 rounded-xl p-3 border border-slate-100">
+                      <div>
+                        <p className="font-semibold text-slate-800 text-sm">Otomatik müşteri fişi</p>
+                        <p className="text-xs text-slate-500">Ödeme alınınca</p>
+                      </div>
+                      <button type="button" onClick={() => setSettings((p) => ({ ...p, autoPrintReceipt: !p.autoPrintReceipt }))}>
+                        {settings.autoPrintReceipt ? (
+                          <ToggleRight className="w-10 h-10 text-orange-500" />
+                        ) : (
+                          <ToggleLeft className="w-10 h-10 text-slate-300" />
+                        )}
+                      </button>
+                    </div>
+                    <div className="flex items-center justify-between bg-amber-50 rounded-xl p-3 border border-amber-200">
+                      <div className="pr-2">
+                        <p className="font-semibold text-amber-900 text-sm">Ödemede adisyon açık</p>
+                        <p className="text-xs text-amber-800/80">Varsayılan toggle</p>
+                      </div>
+                      <button type="button" onClick={() => setSettings((p) => ({ ...p, receiptPrintDefaultOn: !p.receiptPrintDefaultOn }))}>
+                        {settings.receiptPrintDefaultOn ? (
+                          <ToggleRight className="w-10 h-10 text-amber-500" />
+                        ) : (
+                          <ToggleLeft className="w-10 h-10 text-slate-300" />
+                        )}
+                      </button>
+                    </div>
+                  </>
+                )}
+
+                {view === 'paket' && (
+                  <>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-600 mb-1">Paket / kurye yazıcısı</label>
+                      <select
+                        value={settings.defaultTakeawayPrinter || ''}
+                        onChange={(e) => setSettings((p) => ({ ...p, defaultTakeawayPrinter: e.target.value }))}
+                        className="w-full px-3 py-2.5 rounded-lg border border-slate-200 text-sm"
+                      >
+                        <option value="">Önce Paket tipi, sonra adisyon</option>
+                        {availablePrinters.map((p) => (
+                          <option key={`t2-${p.name}`} value={p.name}>{p.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="flex items-center justify-between bg-slate-50 rounded-xl p-3 border border-slate-100">
+                      <div>
+                        <p className="font-semibold text-slate-800 text-sm">Otomatik paket fişi</p>
+                        <p className="text-xs text-slate-500">Paket siparişinde</p>
+                      </div>
+                      <button type="button" onClick={() => setSettings((p) => ({ ...p, autoPrintTakeaway: !p.autoPrintTakeaway }))}>
+                        {settings.autoPrintTakeaway !== false ? (
+                          <ToggleRight className="w-10 h-10 text-orange-500" />
+                        ) : (
+                          <ToggleLeft className="w-10 h-10 text-slate-300" />
+                        )}
+                      </button>
+                    </div>
+                  </>
+                )}
               </div>
-            )}
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {view === 'genel' && (
       <div className="bg-white rounded-xl border border-slate-200 p-4 md:p-6 space-y-4">
