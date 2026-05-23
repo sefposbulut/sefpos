@@ -158,8 +158,8 @@ export function HomeRichPage({ onLogin, onNavigate }: LandingPageProps) {
         <div className="max-w-7xl mx-auto px-4">
           <SectionHeading
             eyebrow="ŞefPOS'un özellikleri"
-            title="Müşterinize gösterebileceğiniz tam kapsam"
-            subtitle="Salondan online platformlara, geçmiş adisyonlardan otomatik güncellemeye — tek sayfada kurumsal katalog."
+            title="İşletmenize ne kazandırır?"
+            subtitle="Masa adisyonundan online siparişe, gün sonu raporuna kadar — restoran dilinde anlatım."
           />
           <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-10">
             {HOME_FEATURE_SPOTLIGHT.map(({ icon: Icon, title, desc }) => (
@@ -177,10 +177,10 @@ export function HomeRichPage({ onLogin, onNavigate }: LandingPageProps) {
           </div>
           <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
             <button type="button" onClick={() => onNavigate('/ozellikler')} className="landing-btn-primary">
-              Özellik kataloğunu aç <ArrowRight className="w-5 h-5" />
+              Tüm özellikleri gör <ArrowRight className="w-5 h-5" />
             </button>
             <p className="text-xs text-slate-500 text-center sm:text-left">
-              PDF için katalog sayfasında &quot;PDF / Yazdır&quot; — paylaşım linki: sefpos.com.tr/ozellikler
+              Müşteri sunumu için: sefpos.com.tr/ozellikler
             </p>
           </div>
         </div>

@@ -80,7 +80,7 @@ export function landingPathTitle(parsed: ParsedLandingPath): string {
   if (parsed.kind === 'static') {
     const map: Record<LandingRoute, string> = {
       '/': 'Ana Sayfa',
-      '/ozellikler': 'Özellik Kataloğu',
+      '/ozellikler': 'ŞefPOS Özellikleri',
       '/entegrasyonlar': 'Entegrasyonlar',
       '/fiyatlar': 'Fiyatlar',
       '/indir': 'İndir',

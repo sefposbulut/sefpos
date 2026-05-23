@@ -45,7 +45,7 @@ export type LandingRoute =
 
 export const LANDING_NAV: { label: string; path: LandingRoute }[] = [
   { label: 'Ana Sayfa', path: '/' },
-  { label: 'Özellik kataloğu', path: '/ozellikler' },
+  { label: 'Özellikler', path: '/ozellikler' },
   { label: 'Entegrasyonlar', path: '/entegrasyonlar' },
   { label: 'Fiyatlar', path: '/fiyatlar' },
   { label: 'İndir', path: '/indir' },
