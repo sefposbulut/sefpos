@@ -28,7 +28,7 @@ interface OrderRow {
   order_type: string | null;
   table_id: string | null;
   created_at: string;
-  closed_at?: string | null;
+  completed_at?: string | null;
   table_number?: number | null;
   table_label?: string | null;
 }
@@ -103,7 +103,7 @@ export function ReprintReceiptModal({
       let q: any = supabase
         .from('orders')
         .select(
-          'id, order_number, total_amount, subtotal, tax_amount, discount_amount, status, payment_method, order_type, table_id, created_at, closed_at, restaurant_tables!orders_table_id_fkey(table_number)',
+          'id, order_number, total_amount, subtotal, tax_amount, discount_amount, status, payment_method, order_type, table_id, created_at, completed_at, restaurant_tables!orders_table_id_fkey(table_number)',
         )
         .eq('tenant_id', tenant.id)
         .gte('created_at', start)
@@ -124,7 +124,7 @@ export function ReprintReceiptModal({
         let q2: any = supabase
           .from('orders')
           .select(
-            'id, order_number, total_amount, subtotal, tax_amount, discount_amount, status, payment_method, order_type, table_id, created_at, closed_at',
+            'id, order_number, total_amount, subtotal, tax_amount, discount_amount, status, payment_method, order_type, table_id, created_at, completed_at',
           )
           .eq('tenant_id', tenant.id)
           .gte('created_at', start)
@@ -183,7 +183,7 @@ export function ReprintReceiptModal({
             order_type: o.order_type,
             table_id: o.table_id,
             created_at: o.created_at,
-            closed_at: o.closed_at,
+            completed_at: o.completed_at,
             table_number: tableNum,
             table_label:
               o.order_type === 'takeaway'
@@ -417,7 +417,7 @@ export function ReprintReceiptModal({
                       {statusBadge(o.status)}
                     </div>
                     <div className="text-[11px] text-slate-500 mt-0.5 flex items-center gap-2">
-                      <span>{fmtTime(o.created_at)}</span>
+                      <span>{fmtTime(o.completed_at || o.created_at)}</span>
                       <span className="font-bold text-slate-700">
                         {(o.total_amount ?? 0).toFixed(2)} ₺
                       </span>
