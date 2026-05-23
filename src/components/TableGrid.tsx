@@ -14,6 +14,8 @@ import { APP_DISPLAY_VERSION } from '../lib/appVersion';
 import {
   tableGridRuntimeCache,
   readPersistedTableGridSnapshot,
+  isHardPageReload,
+  prepareTableGridCacheForPageLoad,
   TABLE_GRID_TABLE_COLS,
   enrichTableGridOrders,
   fetchRestaurantTablesForBranch,
@@ -22,6 +24,9 @@ import {
   type TableGridOrderEmbed,
 } from '../lib/tableGridData';
 import { unlockStalePaymentLocksRpc } from '../lib/paymentLock';
+import {
+  isStaleTableSnapshotAfterClear,
+} from '../lib/tableOptimisticClear';
 import { insertRestaurantTablesSkipDuplicates } from '../lib/restaurantTableBulk';
 import { subscribeLiveTick } from '../lib/liveTick';
 
@@ -132,10 +137,14 @@ function cachedRowToTableWithOrder(row: TableGridCachedRow): TableWithOrder {
 }
 
 /** Cache snapshot'tan istemci icin gosterilebilir state cikartir */
-function readSnapshotForKey(cacheKey: string | null):
+function readSnapshotForKey(
+  cacheKey: string | null,
+  opts?: { allowOnReload?: boolean },
+):
   | { tables: TableWithOrder[]; groups: TableGroup[] }
   | null {
   if (!cacheKey) return null;
+  if (!opts?.allowOnReload && isHardPageReload()) return null;
   const ram = tableGridRuntimeCache.get(cacheKey);
   if (ram) {
     return {
@@ -188,8 +197,8 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
   const mobileColsStorageKey = MOBILE_COLS_KEY;
   const desktopColsStorageKey = DESKTOP_COLS_KEY;
 
-  // Ilk render'da RAM ya da sessionStorage snapshot'i varsa masalari aninda goster.
-  // Bu sayede ilk login'de bos spinner yerine cached izgara gorunur ve hisli yuklenme yasanir.
+  // Ilk render: SPA icinde snapshot ile hizli cizim; F5'te bayat yesil masalar gosterilmez.
+  prepareTableGridCacheForPageLoad();
   const initialKey = tenant?.id && activeBranch?.id ? `${tenant.id}:${activeBranch.id}` : null;
   const initialSnapshot = readSnapshotForKey(initialKey);
   const [tables, setTables] = useState<TableWithOrder[]>(() => initialSnapshot?.tables ?? []);
@@ -278,7 +287,7 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
     const cacheKey = `${tenant.id}:${activeBranch.id}`;
     // RAM yoksa sessionStorage'dan dene (ilk login + sekme yenilemesi icin kritik).
     // SQL modunda eski (bos) cloud onbellegini kullanma — Ayarlar’da 32 masa varken grid bos kalmasin.
-    const snap = isSqlServerMode() ? null : readSnapshotForKey(cacheKey);
+    const snap = isSqlServerMode() || isHardPageReload() ? null : readSnapshotForKey(cacheKey);
     if (snap) {
       setTableGroups(snap.groups);
       setTables(snap.tables);
@@ -493,7 +502,14 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
         };
       });
       const updatedMap = new Map(updatedRows.map((t) => [t.id, t]));
-      setTables((prev) => prev.map((t) => (updatedMap.has(t.id) ? (updatedMap.get(t.id) as TableWithOrder) : t)));
+      setTables((prev) =>
+        prev.map((t) => {
+          if (!updatedMap.has(t.id)) return t;
+          const fresh = updatedMap.get(t.id) as TableWithOrder;
+          if (isStaleTableSnapshotAfterClear(t.id, t, fresh)) return t;
+          return fresh;
+        }),
+      );
       return;
     }
 
@@ -534,7 +550,14 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
         }
       }
       const updatedMap = new Map(updatedRows.map((t) => [t.id, t]));
-      setTables(prev => prev.map(t => updatedMap.has(t.id) ? (updatedMap.get(t.id) as TableWithOrder) : t));
+      setTables((prev) =>
+        prev.map((t) => {
+          if (!updatedMap.has(t.id)) return t;
+          const fresh = updatedMap.get(t.id) as TableWithOrder;
+          if (isStaleTableSnapshotAfterClear(t.id, t, fresh)) return t;
+          return fresh;
+        }),
+      );
     }
   }, []);
 
@@ -740,12 +763,13 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
       setTables((prev) =>
         prev.map((tableRow) => {
           if (tableRow.id !== detail.id) return tableRow;
+          if (isStaleTableSnapshotAfterClear(detail.id, tableRow, detail)) return tableRow;
           const next = { ...tableRow, ...detail } as TableWithOrder;
           if (detail.order === null) {
             delete (next as any).order;
           }
           return next;
-        })
+        }),
       );
     };
 
@@ -1129,7 +1153,11 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
           {filteredTables.map((table) => {
             const isLocked = !!(table as any).payment_locked;
             const isPartial = !isLocked && table.order?.payment_status === 'partial';
-            const bgColor = isLocked ? 'bg-red-600' : isPartial ? 'bg-amber-500' : table.status === 'occupied' ? 'bg-green-600' : 'bg-orange-500';
+            const bgColor = isPartial
+              ? 'bg-amber-500'
+              : table.status === 'occupied'
+                ? 'bg-green-600'
+                : 'bg-orange-500';
             const tableNum = String(table.table_number);
             const isMany = mobileTableCols >= 5;
             const isMedium = mobileTableCols === 4;
@@ -1153,16 +1181,16 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
                 }}
                 onPointerLeave={(e) => { e.currentTarget.style.transform = ''; }}
                 className={`${bgColor} rounded-xl flex flex-col items-center justify-center text-white shadow-lg relative select-none overflow-hidden touch-manipulation`}
-                style={{ height: cardH, transition: 'transform 0.08s ease', opacity: isLocked ? 0.85 : 1 }}
+                style={{ height: cardH, transition: 'transform 0.08s ease' }}
               >
                 {isLocked && (
-                  <div className="absolute top-1 right-1">
+                  <div className="absolute top-1 right-1 rounded-full bg-black/25 p-0.5">
                     <Lock style={{ width: isMany ? 12 : 16, height: isMany ? 12 : 16 }} className="text-white" />
                   </div>
                 )}
                 <div className="font-black leading-none tracking-tight" style={{ fontSize: numFontSize, fontFamily: corporateFontFamily }}>{tableNum}</div>
                 {isLocked ? (
-                  <div className="font-black opacity-95 tracking-wide" style={{ fontSize: subFontSize, marginTop: 3, fontFamily: corporateFontFamily }}>ÖDEME</div>
+                  <div className="font-bold opacity-90 tracking-tight" style={{ fontSize: dkFontSize, marginTop: 2, fontFamily: corporateFontFamily }}>ödeme</div>
                 ) : isPartial ? (
                   <>
                     <div className="font-black opacity-95 tracking-tight" style={{ fontSize: subFontSize, marginTop: 3, fontFamily: corporateFontFamily }}>
@@ -1196,15 +1224,13 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
         {filteredTables.map((table) => {
           const isLocked = !!(table as any).payment_locked;
           const isPartial = !isLocked && table.order?.payment_status === 'partial';
-          const statusColor = isLocked
-            ? 'bg-red-600'
-            : isPartial
-              ? 'bg-amber-500'
-              : table.status === 'occupied'
-                ? 'bg-green-600'
-                : table.status === 'reserved'
-                  ? 'bg-yellow-500'
-                  : 'bg-orange-500';
+          const statusColor = isPartial
+            ? 'bg-amber-500'
+            : table.status === 'occupied'
+              ? 'bg-green-600'
+              : table.status === 'reserved'
+                ? 'bg-yellow-500'
+                : 'bg-orange-500';
           const tableNum = String(table.table_number);
           const isSmall = desktopTableCols >= 9;
           const isMedium = desktopTableCols >= 7;
@@ -1222,17 +1248,17 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
               onPointerUp={(e) => { e.currentTarget.style.transform = ''; if (!isLocked) handleSelectTableInstant(table); }}
               onPointerLeave={(e) => { e.currentTarget.style.transform = ''; }}
               className={`${statusColor} rounded-2xl flex flex-col items-center justify-center text-white aspect-square shadow-lg hover:shadow-xl relative select-none overflow-hidden`}
-              style={{ transition: 'transform 0.08s ease', opacity: isLocked ? 0.85 : 1, padding: isSmall ? 6 : 14 }}
+              style={{ transition: 'transform 0.08s ease', padding: isSmall ? 6 : 14 }}
             >
               {isLocked && (
-                <div className="absolute top-1.5 right-1.5">
+                <div className="absolute top-1.5 right-1.5 rounded-full bg-black/25 p-0.5">
                   <Lock style={{ width: isSmall ? 14 : 18, height: isSmall ? 14 : 18 }} className="text-white" />
                 </div>
               )}
               <div className="font-black leading-none tracking-tight" style={{ fontSize: numFontSize, marginBottom: 4, fontFamily: corporateFontFamily }}>{table.table_number}</div>
 
               {isLocked ? (
-                <div className="font-black tracking-wide" style={{ fontSize: subFontSize, fontFamily: corporateFontFamily }}>ÖDEME</div>
+                <div className="font-bold opacity-90 tracking-tight" style={{ fontSize: dkFontSize, fontFamily: corporateFontFamily }}>ödeme</div>
               ) : isPartial ? (
                 <>
                   <div className="font-black leading-tight tracking-tight" style={{ fontSize: subFontSize, fontFamily: corporateFontFamily }}>

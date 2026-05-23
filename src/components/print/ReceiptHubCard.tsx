@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { ChevronRight } from 'lucide-react';
+import { ReceiptScaledPreview } from './ReceiptScaledPreview';
 
 type Accent = 'orange' | 'emerald' | 'amber';
 
@@ -59,19 +60,8 @@ export function ReceiptHubCard({ title, subtitle, icon, accent, html, onClick }:
         </div>
       </div>
 
-      {/* Önizleme alanı: geniş, kaydırılabilir, sıkıştırma yok */}
-      <div className="flex-1 min-h-[360px] max-h-[min(52vh,520px)] bg-gradient-to-b from-slate-100 via-slate-50 to-slate-100 p-5 sm:p-6 overflow-y-auto overflow-x-hidden">
-        <div className="flex justify-center">
-          <div
-            className="bg-white text-black shadow-lg ring-1 ring-slate-200/90 rounded-sm"
-            style={{
-              width: '72mm',
-              maxWidth: '100%',
-              minHeight: '80mm',
-            }}
-            dangerouslySetInnerHTML={{ __html: html }}
-          />
-        </div>
+      <div className="flex-1 min-h-[380px] max-h-[min(56vh,560px)] bg-gradient-to-b from-slate-100 via-slate-50 to-slate-100 overflow-y-auto overflow-x-hidden">
+        <ReceiptScaledPreview html={html} variant="thumb" />
       </div>
 
       <div className="flex items-center justify-between gap-2 px-4 py-3.5 border-t border-slate-100 bg-white">

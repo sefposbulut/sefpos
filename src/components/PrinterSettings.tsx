@@ -390,7 +390,7 @@ export function PrinterSettings() {
             Bir fiş türüne tıklayın — büyük önizleme ve canlı ayarlar açılır. Aşağıdaki küçük önizlemeler kaydırılabilir.
           </p>
 
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 xl:gap-6 items-stretch">
+          <div className="grid grid-cols-1 xl:grid-cols-3 gap-5 2xl:gap-6 items-stretch">
             <ReceiptHubCard
               title="Mutfak fişi"
               subtitle="Sipariş gönderince mutfağa"

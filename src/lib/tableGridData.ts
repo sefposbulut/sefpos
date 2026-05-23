@@ -69,6 +69,38 @@ const inflight = new Map<string, Promise<{ tables: TableGridCachedRow[]; groups:
 
 const GRID_SNAP_PREFIX = 'sefpos:table_grid_snap:v1:';
 const MAX_GRID_SNAP_CHARS = 3_800_000;
+let reloadSnapCleared = false;
+
+/** F5 / Ctrl+R — sessionStorage'daki bayat yeşil masaları göstermemek için. */
+export function isHardPageReload(): boolean {
+  if (typeof performance === 'undefined') return false;
+  try {
+    const nav = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming | undefined;
+    return nav?.type === 'reload';
+  } catch {
+    return false;
+  }
+}
+
+function clearSessionTableGridSnapshots(): void {
+  if (typeof sessionStorage === 'undefined') return;
+  try {
+    for (let i = sessionStorage.length - 1; i >= 0; i--) {
+      const k = sessionStorage.key(i);
+      if (k?.startsWith(GRID_SNAP_PREFIX)) sessionStorage.removeItem(k);
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Sert yenilemede bir kez session önbelleğini temizle. */
+export function prepareTableGridCacheForPageLoad(): void {
+  if (!isHardPageReload() || reloadSnapCleared) return;
+  reloadSnapCleared = true;
+  clearSessionTableGridSnapshots();
+  tableGridRuntimeCache.clear();
+}
 /** localStorage TTL: 7 gün. Bu sürede internet kesintisinde / app restart sonrasi
  *  masalar ve gruplar son bilinen halleriyle anında ekrana gelir. Sonrasinda
  *  bayat veri kullanmamak icin kalici cache silinir. */
@@ -106,10 +138,13 @@ function readFromStore(
 
 /** F5 / sekme yenilemede ve **offline / app restart sonrasinda** izgara aninda
  *  cizilir. Once sessionStorage (en taze), sonra localStorage (TTL'li) kontrol
- *  edilir. */
+ *  edilir. Sert yenilemede (F5) bayat dolu masa renkleri gösterilmez. */
 export function readPersistedTableGridSnapshot(
   cacheKey: string
 ): SnapshotPayload | null {
+  prepareTableGridCacheForPageLoad();
+  if (isHardPageReload()) return null;
+
   const fromSession = readFromStore(
     typeof sessionStorage !== 'undefined' ? sessionStorage : null,
     GRID_SNAP_PREFIX + cacheKey,

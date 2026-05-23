@@ -293,6 +293,52 @@ input[type="range"]::-moz-range-thumb {
   margin-bottom: 0.75rem;
 }
 
+/* Fiş ayarları — termal önizleme (yazdırma HTML'i; genişlik JS ile ölçeklenir) */
+.receipt-preview-paper {
+  box-sizing: border-box;
+  background: #fff;
+  color: #000;
+  flex-shrink: 0;
+}
+
+.receipt-preview-paper--thumb {
+  min-height: 72mm;
+}
+
+.receipt-preview-paper--editor {
+  min-height: 100mm;
+}
+
+.receipt-preview-paper .sefpos-receipt-scope,
+.receipt-preview-paper .sefpos-kitchen-scope {
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+  padding: 2mm 2.5mm 3mm;
+  line-height: 1.4 !important;
+}
+
+.receipt-preview-paper .line {
+  margin: 5px 0 !important;
+}
+
+.receipt-preview-paper .row,
+.receipt-preview-paper .item-row,
+.receipt-preview-paper .cust-row,
+.receipt-preview-paper .total-row {
+  gap: 6px;
+  margin-bottom: 3px;
+}
+
+.receipt-preview-paper .cust-section {
+  margin: 8px 0 !important;
+  padding: 6px 0 !important;
+}
+
+.receipt-preview-paper .addr-text {
+  overflow-wrap: break-word;
+  line-height: 1.45 !important;
+}
+
 .landing-pricing-badge {
   display: inline-block;
   font-size: 0.6875rem;

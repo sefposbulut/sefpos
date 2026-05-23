@@ -1,5 +1,10 @@
 const { app, BrowserWindow, shell, ipcMain, net, dialog, Menu } = require('electron');
 const { writeSecureJson, readSecureJson } = require('./secureLocalStore.cjs');
+const {
+  acquireMainInstanceFileLock,
+  registerReleaseOnAppQuit,
+  terminateOtherMainSefposProcesses,
+} = require('./singletonLock.cjs');
 const path = require('path');
 const { execSync } = require('child_process');
 
@@ -21,16 +26,20 @@ if (process.platform === 'win32') {
 }
 
 // --------------------------------------------------------------------------
-// Single-instance lock: ikinci kez Sefpos.exe çalıştırılırsa yeni proses
-// hemen kapanır, mevcut pencere öne gelir. Restoran kasalarında yanlışlıkla
-// çift açılan ve veri/print agent çakışmasına yol açan en sık sorunlardan
-// birini engeller.
+// Tek örnek: Electron kilidi + Windows dosya kilidi. İkinci Sefpos.exe açılırsa
+// yeni süreç hemen kapanır, mevcut pencere öne gelir.
+// Not: Görev Yöneticisi'nde 4–6 "Sefpos.exe" satırı tek uygulamanın Chromium
+// alt süreçleri olabilir (gpu, renderer); bunlar normaldir. Sorun, birden fazla
+// ana pencere / ayrı oturumlardır — aşağıdaki kilit bunu engeller.
 // --------------------------------------------------------------------------
-const gotInstanceLock = app.requestSingleInstanceLock();
-if (!gotInstanceLock) {
-  app.quit();
+if (!acquireMainInstanceFileLock()) {
   process.exit(0);
 }
+const gotInstanceLock = app.requestSingleInstanceLock();
+if (!gotInstanceLock) {
+  process.exit(0);
+}
+registerReleaseOnAppQuit(app);
 app.on('second-instance', () => {
   if (!mainWindow || mainWindow.isDestroyed()) {
     try {
@@ -3906,6 +3915,7 @@ ipcMain.handle('get-device-fingerprint', async () => {
 });
 
 app.whenReady().then(() => {
+  terminateOtherMainSefposProcesses();
   startPrintAgent();
   if (isElectronSqlServerMode()) {
     try {

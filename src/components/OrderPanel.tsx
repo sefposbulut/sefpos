@@ -66,6 +66,7 @@ import {
   canManualUnlockPaymentLock,
   manualUnlockTablePayment,
 } from '../lib/paymentLock';
+import { markTableOptimisticallyCleared } from '../lib/tableOptimisticClear';
 
 /** 767px eşiğinde scrollbar/DPI kayması mobil↔masaüstü düzeni gidip getiriyordu (özellikle Electron). Ölü bant ile sabitlenir. */
 const ORDER_PANEL_MOBILE_MAX_PX = 767;
@@ -2121,6 +2122,7 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
     if (!currentOrder) return;
 
     if (table.table_number !== 0 && table.id) {
+      markTableOptimisticallyCleared(table.id);
       flushSync(() => {
         emitTableStateChanged({
           id: table.id,
@@ -2131,6 +2133,7 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
           order: null,
         });
       });
+      void clearTablePaymentLock(table.id);
     }
 
     const stockOrderId = currentOrder.id;
