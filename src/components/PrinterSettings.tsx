@@ -749,7 +749,15 @@ export function PrinterSettings() {
               <Settings2 className="w-4 h-4 text-emerald-500" /> Kategori → Yazıcı Eşleme
             </h4>
             <p className="text-xs text-slate-500 mt-1">
-              Her ürün grubu için tek tıkla yazıcı seçin. Seçim <strong>otomatik kaydedilir</strong> ve bir sonraki sipariş gönderiminden itibaren geçerli olur. <strong>Ürün kartında özel yazıcı yazılıysa</strong> o öncelikli; eşleme yoksa <strong>varsayılan mutfak yazıcısı</strong> devreye girer. Bir kategori aynı anda yalnızca bir mutfak yazıcısına gider (deterministik).
+              {activeBranch?.name ? (
+                <>
+                  <strong>{activeBranch.name}</strong> şubesi için ayrı kayıt — başka şubeyle karışmaz.
+                  {' '}
+                </>
+              ) : null}
+              Her ürün grubunu bir mutfak/bar yazıcısına bağlayın; seçim <strong>otomatik kaydedilir</strong>.
+              Eşleme yapılmayan kategorilerin ürünleri <strong>mutfak fişine gitmez</strong>.
+              Ürün kartında özel yazıcı varsa o önceliklidir.
             </p>
           </div>
 
@@ -818,7 +826,7 @@ export function PrinterSettings() {
                     }}
                     className="w-full px-3 py-2 rounded-lg border border-slate-200 focus:ring-2 focus:ring-orange-400 focus:border-transparent outline-none text-sm bg-white"
                   >
-                    <option value="">— Otomatik (catch-all / varsayılan) —</option>
+                    <option value="">— Yazıcı yok (bu grup basılmaz) —</option>
                     {settings.printers.map((p, idx) => {
                       if (!p.enabled) return null;
                       const isKitchen =
@@ -832,9 +840,11 @@ export function PrinterSettings() {
                     })}
                   </select>
                   <p className="text-[11px] text-slate-500 truncate">
-                    {effective
+                    {effective?.source === 'category'
                       ? `→ ${effective.printerName}`
-                      : '⚠ Atanmadı — yukarıdan varsayılan mutfak yazıcısı seçin.'}
+                      : effective
+                        ? `→ ${effective.printerName} (${sourceLabel})`
+                        : '⚠ Bu kategori için mutfak fişi basılmaz — yazıcı seçin.'}
                   </p>
                 </div>
               );

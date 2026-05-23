@@ -242,10 +242,8 @@ function normalizePrintSettings(raw: Partial<PrintSettings> & Record<string, unk
     autoPrintTakeaway: ps.autoPrintTakeaway !== false,
     // Yeni alan: eski kayıtlarda yok → varsayılan kapalı (kullanıcı isterse açar).
     receiptPrintDefaultOn: ps.receiptPrintDefaultOn === true,
-    // Yeni alan: kategori bazlı sıkı yönlendirme. Eski kayıtlarda yok → kapalı
-    // (mevcut davranışı bozmaz). Açıldığında yalnızca açıkça eşlenen kategoriler
-    // mutfak fişine girer.
-    strictCategoryPrinterRouting: ps.strictCategoryPrinterRouting === true,
+    // Varsayılan açık: yalnızca açıkça eşlenen kategoriler basılır.
+    strictCategoryPrinterRouting: ps.strictCategoryPrinterRouting !== false,
     restaurantName: typeof ps.restaurantName === 'string' ? ps.restaurantName : '',
     restaurantPhone: typeof ps.restaurantPhone === 'string' ? ps.restaurantPhone : '',
     restaurantAddress: typeof ps.restaurantAddress === 'string' ? ps.restaurantAddress : '',
@@ -586,13 +584,12 @@ export function getKitchenRoutePrinters(settings: PrintSettings): PrinterConfig[
  * UI ve runtime tarafından paylaşılan kategori → yazıcı çözümleyicisi.
  *
  * Öncelik:
- *   1. Aktif (kitchen/bar/custom) yazıcılardan kategoriyi *açıkça* listede
- *      tutan ilk yazıcı (= yönetici tarafından eşlenen yazıcı).
- *   2. Kategori listesi boş bırakılmış catch-all kitchen-route yazıcı.
- *   3. `defaultKitchenPrinter` (Ayarlar → Genel).
+ *   1. Aktif (kitchen/bar/custom) yazıcılardan kategoriyi listede tutan yazıcı.
+ *   2. Kategorisi olmayan ürünler → `defaultKitchenPrinter` (varsa).
+ *   3. `strictCategoryPrinterRouting === false` ise eski catch-all / varsayılan
+ *      (geriye dönük); varsayılan modda yalnızca açık eşleme.
  *
- * Sonuç olarak `null` dönerse mutfak fişi atanamaz; UI bunu kırmızı uyarı
- * ile gösterir.
+ * Eşleme yoksa `null` → mutfak fişine eklenmez.
  */
 export function resolveCategoryPrinter(
   settings: PrintSettings,
@@ -602,12 +599,14 @@ export function resolveCategoryPrinter(
   if (categoryId) {
     const matched = route.find((p) => p.categoryIds.length > 0 && p.categoryIds.includes(categoryId));
     if (matched) return { printerName: matched.printerName, source: 'category' };
+    if (settings.strictCategoryPrinterRouting) return null;
+    const catchAll = route.find((p) => p.categoryIds.length === 0);
+    if (catchAll) return { printerName: catchAll.printerName, source: 'catch-all' };
+    if (settings.defaultKitchenPrinter?.trim()) {
+      return { printerName: settings.defaultKitchenPrinter.trim(), source: 'default' };
+    }
+    return null;
   }
-  // Sıkı kategori yönlendirmesi: yalnızca açıkça eşlenenler basılsın;
-  // catch-all ve defaultKitchenPrinter fallback'lerine düşme.
-  if (settings.strictCategoryPrinterRouting) return null;
-  const catchAll = route.find((p) => p.categoryIds.length === 0);
-  if (catchAll) return { printerName: catchAll.printerName, source: 'catch-all' };
   if (settings.defaultKitchenPrinter?.trim()) {
     return { printerName: settings.defaultKitchenPrinter.trim(), source: 'default' };
   }
@@ -1870,18 +1869,10 @@ export async function printKitchenReceipts(opts: {
       await printOneKitchenBatch(logical, logicalGroups[logical]);
     }
     if (unresolved.length > 0) {
-      if (settings.strictCategoryPrinterRouting) {
-        console.warn(
-          `[ŞefPOS] Sıkı routing: ${unresolved.length} ürün yazıcı eşlemesi yok, BASILMADI:`,
-          unresolved.map((u) => u.productName).join(', '),
-        );
-      } else {
-        console.warn(
-          `[ŞefPOS] Mutfak fişi: ${unresolved.length} ürün yazıcı eşlemesi yok → varsayılan kuyruğa:`,
-          unresolved.map((u) => u.productName).join(', '),
-        );
-        await printOneKitchenBatch('', unresolved);
-      }
+      console.warn(
+        `[ŞefPOS] Mutfak fişi: ${unresolved.length} ürün yazıcı eşlemesi yok, BASILMADI:`,
+        unresolved.map((u) => u.productName).join(', '),
+      );
     }
     return;
   }
@@ -1896,24 +1887,12 @@ export async function printKitchenReceipts(opts: {
   }
 
   if (Object.keys(printerItemsMap).length === 0) {
-    if (settings.strictCategoryPrinterRouting) {
-      if (unresolved.length > 0) {
-        console.warn(
-          `[ŞefPOS] Sıkı routing: ${unresolved.length} ürün yazıcı eşlemesi yok, BASILMADI:`,
-          unresolved.map((u) => u.productName).join(', '),
-        );
-      }
-      return;
-    }
     if (unresolved.length > 0) {
       console.warn(
-        `[ŞefPOS] Mutfak fişi: ${unresolved.length} üründen hiçbirine yazıcı çözülemedi → fallback:`,
+        `[ŞefPOS] Mutfak fişi: ${unresolved.length} ürün yazıcı eşlemesi yok, BASILMADI:`,
         unresolved.map((u) => u.productName).join(', '),
       );
     }
-    const guessed = pickKitchenPrinterFromDevices(devices);
-    const toPrint = unresolved.length > 0 ? unresolved : filtered;
-    await printOneKitchenBatch(guessed, toPrint);
     return;
   }
 
@@ -1924,17 +1903,10 @@ export async function printKitchenReceipts(opts: {
   }
 
   if (unresolved.length > 0) {
-    if (settings.strictCategoryPrinterRouting) {
-      console.warn(
-        `[ŞefPOS] Sıkı routing: ${unresolved.length} ürün yazıcı eşlemesi yok, BASILMADI:`,
-        unresolved.map((u) => u.productName).join(', '),
-      );
-    } else {
-      console.warn(
-        `[ŞefPOS] Mutfak fişi: ${unresolved.length} ürün yazıcı çözülemedi (kategori eşlemesi yok), atlandı:`,
-        unresolved.map((u) => u.productName).join(', '),
-      );
-    }
+    console.warn(
+      `[ŞefPOS] Mutfak fişi: ${unresolved.length} ürün yazıcı eşlemesi yok, BASILMADI:`,
+      unresolved.map((u) => u.productName).join(', '),
+    );
   }
 }
 

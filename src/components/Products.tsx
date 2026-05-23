@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { Plus, CreditCard as Edit2, Trash2, Search, Printer, Ban, Save, X, Download, Barcode, Upload, CheckCircle, AlertCircle, FileSpreadsheet, ArrowDownCircle, ArrowRightLeft, History, ChevronDown, MoreVertical, ClipboardList } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
-import { loadPrintSettings, savePrintSettings } from '../lib/printService';
+import { loadPrintSettings, savePrintSettings, assignCategoryToKitchenPrinter } from '../lib/printService';
 import { queryCache } from '../lib/queryCache';
 import { displayMetaText } from '../lib/displayText';
 import * as XLSX from 'xlsx';
@@ -292,7 +292,14 @@ export function Products() {
       });
       setCategoryPrinterMap(map);
       setDisabledCategoryIds(ps.disabledCategoryIds || []);
-      const configured = ps.printers.filter(p => p.printerName).map(p => ({ name: p.printerName, label: p.label || p.printerName }));
+      const configured = ps.printers
+        .filter(
+          (p) =>
+            p.printerName &&
+            p.enabled &&
+            (p.type === 'kitchen' || p.type === 'bar' || p.type === 'custom'),
+        )
+        .map((p) => ({ name: p.printerName, label: p.label || p.printerName }));
       setAvailablePrinters(configured);
 
       if ((window as any).electronAPI?.getPrinters) {
@@ -1096,50 +1103,39 @@ export function Products() {
   };
 
   const saveCategoryPrinter = (categoryId: string, printerName: string) => {
-    const newMap = { ...categoryPrinterMap };
-    if (printerName) {
-      newMap[categoryId] = printerName;
+    let ps = loadPrintSettings();
+    if (!printerName) {
+      ps = assignCategoryToKitchenPrinter(ps, categoryId, -1);
     } else {
-      delete newMap[categoryId];
-    }
-    setCategoryPrinterMap(newMap);
-
-    const ps = loadPrintSettings();
-    // Önce kategori ID'sini TÜM yazıcılardan temizle (deterministik:
-    // bir kategori en fazla bir yazıcıda eşleşsin).
-    const cleanedPrinters = ps.printers.map(p => ({
-      ...p,
-      categoryIds: p.categoryIds.filter(cid => cid !== categoryId),
-    }));
-
-    let updatedPrinters = cleanedPrinters;
-    if (printerName) {
-      const targetIdx = cleanedPrinters.findIndex(p => p.printerName === printerName);
-      if (targetIdx >= 0) {
-        // Yazıcı zaten config'de — kategoriyi ekle ve enabled olduğundan emin ol.
-        updatedPrinters = cleanedPrinters.map((p, i) =>
-          i === targetIdx
-            ? { ...p, enabled: true, categoryIds: [...p.categoryIds, categoryId] }
-            : p,
-        );
-      } else {
-        // Yazıcı henüz Ayarlar > Yazıcılar'da kayıtlı değil. Otomatik olarak
-        // kitchen tipli yeni bir satır ekle ki esleme gerçekten çalışsın
-        // (aksi halde printKitchenReceipts catch-all veya defaultKitchenPrinter'a düşer).
-        const found = availablePrinters.find(p => p.name === printerName);
-        updatedPrinters = [
-          ...cleanedPrinters,
-          {
-            printerName,
-            label: found?.label || printerName,
-            type: 'kitchen' as const,
-            categoryIds: [categoryId],
-            enabled: true,
-          },
-        ];
+      let targetIdx = ps.printers.findIndex((p) => p.printerName === printerName);
+      if (targetIdx < 0) {
+        const found = availablePrinters.find((p) => p.name === printerName);
+        ps = {
+          ...ps,
+          printers: [
+            ...ps.printers,
+            {
+              printerName,
+              label: found?.label || printerName,
+              type: 'kitchen' as const,
+              categoryIds: [],
+              enabled: true,
+            },
+          ],
+        };
+        targetIdx = ps.printers.length - 1;
       }
+      ps = assignCategoryToKitchenPrinter(ps, categoryId, targetIdx);
     }
-    savePrintSettings({ ...ps, printers: updatedPrinters });
+    savePrintSettings(ps);
+
+    const map: Record<string, string> = {};
+    ps.printers.forEach((p) => {
+      p.categoryIds.forEach((cid) => {
+        if (!map[cid]) map[cid] = p.printerName;
+      });
+    });
+    setCategoryPrinterMap(map);
     setShowCategoryPrinter(null);
   };
 
@@ -1442,7 +1438,7 @@ export function Products() {
                                   onClick={() => saveCategoryPrinter(cat.id, '')}
                                   className={`w-full text-left px-2 py-1.5 rounded-lg text-xs transition flex items-center gap-1.5 ${!categoryPrinterMap[cat.id] ? 'bg-orange-50 text-orange-700 font-bold' : 'hover:bg-slate-50 text-slate-600'}`}
                                 >
-                                  <Printer size={10} /> Tüm yazıcılara gönder
+                                  <Printer size={10} /> Yazıcı yok (basılmaz)
                                 </button>
                                 {availablePrinters.map(p => (
                                   <button

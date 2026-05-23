@@ -1,6 +1,10 @@
 import { supabase } from './supabase';
 
 const WIPE_HANDLED_KEY = 'shefpos_wipe_handled_ids';
+/** Girişte yakalanan eski bildirimler — yalnızca bu süre içinde otomatik silinir */
+const WIPE_CATCHUP_MAX_AGE_MS = 120_000;
+
+const wipeInFlight = new Set<string>();
 
 function getHandledWipeIds(): Set<string> {
   try {
@@ -14,6 +18,30 @@ function markWipeHandled(id: string): void {
   const set = getHandledWipeIds();
   set.add(id);
   localStorage.setItem(WIPE_HANDLED_KEY, JSON.stringify(Array.from(set).slice(-200)));
+}
+
+export function isWipeLocalNotificationHandled(id: string): boolean {
+  return getHandledWipeIds().has(id);
+}
+
+/** Kullanıcı bildirimi kapattığında veya eski komutu yoksaydığında */
+export function skipWipeLocalNotification(id: string): void {
+  markWipeHandled(id);
+}
+
+/**
+ * Yalnızca canlı INSERT veya abonelik açılışındaki çok taze bildirimler otomatik çalışır.
+ * Eski wipe_local kayıtları girişte tekrar tetiklenmez (bildirim listesinden manuel yapılır).
+ */
+export function shouldAutoProcessWipeLocal(
+  notif: { id: string; created_at?: string },
+  source: 'realtime' | 'catchup',
+): boolean {
+  if (isWipeLocalNotificationHandled(notif.id)) return false;
+  if (source === 'realtime') return true;
+  if (!notif.created_at) return false;
+  const age = Date.now() - new Date(notif.created_at).getTime();
+  return age >= 0 && age <= WIPE_CATCHUP_MAX_AGE_MS;
 }
 
 function showWipeOverlay(message: string): void {
@@ -39,16 +67,20 @@ export async function processWipeLocalNotification(
     id: string;
     type?: string;
     tenant_id?: string | null;
+    created_at?: string;
   },
   opts?: { force?: boolean },
 ): Promise<boolean> {
   if (notif.type !== 'wipe_local') return false;
-  if (!opts?.force && getHandledWipeIds().has(notif.id)) return false;
+  if (!opts?.force && isWipeLocalNotificationHandled(notif.id)) return false;
+  if (wipeInFlight.has(notif.id)) return false;
+  wipeInFlight.add(notif.id);
 
   const api = (window as any).electronAPI;
   const isElectron = !!api;
 
   if (isElectron && typeof api.wipeLocalData !== 'function') {
+    wipeInFlight.delete(notif.id);
     window.alert(
       'Yerel veri temizleme bu sürümde desteklenmiyor.\n\n' +
         'Lütfen ŞefPOS 1.0.202 veya üzeri sürüme güncelleyin, ardından bildirimi tekrar gönderin.',
@@ -99,6 +131,8 @@ export async function processWipeLocalNotification(
     document.getElementById('sefpos-wipe-overlay')?.remove();
     window.alert(`Yerel veri temizlenemedi: ${msg}`);
     return false;
+  } finally {
+    wipeInFlight.delete(notif.id);
   }
 }
 

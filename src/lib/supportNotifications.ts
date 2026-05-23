@@ -170,8 +170,10 @@ export async function dispatchIncomingSupportNotification(n: {
   tenant_id?: string | null;
 }): Promise<boolean> {
   if (n.type !== 'wipe_local') return false;
-  const { processWipeLocalNotification } = await import('./remoteWipe');
-  void processWipeLocalNotification(n);
+  const { processWipeLocalNotification, shouldAutoProcessWipeLocal } = await import('./remoteWipe');
+  if (shouldAutoProcessWipeLocal(n, 'realtime')) {
+    void processWipeLocalNotification(n);
+  }
   return true;
 }
 

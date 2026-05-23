@@ -52,7 +52,7 @@ import {
   getDismissedIds,
   isNotificationUnread,
 } from './lib/supportNotifications';
-import { processWipeLocalNotification } from './lib/remoteWipe';
+import { processWipeLocalNotification, shouldAutoProcessWipeLocal } from './lib/remoteWipe';
 import { OnlineOrderToast } from './components/OnlineOrderToast';
 import { GlobalGetirSync } from './components/GlobalGetirSync';
 import { PrintStatusToast } from './components/PrintStatusToast';
@@ -337,7 +337,9 @@ function App() {
         if (n.tenant_id && n.tenant_id !== tenant.id) return;
         if (n.type === 'revoke') return;
         if (n.type === 'wipe_local') {
-          void processWipeLocalNotification(n);
+          if (shouldAutoProcessWipeLocal(n, 'realtime')) {
+            void processWipeLocalNotification(n);
+          }
           return;
         }
         showNewNotification(n);
@@ -357,7 +359,9 @@ function App() {
             .reverse()
             .forEach((n) => {
               if (n.type === 'wipe_local') {
-                void processWipeLocalNotification(n);
+                if (shouldAutoProcessWipeLocal(n, 'catchup')) {
+                  void processWipeLocalNotification(n);
+                }
                 return;
               }
               showNewNotification(n);
@@ -369,19 +373,6 @@ function App() {
       supabase.removeChannel(channel);
     };
   }, [tenant, user, showNewNotification]);
-
-  useEffect(() => {
-    if (!tenant?.id || !user) return;
-    const maxAgeMs = 48 * 60 * 60 * 1000;
-    const now = Date.now();
-    void fetchSupportNotifications(tenant.id, 50).then((rows) => {
-      for (const n of rows) {
-        if (n.type !== 'wipe_local') continue;
-        if (now - new Date(n.created_at).getTime() > maxAgeMs) continue;
-        void processWipeLocalNotification(n);
-      }
-    });
-  }, [tenant?.id, user]);
 
   const handleTableGridRefresh = useCallback((fn: () => void) => {
     tableRefreshRef.current = fn;

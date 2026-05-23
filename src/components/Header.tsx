@@ -17,7 +17,11 @@ import {
   notificationTypeLabel,
   type SupportNotificationRow,
 } from '../lib/supportNotifications';
-import { processWipeLocalNotification } from '../lib/remoteWipe';
+import {
+  processWipeLocalNotification,
+  shouldAutoProcessWipeLocal,
+  skipWipeLocalNotification,
+} from '../lib/remoteWipe';
 import { publicAsset } from '../lib/assetUrl';
 import {
   ELECTRON_HEADER_BAR_CLASS,
@@ -152,13 +156,6 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
     const rows = await fetchSupportNotifications(tenant.id);
     setSystemNotifs(rows);
     setSystemUnreadCount(countUnreadNotifications(rows, tenant.id));
-    const maxAgeMs = 48 * 60 * 60 * 1000;
-    const now = Date.now();
-    for (const n of rows) {
-      if (n.type !== 'wipe_local') continue;
-      if (now - new Date(n.created_at).getTime() > maxAgeMs) continue;
-      void processWipeLocalNotification(n);
-    }
   };
 
   const loadAllNotifications = async () => {
@@ -173,6 +170,9 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
     if (!result.ok) {
       alert('Bildirim kaldırılamadı: ' + (result.error || 'hata'));
       return;
+    }
+    if (notif.type === 'wipe_local') {
+      skipWipeLocalNotification(notif.id);
     }
     setSystemNotifs((prev) => {
       const next = prev.filter((row) => row.id !== notif.id);
@@ -214,7 +214,16 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
         if (n.tenant_id && n.tenant_id !== tenant.id) return;
         if (n.type === 'revoke') return;
         if (n.type === 'wipe_local') {
-          void processWipeLocalNotification(n);
+          if (shouldAutoProcessWipeLocal(n, 'realtime')) {
+            void processWipeLocalNotification(n);
+          } else {
+            setSystemNotifs((prev) => {
+              if (prev.some((row) => row.id === n.id)) return prev;
+              const next = [n, ...prev].slice(0, 50);
+              setSystemUnreadCount(countUnreadNotifications(next, tenant.id));
+              return next;
+            });
+          }
           return;
         }
         setSystemNotifs((prev) => {

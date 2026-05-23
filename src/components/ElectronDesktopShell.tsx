@@ -42,7 +42,7 @@ type UpdateState =
   | { kind: 'ready'; version: string; releaseNotes: string; releaseName: string }
   | { kind: 'error'; message: string };
 
-const RELEASE_PAGE_URL = 'https://github.com/sefposbulut/sefpos-releases/releases/latest';
+const RELEASE_PAGE_URL = 'https://www.sefpos.com.tr/download/setup';
 
 const RELEASE_NOTES_SEEN_KEY = 'sefpos_release_notes_seen_version';
 const PENDING_RELEASE_NOTES_KEY = 'sefpos_pending_release_notes';
