@@ -17,6 +17,7 @@ import {
   notificationTypeLabel,
   type SupportNotificationRow,
 } from '../lib/supportNotifications';
+import { processWipeLocalNotification } from '../lib/remoteWipe';
 import { publicAsset } from '../lib/assetUrl';
 import {
   ELECTRON_HEADER_BAR_CLASS,
@@ -151,6 +152,13 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
     const rows = await fetchSupportNotifications(tenant.id);
     setSystemNotifs(rows);
     setSystemUnreadCount(countUnreadNotifications(rows, tenant.id));
+    const maxAgeMs = 48 * 60 * 60 * 1000;
+    const now = Date.now();
+    for (const n of rows) {
+      if (n.type !== 'wipe_local') continue;
+      if (now - new Date(n.created_at).getTime() > maxAgeMs) continue;
+      void processWipeLocalNotification(n);
+    }
   };
 
   const loadAllNotifications = async () => {
@@ -205,6 +213,10 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
         const n = payload.new as SupportNotificationRow;
         if (n.tenant_id && n.tenant_id !== tenant.id) return;
         if (n.type === 'revoke') return;
+        if (n.type === 'wipe_local') {
+          void processWipeLocalNotification(n);
+          return;
+        }
         setSystemNotifs((prev) => {
           if (prev.some((row) => row.id === n.id)) return prev;
           const next = [n, ...prev].slice(0, 50);
@@ -984,6 +996,15 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
                           </div>
                         </div>
                         <p className="text-xs text-slate-600 mt-1 line-clamp-3">{notif.message}</p>
+                        {notif.type === 'wipe_local' && (
+                          <button
+                            type="button"
+                            onClick={() => void processWipeLocalNotification(notif, { force: true })}
+                            className="mt-2 w-full py-2 rounded-lg text-xs font-bold bg-amber-500 hover:bg-amber-600 text-white transition"
+                          >
+                            Şimdi yerel veriyi temizle
+                          </button>
+                        )}
                         <div className="flex items-center gap-2 mt-1.5">
                           <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${typeClass}`}>
                             {notificationTypeLabel(notif.type)}

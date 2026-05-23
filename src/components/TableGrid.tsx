@@ -223,6 +223,25 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
   const [mobileTableCols, setMobileTableCols] = useState<number>(3);
   const [mobileZoomOpen, setMobileZoomOpen] = useState(false);
   const [showReprintModal, setShowReprintModal] = useState(false);
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'v' && e.key !== 'V') return;
+      const target = e.target as HTMLElement;
+      if (
+        target.tagName === 'INPUT' ||
+        target.tagName === 'TEXTAREA' ||
+        target.tagName === 'SELECT' ||
+        target.isContentEditable
+      ) {
+        return;
+      }
+      e.preventDefault();
+      setShowReprintModal(true);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
   const [desktopTableCols, setDesktopTableCols] = useState<number>(6);
   const [mobileColsTouched, setMobileColsTouched] = useState(false);
   const [desktopColsTouched, setDesktopColsTouched] = useState(false);
@@ -1009,12 +1028,14 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
             </div>
 
             <button
+              type="button"
               onClick={() => setShowReprintModal(true)}
-              className="hidden md:flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white border border-slate-200 text-slate-700 hover:border-orange-300 hover:text-orange-700 hover:bg-orange-50/80 shrink-0 active:scale-95 text-xs font-bold transition-colors"
-              title="Geçmiş siparişlerin adisyonunu yeniden bas"
+              className="flex items-center gap-1 px-2 md:px-3 py-2 rounded-xl bg-white border border-slate-200 text-slate-700 hover:border-orange-300 hover:text-orange-700 hover:bg-orange-50/80 shrink-0 active:scale-95 text-[10px] md:text-xs font-bold transition-colors"
+              title="Geçmiş adisyonlar (V)"
             >
-              <Receipt className="w-3.5 h-3.5 text-orange-600" />
-              Adisyon
+              <Receipt className="w-3.5 h-3.5 text-orange-600 shrink-0" />
+              <span className="hidden sm:inline">Geçmiş adisyonlar</span>
+              <span className="sm:hidden">Geçmiş</span>
             </button>
 
             <div className="hidden md:flex items-center gap-0.5 bg-slate-100 rounded-xl p-1 border border-slate-200/80 shrink-0">

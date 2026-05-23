@@ -325,7 +325,6 @@ function App() {
 
   useEffect(() => {
     if (!tenant || !user) return;
-    if (isSqlServerMode()) return;
 
     const channel = supabase
       .channel(`system-notifs-${tenant.id}`)
@@ -373,10 +372,13 @@ function App() {
 
   useEffect(() => {
     if (!tenant?.id || !user) return;
-    if (isSqlServerMode()) return;
-    void fetchSupportNotifications(tenant.id, 30).then((rows) => {
+    const maxAgeMs = 48 * 60 * 60 * 1000;
+    const now = Date.now();
+    void fetchSupportNotifications(tenant.id, 50).then((rows) => {
       for (const n of rows) {
-        if (n.type === 'wipe_local') void processWipeLocalNotification(n);
+        if (n.type !== 'wipe_local') continue;
+        if (now - new Date(n.created_at).getTime() > maxAgeMs) continue;
+        void processWipeLocalNotification(n);
       }
     });
   }, [tenant?.id, user]);

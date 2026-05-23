@@ -355,10 +355,10 @@ export function CashRegister({ onClose }: CashRegisterProps) {
           <button
             onClick={() => setShowReprintModal(true)}
             className="hidden sm:flex items-center gap-1.5 bg-white/20 hover:bg-white/30 text-white text-sm px-3 py-1.5 rounded-lg border border-white/30 transition-all active:scale-95"
-            title="Geçmiş siparişlerin adisyonunu yeniden bas"
+            title="Geçmiş adisyonlar"
           >
             <Printer className="w-4 h-4" />
-            <span className="font-bold">Adisyon Yazdır</span>
+            <span className="font-bold">Geçmiş adisyonlar</span>
           </button>
           <button onClick={onClose} className="text-white hover:bg-white/20 p-2 rounded-lg transition-all active:scale-95">
             <X className="w-6 h-6 md:w-7 md:h-7" />

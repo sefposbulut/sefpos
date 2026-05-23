@@ -11,6 +11,9 @@ import { dispatchPrintToast } from '../lib/printToasts';
 
 interface ReprintReceiptModalProps {
   onClose: () => void;
+  /** Yalnızca bu masanın siparişleri (sipariş panelinden açılırsa). */
+  filterTableId?: string | null;
+  filterTableNumber?: number | null;
 }
 
 interface OrderRow {
@@ -78,23 +81,29 @@ function periodRange(p: Period): { start: string; end: string } {
   };
 }
 
-export function ReprintReceiptModal({ onClose }: ReprintReceiptModalProps) {
+export function ReprintReceiptModal({
+  onClose,
+  filterTableId = null,
+  filterTableNumber = null,
+}: ReprintReceiptModalProps) {
   const { tenant, activeBranch } = useAuth();
-  const [period, setPeriod] = useState<Period>('today');
+  const [period, setPeriod] = useState<Period>('last7');
   const [search, setSearch] = useState('');
   const [orders, setOrders] = useState<OrderRow[]>([]);
   const [loading, setLoading] = useState(false);
+  const [fetchError, setFetchError] = useState<string | null>(null);
   const [printingId, setPrintingId] = useState<string | null>(null);
 
   const load = async () => {
     if (!tenant) return;
     setLoading(true);
+    setFetchError(null);
     try {
       const { start, end } = periodRange(period);
       let q: any = supabase
         .from('orders')
         .select(
-          'id, order_number, total_amount, subtotal, tax_amount, discount_amount, status, payment_method, order_type, table_id, created_at, closed_at, tables(table_number)',
+          'id, order_number, total_amount, subtotal, tax_amount, discount_amount, status, payment_method, order_type, table_id, created_at, closed_at, restaurant_tables(table_number)',
         )
         .eq('tenant_id', tenant.id)
         .gte('created_at', start)
@@ -102,34 +111,41 @@ export function ReprintReceiptModal({ onClose }: ReprintReceiptModalProps) {
         .order('created_at', { ascending: false })
         .limit(200);
       if (activeBranch?.id) {
-        q = q.eq('branch_id', activeBranch.id);
+        q = q.or(`branch_id.eq.${activeBranch.id},branch_id.is.null`);
+      }
+      if (filterTableId) {
+        q = q.eq('table_id', filterTableId);
       }
       const { data, error } = await q;
       if (error) {
-        console.warn('[ŞefPOS] reprint orders fetch hatası:', error.message);
+        console.warn('[ŞefPOS] geçmiş adisyonlar fetch hatası:', error.message);
+        setFetchError(error.message);
         setOrders([]);
       } else {
-        const rows: OrderRow[] = (data || []).map((o: any) => ({
-          id: o.id,
-          order_number: o.order_number,
-          total_amount: o.total_amount,
-          subtotal: o.subtotal,
-          tax_amount: o.tax_amount,
-          discount_amount: o.discount_amount,
-          status: o.status,
-          payment_method: o.payment_method,
-          order_type: o.order_type,
-          table_id: o.table_id,
-          created_at: o.created_at,
-          closed_at: o.closed_at,
-          table_number: o.tables?.table_number ?? null,
-          table_label:
-            o.order_type === 'takeaway'
-              ? 'Paket'
-              : o.tables?.table_number != null
-              ? `Masa ${o.tables.table_number}`
-              : '—',
-        }));
+        const rows: OrderRow[] = (data || []).map((o: any) => {
+          const tableNum = o.restaurant_tables?.table_number ?? null;
+          return {
+            id: o.id,
+            order_number: o.order_number,
+            total_amount: o.total_amount,
+            subtotal: o.subtotal,
+            tax_amount: o.tax_amount,
+            discount_amount: o.discount_amount,
+            status: o.status,
+            payment_method: o.payment_method,
+            order_type: o.order_type,
+            table_id: o.table_id,
+            created_at: o.created_at,
+            closed_at: o.closed_at,
+            table_number: tableNum,
+            table_label:
+              o.order_type === 'takeaway'
+                ? 'Paket'
+                : tableNum != null
+                  ? `Masa ${tableNum}`
+                  : '—',
+          };
+        });
         setOrders(rows);
       }
     } finally {
@@ -139,7 +155,7 @@ export function ReprintReceiptModal({ onClose }: ReprintReceiptModalProps) {
 
   useEffect(() => {
     void load();
-  }, [period, tenant?.id, activeBranch?.id]);
+  }, [period, tenant?.id, activeBranch?.id, filterTableId]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -254,9 +270,11 @@ export function ReprintReceiptModal({ onClose }: ReprintReceiptModalProps) {
           <div className="flex items-center gap-2 min-w-0">
             <Receipt className="w-5 h-5 shrink-0" />
             <div className="min-w-0">
-              <h3 className="font-bold text-base truncate">Adisyon Yazdır (Geçmiş)</h3>
+              <h3 className="font-bold text-base truncate">Geçmiş adisyonlar</h3>
               <p className="text-xs opacity-90 truncate">
-                Geçmiş siparişlerin adisyonunu yeniden bas
+                {filterTableNumber != null
+                  ? `Masa ${filterTableNumber} — kapanmış siparişleri yeniden yazdır`
+                  : 'Kapanmış siparişlerin adisyonunu yeniden yazdır'}
               </p>
             </div>
           </div>
@@ -311,10 +329,19 @@ export function ReprintReceiptModal({ onClose }: ReprintReceiptModalProps) {
               <RefreshCw className="w-6 h-6 animate-spin" />
               <span className="text-sm">Yükleniyor…</span>
             </div>
-          ) : filtered.length === 0 ? (
-            <div className="flex flex-col items-center justify-center text-slate-400 py-12 gap-2">
+          ) : fetchError ? (
+            <div className="flex flex-col items-center justify-center text-red-600 py-12 gap-2 px-4 text-center">
               <Receipt className="w-8 h-8" />
-              <span className="text-sm">Sipariş bulunamadı</span>
+              <span className="text-sm font-semibold">Liste yüklenemedi</span>
+              <span className="text-xs text-red-500">{fetchError}</span>
+            </div>
+          ) : filtered.length === 0 ? (
+            <div className="flex flex-col items-center justify-center text-slate-400 py-12 gap-2 px-4 text-center">
+              <Receipt className="w-8 h-8" />
+              <span className="text-sm font-semibold">Bu dönemde sipariş yok</span>
+              <span className="text-xs">
+                Üstten &quot;Son 7 gün&quot; veya &quot;Son 30 gün&quot; seçip yenileyin.
+              </span>
             </div>
           ) : (
             <ul className="divide-y divide-slate-100">

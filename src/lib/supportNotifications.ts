@@ -160,7 +160,20 @@ const NOTIF_TYPE_LABELS: Record<string, string> = {
   success: 'Başarılı',
   warning: 'Uyarı',
   error: 'Önemli',
+  wipe_local: 'Yerel temizleme',
 };
+
+/** Gelen bildirimi işle; wipe_local ise true döner (toast gösterme). */
+export async function dispatchIncomingSupportNotification(n: {
+  id: string;
+  type?: string;
+  tenant_id?: string | null;
+}): Promise<boolean> {
+  if (n.type !== 'wipe_local') return false;
+  const { processWipeLocalNotification } = await import('./remoteWipe');
+  void processWipeLocalNotification(n);
+  return true;
+}
 
 export function notificationTypeLabel(type: string): string {
   return NOTIF_TYPE_LABELS[type] || 'Bildirim';
