@@ -3,7 +3,7 @@ import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { isModuleEnabled } from '../lib/modules';
 import { Database } from '../lib/supabase';
-import { Plus, Clock, Lock, ZoomIn, ZoomOut, ScanBarcode, Truck, Eye, EyeOff, Receipt, Maximize2 } from 'lucide-react';
+import { Plus, Minus, Clock, Lock, ZoomIn, ZoomOut, ScanBarcode, Truck, Eye, EyeOff, Receipt, Maximize2, LayoutGrid } from 'lucide-react';
 import { useUiPrefs, setHeaderHidden } from '../lib/uiPrefs';
 import { ReprintReceiptModal } from './ReprintReceiptModal';
 import { isLocalMode, isOfflineMode, isSqlServerMode } from '../lib/sqlDb';
@@ -169,7 +169,6 @@ function readSnapshotForKey(
 // boyut hep korunur. (Eski scoped anahtarlar varsa migrate edilir.)
 const MOBILE_COLS_KEY = 'sefpos.tableGrid.mobileCols';
 const DESKTOP_COLS_KEY = 'sefpos.tableGrid.desktopCols';
-
 function readPersistedCols(globalKey: string, legacyPrefix: string): number | null {
   try {
     const direct = localStorage.getItem(globalKey);
@@ -189,6 +188,22 @@ function readPersistedCols(globalKey: string, legacyPrefix: string): number | nu
     }
   } catch {}
   return null;
+}
+
+function initMobileColsState(): { cols: number; touched: boolean } {
+  const parsed = readPersistedCols(MOBILE_COLS_KEY, 'mobileTableCols');
+  if (parsed != null) {
+    return { cols: Math.min(6, Math.max(2, parsed)), touched: true };
+  }
+  return { cols: 4, touched: false };
+}
+
+function initDesktopColsState(): { cols: number; touched: boolean } {
+  const parsed = readPersistedCols(DESKTOP_COLS_KEY, 'desktopTableCols');
+  if (parsed != null) {
+    return { cols: Math.min(12, Math.max(3, parsed)), touched: true };
+  }
+  return { cols: 6, touched: false };
 }
 
 export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayButton = true }: TableGridProps) {
@@ -229,8 +244,11 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
     } catch {}
   }, [footerAmountVisible]);
 
-  const [mobileTableCols, setMobileTableCols] = useState<number>(3);
-  const [mobileZoomOpen, setMobileZoomOpen] = useState(false);
+  const mobileColsInit = initMobileColsState();
+  const desktopColsInit = initDesktopColsState();
+  const [mobileTableCols, setMobileTableCols] = useState<number>(mobileColsInit.cols);
+  const [mobileColsTouched, setMobileColsTouched] = useState(mobileColsInit.touched);
+  const [mobileLayoutSheetOpen, setMobileLayoutSheetOpen] = useState(false);
   const [showReprintModal, setShowReprintModal] = useState(false);
 
   useEffect(() => {
@@ -251,10 +269,9 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
-  const [desktopTableCols, setDesktopTableCols] = useState<number>(6);
-  const [mobileColsTouched, setMobileColsTouched] = useState(false);
-  const [desktopColsTouched, setDesktopColsTouched] = useState(false);
-  const [colsPrefsReady, setColsPrefsReady] = useState(false);
+  const [desktopTableCols, setDesktopTableCols] = useState<number>(desktopColsInit.cols);
+  const [desktopColsTouched, setDesktopColsTouched] = useState(desktopColsInit.touched);
+  const [colsPrefsReady] = useState(true);
   const corporateFontFamily = '"Inter", "Segoe UI", "Arial", sans-serif';
   const channelsRef = useRef<ReturnType<typeof supabase.channel>[]>([]);
   const pendingUpdatesRef = useRef<Set<string>>(new Set());
@@ -270,8 +287,8 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
   );
 
   const getAutoMobileCols = useCallback((_count: number) => {
-    // Default mobile layout should be consistently 3 columns.
-    return 3;
+    // Mobilde varsayılan 4 sütun — kartlar daha dar, sağ kenar dokunulabilir kalır.
+    return 4;
   }, []);
 
   const getAutoDesktopCols = useCallback((count: number) => {
@@ -608,35 +625,29 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
   }, [onSelectTable]);
 
   useEffect(() => {
-    setColsPrefsReady(false);
-    const parsedMobile = readPersistedCols(MOBILE_COLS_KEY, 'mobileTableCols');
-    const parsedDesktop = readPersistedCols(DESKTOP_COLS_KEY, 'desktopTableCols');
-
-    if (parsedMobile != null) {
-      setMobileTableCols(Math.min(6, Math.max(2, parsedMobile)));
-      setMobileColsTouched(true);
-    } else {
-      setMobileColsTouched(false);
-    }
-
-    if (parsedDesktop != null) {
-      setDesktopTableCols(Math.min(12, Math.max(3, parsedDesktop)));
-      setDesktopColsTouched(true);
-    } else {
-      setDesktopColsTouched(false);
-    }
-    setColsPrefsReady(true);
-  }, []);
-
-  useEffect(() => {
     if (!mobileColsTouched) return;
-    localStorage.setItem(mobileColsStorageKey, String(mobileTableCols));
+    try {
+      localStorage.setItem(mobileColsStorageKey, String(mobileTableCols));
+    } catch { /* ignore */ }
   }, [mobileColsStorageKey, mobileTableCols, mobileColsTouched]);
 
   useEffect(() => {
     if (!desktopColsTouched) return;
-    localStorage.setItem(desktopColsStorageKey, String(desktopTableCols));
+    try {
+      localStorage.setItem(desktopColsStorageKey, String(desktopTableCols));
+    } catch { /* ignore */ }
   }, [desktopColsStorageKey, desktopTableCols, desktopColsTouched]);
+
+  const setMobileTableColsPersisted = useCallback((updater: (prev: number) => number) => {
+    setMobileColsTouched(true);
+    setMobileTableCols((prev) => {
+      const next = Math.min(6, Math.max(2, updater(prev)));
+      try {
+        localStorage.setItem(MOBILE_COLS_KEY, String(next));
+      } catch { /* ignore */ }
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
     if (!colsPrefsReady) return;
@@ -1035,13 +1046,14 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
               <button
                 type="button"
                 onClick={() => setSelectedGroup(null)}
-                className={`px-3 py-2 md:px-4 md:py-2.5 rounded-lg font-bold whitespace-nowrap transition-all text-xs md:text-sm active:scale-[0.98] shrink-0 border-2 ${
+                className={`px-2 py-1.5 md:px-4 md:py-2.5 rounded-lg font-bold whitespace-nowrap transition-all text-[10px] md:text-sm active:scale-[0.98] shrink-0 border-2 ${
                   selectedGroup === null
                     ? 'bg-gradient-to-r from-green-500 to-green-600 text-white border-green-700 shadow-md ring-1 ring-green-400/50'
                     : 'bg-gradient-to-r from-green-500 to-green-600 text-white border-green-700 opacity-90 hover:opacity-100'
                 }`}
               >
-                AÇIK MASALAR
+                <span className="md:hidden">AÇIK</span>
+                <span className="hidden md:inline">AÇIK MASALAR</span>
                 <span className="ml-1.5 tabular-nums text-[11px] md:text-xs font-extrabold opacity-95">
                   ({groupStats.get(null)?.occupied ?? 0})
                 </span>
@@ -1092,7 +1104,8 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
 
             <div className="hidden md:flex items-center gap-0.5 bg-slate-100 rounded-xl p-1 border border-slate-200/80 shrink-0">
               <button
-                onClick={() => { setDesktopColsTouched(true); setDesktopTableCols(prev => Math.min(12, prev + 1)); }}
+                type="button"
+                onClick={() => { setDesktopColsTouched(true); setDesktopTableCols((prev) => Math.min(12, prev + 1)); }}
                 disabled={desktopTableCols >= 12}
                 className="w-8 h-8 flex items-center justify-center rounded-lg bg-white text-slate-600 hover:bg-white shadow-sm active:scale-90 disabled:opacity-30"
                 title="Küçült"
@@ -1101,7 +1114,8 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
               </button>
               <span className="text-xs font-bold text-slate-600 w-5 text-center tabular-nums">{desktopTableCols}</span>
               <button
-                onClick={() => { setDesktopColsTouched(true); setDesktopTableCols(prev => Math.max(3, prev - 1)); }}
+                type="button"
+                onClick={() => { setDesktopColsTouched(true); setDesktopTableCols((prev) => Math.max(3, prev - 1)); }}
                 disabled={desktopTableCols <= 3}
                 className="w-8 h-8 flex items-center justify-center rounded-lg bg-white text-slate-600 hover:bg-white shadow-sm active:scale-90 disabled:opacity-30"
                 title="Büyüt"
@@ -1113,65 +1127,34 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
         </div>
       )}
 
-      {/* Mobile floating zoom panel */}
-      <div className="md:hidden fixed right-0 top-1/2 -translate-y-1/2 z-50 flex items-center">
+      <div className="md:hidden flex-1 min-h-0 flex flex-col min-w-0 bg-white">
         <div
-          className="flex items-center transition-transform duration-300 ease-in-out"
-          style={{ transform: mobileZoomOpen ? 'translateX(0)' : 'translateX(calc(100% - 36px))' }}
-        >
-          <button
-            onClick={() => setMobileZoomOpen(p => !p)}
-            className="w-9 h-20 bg-orange-500 text-white rounded-l-2xl flex items-center justify-center shadow-xl shrink-0 active:scale-95"
-            style={{ touchAction: 'manipulation' }}
-          >
-            {mobileZoomOpen
-              ? <ZoomOut className="w-4 h-4" />
-              : <ZoomIn className="w-4 h-4" />}
-          </button>
-          <div className="bg-white shadow-2xl rounded-l-2xl flex flex-col items-center py-4 px-3 gap-3 border border-gray-200">
-            <button
-              onClick={() => { setMobileColsTouched(true); setMobileTableCols(prev => Math.max(2, prev - 1)); }}
-              disabled={mobileTableCols <= 2}
-              className="w-11 h-11 flex items-center justify-center rounded-xl bg-orange-50 border-2 border-orange-200 text-orange-600 active:scale-90 disabled:opacity-30 shadow"
-            >
-              <ZoomIn className="w-5 h-5" />
-            </button>
-            <span className="text-base font-black text-gray-700 w-6 text-center">{mobileTableCols}</span>
-            <button
-              onClick={() => { setMobileColsTouched(true); setMobileTableCols(prev => Math.min(6, prev + 1)); }}
-              disabled={mobileTableCols >= 6}
-              className="w-11 h-11 flex items-center justify-center rounded-xl bg-gray-50 border-2 border-gray-200 text-gray-600 active:scale-90 disabled:opacity-30 shadow"
-            >
-              <ZoomOut className="w-5 h-5" />
-            </button>
-          </div>
-        </div>
-      </div>
-
-      <div
-        className="md:hidden flex-1 min-h-0 overflow-y-auto bg-white p-3 touch-pan-y"
-        style={{ overscrollBehaviorY: 'contain', WebkitOverflowScrolling: 'touch' }}
-        onPointerDownCapture={(e) => {
-          if (e.pointerType === 'mouse' && e.button !== 0) return;
-          mobileScrollMovedRef.current = false;
-          mobilePointerStartRef.current = { x: e.clientX, y: e.clientY };
-        }}
-        onPointerMoveCapture={(e) => {
-          const start = mobilePointerStartRef.current;
-          if (!start || mobileScrollMovedRef.current) return;
-          if (Math.hypot(e.clientX - start.x, e.clientY - start.y) > 12) {
-            mobileScrollMovedRef.current = true;
-          }
-        }}
-      >
-        <div
+          className="flex-1 min-h-0 overflow-y-auto px-2 py-2 touch-pan-y"
           style={{
-            display: 'grid',
-            gridTemplateColumns: `repeat(${mobileTableCols}, minmax(0, 1fr))`,
-            gap: 10,
-            paddingBottom: 'calc(12px + env(safe-area-inset-bottom, 0px))',
+            overscrollBehaviorY: 'contain',
+            WebkitOverflowScrolling: 'touch',
+          }}
+          onPointerDownCapture={(e) => {
+            if (e.pointerType === 'mouse' && e.button !== 0) return;
+            mobileScrollMovedRef.current = false;
+            mobilePointerStartRef.current = { x: e.clientX, y: e.clientY };
+          }}
+          onPointerMoveCapture={(e) => {
+            const start = mobilePointerStartRef.current;
+            if (!start || mobileScrollMovedRef.current) return;
+            if (Math.hypot(e.clientX - start.x, e.clientY - start.y) > 12) {
+              mobileScrollMovedRef.current = true;
+            }
           }}
         >
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: `repeat(${mobileTableCols}, minmax(0, 1fr))`,
+              gap: 8,
+              paddingBottom: 'calc(64px + env(safe-area-inset-bottom, 0px))',
+            }}
+          >
           {filteredTables.map((table) => {
             const isLocked = !!(table as any).payment_locked;
             const isPartial = !isLocked && table.order?.payment_status === 'partial';
@@ -1183,14 +1166,14 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
             const tableNum = String(table.table_number);
             const isMany = mobileTableCols >= 5;
             const isMedium = mobileTableCols === 4;
-            const cardH = isMany ? 72 : isMedium ? 96 : 120;
+            const cardH = isMany ? 64 : isMedium ? 84 : 100;
             const numFontSize = isMany
-              ? (tableNum.length <= 2 ? 24 : 16)
+              ? (tableNum.length <= 2 ? 20 : 14)
               : isMedium
-                ? (tableNum.length <= 2 ? 32 : 21)
-                : (tableNum.length <= 2 ? 42 : tableNum.length <= 4 ? 30 : 22);
-            const subFontSize = isMany ? 12 : isMedium ? 14 : 17;
-            const dkFontSize = isMany ? 11 : isMedium ? 12 : 14;
+                ? (tableNum.length <= 2 ? 26 : 18)
+                : (tableNum.length <= 2 ? 34 : tableNum.length <= 4 ? 24 : 18);
+            const subFontSize = isMany ? 11 : isMedium ? 12 : 14;
+            const dkFontSize = isMany ? 10 : isMedium ? 11 : 12;
             return (
               <button
                 key={table.id}
@@ -1236,7 +1219,89 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
               </button>
             );
           })}
+          </div>
         </div>
+
+        {!mobileLayoutSheetOpen && (
+          <button
+            type="button"
+            onClick={() => setMobileLayoutSheetOpen(true)}
+            className="fixed z-30 flex items-center justify-center w-12 h-12 rounded-full bg-orange-500 text-white shadow-lg border-2 border-orange-600/40 active:scale-95 touch-manipulation"
+            style={{
+              right: 12,
+              bottom: 'calc(12px + env(safe-area-inset-bottom, 0px))',
+              touchAction: 'manipulation',
+            }}
+            aria-label="Masa görünümünü ayarla"
+            title="Masa boyutu"
+          >
+            <LayoutGrid className="w-5 h-5" strokeWidth={2.25} />
+            <span className="absolute -top-0.5 -right-0.5 min-w-[1.125rem] h-[1.125rem] px-0.5 rounded-full bg-white text-orange-600 text-[10px] font-black leading-[1.125rem] text-center tabular-nums shadow">
+              {mobileTableCols}
+            </span>
+          </button>
+        )}
+
+        {mobileLayoutSheetOpen && (
+          <>
+            <button
+              type="button"
+              className="fixed inset-0 z-40 bg-black/30 touch-manipulation"
+              aria-label="Kapat"
+              onClick={() => setMobileLayoutSheetOpen(false)}
+            />
+            <div
+              className="fixed inset-x-0 bottom-0 z-50 animate-table-grid-sheet-up"
+              role="dialog"
+              aria-modal="true"
+              aria-label="Masa görünümü"
+            >
+              <div
+                className="bg-white rounded-t-2xl shadow-[0_-8px_32px_rgba(0,0,0,0.12)] border-t border-slate-200 px-4 pt-2"
+                style={{ paddingBottom: 'calc(16px + env(safe-area-inset-bottom, 0px))' }}
+              >
+                <div className="w-10 h-1 rounded-full bg-slate-200 mx-auto mb-3" />
+                <p className="text-center text-sm font-bold text-slate-800 mb-1">Masa görünümü</p>
+                <p className="text-center text-[11px] text-slate-500 mb-4">
+                  Sütun sayısı — kartlar küçülür veya büyür
+                </p>
+                <div className="flex items-center justify-center gap-5 mb-4">
+                  <button
+                    type="button"
+                    onClick={() => setMobileTableColsPersisted((prev) => prev - 1)}
+                    disabled={mobileTableCols <= 2}
+                    className="w-12 h-12 flex items-center justify-center rounded-xl bg-slate-100 border-2 border-slate-200 text-slate-700 active:bg-slate-200 disabled:opacity-30 touch-manipulation"
+                    aria-label="Daha büyük kartlar"
+                  >
+                    <Minus className="w-5 h-5" strokeWidth={2.5} />
+                  </button>
+                  <div className="text-center min-w-[4rem]">
+                    <div className="text-3xl font-black text-orange-600 tabular-nums leading-none">
+                      {mobileTableCols}
+                    </div>
+                    <div className="text-[11px] font-semibold text-slate-500 mt-1">sütun</div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setMobileTableColsPersisted((prev) => prev + 1)}
+                    disabled={mobileTableCols >= 6}
+                    className="w-12 h-12 flex items-center justify-center rounded-xl bg-orange-50 border-2 border-orange-200 text-orange-600 active:bg-orange-100 disabled:opacity-30 touch-manipulation"
+                    aria-label="Daha küçük kartlar"
+                  >
+                    <Plus className="w-5 h-5" strokeWidth={2.5} />
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setMobileLayoutSheetOpen(false)}
+                  className="w-full py-3 rounded-xl bg-orange-500 hover:bg-orange-600 text-white font-bold text-sm active:scale-[0.98] touch-manipulation"
+                >
+                  Tamam
+                </button>
+              </div>
+            </div>
+          </>
+        )}
       </div>
 
       <div

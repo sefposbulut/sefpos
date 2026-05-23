@@ -106,6 +106,15 @@ input[type="range"]::-moz-range-thumb {
   }
 }
 
+@keyframes table-grid-sheet-up {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+
+.animate-table-grid-sheet-up {
+  animation: table-grid-sheet-up 0.22s ease-out;
+}
+
 /* Pazarlama sitesi — hero POS mockup animasyonları */
 @keyframes landing-table-glow {
   0%, 100% { box-shadow: 0 0 0 0 rgba(251, 146, 60, 0.45); }
