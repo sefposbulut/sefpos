@@ -97,8 +97,9 @@ export async function fetchOnlineProfileIdsByTenant(
 const LAST_ACTIVE_PING_MS = 60_000;
 
 let pingTimer: ReturnType<typeof setInterval> | null = null;
+let kickoffTimer: ReturnType<typeof setTimeout> | null = null;
 let pingUserId: string | null = null;
-let visibilityBound = false;
+let lifecycleBound = false;
 
 async function touchLastActive(userId: string): Promise<void> {
   if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
@@ -111,6 +112,17 @@ async function touchLastActive(userId: string): Promise<void> {
   }
 }
 
+/** Çıkış / pencere kapanınca — admin panelinde hemen çevrimdışı */
+async function clearLastActive(userId: string): Promise<void> {
+  const { error } = await supabase
+    .from('profiles')
+    .update({ last_active_at: null })
+    .eq('id', userId);
+  if (error && import.meta.env.DEV) {
+    console.warn('[ŞefPOS] last_active_at clear:', error.message);
+  }
+}
+
 function onVisibilityChange(): void {
   if (!pingUserId) return;
   if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
@@ -118,16 +130,24 @@ function onVisibilityChange(): void {
   }
 }
 
-function bindVisibility(): void {
-  if (visibilityBound || typeof document === 'undefined') return;
-  visibilityBound = true;
-  document.addEventListener('visibilitychange', onVisibilityChange);
+function onPageHide(): void {
+  const uid = pingUserId;
+  if (!uid) return;
+  void clearLastActive(uid);
 }
 
-function unbindVisibility(): void {
-  if (!visibilityBound || typeof document === 'undefined') return;
+function bindLifecycle(): void {
+  if (lifecycleBound || typeof document === 'undefined') return;
+  lifecycleBound = true;
+  document.addEventListener('visibilitychange', onVisibilityChange);
+  window.addEventListener('pagehide', onPageHide);
+}
+
+function unbindLifecycle(): void {
+  if (!lifecycleBound || typeof document === 'undefined') return;
   document.removeEventListener('visibilitychange', onVisibilityChange);
-  visibilityBound = false;
+  window.removeEventListener('pagehide', onPageHide);
+  lifecycleBound = false;
 }
 
 /** Oturum açık restoran kullanıcısı — admin paneli için hafif nabız. */
@@ -140,25 +160,37 @@ export function startTenantPresenceTracking(opts: {
   const { userId } = opts;
   if (!userId) return;
 
-  stopTenantPresenceTracking();
+  void stopTenantPresenceTracking();
   pingUserId = userId;
-  bindVisibility();
+  bindLifecycle();
 
   void touchLastActive(userId);
-  // İlk dakikayı beklemeden admin paneli görsün diye kısa aralıkla bir kez daha
-  window.setTimeout(() => void touchLastActive(userId), 8_000);
+  kickoffTimer = window.setTimeout(() => {
+    kickoffTimer = null;
+    if (pingUserId === userId) void touchLastActive(userId);
+  }, 8_000);
   pingTimer = setInterval(() => {
     void touchLastActive(userId);
   }, LAST_ACTIVE_PING_MS);
 }
 
-export function stopTenantPresenceTracking(): void {
+/** Oturum bitti — ping durur; veritabanında çevrimdışı (çıkışta await edin). */
+export async function stopTenantPresenceTracking(userIdToClear?: string | null): Promise<void> {
+  const uid = userIdToClear ?? pingUserId;
+
   if (pingTimer) {
     clearInterval(pingTimer);
     pingTimer = null;
   }
+  if (kickoffTimer) {
+    clearTimeout(kickoffTimer);
+    kickoffTimer = null;
+  }
+
   pingUserId = null;
-  unbindVisibility();
+  unbindLifecycle();
+
+  if (uid) await clearLastActive(uid);
 }
 
 export function isProfileOnline(lastActiveAt: string | null | undefined): boolean {

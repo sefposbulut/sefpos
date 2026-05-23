@@ -763,9 +763,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const signOut = async () => {
-    stopTenantPresenceTracking();
+    const uid = user?.id ?? null;
+    await stopTenantPresenceTracking(uid);
     try {
-      const uid = user?.id;
       if (uid) {
         try {
           await supabase.from('admin_tenant_impersonation' as any).delete().eq('user_id', uid);
@@ -1240,13 +1240,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // yalnızca lisans paneli URL'sinde (/ayka-yonetim45) ping kapalı.
   useEffect(() => {
     if (!user?.id || !tenant?.id || !profile) {
-      stopTenantPresenceTracking();
+      void stopTenantPresenceTracking();
       return;
     }
     const onLicensePanel =
       typeof window !== 'undefined' && isAykaAdminPath(window.location.pathname);
     if (profile.is_super_admin && onLicensePanel && !impersonationTenantId) {
-      stopTenantPresenceTracking();
+      void stopTenantPresenceTracking(user.id);
       return;
     }
     startTenantPresenceTracking({
@@ -1255,7 +1255,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       fullName: profile.full_name || undefined,
       role: profile.role || undefined,
     });
-    return () => stopTenantPresenceTracking();
+    return () => {
+      void stopTenantPresenceTracking();
+    };
   }, [user?.id, tenant?.id, profile?.id, profile?.is_super_admin, impersonationTenantId]);
 
   return (
