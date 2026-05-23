@@ -20,6 +20,8 @@ import {
   loadPrintSettings,
   savePrintSettings,
 } from '../lib/printService';
+import { isAykaAdminPath } from '../lib/aykaRoute';
+import { startTenantPresenceTracking, stopTenantPresenceTracking } from '../lib/tenantPresence';
 
 type Profile = Database['public']['Tables']['profiles']['Row'];
 type Tenant = Database['public']['Tables']['tenants']['Row'];
@@ -761,6 +763,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const signOut = async () => {
+    stopTenantPresenceTracking();
     try {
       const uid = user?.id;
       if (uid) {
@@ -1232,6 +1235,28 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return `${x.getFullYear()}-${pad(x.getMonth() + 1)}-${pad(x.getDate())}`;
   })();
   const businessDayHoursOpen = businessDayMode === 'manual' ? serverHoursOpen : null;
+
+  // Restoran POS: çevrimiçi nabız (~60 sn). Kurucu super_admin POS'ta ping gönderir;
+  // yalnızca lisans paneli URL'sinde (/ayka-yonetim45) ping kapalı.
+  useEffect(() => {
+    if (!user?.id || !tenant?.id || !profile) {
+      stopTenantPresenceTracking();
+      return;
+    }
+    const onLicensePanel =
+      typeof window !== 'undefined' && isAykaAdminPath(window.location.pathname);
+    if (profile.is_super_admin && onLicensePanel && !impersonationTenantId) {
+      stopTenantPresenceTracking();
+      return;
+    }
+    startTenantPresenceTracking({
+      tenantId: tenant.id,
+      userId: user.id,
+      fullName: profile.full_name || undefined,
+      role: profile.role || undefined,
+    });
+    return () => stopTenantPresenceTracking();
+  }, [user?.id, tenant?.id, profile?.id, profile?.is_super_admin, impersonationTenantId]);
 
   return (
     <AuthContext.Provider value={{

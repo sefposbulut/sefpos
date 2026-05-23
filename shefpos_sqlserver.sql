@@ -748,6 +748,10 @@ GO
 -- INDEXLER (PERFORMANS)
 -- ============================================================
 
+IF COL_LENGTH('profiles', 'last_active_at') IS NULL
+    ALTER TABLE profiles ADD last_active_at DATETIME2 NULL;
+GO
+
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'idx_profiles_tenant_id' AND object_id = OBJECT_ID(N'profiles'))
     CREATE INDEX idx_profiles_tenant_id ON profiles(tenant_id);
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'idx_profiles_branch_id' AND object_id = OBJECT_ID(N'profiles'))

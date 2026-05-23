@@ -1,6 +1,7 @@
 import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { useAuth } from './contexts/AuthContext';
 import { isAykaAdminPath } from './lib/aykaRoute';
+import { canAccessAdminPanel, clearAykaSessionFlag } from './lib/adminAccess';
 import { publicAsset } from './lib/assetUrl';
 import { Auth } from './components/Auth';
 import { AykaLogin } from './components/AykaLogin';
@@ -564,22 +565,41 @@ function App() {
   const isAykaRoute =
     typeof window !== 'undefined' && isAykaAdminPath(window.location.pathname);
 
-  if (profile?.is_super_admin && (showAdminPanel || isAykaRoute)) {
-    return (
-      <AdminPanel
-        onExit={() => {
-          setShowAdminPanel(false);
-          if (isAykaRoute) {
-            try {
-              localStorage.removeItem('shefpos_ayka_auth');
-            } catch {
-              /* ignore */
-            }
+  if (user && profile && isAykaRoute) {
+    if (canAccessAdminPanel(profile, { isAykaRoute: true })) {
+      return (
+        <AdminPanel
+          onExit={() => {
+            setShowAdminPanel(false);
+            clearAykaSessionFlag();
+            void signOut();
             window.location.assign('/');
-          }
-        }}
-      />
-    );
+          }}
+        />
+      );
+    }
+    if (profile.is_super_admin) {
+      return (
+        <div className="min-h-screen flex items-center justify-center bg-slate-900 text-white p-6">
+          <div className="max-w-md text-center space-y-4">
+            <h1 className="text-xl font-black">Yetkisiz erişim</h1>
+            <p className="text-slate-300 text-sm">
+              Bu hesap lisans paneline erişemez. Yalnızca yetkili kurucu hesabı ve gizli giriş yolu kullanılabilir.
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                clearAykaSessionFlag();
+                void signOut();
+              }}
+              className="px-5 py-2.5 rounded-xl bg-red-600 hover:bg-red-500 font-bold text-sm"
+            >
+              Çıkış
+            </button>
+          </div>
+        </div>
+      );
+    }
   }
 
   const needsOnboarding = user && tenant && profile?.role === 'owner' && (tenant.onboarding_completed === false || tenant.onboarding_completed === null) && !onboardingDone;

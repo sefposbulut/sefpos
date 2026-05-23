@@ -2,11 +2,7 @@ import { useState, type FormEvent } from 'react';
 import { Lock, Mail, ShieldCheck, KeyRound, Loader2, ArrowLeft } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
-
-// Yalnızca bu e-posta lisans (super-admin) giriş ekranında kullanılabilir.
-// Başka bir e-posta veya is_super_admin = false olan bir hesap bu kapıdan geçemez.
-const ALLOWED_EMAILS = ['info@aykasoft.com.tr'];
-const AYKA_AUTH_KEY = 'shefpos_ayka_auth';
+import { isAdminAllowedEmail, setAykaSessionFlag } from '../lib/adminAccess';
 
 interface AykaLoginProps {
   onBackToLanding?: () => void;
@@ -33,7 +29,7 @@ export function AykaLogin({ onBackToLanding }: AykaLoginProps) {
       setError(GENERIC_ERROR);
       return;
     }
-    if (!ALLOWED_EMAILS.includes(normalized)) {
+    if (!isAdminAllowedEmail(normalized)) {
       // E-postayı sunucuya bile göndermiyoruz; ama mesaj generic.
       setError(GENERIC_ERROR);
       return;
@@ -59,18 +55,14 @@ export function AykaLogin({ onBackToLanding }: AykaLoginProps) {
 
         const isSuper = prof?.is_super_admin === true;
         const profEmail = String(prof?.email || '').toLowerCase();
-        if (!isSuper || (profEmail && !ALLOWED_EMAILS.includes(profEmail))) {
+        if (!isSuper || (profEmail && !isAdminAllowedEmail(profEmail))) {
           await supabase.auth.signOut();
           setError(GENERIC_ERROR);
           setLoading(false);
           return;
         }
 
-        try {
-          localStorage.setItem(AYKA_AUTH_KEY, '1');
-        } catch {
-          /* storage erişimi yoksa yok say */
-        }
+        setAykaSessionFlag();
       }
       // Başarılı: AppRouter is_super_admin + AYKA_ADMIN_PATH ile AdminPanel açılır.
     } catch {
