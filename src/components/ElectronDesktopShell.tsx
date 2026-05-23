@@ -36,10 +36,13 @@ type ProgressPayload = {
 
 type UpdateState =
   | { kind: 'idle' }
+  | { kind: 'checking' }
   | { kind: 'available'; version: string }
   | { kind: 'progress'; percent: number; version: string }
   | { kind: 'ready'; version: string; releaseNotes: string; releaseName: string }
   | { kind: 'error'; message: string };
+
+const RELEASE_PAGE_URL = 'https://github.com/sefposbulut/sefpos-releases/releases/latest';
 
 const RELEASE_NOTES_SEEN_KEY = 'sefpos_release_notes_seen_version';
 const PENDING_RELEASE_NOTES_KEY = 'sefpos_pending_release_notes';
@@ -188,13 +191,7 @@ export function ElectronDesktopShell() {
     };
   }, [isElectron]);
 
-  useEffect(() => {
-    if (!isElectron || !mandatoryRequired) return;
-    const api = (window as any).electronAPI;
-    void api?.checkForUpdates?.();
-  }, [isElectron, mandatoryRequired]);
-
-  // Auto-update event aboneliği.
+  // Auto-update event aboneliği (zorunlu güncelleme kontrolü de burada — olay kaçırılmasın).
   useEffect(() => {
     if (!isElectron) return;
     const api = (window as any).electronAPI;
@@ -242,6 +239,14 @@ export function ElectronDesktopShell() {
       setToastDismissed(false);
       setUpdateState({ kind: 'error', message: String(info?.message || 'unknown') });
     });
+    api.onUpdateNotAvailable?.(() => {
+      if (!mandatoryRef.current) return;
+      setUpdateState({
+        kind: 'error',
+        message:
+          'Otomatik güncelleme şu an başlatılamadı. İnternet bağlantınızı kontrol edin veya aşağıdan kurulum dosyasını indirin.',
+      });
+    });
 
     void (async () => {
       try {
@@ -260,6 +265,22 @@ export function ElectronDesktopShell() {
       } catch {
         /* yoksay */
       }
+      if (mandatoryRef.current) {
+        setUpdateState((prev) =>
+          prev.kind === 'ready' || prev.kind === 'progress' ? prev : { kind: 'checking' },
+        );
+        try {
+          const res = await api.checkForUpdates?.();
+          if (res?.error) {
+            setUpdateState({ kind: 'error', message: String(res.error) });
+          }
+        } catch {
+          setUpdateState({
+            kind: 'error',
+            message: 'Güncelleme kontrol edilemedi. İnternet bağlantınızı kontrol edin.',
+          });
+        }
+      }
     })();
 
     return () => {
@@ -267,7 +288,7 @@ export function ElectronDesktopShell() {
         api.removeUpdateListeners?.();
       } catch (_) {}
     };
-  }, [isElectron]);
+  }, [isElectron, mandatoryRequired]);
 
   const dismissWhatsNew = () => {
     if (!whatsNew) return;
@@ -325,9 +346,15 @@ export function ElectronDesktopShell() {
                 {releasePolicy?.message?.trim() ||
                   'Bu sürüm artık desteklenmiyor. Devam etmek için güncellemeyi indirip kurmanız gerekiyor.'}
               </p>
-              {updateState.kind === 'available' || updateState.kind === 'progress' ? (
-                <p className="text-xs text-slate-500">Güncelleme indiriliyor, lütfen bekleyin…</p>
-              ) : null}
+              {(updateState.kind === 'checking' ||
+                updateState.kind === 'available' ||
+                updateState.kind === 'progress') && (
+                <p className="text-xs text-slate-500">
+                  {updateState.kind === 'checking'
+                    ? 'Güncelleme aranıyor…'
+                    : 'Güncelleme indiriliyor (~120 MB), lütfen bekleyin…'}
+                </p>
+              )}
               {updateState.kind === 'progress' && (
                 <div className="h-2 w-full rounded-full bg-slate-100 overflow-hidden">
                   <div
@@ -346,16 +373,29 @@ export function ElectronDesktopShell() {
                 </button>
               )}
               {updateState.kind === 'error' && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    const api = (window as any).electronAPI;
-                    void api?.checkForUpdates?.();
-                  }}
-                  className="w-full py-3 rounded-xl text-sm font-bold bg-slate-100 text-slate-800 hover:bg-slate-200 flex items-center justify-center gap-2"
-                >
-                  <RefreshCcw className="w-4 h-4" /> Tekrar dene
-                </button>
+                <div className="space-y-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const api = (window as any).electronAPI;
+                      setUpdateState({ kind: 'checking' });
+                      void api?.checkForUpdates?.();
+                    }}
+                    className="w-full py-3 rounded-xl text-sm font-bold bg-slate-100 text-slate-800 hover:bg-slate-200 flex items-center justify-center gap-2"
+                  >
+                    <RefreshCcw className="w-4 h-4" /> Tekrar dene
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const api = (window as any).electronAPI;
+                      void api?.openExternalUrl?.(RELEASE_PAGE_URL);
+                    }}
+                    className="w-full py-3 rounded-xl text-sm font-bold bg-gradient-to-r from-amber-500 to-orange-600 text-white shadow"
+                  >
+                    Kurulum dosyasını indir
+                  </button>
+                </div>
               )}
             </div>
           </div>

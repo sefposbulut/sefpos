@@ -69,6 +69,8 @@ try {
  * kontrolünde 404/network hatalarıyla kullanıcı rahatsız edilmez.
  */
 let _manualUpdateCheckInFlight = false;
+/** Manuel / zorunlu kontrol sonrası hata olaylarını renderer'a ilet (ms epoch). */
+let _manualUpdateCheckUntil = 0;
 
 /** React mount olmadan gelen güncelleme olayları kaybolmasın diye son yük (IPC ile replay). */
 let _pendingUpdateAvailablePayload = null;
@@ -169,10 +171,10 @@ function setupAutoUpdater() {
     }
   });
 
-  autoUpdater.on('update-not-available', () => {
-    paLog('info', '[updater] Uygulama güncel.');
+  autoUpdater.on('update-not-available', (info) => {
+    paLog('info', '[updater] Uygulama güncel.', { version: info?.version });
     if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('update-not-available', {});
+      mainWindow.webContents.send('update-not-available', { version: info?.version || '' });
     }
   });
 
@@ -204,13 +206,13 @@ function setupAutoUpdater() {
 
   autoUpdater.on('error', (err) => {
     paLog('error', '[updater] Güncelleme hatası', { message: err?.message });
-    // ÖNEMLİ: Renderer'a `update-error` event'i SADECE manuel kontrolde
-    // (`check-for-updates` IPC) gönderilir. Otomatik arka plan kontrolünde
-    // (saatlik / başlangıç) kullanıcı release repo'su henüz hazır değilse
-    // 404/network gibi sebeplerle rahatsız edilmesin diye sessiz tutarız.
-    if (!_manualUpdateCheckInFlight) return;
+    const manualWindow =
+      _manualUpdateCheckInFlight || Date.now() < _manualUpdateCheckUntil;
+    if (!manualWindow) return;
     if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('update-error', { message: err?.message || 'unknown' });
+      mainWindow.webContents.send('update-error', {
+        message: friendlyUpdateError(err),
+      });
     }
   });
 
@@ -3630,14 +3632,25 @@ ipcMain.handle('check-for-updates', async () => {
     return { error: 'Güncelleme sadece production modunda çalışır' };
   }
   _manualUpdateCheckInFlight = true;
+  _manualUpdateCheckUntil = Date.now() + 120_000;
   try {
     const result = await autoUpdater.checkForUpdates();
     return { version: result?.updateInfo?.version || null };
   } catch (err) {
     return { error: friendlyUpdateError(err) };
   } finally {
-    // Olay sırasında error event'i de aksın diye küçük bir gecikme bırak.
-    setTimeout(() => { _manualUpdateCheckInFlight = false; }, 1500);
+    setTimeout(() => { _manualUpdateCheckInFlight = false; }, 3000);
+  }
+});
+
+ipcMain.handle('open-external-url', async (_evt, url) => {
+  try {
+    const u = String(url || '').trim();
+    if (!/^https?:\/\//i.test(u)) return { ok: false };
+    await shell.openExternal(u);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
   }
 });
 
