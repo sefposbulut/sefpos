@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../contexts/AuthContext';
+import { fetchCustomersList } from '../../lib/customersApi';
 
 // =====================================================================
 // Tipler
@@ -22,6 +23,7 @@ interface Customer {
   credit_limit: number;
   current_balance: number;
   is_active: boolean;
+  loyalty_points?: number;
   created_at: string | null;
 }
 
@@ -88,16 +90,13 @@ export function Customers() {
     if (!tenant) return;
     setLoading(true);
     setError(null);
-    const { data, error: err } = await supabase
-      .from('customers')
-      .select('id, tenant_id, name, phone, email, address, notes, credit_limit, current_balance, is_active, created_at')
-      .eq('tenant_id', tenant.id)
-      .order('name', { ascending: true });
+    const { data, error: err } = await fetchCustomersList(tenant.id);
     if (err) {
       console.error('[Cari] customers load error:', err);
       setError(err.message || 'Cari hesaplar yüklenemedi.');
+      setCustomers([]);
     } else {
-      setCustomers((data || []) as Customer[]);
+      setCustomers(data as Customer[]);
     }
     setLoading(false);
   }, [tenant]);
@@ -196,117 +195,135 @@ export function Customers() {
   };
 
   return (
-    <div className="h-full flex flex-col">
-      {/* Üst bant: başlık + istatistikler */}
-      <div className="flex-shrink-0 px-4 md:px-6 pt-4 pb-3 bg-white border-b border-slate-200">
-        <div className="flex items-center justify-between gap-3 mb-3">
-          <div className="flex items-center gap-2 min-w-0">
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center shadow-sm flex-shrink-0">
-              <Users className="w-5 h-5 text-white" />
+    <div className="h-full flex flex-col bg-gradient-to-br from-slate-50 via-orange-50/20 to-slate-50">
+      <div className="flex-shrink-0 bg-gradient-to-r from-orange-500 to-red-600 text-white px-4 md:px-6 py-4 shadow-md">
+        <div className="flex items-center justify-between gap-3 mb-4">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-11 h-11 rounded-2xl bg-white/15 flex items-center justify-center shrink-0">
+              <Users className="w-6 h-6 text-white" />
             </div>
             <div className="min-w-0">
-              <h1 className="text-base md:text-xl font-black text-slate-800 leading-tight">Cari Hesaplar</h1>
-              <p className="text-[11px] md:text-xs text-slate-500">Müşteri borç / alacak yönetimi</p>
+              <h1 className="text-lg md:text-2xl font-black leading-tight">Cari Hesaplar</h1>
+              <p className="text-orange-100 text-xs md:text-sm">Borç, tahsilat ve müşteri kartları</p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 shrink-0">
             <button
-              onClick={loadCustomers}
+              type="button"
+              onClick={() => void loadCustomers()}
               disabled={loading}
-              className="p-2 hover:bg-slate-100 rounded-lg transition disabled:opacity-50"
+              className="p-2.5 rounded-xl bg-white/15 hover:bg-white/25 transition disabled:opacity-50"
               title="Yenile"
             >
-              <RefreshCw className={`w-4 h-4 text-slate-600 ${loading ? 'animate-spin' : ''}`} />
+              <RefreshCw className={`w-5 h-5 ${loading ? 'animate-spin' : ''}`} />
             </button>
             <button
+              type="button"
               onClick={openCreate}
-              className="flex items-center gap-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white px-3 md:px-4 py-2 rounded-lg text-sm font-semibold shadow-sm transition active:scale-95"
+              className="flex items-center gap-2 bg-white text-orange-700 hover:bg-orange-50 px-4 py-2.5 rounded-xl text-sm font-bold shadow transition active:scale-95"
             >
-              <Plus className="w-4 h-4" />
-              <span className="hidden sm:inline">Yeni Cari</span>
+              <Plus className="w-5 h-5" />
+              <span className="hidden sm:inline">Yeni cari</span>
             </button>
           </div>
         </div>
 
         <div className="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-3">
           <StatCard
-            icon={<Users className="w-4 h-4" />}
-            label="Toplam Cari"
+            icon={<Users className="w-4 h-4 text-slate-600" />}
+            label="Aktif cari"
             value={String(stats.count)}
-            color="from-slate-500 to-slate-700"
+            tone="slate"
           />
           <StatCard
-            icon={<TrendingUp className="w-4 h-4" />}
+            icon={<TrendingUp className="w-4 h-4 text-rose-600" />}
             label={`Borçlu (${stats.debtors})`}
             value={TRY(stats.totalDebt)}
-            color="from-rose-500 to-red-600"
+            tone="rose"
           />
           <StatCard
-            icon={<TrendingDown className="w-4 h-4" />}
+            icon={<TrendingDown className="w-4 h-4 text-emerald-600" />}
             label={`Alacaklı (${stats.creditors})`}
             value={TRY(stats.totalCredit)}
-            color="from-emerald-500 to-green-600"
+            tone="emerald"
           />
           <StatCard
-            icon={<Wallet className="w-4 h-4" />}
-            label="Net"
+            icon={<Wallet className="w-4 h-4 text-orange-600" />}
+            label="Net bakiye"
             value={TRY(stats.net)}
-            color={stats.net >= 0 ? 'from-blue-500 to-indigo-600' : 'from-amber-500 to-orange-600'}
+            tone={stats.net >= 0 ? 'orange' : 'amber'}
           />
         </div>
       </div>
 
-      {/* İçerik: liste + detay */}
-      <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)] gap-3 md:gap-4 p-3 md:p-4">
-        {/* Sol: liste */}
-        <div className={`bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col min-h-0 ${selected ? 'hidden lg:flex' : 'flex'}`}>
-          <div className="p-3 border-b border-slate-200 space-y-2">
+      <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-[minmax(280px,360px)_1fr] gap-3 md:gap-4 p-3 md:p-4">
+        <div
+          className={`bg-white rounded-2xl border border-slate-200/80 shadow-sm flex flex-col min-h-0 overflow-hidden ${
+            selected ? 'hidden lg:flex' : 'flex'
+          }`}
+        >
+          <div className="p-3 border-b border-slate-100 space-y-3 bg-slate-50/80">
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4" />
               <input
-                type="text"
-                placeholder="İsim, telefon, e-posta..."
+                type="search"
+                placeholder="İsim, telefon veya e-posta ara…"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                className="pl-9 pr-3 py-2 w-full text-sm border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
+                className="pl-10 pr-3 py-2.5 w-full text-sm border border-slate-200 rounded-xl bg-white focus:ring-2 focus:ring-orange-400 focus:border-orange-300 outline-none"
               />
             </div>
-            <div className="flex gap-1 overflow-x-auto -mx-1 px-1">
+            <div className="flex flex-wrap gap-1.5">
               {[
-                { id: 'all',       label: 'Tümü',      cnt: customers.filter(c => c.is_active).length },
-                { id: 'debtors',   label: 'Borçlular', cnt: stats.debtors },
-                { id: 'creditors', label: 'Alacaklı',  cnt: stats.creditors },
-                { id: 'inactive',  label: 'Pasifler',  cnt: customers.filter(c => !c.is_active).length },
-              ].map(t => {
+                { id: 'all', label: 'Tümü', cnt: customers.filter((c) => c.is_active).length },
+                { id: 'debtors', label: 'Borçlu', cnt: stats.debtors },
+                { id: 'creditors', label: 'Alacaklı', cnt: stats.creditors },
+                { id: 'inactive', label: 'Pasif', cnt: customers.filter((c) => !c.is_active).length },
+              ].map((t) => {
                 const active = filterTab === t.id;
                 return (
                   <button
                     key={t.id}
+                    type="button"
                     onClick={() => setFilterTab(t.id as FilterTab)}
-                    className={`px-2.5 py-1.5 rounded-md text-xs font-semibold whitespace-nowrap transition ${
+                    className={`px-3 py-1.5 rounded-full text-xs font-bold transition ${
                       active
-                        ? 'bg-blue-600 text-white shadow-sm'
-                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                        ? 'bg-orange-600 text-white shadow-sm'
+                        : 'bg-white border border-slate-200 text-slate-600 hover:border-orange-200'
                     }`}
                   >
                     {t.label}
-                    <span className={`ml-1 ${active ? 'text-blue-100' : 'text-slate-400'}`}>({t.cnt})</span>
+                    <span className={`ml-1 ${active ? 'text-orange-100' : 'text-slate-400'}`}>
+                      {t.cnt}
+                    </span>
                   </button>
                 );
               })}
             </div>
           </div>
 
-          <div className="flex-1 overflow-y-auto">
+          <div className="flex-1 overflow-y-auto min-h-0">
             {loading ? (
-              <div className="p-8 text-center text-slate-400 text-sm">
-                <div className="inline-block animate-spin rounded-full w-6 h-6 border-2 border-blue-500 border-t-transparent mb-2" />
-                <p>Yükleniyor...</p>
+              <div className="p-10 text-center text-slate-500 text-sm">
+                <Loader2 className="w-8 h-8 mx-auto mb-2 animate-spin text-orange-500" />
+                <p>Yükleniyor…</p>
               </div>
             ) : error ? (
-              <div className="p-4 m-3 rounded-lg bg-red-50 border border-red-200 text-red-700 text-sm">
-                <AlertCircle className="inline w-4 h-4 mr-1" />
-                {error}
+              <div className="p-4 m-3 rounded-xl bg-red-50 border border-red-200 text-red-800 text-sm space-y-3">
+                <div className="flex items-start gap-2">
+                  <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
+                  <div>
+                    <p className="font-bold">Liste yüklenemedi</p>
+                    <p className="text-red-700/90 mt-1 text-xs">{error}</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void loadCustomers()}
+                  className="w-full py-2 rounded-lg bg-red-600 text-white font-bold text-sm hover:bg-red-700"
+                >
+                  Tekrar dene
+                </button>
               </div>
             ) : filtered.length === 0 ? (
               <div className="p-8 text-center text-slate-400 text-sm">
@@ -323,8 +340,8 @@ export function Customers() {
                     <li key={c.id}>
                       <button
                         onClick={() => setSelectedId(c.id)}
-                        className={`w-full text-left px-3 py-2.5 hover:bg-slate-50 transition flex items-center gap-3 ${
-                          isSelected ? 'bg-blue-50 hover:bg-blue-50' : ''
+                        className={`w-full text-left px-3 py-3 hover:bg-orange-50/60 transition flex items-center gap-3 touch-manipulation ${
+                          isSelected ? 'bg-orange-50 ring-1 ring-inset ring-orange-200' : ''
                         }`}
                       >
                         <div className={`w-9 h-9 rounded-lg flex items-center justify-center text-white text-sm font-bold flex-shrink-0 ${
@@ -352,6 +369,11 @@ export function Customers() {
                           <div className="text-[10px] uppercase font-semibold tracking-wider text-slate-400">
                             {balance > 0 ? 'Borç' : balance < 0 ? 'Alacak' : 'Sıfır'}
                           </div>
+                          {(c.loyalty_points ?? 0) > 0 && (
+                            <div className="text-[10px] font-bold text-violet-600 mt-0.5">
+                              {c.loyalty_points} puan
+                            </div>
+                          )}
                         </div>
                         <ChevronRight className="w-4 h-4 text-slate-300 hidden lg:block" />
                       </button>
@@ -364,7 +386,11 @@ export function Customers() {
         </div>
 
         {/* Sağ: detay */}
-        <div className={`bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col min-h-0 ${selected ? 'flex' : 'hidden lg:flex'}`}>
+        <div
+          className={`bg-white rounded-2xl border border-slate-200/80 shadow-sm flex flex-col min-h-0 overflow-hidden ${
+            selected ? 'flex' : 'hidden lg:flex'
+          }`}
+        >
           {selected ? (
             <CustomerDetail
               key={selected.id}
@@ -426,14 +452,36 @@ export function Customers() {
 // =====================================================================
 // İstatistik kartı
 // =====================================================================
-function StatCard({ icon, label, value, color }: { icon: React.ReactNode; label: string; value: string; color: string }) {
+type StatTone = 'slate' | 'rose' | 'emerald' | 'orange' | 'amber';
+
+const STAT_TONE_CLASS: Record<StatTone, string> = {
+  slate: 'border-slate-300 bg-white/95',
+  rose: 'border-rose-300 bg-white/95',
+  emerald: 'border-emerald-300 bg-white/95',
+  orange: 'border-orange-300 bg-white/95',
+  amber: 'border-amber-300 bg-white/95',
+};
+
+function StatCard({
+  icon,
+  label,
+  value,
+  tone,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: string;
+  tone: StatTone;
+}) {
   return (
-    <div className={`relative overflow-hidden rounded-xl bg-gradient-to-br ${color} p-3 text-white shadow-sm`}>
-      <div className="flex items-center gap-1.5 text-white/80 text-[10px] md:text-xs font-semibold uppercase tracking-wider">
+    <div
+      className={`rounded-xl border-l-4 p-3 shadow-sm backdrop-blur-sm ${STAT_TONE_CLASS[tone]}`}
+    >
+      <div className="flex items-center gap-1.5 text-[10px] md:text-xs font-bold text-slate-600 uppercase tracking-wide">
         {icon}
         <span className="truncate">{label}</span>
       </div>
-      <div className="text-base md:text-lg font-black mt-0.5 truncate">{value}</div>
+      <div className="text-base md:text-lg font-black text-slate-900 mt-1 truncate">{value}</div>
     </div>
   );
 }
@@ -546,7 +594,7 @@ function CariTransactionDetailModal({
               </span>
               <span className="font-black text-slate-800">{TRY(Number(tx.amount) || 0)}</span>
               {tx.order?.order_number && (
-                <span className="px-1.5 py-0.5 bg-blue-100 text-blue-800 text-[10px] font-bold rounded">#{tx.order.order_number}</span>
+                <span className="px-1.5 py-0.5 bg-orange-100 text-orange-800 text-[10px] font-bold rounded">#{tx.order.order_number}</span>
               )}
             </div>
             <div className="text-xs text-slate-500">{fmtDate(tx.created_at)}</div>
@@ -914,7 +962,7 @@ function CariStatementModal({
                 type="datetime-local"
                 value={startStr}
                 onChange={(e) => setStartStr(e.target.value)}
-                className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-orange-500 outline-none"
               />
             </div>
             <div>
@@ -923,7 +971,7 @@ function CariStatementModal({
                 type="datetime-local"
                 value={endStr}
                 onChange={(e) => setEndStr(e.target.value)}
-                className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-orange-500 outline-none"
               />
             </div>
           </div>
@@ -933,7 +981,7 @@ function CariStatementModal({
             <select
               value={typeFilter}
               onChange={(e) => setTypeFilter(e.target.value as any)}
-              className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+              className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-orange-500 outline-none"
             >
               <option value="all">Tümü (borç + ödeme)</option>
               <option value="debt">Sadece Borç</option>
@@ -953,7 +1001,7 @@ function CariStatementModal({
             </span>
           </label>
 
-          <div className="text-[11px] text-slate-600 bg-blue-50 border border-blue-100 rounded-lg p-2.5 leading-relaxed">
+          <div className="text-[11px] text-slate-600 bg-orange-50 border border-orange-100 rounded-lg p-2.5 leading-relaxed">
             <b>Mantık:</b> Seçilen aralık için <b>devir bakiyesi</b> (öncesindeki tüm hareketlerin net toplamı) hesaplanır, dönem hareketleri yürüyen bakiyeyle listelenir, en altta <b>kapanış bakiyesi</b> yazılır. Böylece müşteri 5 ay boyunca her gün borç yazdırmış olsa bile sadece istediğin ay/hafta basılır; öncesinden gelen borç “devir” olarak görünür.
           </div>
 
@@ -972,7 +1020,7 @@ function CariStatementModal({
             type="button"
             onClick={() => void handlePrint()}
             disabled={busy}
-            className="flex-1 px-4 py-2.5 text-sm font-semibold bg-blue-600 hover:bg-blue-700 text-white rounded-lg disabled:opacity-50 inline-flex items-center justify-center gap-2"
+            className="flex-1 px-4 py-2.5 text-sm font-semibold bg-orange-600 hover:bg-orange-700 text-white rounded-lg disabled:opacity-50 inline-flex items-center justify-center gap-2"
           >
             {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileText className="w-4 h-4" />}
             Yazdır
@@ -1159,14 +1207,14 @@ function CustomerDetail({
               {balance > 0 ? 'Müşteri size borçlu' : balance < 0 ? 'Müşteriye borcunuz var' : 'Bakiye sıfır'}
             </div>
           </div>
-          <div className="rounded-lg p-3 bg-blue-50 border border-blue-200">
+          <div className="rounded-lg p-3 bg-orange-50 border border-orange-200">
             <div className="text-[10px] uppercase font-bold tracking-wider text-slate-500">Kredi Limiti</div>
-            <div className="text-lg md:text-xl font-black mt-0.5 text-blue-700">{TRY(limit)}</div>
+            <div className="text-lg md:text-xl font-black mt-0.5 text-orange-700">{TRY(limit)}</div>
             {limit > 0 && (
               <div className="mt-1.5">
-                <div className="h-1 bg-blue-100 rounded overflow-hidden">
+                <div className="h-1 bg-orange-100 rounded overflow-hidden">
                   <div
-                    className={`h-full ${limitOver ? 'bg-rose-500' : 'bg-blue-500'}`}
+                    className={`h-full ${limitOver ? 'bg-rose-500' : 'bg-orange-500'}`}
                     style={{ width: `${limitUsage}%` }}
                   />
                 </div>
@@ -1200,7 +1248,7 @@ function CustomerDetail({
           <button onClick={sendWhatsApp} className="flex items-center gap-1.5 bg-green-50 hover:bg-green-100 text-green-700 px-3 py-2 rounded-lg text-sm font-semibold transition active:scale-95" title="WhatsApp ile bakiye gönder">
             <Send className="w-4 h-4" />
           </button>
-          <button onClick={() => setShowStatement(true)} className="flex items-center gap-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 px-3 py-2 rounded-lg text-sm font-semibold transition active:scale-95" title="Hesap ekstresi (tarih aralıklı)">
+          <button onClick={() => setShowStatement(true)} className="flex items-center gap-1.5 bg-orange-50 hover:bg-orange-100 text-orange-700 px-3 py-2 rounded-lg text-sm font-semibold transition active:scale-95" title="Hesap ekstresi (tarih aralıklı)">
             <FileText className="w-4 h-4" />
           </button>
           {customer.is_active ? (
@@ -1230,7 +1278,7 @@ function CustomerDetail({
               key={t.id}
               onClick={() => setTab(t.id as any)}
               className={`px-3 py-2 text-sm font-semibold border-b-2 transition ${
-                active ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:text-slate-700'
+                active ? 'border-orange-600 text-orange-700' : 'border-transparent text-slate-500 hover:text-slate-700'
               }`}
             >
               {t.label}
@@ -1243,7 +1291,7 @@ function CustomerDetail({
         {tab === 'transactions' ? (
           txLoading ? (
             <div className="text-center text-slate-400 text-sm py-8">
-              <div className="inline-block animate-spin rounded-full w-6 h-6 border-2 border-blue-500 border-t-transparent mb-2" />
+              <div className="inline-block animate-spin rounded-full w-6 h-6 border-2 border-orange-500 border-t-transparent mb-2" />
               <p>Yükleniyor...</p>
             </div>
           ) : txLoadError ? (
@@ -1284,7 +1332,7 @@ function CustomerDetail({
                           {t.type === 'debt' ? 'Borç' : 'Ödeme'} • {TRY(Number(t.amount) || 0)}
                         </span>
                         {t.order?.order_number && (
-                          <span className="px-1.5 py-0.5 bg-blue-50 text-blue-700 text-[10px] font-bold rounded">
+                          <span className="px-1.5 py-0.5 bg-orange-50 text-orange-700 text-[10px] font-bold rounded">
                             #{t.order.order_number}
                           </span>
                         )}
@@ -1424,7 +1472,7 @@ function CustomerFormModal({ tenantId, customer, onClose, onSaved }: CustomerFor
               required
               value={form.name}
               onChange={(e) => setForm({ ...form, name: e.target.value })}
-              className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+              className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-orange-500 outline-none"
               autoFocus
             />
           </Field>
@@ -1434,7 +1482,7 @@ function CustomerFormModal({ tenantId, customer, onClose, onSaved }: CustomerFor
                 type="tel"
                 value={form.phone}
                 onChange={(e) => setForm({ ...form, phone: e.target.value })}
-                className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-orange-500 outline-none"
               />
             </Field>
             <Field label="E-posta">
@@ -1442,7 +1490,7 @@ function CustomerFormModal({ tenantId, customer, onClose, onSaved }: CustomerFor
                 type="email"
                 value={form.email}
                 onChange={(e) => setForm({ ...form, email: e.target.value })}
-                className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-orange-500 outline-none"
               />
             </Field>
           </div>
@@ -1451,7 +1499,7 @@ function CustomerFormModal({ tenantId, customer, onClose, onSaved }: CustomerFor
               value={form.address}
               onChange={(e) => setForm({ ...form, address: e.target.value })}
               rows={2}
-              className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+              className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-orange-500 outline-none"
             />
           </Field>
           <Field label="Kredi Limiti (₺)" hint="0 = limit yok">
@@ -1461,7 +1509,7 @@ function CustomerFormModal({ tenantId, customer, onClose, onSaved }: CustomerFor
               step={0.01}
               value={form.credit_limit}
               onChange={(e) => setForm({ ...form, credit_limit: Number(e.target.value) })}
-              className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+              className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-orange-500 outline-none"
             />
           </Field>
           <Field label="Notlar">
@@ -1469,7 +1517,7 @@ function CustomerFormModal({ tenantId, customer, onClose, onSaved }: CustomerFor
               value={form.notes}
               onChange={(e) => setForm({ ...form, notes: e.target.value })}
               rows={2}
-              className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+              className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-orange-500 outline-none"
             />
           </Field>
           {err && (
@@ -1481,7 +1529,7 @@ function CustomerFormModal({ tenantId, customer, onClose, onSaved }: CustomerFor
         </form>
         <div className="flex-shrink-0 flex justify-end gap-2 p-4 border-t border-slate-200">
           <button type="button" onClick={onClose} className="px-4 py-2 text-sm bg-slate-100 hover:bg-slate-200 rounded-lg font-semibold transition">İptal</button>
-          <button onClick={submit} disabled={saving} className="px-4 py-2 text-sm bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white rounded-lg font-semibold transition">
+          <button onClick={submit} disabled={saving} className="px-4 py-2 text-sm bg-orange-600 hover:bg-orange-700 disabled:opacity-60 text-white rounded-lg font-semibold transition">
             {saving ? 'Kaydediliyor...' : (customer ? 'Güncelle' : 'Kaydet')}
           </button>
         </div>
@@ -1603,7 +1651,7 @@ function TransactionModal({ tenantId, createdBy, customer, kind, onClose, onSave
           </Field>
 
           {numericAmount > 0 && (
-            <div className="bg-blue-50 border border-blue-200 rounded-lg p-2.5 text-xs">
+            <div className="bg-orange-50 border border-orange-200 rounded-lg p-2.5 text-xs">
               <div className="flex justify-between">
                 <span className="text-slate-600">İşlem sonrası bakiye:</span>
                 <span className={`font-bold ${
@@ -1628,7 +1676,7 @@ function TransactionModal({ tenantId, createdBy, customer, kind, onClose, onSave
               onChange={(e) => setNote(e.target.value)}
               rows={2}
               placeholder="Opsiyonel: işlem detayı..."
-              className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+              className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-orange-500 outline-none"
             />
           </Field>
 

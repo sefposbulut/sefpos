@@ -8,6 +8,7 @@ import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { loadPrintSettings, PRINT_SETTINGS_REMOTE_UPDATED_EVENT, PRINT_SETTINGS_CONTEXT_EVENT } from '../lib/printService';
 import { HuginPaymentGate, type HuginPaymentGateProps } from './HuginPaymentGate';
+import { LoyaltyPaymentSection, type LoyaltyPaymentSelection } from './loyalty/LoyaltyPaymentSection';
 
 interface PickerCustomer {
   id: string;
@@ -33,6 +34,10 @@ interface PaymentModalProps {
   /** Yazarkasa beklerken modal kapanmasın */
   disableDismiss?: boolean;
   huginGate?: HuginPaymentGateProps | null;
+  loyaltyEnabled?: boolean;
+  loyaltyBillBase?: number;
+  loyaltyPayment?: LoyaltyPaymentSelection | null;
+  onLoyaltyChange?: (v: LoyaltyPaymentSelection | null) => void;
 }
 
 const METHOD_LABELS: Record<PaymentSplit['method'], string> = {
@@ -277,6 +282,10 @@ export function PaymentModal({
   loading,
   disableDismiss = false,
   huginGate = null,
+  loyaltyEnabled = false,
+  loyaltyBillBase = 0,
+  loyaltyPayment = null,
+  onLoyaltyChange,
 }: PaymentModalProps) {
   const { tenant } = useAuth();
   const [splits, setSplits] = useState<PaymentSplit[]>([
@@ -451,6 +460,15 @@ export function PaymentModal({
         </div>
 
         <div className="overflow-y-auto overscroll-contain flex-1 min-h-0 p-3 sm:p-4 space-y-3">
+          {loyaltyEnabled && tenant && onLoyaltyChange && (
+            <LoyaltyPaymentSection
+              tenantId={tenant.id}
+              billTotalTl={loyaltyBillBase}
+              value={loyaltyPayment}
+              onChange={onLoyaltyChange}
+            />
+          )}
+
           {/* Tutar özeti */}
           <div className="grid grid-cols-2 gap-2">
             <div className="bg-orange-50 border-2 border-orange-200 rounded-xl p-3 text-center">

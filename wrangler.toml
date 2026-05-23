@@ -10,7 +10,8 @@
 # public/_worker.js → dist: Advanced mode; /api/* SPA yerine Supabase Edge proxy.
 # Cloudflare → sefposadisyon → Settings → Environment variables (Production):
 #   SEFPOS_SUPABASE_URL = https://xdfnozfuuzctubijbnds.supabase.co
-# Üretim domain (www.sefpos.com.tr) bu Pages projesine bağlıdır. GitHub Actions
+# Üretim domain (www.sefpos.com.tr) bu Pages projesine bağlıdır. Apex (sefpos.com.tr) için
+# Cloudflare → sefposadisyon → Custom domains → sefpos.com.tr ekleyin; _worker.js 301 ile www'ye yönlendirir.
 # wrangler pages deploy hedefi varsayılan olarak aynı addır (sefposadisyon).
 #
 # Eski yinelenen proje "sefpos" (yalnızca sefpos.pages.dev, domain yok) silinmek için

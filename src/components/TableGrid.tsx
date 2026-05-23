@@ -1054,7 +1054,7 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
             <button
               type="button"
               onClick={() => setShowReprintModal(true)}
-              className="flex items-center gap-1.5 px-2 md:px-2.5 py-1.5 rounded-xl bg-white border border-slate-200 text-slate-700 hover:border-orange-300 hover:text-orange-700 hover:bg-orange-50/80 shrink-0 active:scale-95 transition-colors"
+              className="hidden md:flex items-center gap-1.5 px-2 md:px-2.5 py-1.5 rounded-xl bg-white border border-slate-200 text-slate-700 hover:border-orange-300 hover:text-orange-700 hover:bg-orange-50/80 shrink-0 active:scale-95 transition-colors"
               title="Geçmiş adisyonlar (V)"
             >
               <Receipt className="w-3.5 h-3.5 text-orange-600 shrink-0" />

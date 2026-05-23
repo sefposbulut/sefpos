@@ -67,6 +67,8 @@ import {
   manualUnlockTablePayment,
 } from '../lib/paymentLock';
 import { markTableOptimisticallyCleared } from '../lib/tableOptimisticClear';
+import { isModuleEnabled } from '../lib/modules';
+import { loyaltyApplyForOrder, type LoyaltyPaymentSelection } from '../lib/loyalty';
 
 /** 767px eşiğinde scrollbar/DPI kayması mobil↔masaüstü düzeni gidip getiriyordu (özellikle Electron). Ölü bant ile sabitlenir. */
 const ORDER_PANEL_MOBILE_MAX_PX = 767;
@@ -270,6 +272,8 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
   const [products, setProducts] = useState<Product[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [showPayment, setShowPayment] = useState(false);
+  const [loyaltyPayment, setLoyaltyPayment] = useState<LoyaltyPaymentSelection | null>(null);
+  const loyaltyModuleOn = isModuleEnabled('loyalty', tenant as any);
   const [huginGate, setHuginGate] = useState<HuginPaymentGateProps | null>(null);
   const [huginGateBusy, setHuginGateBusy] = useState(false);
   const huginOpenDocIdRef = useRef<string | null>(null);
@@ -1562,10 +1566,12 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
         : Number(currentOrder?.subtotal) || 0;
     const subtotal = cartSubtotal + existingSubtotal;
     const taxAmount = 0;
-    const discountAmount = subtotal * (discount / 100);
-    const total = subtotal - discountAmount;
-    return { subtotal, taxAmount, discountAmount, total };
-  }, [cartSubtotal, existingOrderItems, currentOrder?.subtotal, discount]);
+    const percentDiscount = subtotal * (discount / 100);
+    const loyaltyDiscount = loyaltyPayment?.discountTl ?? 0;
+    const discountAmount = percentDiscount + loyaltyDiscount;
+    const total = Math.max(0, subtotal - discountAmount);
+    return { subtotal, taxAmount, discountAmount, total, percentDiscount, loyaltyDiscount };
+  }, [cartSubtotal, existingOrderItems, currentOrder?.subtotal, discount, loyaltyPayment]);
 
   const handleSubmitOrder = async (opts?: { closeWithoutUi?: boolean }) => {
     if (cart.length === 0 || !tenant || !user || submittingRef.current) return;
@@ -2140,6 +2146,23 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
     const stockItemsSnapshot = existingOrderItems;
     const orderItemsSnapshot = existingOrderItems;
 
+    if (loyaltyPayment?.customerId && loyaltyModuleOn) {
+      const { subtotal: orderSubtotal } = calculateTotal();
+      const loyaltyRes = await loyaltyApplyForOrder(
+        loyaltyPayment.customerId,
+        currentOrder.id,
+        orderSubtotal,
+        loyaltyPayment.redeemPoints,
+      );
+      if (!loyaltyRes.ok && !loyaltyRes.skipped) {
+        console.warn('[Sadakat]', loyaltyRes.error);
+        alert(
+          `Ödeme kaydedildi; sadakat puanı işlenemedi: ${loyaltyRes.error || 'bilinmeyen hata'}. ` +
+            'Sadakat menüsünden ayarları kontrol edin.',
+        );
+      }
+    }
+
     void Promise.all([
       supabase.from('orders').update({
         status: 'completed',
@@ -2201,6 +2224,7 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
     setHuginGate(null);
     huginOpenDocIdRef.current = null;
     huginCtxRef.current = null;
+    setLoyaltyPayment(null);
     setShowPayment(false);
     onClose();
   };
@@ -2471,7 +2495,10 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
     return matchCategory && matchSearch;
   }), [products, selectedCategory, searchQuery, searchLower]);
 
-  const { discountAmount, total } = useMemo(() => calculateTotal(), [calculateTotal]);
+  const { discountAmount, total, subtotal, percentDiscount } = useMemo(
+    () => calculateTotal(),
+    [calculateTotal],
+  );
   const totalPaid = useMemo(() => paymentTransactions.reduce((sum, p) => sum + Number(p.amount), 0), [paymentTransactions]);
   const remainingAmount = useMemo(() => Math.max(0, total - totalPaid), [total, totalPaid]);
 
@@ -2489,6 +2516,10 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
   }, [existingOrderItems, selectedItemIds, isItemPaid]);
   const partialPayActive = selectedItemIds.size > 0 && selectedItemsTotal > 0;
   const paymentModalAmount = partialPayActive ? selectedItemsTotal : remainingAmount;
+  const loyaltyBillBase = useMemo(
+    () => Math.max(0, subtotal - percentDiscount),
+    [subtotal, percentDiscount],
+  );
 
   /** Ödeme modalını anında aç; masa kilidi arka planda (önce RPC beklemez). */
   const openPaymentFlow = useCallback(() => {
@@ -2501,6 +2532,7 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
       partialPaymentMarkedRef.current = false;
       partialPaymentRemainingRef.current = 0;
     }
+    setLoyaltyPayment(null);
     setShowPayment(true);
     if (cart.length > 0) void handleSubmitOrder();
     if (table.table_number === 0 || !table.id) return;
@@ -2810,11 +2842,16 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
             // de bir sonraki kullanım için sıfırlanacaklar.
             if (huginGate) return;
             setShowPayment(false);
+            setLoyaltyPayment(null);
             setHuginGate(null);
             huginCtxRef.current = null;
             unlockTable();
           }}
           loading={huginGateBusy}
+          loyaltyEnabled={loyaltyModuleOn && !partialPayActive}
+          loyaltyBillBase={loyaltyBillBase}
+          loyaltyPayment={loyaltyPayment}
+          onLoyaltyChange={setLoyaltyPayment}
         />
       )}
 

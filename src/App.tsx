@@ -29,6 +29,7 @@ import { TrialExpiredOverlay } from './components/TrialExpiredOverlay';
 import { getTrialInfo } from './lib/tenantTrial';
 import { AdminPanel } from './components/AdminPanel';
 import { Customers } from './components/customers/Customers';
+import { LoyaltyPage } from './components/loyalty/LoyaltyPage';
 import { EndOfDay } from './components/EndOfDay';
 import { Reports } from './components/reports/Reports';
 import { StockCountReport } from './components/reports/StockCountReport';
@@ -788,6 +789,12 @@ function App() {
       {show('customers') && (
         <div className="fixed inset-0 top-14 md:top-20 bg-gradient-to-br from-slate-50 to-slate-100 overflow-hidden">
           <Customers />
+        </div>
+      )}
+
+      {show('loyalty') && (
+        <div className="fixed inset-0 top-14 md:top-20 bg-gradient-to-br from-slate-50 to-slate-100 overflow-hidden">
+          <LoyaltyPage onBack={() => setCurrentPage(isElectron ? 'desktop-home' : 'tables')} />
         </div>
       )}
 

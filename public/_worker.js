@@ -99,6 +99,13 @@ async function redirectLatestWindowsSetup() {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+
+    // sefpos.com.tr → www.sefpos.com.tr (apex custom domain aynı Pages projesine bağlı olmalı)
+    if (url.hostname === 'sefpos.com.tr') {
+      url.hostname = 'www.sefpos.com.tr';
+      return Response.redirect(url.toString(), 301);
+    }
+
     const path = url.pathname;
 
     if (path === '/download/setup' || path === '/download/Sefpos-Setup.exe') {

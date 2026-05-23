@@ -13,6 +13,7 @@ import {
   Users,
   Wallet,
   Zap,
+  Gift,
 } from 'lucide-react';
 import { isModuleEnabled } from './modules';
 import { isSqlServerMode } from './sqlDb';
@@ -139,6 +140,17 @@ export function buildPosMenuTiles({
         !!(permissions.can_process_payments || permissions.can_manage_products) &&
         mod('customers'),
       page: 'customers',
+    },
+    {
+      id: 'loyalty',
+      label: 'Sadakat',
+      description: 'Puan kazan / kullan',
+      icon: Gift,
+      show:
+        !!permissions.can_process_payments &&
+        mod('loyalty') &&
+        !isSqlServerMode(),
+      page: 'loyalty',
     },
     {
       id: 'reports',

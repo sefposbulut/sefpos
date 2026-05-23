@@ -23,6 +23,7 @@ export type ToggleableModuleCode =
   | 'products'
   | 'inventory'
   | 'customers'
+  | 'loyalty'
   | 'reports'
   | 'cashier'
   | 'shifts'
@@ -47,6 +48,7 @@ export const TOGGLEABLE_MODULES: ToggleableModuleMeta[] = [
   { code: 'products',     label: 'Ürünler',           description: 'Ürün/kategori/varyant yönetimi' },
   { code: 'inventory',    label: 'Stok yönetimi',     description: 'Reçete, hammadde, tedarikçi, alış faturası' },
   { code: 'customers',    label: 'Cari Hesaplar',     description: 'Müşteri kartları, açık hesap takibi' },
+  { code: 'loyalty',      label: 'Sadakat',           description: 'Müşteri puanı, ödeme ekranından kullanım' },
   { code: 'reports',      label: 'Raporlar',          description: 'Satış / şube / personel / ürün raporları' },
   { code: 'cashier',      label: 'Kasa Yönetimi',     description: 'Kasa giriş/çıkış işlemleri' },
   { code: 'shifts',       label: 'Vardiya',           description: 'Vardiya aç/kapat, çift bazlı sayım' },

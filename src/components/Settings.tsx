@@ -3,7 +3,9 @@ import { supabase } from '../lib/supabase';
 import { createClient } from '@supabase/supabase-js';
 import { useAuth } from '../contexts/AuthContext';
 import { Database } from '../lib/supabase';
-import { X, Plus, Trash2, Settings as SettingsIcon, Building2, ToggleLeft, ToggleRight, Printer, AlertCircle, MapPin, Phone, Save, CreditCard as Edit2, User, Store, CheckCircle, Wifi, WifiOff, Globe, RefreshCw, Lock, ShieldCheck, Eye, EyeOff, Package, CheckSquare, Square, Database as DatabaseIcon, Receipt, Pencil, Scale, Loader, QrCode, PhoneIncoming, FlaskConical, Clock, Download, Sparkles, ChevronDown, ChevronUp, HelpCircle, Info, Percent, Puzzle } from 'lucide-react';
+import { X, Plus, Trash2, Settings as SettingsIcon, Building2, ToggleLeft, ToggleRight, Printer, AlertCircle, MapPin, Phone, Save, CreditCard as Edit2, User, Store, CheckCircle, Wifi, WifiOff, Globe, RefreshCw, Lock, ShieldCheck, Eye, EyeOff, Package, CheckSquare, Square, Database as DatabaseIcon, Receipt, Pencil, Scale, Loader, QrCode, PhoneIncoming, FlaskConical, Clock, Download, Sparkles, ChevronDown, ChevronUp, HelpCircle, Info, Percent, Puzzle, Gift } from 'lucide-react';
+import { isModuleEnabled } from '../lib/modules';
+import { LoyaltySettingsPanel } from './loyalty/LoyaltySettingsPanel';
 import IntegrationsSettings from './IntegrationsSettings';
 import {
   isCallerIdAvailable,
@@ -47,7 +49,7 @@ interface SettingsProps {
 
 export function Settings({ onClose }: SettingsProps) {
   const { tenant, profile, activeBranch, refreshProfile, refreshBranches } = useAuth();
-  const [activeTab, setActiveTab] = useState<'tables' | 'products' | 'manage' | 'platforms' | 'integrations' | 'partner-api' | 'branches' | 'printers' | 'account' | 'system' | 'security' | 'branch-products' | 'database' | 'hugin' | 'devices' | 'waiters' | 'scale' | 'qr-menu' | 'caller-id'>('branches');
+  const [activeTab, setActiveTab] = useState<'tables' | 'products' | 'manage' | 'platforms' | 'integrations' | 'partner-api' | 'branches' | 'printers' | 'account' | 'system' | 'security' | 'branch-products' | 'database' | 'hugin' | 'devices' | 'waiters' | 'scale' | 'qr-menu' | 'caller-id' | 'loyalty'>('branches');
   const [groups, setGroups] = useState<TableGroup[]>([]);
   const [showGroupForm, setShowGroupForm] = useState(false);
   const [groupName, setGroupName] = useState('');
@@ -1095,10 +1097,15 @@ export function Settings({ onClose }: SettingsProps) {
     }
   };
 
+  const loyaltyModuleOn = tenant ? isModuleEnabled('loyalty', tenant as any) : false;
+
   const navItems = [
     { id: 'branches', label: 'Şubeler', icon: Building2, group: 'Yönetim' },
     { id: 'branch-products', label: 'Şube Ürünleri', icon: Package, group: 'Yönetim' },
     { id: 'qr-menu', label: 'QR Menü', icon: QrCode, group: 'Yönetim' },
+    ...(loyaltyModuleOn
+      ? [{ id: 'loyalty' as const, label: 'Sadakat', icon: Gift, group: 'Yönetim' as const }]
+      : []),
     { id: 'waiters', label: 'Garsonlar', icon: User, group: 'Yönetim' },
     { id: 'tables', label: 'Masa Grupları', icon: Store, group: 'Masalar' },
     { id: 'manage', label: 'Masa Düzenle', icon: SettingsIcon, group: 'Masalar' },
@@ -2558,6 +2565,8 @@ export function Settings({ onClose }: SettingsProps) {
                 userId={profile?.id ?? null}
               />
             ) : null
+          ) : activeTab === 'loyalty' && tenant ? (
+            <LoyaltySettingsPanel tenantId={tenant.id} embedded />
           ) : activeTab === 'printers' ? (
             <PrinterSettings />
           ) : activeTab === 'scale' ? (

@@ -1,5 +1,5 @@
 import { useState, useEffect, type ReactNode } from 'react';
-import { Menu, X, Phone, MapPin, MessageCircle, ArrowRight } from 'lucide-react';
+import { Menu, X, Phone, MapPin, MessageCircle, ArrowRight, ChevronDown } from 'lucide-react';
 import { BrandLogo } from './components/BrandLogo';
 import { SITE, LANDING_NAV, type LandingRoute } from './content/siteContent';
 import { FeaturesMegaMenu } from './components/FeaturesMegaMenu';
@@ -29,6 +29,7 @@ function footerLabel(parsed: ParsedLandingPath): string {
 export function LandingLayout({ parsed, onNavigate, onLogin, children }: Props) {
   const staticRoute = parsed.kind === 'static' ? parsed.route : null;
   const [menuOpen, setMenuOpen] = useState(false);
+  const [featuresSubmenuOpen, setFeaturesSubmenuOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
 
   useEffect(() => {
@@ -39,7 +40,12 @@ export function LandingLayout({ parsed, onNavigate, onLogin, children }: Props) 
 
   useEffect(() => {
     setMenuOpen(false);
+    setFeaturesSubmenuOpen(false);
   }, [parsed]);
+
+  useEffect(() => {
+    if (!menuOpen) setFeaturesSubmenuOpen(false);
+  }, [menuOpen]);
 
   const navLink = (path: LandingRoute) => {
     if (path === '/ozellikler') {
@@ -114,24 +120,54 @@ export function LandingLayout({ parsed, onNavigate, onLogin, children }: Props) 
           <div className="lg:hidden border-t border-slate-200 bg-white px-4 py-4 space-y-3 shadow-lg max-h-[85vh] overflow-y-auto">
             {LANDING_NAV.map((n) =>
               n.path === '/ozellikler' ? (
-                <div key={n.path} className="border-b border-slate-100 pb-3 mb-1">
-                  <button
-                    type="button"
-                    onClick={() => onNavigate('/ozellikler')}
-                    className="block w-full text-left font-semibold text-slate-800 py-2"
-                  >
-                    {n.label}
-                  </button>
-                  <div className="pl-1 pr-1">
-                    <FeaturesNavList
-                      activeId={null}
-                      compact
-                      onSelect={(id) => {
+                <div key={n.path} className="border-b border-slate-100 pb-2 mb-1">
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => {
                         setMenuOpen(false);
-                        onNavigate(`/ozellikler#${id}`);
+                        onNavigate('/ozellikler');
                       }}
-                    />
+                      className="flex-1 text-left font-semibold text-slate-800 py-2"
+                    >
+                      {n.label}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setFeaturesSubmenuOpen((v) => !v)}
+                      className="p-2 rounded-lg text-slate-500 hover:bg-slate-100"
+                      aria-expanded={featuresSubmenuOpen}
+                      aria-label={featuresSubmenuOpen ? 'Özellik listesini gizle' : 'Özellik listesini göster'}
+                    >
+                      <ChevronDown
+                        className={`w-5 h-5 transition-transform ${featuresSubmenuOpen ? 'rotate-180' : ''}`}
+                      />
+                    </button>
                   </div>
+                  {featuresSubmenuOpen && (
+                    <div className="pl-1 pr-1 pb-2">
+                      <FeaturesNavList
+                        activeId={null}
+                        compact
+                        onSelect={(id) => {
+                          setMenuOpen(false);
+                          setFeaturesSubmenuOpen(false);
+                          onNavigate(`/ozellikler#${id}`);
+                        }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setMenuOpen(false);
+                          setFeaturesSubmenuOpen(false);
+                          onNavigate('/ozellikler');
+                        }}
+                        className="mt-2 w-full text-left text-sm font-bold text-orange-600 py-2"
+                      >
+                        Tüm özellikleri gör →
+                      </button>
+                    </div>
+                  )}
                 </div>
               ) : (
                 <button
