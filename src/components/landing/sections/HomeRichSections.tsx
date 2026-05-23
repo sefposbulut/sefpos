@@ -27,6 +27,7 @@ import {
   PROOF_POINTS,
   MODULE_HIGHLIGHTS,
 } from '../content/siteContent';
+import { HOME_FEATURE_SPOTLIGHT } from '../content/featureCatalog';
 import { TURKEY_STATS } from '../content/turkeyLocations.generated';
 import { BrandLogo } from '../components/BrandLogo';
 import { HeroDashboard } from '../components/HeroDashboard';
@@ -148,6 +149,39 @@ export function HomeRichPage({ onLogin, onNavigate }: LandingPageProps) {
                 <span className="text-xs font-bold text-slate-800 leading-tight">{label}</span>
               </div>
             ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ŞEFPOS ÖZELLİKLERİ — özet */}
+      <section className="py-16 md:py-20 bg-gradient-to-b from-white to-orange-50/40 border-b border-orange-100/60">
+        <div className="max-w-7xl mx-auto px-4">
+          <SectionHeading
+            eyebrow="ŞefPOS'un özellikleri"
+            title="Müşterinize gösterebileceğiniz tam kapsam"
+            subtitle="Salondan online platformlara, geçmiş adisyonlardan otomatik güncellemeye — tek sayfada kurumsal katalog."
+          />
+          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-10">
+            {HOME_FEATURE_SPOTLIGHT.map(({ icon: Icon, title, desc }) => (
+              <article
+                key={title}
+                className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-sm hover:shadow-md hover:border-orange-200 transition"
+              >
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-orange-500 to-red-700 flex items-center justify-center mb-3">
+                  <Icon className="w-5 h-5 text-white" />
+                </div>
+                <h3 className="font-bold text-slate-900 mb-1">{title}</h3>
+                <p className="text-sm text-slate-600 leading-relaxed">{desc}</p>
+              </article>
+            ))}
+          </div>
+          <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
+            <button type="button" onClick={() => onNavigate('/ozellikler')} className="landing-btn-primary">
+              Özellik kataloğunu aç <ArrowRight className="w-5 h-5" />
+            </button>
+            <p className="text-xs text-slate-500 text-center sm:text-left">
+              PDF için katalog sayfasında &quot;PDF / Yazdır&quot; — paylaşım linki: sefpos.com.tr/ozellikler
+            </p>
           </div>
         </div>
       </section>

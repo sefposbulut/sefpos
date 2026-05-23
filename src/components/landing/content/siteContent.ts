@@ -45,7 +45,7 @@ export type LandingRoute =
 
 export const LANDING_NAV: { label: string; path: LandingRoute }[] = [
   { label: 'Ana Sayfa', path: '/' },
-  { label: 'Özellikler', path: '/ozellikler' },
+  { label: 'Özellik kataloğu', path: '/ozellikler' },
   { label: 'Entegrasyonlar', path: '/entegrasyonlar' },
   { label: 'Fiyatlar', path: '/fiyatlar' },
   { label: 'İndir', path: '/indir' },
@@ -220,6 +220,7 @@ export const COMPARISON_ROWS = [
   { label: 'Tüm platformlar tek panel', sefpos: true, generic: false },
   { label: 'Caller ID ile müşteri tanıma', sefpos: true, generic: false },
   { label: '1000+ açık paket performansı', sefpos: true, generic: false },
+  { label: 'Geçmiş adisyon & kalem görüntüleme', sefpos: true, generic: 'Kısıtlı' },
   { label: 'QR menü + garson çağrısı', sefpos: true, generic: 'Kısıtlı' },
   { label: 'Şube SQL + bulut hibrit', sefpos: true, generic: false },
   { label: 'Otomatik masaüstü güncelleme', sefpos: true, generic: 'Manuel' },

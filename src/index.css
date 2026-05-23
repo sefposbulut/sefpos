@@ -296,3 +296,27 @@ input[type="range"]::-moz-range-thumb {
 .landing-marquee-track:hover {
   animation-play-state: paused;
 }
+
+/* Özellik kataloğu — yazdır / PDF */
+@media print {
+  body {
+    background: #fff !important;
+  }
+
+  .landing-features-catalog nav,
+  .landing-features-catalog .print\\:hidden,
+  header,
+  footer {
+    display: none !important;
+  }
+
+  .landing-features-catalog article {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  .landing-features-catalog .landing-btn-primary,
+  .landing-features-catalog .landing-btn-outline {
+    display: none !important;
+  }
+}

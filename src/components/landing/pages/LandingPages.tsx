@@ -19,8 +19,6 @@ import {
 import type { LandingRoute } from '../content/siteContent';
 import {
   SITE,
-  CORE_FEATURES,
-  ADVANCED_FEATURES,
   INTEGRATIONS,
   PRICING_PLANS,
   FAQ_ITEMS,
@@ -30,9 +28,9 @@ import { PlatformLogo } from '../../PlatformLogo';
 import { IntegrationMarquee } from '../components/IntegrationMarquee';
 import { CTABand } from '../components/CTABand';
 import { SectionHeading } from '../components/SectionHeading';
-import { FeatureCard } from '../components/FeatureCard';
 import { ResellerForm } from '../components/ResellerForm';
 import { HomeRichPage } from '../sections/HomeRichSections';
+import { FeaturesCatalogPage } from '../sections/FeaturesCatalogPage';
 import { APP_VERSION } from '../../../lib/appVersion';
 
 export type LandingPageProps = {
@@ -65,31 +63,8 @@ export function HomePage(props: LandingPageProps) {
   return <HomeRichPage {...props} />;
 }
 
-/** @deprecated Eski ana sayfa — HomeRichPage kullanılıyor */
-export function FeaturesPage({ onLogin, onNavigate }: LandingPageProps) {
-  return (
-    <>
-      <section className="bg-slate-950 text-white py-20">
-        <div className="max-w-7xl mx-auto px-4 text-center">
-          <h1 className="text-4xl md:text-5xl font-black mb-4">Her modül, gerçek restoran ihtiyacı için</h1>
-          <p className="text-slate-300 text-lg max-w-2xl mx-auto">Salondan mutfağa, paketten online platformlara kadar uçtan uca.</p>
-        </div>
-      </section>
-      <section className="py-20 bg-white">
-        <div className="max-w-7xl mx-auto px-4">
-          <SectionHeading title="Temel modüller" />
-          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6 mb-16">
-            {CORE_FEATURES.map((f) => <FeatureCard key={f.title} {...f} />)}
-          </div>
-          <SectionHeading title="Gelişmiş yetenekler" subtitle="Zincir, franchise ve teknik entegrasyon ihtiyaçları." />
-          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
-            {ADVANCED_FEATURES.map((f) => <FeatureCard key={f.title} {...f} />)}
-          </div>
-        </div>
-      </section>
-      <CTABand title="Canlı demo isteyin" subtitle="Uzaktan ekran paylaşımıyla işletmenize özel tur." onPrimary={onLogin} onSecondary={() => onNavigate('/iletisim')} secondaryLabel="İletişim" />
-    </>
-  );
+export function FeaturesPage(props: LandingPageProps) {
+  return <FeaturesCatalogPage {...props} />;
 }
 
 export function IntegrationsPage({ onLogin, onNavigate }: LandingPageProps) {
