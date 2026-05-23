@@ -66,10 +66,47 @@ function getirWebhookGetResponse() {
   );
 }
 
+const RELEASE_LATEST_YML =
+  'https://github.com/sefposbulut/sefpos-releases/releases/latest/download/latest.yml';
+const RELEASE_DOWNLOAD_BASE =
+  'https://github.com/sefposbulut/sefpos-releases/releases/latest/download/';
+
+async function resolveLatestSetupFilename() {
+  const res = await fetch(RELEASE_LATEST_YML, {
+    headers: { 'User-Agent': 'sefpos-setup-download/1' },
+  });
+  if (!res.ok) throw new Error(`latest.yml HTTP ${res.status}`);
+  const yaml = await res.text();
+  const match = yaml.match(/^path:\s*(\S+)\s*$/m);
+  const name = match?.[1]?.trim();
+  if (!name) throw new Error('latest.yml path missing');
+  return name;
+}
+
+async function redirectLatestWindowsSetup() {
+  try {
+    const artifact = await resolveLatestSetupFilename();
+    const dest = `${RELEASE_DOWNLOAD_BASE}${encodeURIComponent(artifact)}`;
+    return Response.redirect(dest, 302);
+  } catch {
+    return new Response('Kurulum dosyası şu an indirilemiyor. Lütfen biraz sonra tekrar deneyin.', {
+      status: 503,
+      headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+    });
+  }
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     const path = url.pathname;
+
+    if (path === '/download/setup' || path === '/download/Sefpos-Setup.exe') {
+      if (request.method === 'GET' || request.method === 'HEAD') {
+        return redirectLatestWindowsSetup();
+      }
+      return new Response('Method Not Allowed', { status: 405 });
+    }
 
     if (path === '/api/getir-webhook' || path.startsWith('/api/getir-webhook/')) {
       if (request.method === 'GET' || request.method === 'HEAD') {

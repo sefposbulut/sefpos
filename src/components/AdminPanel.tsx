@@ -19,6 +19,8 @@ import {
   formatOnlineLabel,
   onlineUserIdsFromProfiles,
 } from '../lib/tenantPresence';
+import { resolveProvinceSlug, provinceDisplayName } from '../lib/resellerProvince';
+import { TURKEY_PROVINCES } from './landing/content/turkeyLocations.generated';
 
 interface TenantRow {
   id: string;
@@ -2099,6 +2101,8 @@ interface ResellerRow {
   status: string;
   commission_rate: number;
   notes: string;
+  city?: string;
+  province_slug?: string;
   created_at: string;
 }
 
@@ -2120,9 +2124,9 @@ function ResellersPanel() {
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<'resellers' | 'applications'>('resellers');
   const [showAddForm, setShowAddForm] = useState(false);
-  const [newReseller, setNewReseller] = useState({ email: '', company_name: '', contact_name: '', phone: '', commission_rate: '0', notes: '' });
+  const [newReseller, setNewReseller] = useState({ email: '', company_name: '', contact_name: '', phone: '', commission_rate: '0', notes: '', province_slug: '' });
   const [editResellerId, setEditResellerId] = useState<string | null>(null);
-  const [editReseller, setEditReseller] = useState({ email: '', company_name: '', contact_name: '', phone: '', commission_rate: '0', notes: '' });
+  const [editReseller, setEditReseller] = useState({ email: '', company_name: '', contact_name: '', phone: '', commission_rate: '0', notes: '', province_slug: '' });
   const [deletingResellerId, setDeletingResellerId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -2142,6 +2146,7 @@ function ResellersPanel() {
   const handleAddReseller = async () => {
     if (!newReseller.email || !newReseller.company_name) return;
     setSaving(true);
+    const slug = resolveProvinceSlug(newReseller.province_slug) || '';
     await supabase.from('resellers').insert({
       email: newReseller.email,
       company_name: newReseller.company_name,
@@ -2149,11 +2154,13 @@ function ResellersPanel() {
       phone: newReseller.phone,
       commission_rate: parseFloat(newReseller.commission_rate) || 0,
       notes: newReseller.notes,
+      city: provinceDisplayName(slug),
+      province_slug: slug,
       status: 'active',
     });
     setSaving(false);
     setShowAddForm(false);
-    setNewReseller({ email: '', company_name: '', contact_name: '', phone: '', commission_rate: '0', notes: '' });
+    setNewReseller({ email: '', company_name: '', contact_name: '', phone: '', commission_rate: '0', notes: '', province_slug: '' });
     load();
   };
 
@@ -2171,6 +2178,7 @@ function ResellersPanel() {
       phone: r.phone || '',
       commission_rate: String(r.commission_rate ?? 0),
       notes: r.notes || '',
+      province_slug: r.province_slug || resolveProvinceSlug(r.city) || '',
     });
   };
 
@@ -2178,6 +2186,7 @@ function ResellersPanel() {
     if (!editResellerId || !editReseller.company_name.trim() || !editReseller.email.trim()) return;
     setSaving(true);
     try {
+      const slug = resolveProvinceSlug(editReseller.province_slug) || '';
       const { error } = await supabase
         .from('resellers')
         .update({
@@ -2187,6 +2196,8 @@ function ResellersPanel() {
           phone: editReseller.phone.trim(),
           commission_rate: parseFloat(editReseller.commission_rate) || 0,
           notes: editReseller.notes.trim(),
+          city: provinceDisplayName(slug),
+          province_slug: slug,
         })
         .eq('id', editResellerId);
       if (error) throw error;
@@ -2217,11 +2228,14 @@ function ResellersPanel() {
   };
 
   const handleApproveApplication = async (app: ApplicationRow) => {
+    const slug = resolveProvinceSlug(app.city) || '';
     await supabase.from('resellers').insert({
       email: app.email,
       company_name: app.company_name,
       contact_name: app.contact_name,
       phone: app.phone,
+      city: provinceDisplayName(slug) || app.city,
+      province_slug: slug,
       status: 'active',
     });
     await supabase.from('reseller_applications').update({ status: 'approved' }).eq('id', app.id);
@@ -2282,6 +2296,19 @@ function ResellersPanel() {
                   className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-amber-400" />
               </div>
             ))}
+            <div className="col-span-2">
+              <label className="block text-xs font-medium text-slate-500 mb-1">İl (haritada)</label>
+              <select
+                value={newReseller.province_slug}
+                onChange={e => setNewReseller({ ...newReseller, province_slug: e.target.value })}
+                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-amber-400 bg-white"
+              >
+                <option value="">İl seçin</option>
+                {TURKEY_PROVINCES.map(p => (
+                  <option key={p.s} value={p.s}>{p.n}</option>
+                ))}
+              </select>
+            </div>
           </div>
           <div className="flex gap-3 mt-4">
             <button onClick={() => setShowAddForm(false)} className="px-4 py-2 text-slate-500 hover:text-slate-700 text-sm transition-colors">İptal</button>
@@ -2348,6 +2375,9 @@ function ResellersPanel() {
                       <>
                         <div className="font-semibold text-slate-800">{r.company_name}</div>
                         <div className="text-xs text-slate-400">{r.email}</div>
+                        <div className="text-xs text-orange-600 mt-0.5">
+                          {provinceDisplayName(r.province_slug) || r.city || '—'}
+                        </div>
                       </>
                     )}
                   </td>
@@ -2368,6 +2398,16 @@ function ResellersPanel() {
                           className="w-full border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs focus:outline-none focus:border-amber-400"
                           placeholder="Telefon"
                         />
+                        <select
+                          value={editReseller.province_slug}
+                          onChange={e => setEditReseller(prev => ({ ...prev, province_slug: e.target.value }))}
+                          className="w-full border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs bg-white focus:outline-none focus:border-amber-400"
+                        >
+                          <option value="">İl</option>
+                          {TURKEY_PROVINCES.map(p => (
+                            <option key={p.s} value={p.s}>{p.n}</option>
+                          ))}
+                        </select>
                       </div>
                     ) : (
                       <>{r.contact_name || '-'}<br /><span className="text-xs text-slate-400">{r.phone}</span></>

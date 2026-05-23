@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from 'react';
-import { BrandLogo } from './BrandLogo';
 
 type TableStatus = 'empty' | 'occupied' | 'paying' | 'reserved';
 
@@ -86,7 +85,10 @@ export function HeroDashboard() {
   return (
     <div className="h-full flex flex-col bg-black text-white text-[10px] rounded-lg overflow-hidden landing-hero-dashboard">
       <div className="bg-gradient-to-r from-orange-600 via-orange-500 to-red-800 px-3 py-2 flex justify-between items-center gap-2 shrink-0">
-        <BrandLogo size="md" onDark />
+        <div>
+          <p className="font-bold text-[11px] text-white leading-tight">Salon ekranı</p>
+          <p className="text-[8px] text-orange-100/85">Masa · Online · Paket</p>
+        </div>
         <div className="text-right">
           <p className="text-[9px] text-orange-100/90 uppercase tracking-wider font-semibold">Günlük ciro</p>
           <p key={revenue} className="font-black text-sm tabular-nums landing-revenue-tick">₺{revenue.toLocaleString('tr-TR')}</p>

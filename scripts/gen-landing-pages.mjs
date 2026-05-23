@@ -314,12 +314,11 @@ export function DownloadPage({ onLogin }: LandingPageProps) {
             <h1 className="text-4xl md:text-5xl font-black mb-4">Windows masaüstü</h1>
             <p className="text-slate-300 text-lg mb-6">Yazıcı, terazi ve Caller ID için Electron sürümü. Otomatik güncelleme ile her zaman güncel kalın.</p>
             <a
-              href="https://github.com/sefposbulut/sefpos-releases/releases/latest"
-              target="_blank"
-              rel="noreferrer"
+              href="https://www.sefpos.com.tr/download/setup"
+              download="Sefpos-Setup.exe"
               className="inline-flex items-center gap-2 bg-orange-600 hover:bg-orange-500 text-white font-bold px-8 py-4 rounded-xl"
             >
-              <Download className="w-5 h-5" /> Sefpos-Setup indir
+              <Download className="w-5 h-5" /> Windows kurulumunu indir
             </a>
             <p className="text-sm text-slate-500 mt-3">Güncel sürüm: v{ver}</p>
           </${D}>

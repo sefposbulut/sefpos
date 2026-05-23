@@ -2,6 +2,8 @@ import { useState, useEffect, type ReactNode } from 'react';
 import { Menu, X, Phone, MapPin, MessageCircle, ArrowRight } from 'lucide-react';
 import { BrandLogo } from './components/BrandLogo';
 import { SITE, LANDING_NAV, type LandingRoute } from './content/siteContent';
+import { FeaturesMegaMenu } from './components/FeaturesMegaMenu';
+import { FeaturesNavList } from './components/FeaturesNavList';
 import { landingPathTitle, type ParsedLandingPath } from './landingRoutes';
 import { getDistrictBySlugs, getProvinceBySlug } from './content/turkeyLocations.generated';
 
@@ -39,18 +41,29 @@ export function LandingLayout({ parsed, onNavigate, onLogin, children }: Props) 
     setMenuOpen(false);
   }, [parsed]);
 
-  const navLink = (path: LandingRoute) => (
-    <button
-      type="button"
-      key={path}
-      onClick={() => onNavigate(path)}
-      className={`text-sm font-semibold transition-colors ${
-        staticRoute === path ? 'text-orange-600' : 'text-slate-600 hover:text-orange-600'
-      }`}
-    >
-      {LANDING_NAV.find((n) => n.path === path)?.label}
-    </button>
-  );
+  const navLink = (path: LandingRoute) => {
+    if (path === '/ozellikler') {
+      return (
+        <FeaturesMegaMenu
+          key={path}
+          isActive={staticRoute === '/ozellikler'}
+          onNavigate={onNavigate}
+        />
+      );
+    }
+    return (
+      <button
+        type="button"
+        key={path}
+        onClick={() => onNavigate(path)}
+        className={`text-sm font-semibold transition-colors ${
+          staticRoute === path ? 'text-orange-600' : 'text-slate-600 hover:text-orange-600'
+        }`}
+      >
+        {LANDING_NAV.find((n) => n.path === path)?.label}
+      </button>
+    );
+  };
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 font-sans antialiased">
@@ -98,12 +111,39 @@ export function LandingLayout({ parsed, onNavigate, onLogin, children }: Props) 
         </div>
 
         {menuOpen && (
-          <div className="lg:hidden border-t border-slate-200 bg-white px-4 py-4 space-y-3 shadow-lg">
-            {LANDING_NAV.map((n) => (
-              <button key={n.path} type="button" onClick={() => onNavigate(n.path)} className="block w-full text-left font-semibold text-slate-700 py-2">
-                {n.label}
-              </button>
-            ))}
+          <div className="lg:hidden border-t border-slate-200 bg-white px-4 py-4 space-y-3 shadow-lg max-h-[85vh] overflow-y-auto">
+            {LANDING_NAV.map((n) =>
+              n.path === '/ozellikler' ? (
+                <div key={n.path} className="border-b border-slate-100 pb-3 mb-1">
+                  <button
+                    type="button"
+                    onClick={() => onNavigate('/ozellikler')}
+                    className="block w-full text-left font-semibold text-slate-800 py-2"
+                  >
+                    {n.label}
+                  </button>
+                  <div className="pl-1 pr-1">
+                    <FeaturesNavList
+                      activeId={null}
+                      compact
+                      onSelect={(id) => {
+                        setMenuOpen(false);
+                        onNavigate(`/ozellikler#${id}`);
+                      }}
+                    />
+                  </div>
+                </div>
+              ) : (
+                <button
+                  key={n.path}
+                  type="button"
+                  onClick={() => onNavigate(n.path)}
+                  className="block w-full text-left font-semibold text-slate-700 py-2"
+                >
+                  {n.label}
+                </button>
+              ),
+            )}
             <button type="button" onClick={onLogin} className="w-full bg-orange-600 text-white font-bold py-3 rounded-xl">Giriş Yap</button>
           </div>
         )}

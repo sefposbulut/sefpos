@@ -48,13 +48,22 @@ export function LandingSite({ onLogin }: LandingSiteProps) {
   const [parsed, setParsed] = useState<ParsedLandingPath>(readPath);
 
   const navigate = useCallback((path: string) => {
-    const next = parseLandingPath(path);
-    const url = landingPathToUrl(next);
-    if (typeof window !== 'undefined' && window.location.pathname !== url) {
-      window.history.pushState({}, '', url);
+    const hashIdx = path.indexOf('#');
+    const pathOnly = hashIdx >= 0 ? path.slice(0, hashIdx) || '/' : path;
+    const hash = hashIdx >= 0 ? path.slice(hashIdx + 1) : '';
+    const next = parseLandingPath(pathOnly);
+    const url = landingPathToUrl(next) + (hash ? `#${hash}` : '');
+    if (typeof window !== 'undefined') {
+      const current = window.location.pathname + window.location.hash;
+      if (current !== url) {
+        window.history.pushState({}, '', url);
+      }
+      window.dispatchEvent(new Event('sefpos-navigate'));
     }
     setParsed(next);
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    if (!hash) {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
   }, []);
 
   useEffect(() => {

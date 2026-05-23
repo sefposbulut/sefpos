@@ -4,16 +4,18 @@ import {
   X,
   Download,
   Star,
-  Zap,
   ChevronRight,
   UtensilsCrossed,
   Store,
   Headphones,
+  Monitor,
+  Package,
+  Globe,
+  Sparkles,
 } from 'lucide-react';
 import type { LandingPageProps } from '../pages/LandingPages';
 import {
   SITE,
-  HERO_STATS,
   CORE_FEATURES,
   ADVANCED_FEATURES,
   INTEGRATIONS,
@@ -22,19 +24,27 @@ import {
   PRICING_PLANS,
   FAQ_ITEMS,
   TRUST_ITEMS,
+  HERO_STATS,
   INDUSTRIES,
   WORKFLOW_STEPS,
   PROOF_POINTS,
   MODULE_HIGHLIGHTS,
 } from '../content/siteContent';
 import { HOME_FEATURE_SPOTLIGHT } from '../content/featureCatalog';
+import { WINDOWS_SETUP_FILENAME, windowsSetupDownloadHref } from '../../../lib/desktopDownload';
 import { TURKEY_STATS } from '../content/turkeyLocations.generated';
-import { BrandLogo } from '../components/BrandLogo';
 import { HeroDashboard } from '../components/HeroDashboard';
 import { IntegrationMarquee } from '../components/IntegrationMarquee';
 import { CTABand } from '../components/CTABand';
 import { SectionHeading } from '../components/SectionHeading';
+import { PricingPlanCard } from '../components/PricingPlanCard';
 import { FeatureCard } from '../components/FeatureCard';
+
+const HERO_PILLARS = [
+  { icon: Monitor, label: 'Salon', desc: 'Masa haritası ve adisyon' },
+  { icon: Package, label: 'Paket', desc: 'Telefon ve teslimat' },
+  { icon: Globe, label: 'Online', desc: 'Platform siparişleri' },
+] as const;
 
 export function HomeRichPage({ onLogin, onNavigate }: LandingPageProps) {
   return (
@@ -45,56 +55,69 @@ export function HomeRichPage({ onLogin, onNavigate }: LandingPageProps) {
         <div className="absolute top-20 right-0 w-[480px] h-[480px] bg-red-900/20 blur-[100px] rounded-full" aria-hidden />
         <div className="relative max-w-7xl mx-auto px-4 pt-8 pb-20 md:pt-14 md:pb-28">
           <div className="grid lg:grid-cols-2 gap-10 lg:gap-14 items-center">
-            <div>
-              <div className="flex items-center gap-4 mb-6">
-                <BrandLogo size="xl" onDark />
-                <div className="hidden sm:block h-12 w-px bg-white/15" />
-                <div className="hidden sm:block">
-                  <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-orange-400">ŞefPOS</p>
-                  <p className="text-sm text-slate-400 font-medium">Restoran adisyon yazılımı</p>
-                </div>
+            <div className="landing-hero-copy max-w-xl">
+              <div className="landing-hero-eyebrow">
+                <Sparkles className="w-3.5 h-3.5" aria-hidden />
+                Restoran işletmeleri için profesyonel POS
               </div>
-              <span className="landing-badge mb-4 inline-flex">
-                <Zap className="w-3.5 h-3.5" /> Türkiye&apos;nin modern restoran POS&apos;u
-              </span>
-              <h1 className="text-4xl md:text-5xl xl:text-[3.25rem] font-black leading-[1.08] tracking-tight mb-5">
-                Gerçek bir{' '}
-                <span className="text-transparent bg-clip-text bg-gradient-to-r from-orange-400 to-red-500">
-                  adisyon yazılımı
-                </span>
-                — masa, paket ve online tek ekranda
+
+              <h1 className="landing-hero-title">
+                İşletmenizi{' '}
+                <span className="landing-hero-title-accent">tek ekrandan</span>
+                <span className="block mt-1 text-slate-200">yönetin</span>
               </h1>
-              <p className="text-lg text-slate-300 mb-8 max-w-xl leading-relaxed">
-                ŞefPOS; restoran, cafe ve paket servis işletmeleri için profesyonel kasa, mutfak fişi,
-                platform entegrasyonları ve gün sonu raporlarını bir araya getirir. Kurulumdan eğitime kadar yanınızdayız.
+
+              <p className="landing-hero-lead">
+                Masa adisyonu, paket servis ve online platformlar — kasa, mutfak fişi ve gün sonu raporu
+                Türkçe arayüzde bir arada.
               </p>
-              <div className="flex flex-col sm:flex-row gap-3 mb-8">
-                <button type="button" onClick={onLogin} className="landing-btn-primary">
+
+              <ul className="landing-hero-pillars">
+                {HERO_PILLARS.map(({ icon: Icon, label, desc }) => (
+                  <li key={label} className="landing-hero-pillar">
+                    <span className="landing-hero-pillar-icon" aria-hidden>
+                      <Icon className="w-4 h-4" strokeWidth={2} />
+                    </span>
+                    <span>
+                      <span className="landing-hero-pillar-label">{label}</span>
+                      <span className="landing-hero-pillar-desc">{desc}</span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+
+              <div className="landing-hero-cta">
+                <button type="button" onClick={onLogin} className="landing-btn-primary landing-hero-cta-primary">
                   Ücretsiz Dene <ArrowRight className="w-5 h-5" />
                 </button>
-                <button type="button" onClick={() => onNavigate('/indir')} className="landing-btn-outline">
+                <a
+                  href={windowsSetupDownloadHref()}
+                  download={WINDOWS_SETUP_FILENAME}
+                  className="landing-btn-outline landing-hero-cta-secondary"
+                >
                   <Download className="w-5 h-5" /> Windows İndir
-                </button>
+                </a>
               </div>
-              <ul className="flex flex-wrap gap-2 mb-8">
-                {TRUST_ITEMS.map((t) => (
-                  <li key={t} className="text-[11px] font-semibold text-slate-300 bg-white/5 border border-white/10 rounded-full px-3 py-1">
-                    <Check className="w-3 h-3 inline text-orange-400 mr-1 -mt-px" />
+
+              <div className="landing-hero-stats">
+                {HERO_STATS.slice(0, 3).map((s) => (
+                  <div key={s.label} className="landing-hero-stat">
+                    <p className="landing-hero-stat-value">{s.value}</p>
+                    <p className="landing-hero-stat-label">{s.label}</p>
+                  </div>
+                ))}
+              </div>
+
+              <ul className="landing-hero-trust">
+                {TRUST_ITEMS.slice(0, 3).map((t) => (
+                  <li key={t}>
+                    <Check className="w-3.5 h-3.5" aria-hidden />
                     {t}
                   </li>
                 ))}
               </ul>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                {HERO_STATS.map((s) => (
-                  <div key={s.label} className="landing-stat-pill">
-                    <p className="text-xl md:text-2xl font-black text-orange-400 tabular-nums">{s.value}</p>
-                    <p className="text-[10px] md:text-xs text-slate-400 font-medium mt-0.5">{s.label}</p>
-                  </div>
-                ))}
-              </div>
             </div>
             <div className="relative">
-              <div className="absolute -inset-8 landing-logo-ring blur-2xl opacity-60" aria-hidden />
               <div className="relative rounded-3xl border border-red-900/50 shadow-2xl shadow-black/50 overflow-hidden aspect-[5/4] min-h-[300px] bg-black ring-2 ring-orange-500/20">
                 <HeroDashboard />
               </div>
@@ -342,21 +365,9 @@ export function HomeRichPage({ onLogin, onNavigate }: LandingPageProps) {
       <section className="py-20 bg-slate-50">
         <div className="max-w-7xl mx-auto px-4">
           <SectionHeading eyebrow="Paketler" title="İşletmenize uygun lisans" subtitle="Şeffaf fiyatlandırma — gizli maliyet yok. Detay için bizi arayın." />
-          <div className="grid md:grid-cols-3 gap-6">
+          <div className="landing-pricing-grid">
             {PRICING_PLANS.map((plan) => (
-              <article key={plan.name} className={`rounded-3xl p-8 border flex flex-col ${plan.highlight ? 'border-orange-500 bg-white shadow-xl shadow-orange-500/10 ring-2 ring-orange-500/20' : 'border-slate-200 bg-white'}`}>
-                {plan.highlight && <span className="text-xs font-bold text-orange-600 uppercase mb-2">En popüler</span>}
-                <h3 className="text-2xl font-black">{plan.name}</h3>
-                <p className="text-sm text-slate-500 mt-1 mb-6">{plan.ideal}</p>
-                <ul className="space-y-2 flex-1 text-sm">
-                  {plan.features.map((f) => (
-                    <li key={f} className="flex gap-2"><Check className="w-4 h-4 text-green-600 shrink-0" />{f}</li>
-                  ))}
-                </ul>
-                <button type="button" onClick={onLogin} className={`mt-6 w-full py-3 rounded-xl font-bold ${plan.highlight ? 'landing-btn-primary justify-center' : 'bg-slate-900 text-white hover:bg-slate-800'}`}>
-                  Teklif Al
-                </button>
-              </article>
+              <PricingPlanCard key={plan.name} plan={plan} onCta={onLogin} variant="preview" />
             ))}
           </div>
           <div className="text-center mt-8">

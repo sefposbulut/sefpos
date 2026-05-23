@@ -245,37 +245,132 @@ export const TESTIMONIALS = [
   },
 ];
 
-export const PRICING_PLANS = [
+export type PricingFeatureGroup = {
+  title: string;
+  items: string[];
+};
+
+export type PricingPlan = {
+  name: string;
+  ideal: string;
+  highlight?: boolean;
+  badge?: string;
+  tier: 1 | 2 | 3;
+  limits: string[];
+  groups: PricingFeatureGroup[];
+  excluded?: string[];
+};
+
+export const PRICING_PLANS: PricingPlan[] = [
   {
     name: 'Başlangıç',
-    ideal: 'Tek şube, yeni açılan işletmeler',
-    features: ['1 şube', '5 kullanıcı', 'Masa & paket', 'Temel raporlar', 'E-posta destek'],
+    ideal: 'Tek şube — salon ve kasa temeli',
+    highlight: true,
+    badge: 'En popüler',
+    tier: 1,
+    limits: ['1 şube', '3 kullanıcı', '14 gün deneme'],
+    groups: [
+      {
+        title: 'Salon Yönetimi',
+        items: ['Masa haritası', 'Sipariş girişi', 'Temel garson / kasa rolleri'],
+      },
+      {
+        title: 'Kasa ve Ödeme',
+        items: ['Nakit ve kart ödeme', 'Adisyon ve mutfak fişi'],
+      },
+      {
+        title: 'Mutfak',
+        items: ['Otomatik mutfak fişi', '1 yazıcı yönlendirme'],
+      },
+      {
+        title: 'Raporlama',
+        items: ['Günlük ciro özeti', 'Gün sonu kapanış'],
+      },
+    ],
+    excluded: ['Online platformlar', 'Paket / Caller ID', 'QR menü', 'Kurye', 'Stok', 'Çok şube'],
   },
   {
     name: 'Profesyonel',
-    ideal: 'Büyüyen restoran ve kafeler',
-    highlight: true,
-    features: [
-      '3 şube',
-      '15 kullanıcı',
-      'Tüm online entegrasyonlar',
-      'QR menü & kurye',
-      'Öncelikli destek',
-      'Caller ID',
+    ideal: 'Salon + paket + online — tam restoran',
+    tier: 2,
+    limits: ['3 şube', '15 kullanıcı', 'Öncelikli destek'],
+    groups: [
+      {
+        title: 'Salon Yönetimi',
+        items: ['Canlı masa haritası', 'Masa birleştirme / transfer', 'Hesap kilidi', 'Garson mobil ekran'],
+      },
+      {
+        title: 'Paket Servisi',
+        items: ['Caller ID', 'Müşteri ve adres kaydı', 'Açık paket listesi', 'Kurye atama ve ekranı'],
+      },
+      {
+        title: 'Online Sipariş',
+        items: ['Getir · Yemeksepeti · Trendyol', 'Migros · HemenYolda', 'Sesli uyarı · platform fişi'],
+      },
+      {
+        title: 'Kasa ve Ödeme',
+        items: ['Parçalı / karma ödeme', 'Veresiye (cari)', 'Geçmiş adisyon', 'İptal kayıtları'],
+      },
+      {
+        title: 'QR Menü',
+        items: ['Dijital menü', 'Garson çağrı zili', 'QR sipariş talebi'],
+      },
+      {
+        title: 'Mutfak ve Yazıcı',
+        items: ['Kategori bazlı yazıcılar', 'Online otomatik fiş', 'Terazi entegrasyonu'],
+      },
+      {
+        title: 'Stok ve Rapor',
+        items: ['Stok sayımı', 'Kritik stok uyarısı', 'Vardiya', 'Performans raporları'],
+      },
+      {
+        title: 'Personel',
+        items: ['Rol ve yetki', 'PIN ile giriş', 'Kullanıcı yönetimi'],
+      },
     ],
   },
   {
     name: 'Kurumsal',
-    ideal: 'Zincir ve franchise yapılar',
-    features: [
-      'Sınırsız şube',
-      'Sınırsız kullanıcı',
-      'Özel eğitim',
-      'SLA & 7/24 destek',
-      'SQL şube modu',
+    ideal: 'Zincir ve franchise — tam teşekküllü',
+    badge: 'Tam donanım',
+    tier: 3,
+    limits: ['Sınırsız şube', 'Sınırsız kullanıcı', 'SLA 7/24'],
+    groups: [
+      { title: 'Profesyonel paket', items: ['Tüm Profesyonel modüller dahil'] },
+      {
+        title: 'Zincir ve Şube',
+        items: ['Tek panel çok şube', 'Merkez canlı izleme', 'Şube karşılaştırma', 'Franchise yönetimi'],
+      },
+      {
+        title: 'Kesintisiz çalışma',
+        items: ['Şube SQL modu', 'Windows kasa + Caller ID', 'Veri izolasyonu', 'Bulut yedekleme'],
+      },
+      {
+        title: 'Stok ve Maliyet',
+        items: ['Reçete ve maliyet', 'Tedarikçi / alış', 'Dönemsel sayım analizi'],
+      },
+      {
+        title: 'Raporlama',
+        items: ['Konsolide çok şube rapor', 'Detaylı kırılımlar', 'Özel rapor talebi'],
+      },
+      {
+        title: 'Personel ve Güvenlik',
+        items: ['Sınırsız rol şablonları', 'Merkezi yetki politikası', 'Denetim kayıtları'],
+      },
+      {
+        title: 'Kurumsal hizmet',
+        items: ['Özel eğitim', 'Kurulum danışmanlığı', 'API / özel entegrasyon', 'Özel hesap yöneticisi'],
+      },
     ],
   },
 ];
+
+/** Ana sayfa önizlemesi */
+export function pricingPlanFeaturePreview(plan: PricingPlan, max = 6): string[] {
+  const flat = [...plan.limits, ...plan.groups.flatMap((g) => g.items)];
+  if (flat.length <= max) return flat;
+  return [...flat.slice(0, max - 1), `+${flat.length - max + 1} özellik`];
+}
 
 export const FAQ_ITEMS = [
   {
