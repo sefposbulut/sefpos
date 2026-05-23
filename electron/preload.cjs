@@ -41,6 +41,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
   installUpdate: () => ipcRenderer.invoke('install-update'),
   getAppVersion: () => ipcRenderer.invoke('get-app-version'),
+  wipeLocalData: () => ipcRenderer.invoke('wipe-local-data'),
   updaterListenersReady: () => ipcRenderer.invoke('updater-listeners-ready'),
   getUpdaterPending: () => ipcRenderer.invoke('get-updater-pending'),
   clearUpdaterDownloadedPending: () => ipcRenderer.invoke('clear-updater-downloaded-pending'),

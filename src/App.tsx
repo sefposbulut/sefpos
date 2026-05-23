@@ -52,6 +52,7 @@ import {
   getDismissedIds,
   isNotificationUnread,
 } from './lib/supportNotifications';
+import { processWipeLocalNotification } from './lib/remoteWipe';
 import { OnlineOrderToast } from './components/OnlineOrderToast';
 import { GlobalGetirSync } from './components/GlobalGetirSync';
 import { PrintStatusToast } from './components/PrintStatusToast';
@@ -336,6 +337,10 @@ function App() {
         const n = payload.new as any;
         if (n.tenant_id && n.tenant_id !== tenant.id) return;
         if (n.type === 'revoke') return;
+        if (n.type === 'wipe_local') {
+          void processWipeLocalNotification(n);
+          return;
+        }
         showNewNotification(n);
       })
       .subscribe(async (status) => {
@@ -351,7 +356,13 @@ function App() {
                 isNotificationUnread(n, tenant.id, dismissed),
             )
             .reverse()
-            .forEach((n) => showNewNotification(n));
+            .forEach((n) => {
+              if (n.type === 'wipe_local') {
+                void processWipeLocalNotification(n);
+                return;
+              }
+              showNewNotification(n);
+            });
         }
       });
 
@@ -359,6 +370,16 @@ function App() {
       supabase.removeChannel(channel);
     };
   }, [tenant, user, showNewNotification]);
+
+  useEffect(() => {
+    if (!tenant?.id || !user) return;
+    if (isSqlServerMode()) return;
+    void fetchSupportNotifications(tenant.id, 30).then((rows) => {
+      for (const n of rows) {
+        if (n.type === 'wipe_local') void processWipeLocalNotification(n);
+      }
+    });
+  }, [tenant?.id, user]);
 
   const handleTableGridRefresh = useCallback((fn: () => void) => {
     tableRefreshRef.current = fn;

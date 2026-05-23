@@ -2,7 +2,13 @@ import { useState, useEffect } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import { supabase, invokeEdgeFunction } from '../lib/supabase';
 import '../styles/admin-panel.css';
-import { Shield, Search, Building2, Users, CheckCircle, XCircle, Clock, AlertTriangle, RefreshCw, ChevronDown, ChevronUp, X, Save, Calendar, CreditCard, TrendingUp, LogOut, Bell, Send, TicketCheck, MessageCircle, Trash2, Eye, EyeOff, Ban, Play, ChevronRight, Mail, Phone, MapPin, Hash, UserCheck, AlertCircle, Info, Headphones, BarChart3, Banknote, Package2, Server, Handshake, Key, Plus, CreditCard as Edit2, Smartphone } from 'lucide-react';
+import { Shield, Search, Building2, Users, CheckCircle, XCircle, Clock, AlertTriangle, RefreshCw, ChevronDown, ChevronUp, X, Save, Calendar, CreditCard, TrendingUp, LogOut, Bell, Send, TicketCheck, MessageCircle, Trash2, Eye, EyeOff, Ban, Play, ChevronRight, Mail, Phone, MapPin, Hash, UserCheck, AlertCircle, Info, Headphones, BarChart3, Banknote, Package2, Server, Handshake, Key, Plus, CreditCard as Edit2, Smartphone, HardDrive, Download } from 'lucide-react';
+import {
+  fetchPlatformReleasePolicy,
+  savePlatformReleasePolicy,
+  type PlatformReleasePolicy,
+} from '../lib/releasePolicy';
+import { sendWipeLocalCommand } from '../lib/remoteWipe';
 import { useAuth } from '../contexts/AuthContext';
 import { AYKA_ADMIN_PATH } from '../lib/aykaRoute';
 import { TOGGLEABLE_MODULES } from '../lib/modules';
@@ -449,9 +455,11 @@ interface TenantDetailProps {
   planUpdating: boolean;
   onStatusChange: (status: string) => void;
   statusChanging: boolean;
+  onWipeLocal: () => void;
+  wipeSending: boolean;
 }
 
-function TenantDetailPanel({ tenant, onlineUserIds, onClose, onEdit, onDelete, onImpersonate, onApplyPlan, planUpdating, onStatusChange, statusChanging }: TenantDetailProps) {
+function TenantDetailPanel({ tenant, onlineUserIds, onClose, onEdit, onDelete, onImpersonate, onApplyPlan, planUpdating, onStatusChange, statusChanging, onWipeLocal, wipeSending }: TenantDetailProps) {
   const [showUsers, setShowUsers] = useState(true);
 
   return (
@@ -671,6 +679,18 @@ function TenantDetailPanel({ tenant, onlineUserIds, onClose, onEdit, onDelete, o
                   Deneme Moduna Al
                 </button>
               )}
+              <button
+                type="button"
+                onClick={onWipeLocal}
+                disabled={wipeSending}
+                className="w-full flex items-center gap-3 px-4 py-3 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-xl text-amber-900 font-semibold text-sm transition disabled:opacity-50"
+              >
+                <HardDrive className="w-4 h-4 shrink-0" />
+                Kasa yerel verisini sil (uzaktan)
+              </button>
+              <p className="text-[11px] text-slate-500 leading-snug px-1">
+                Açık kasalarda AppData önbelleği ve oturum dosyaları temizlenir; bulut verileri ve sipariş geçmişi korunur.
+              </p>
             </div>
           </div>
         </div>
@@ -1371,6 +1391,7 @@ export function AdminPanel({ onExit }: AdminPanelProps) {
   const [salesLoading, setSalesLoading] = useState(false);
   const [onlineByTenant, setOnlineByTenant] = useState<Record<string, string[]>>({});
   const [planUpdating, setPlanUpdating] = useState(false);
+  const [wipeSending, setWipeSending] = useState(false);
 
   const adminAllowed =
     canAccessAdminPanel(profile, { isAykaRoute: true }) &&
@@ -1551,6 +1572,23 @@ export function AdminPanel({ onExit }: AdminPanelProps) {
     await loadTenants();
     setDetailTenant(prev => prev ? { ...prev, subscription_status: status } : null);
     setStatusChanging(false);
+  };
+
+  const handleWipeLocal = async () => {
+    if (!detailTenant) return;
+    const ok = window.confirm(
+      `"${detailTenant.name}" için tüm açık kasalarda yerel önbellek ve oturum dosyaları silinecek.\n\n` +
+        'Bulut verileri (siparişler, menü, kullanıcılar) korunur. Devam edilsin mi?',
+    );
+    if (!ok) return;
+    setWipeSending(true);
+    const err = await sendWipeLocalCommand(detailTenant.id);
+    setWipeSending(false);
+    if (err) {
+      alert(`Komut gönderilemedi: ${err}`);
+      return;
+    }
+    alert('Komut gönderildi. Kasalar bildirimi alınca yerel veriyi temizleyip yeniden başlayacak.');
   };
 
   const handleImpersonateTenant = async (tenantId: string) => {
@@ -1765,7 +1803,12 @@ export function AdminPanel({ onExit }: AdminPanelProps) {
       )}
 
       {activeTab === 'resellers' && <ResellersPanel />}
-      {activeTab === 'licenses' && <LicensesPanel tenants={tenants} />}
+      {activeTab === 'licenses' && (
+        <>
+          <UpdatePolicyPanel />
+          <LicensesPanel tenants={tenants} />
+        </>
+      )}
       {activeTab === 'support' && <SupportPanel tenants={tenants} />}
 
       {activeTab === 'sales' && (
@@ -2015,6 +2058,8 @@ export function AdminPanel({ onExit }: AdminPanelProps) {
           planUpdating={planUpdating}
           onStatusChange={handleStatusChange}
           statusChanging={statusChanging}
+          onWipeLocal={handleWipeLocal}
+          wipeSending={wipeSending}
         />
       )}
 
@@ -2463,6 +2508,143 @@ interface LicenseRow {
   max_users: number;
   notes: string;
   created_at: string;
+}
+
+function UpdatePolicyPanel() {
+  const { user } = useAuth();
+  const [policy, setPolicy] = useState<PlatformReleasePolicy>({
+    min_required_version: '1.0.202',
+    force_update: false,
+    message: '',
+  });
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [feedback, setFeedback] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetchPlatformReleasePolicy().then((p) => {
+      if (!cancelled) {
+        setPolicy(p);
+        setLoading(false);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const save = async (next?: Partial<PlatformReleasePolicy>) => {
+    const merged = { ...policy, ...next };
+    setSaving(true);
+    setFeedback('');
+    const { error } = await savePlatformReleasePolicy(
+      {
+        min_required_version: merged.min_required_version,
+        force_update: merged.force_update,
+        message: merged.message,
+      },
+      user?.id,
+    );
+    setSaving(false);
+    if (error) {
+      setFeedback(`Kaydedilemedi: ${error}`);
+      return;
+    }
+    setPolicy(merged);
+    setFeedback('Politika kaydedildi. Açık kasalar birkaç dakika içinde zorunlu güncellemeyi görür.');
+  };
+
+  if (loading) return null;
+
+  return (
+    <div className="admin-main pb-0">
+      <div className="admin-card p-5 mb-4 border border-orange-200/60">
+        <div className="flex flex-wrap items-start justify-between gap-3 mb-4">
+          <div>
+            <h3 className="text-base font-black text-slate-800 flex items-center gap-2">
+              <Download className="w-5 h-5 text-orange-500" />
+              Masaüstü zorunlu güncelleme
+            </h3>
+            <p className="text-xs text-slate-500 mt-1 max-w-xl">
+              Kurulu ŞefPOS EXE sürümü belirtilen minimumun altındaysa ve zorunlu işaretliyse kasa güncellemeden
+              çalışmaz. Önce GitHub Release’te ilgili sürümün yayında olduğundan emin olun.
+            </p>
+          </div>
+          <button
+            type="button"
+            disabled={saving}
+            onClick={() =>
+              void save({
+                min_required_version: '1.0.202',
+                force_update: true,
+                message:
+                  'Güvenlik ve performans güncellemesi zorunludur. Lütfen güncellemeyi tamamlayın; işlem birkaç dakika sürer.',
+              })
+            }
+            className="px-4 py-2 rounded-xl text-sm font-bold bg-gradient-to-r from-orange-500 to-red-500 text-white shadow disabled:opacity-50"
+          >
+            1.0.202 zorunlu yap
+          </button>
+        </div>
+        <div className="grid md:grid-cols-3 gap-4">
+          <div>
+            <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">
+              Minimum sürüm
+            </label>
+            <input
+              value={policy.min_required_version}
+              onChange={(e) => setPolicy((p) => ({ ...p, min_required_version: e.target.value }))}
+              placeholder="1.0.202"
+              className="w-full px-3 py-2.5 rounded-xl border border-slate-200 text-sm font-mono"
+            />
+          </div>
+          <div className="flex items-end">
+            <label className="flex items-center gap-2 cursor-pointer text-sm font-semibold text-slate-700">
+              <input
+                type="checkbox"
+                checked={policy.force_update}
+                onChange={(e) => setPolicy((p) => ({ ...p, force_update: e.target.checked }))}
+                className="w-4 h-4 rounded border-slate-300 text-orange-600"
+              />
+              Zorunlu güncelleme aktif
+            </label>
+          </div>
+          <div className="flex items-end">
+            <button
+              type="button"
+              disabled={saving}
+              onClick={() => void save()}
+              className="w-full py-2.5 rounded-xl bg-slate-800 hover:bg-slate-900 text-white text-sm font-bold disabled:opacity-50"
+            >
+              {saving ? 'Kaydediliyor…' : 'Politikayı kaydet'}
+            </button>
+          </div>
+        </div>
+        <div className="mt-4">
+          <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">
+            Kasada gösterilecek mesaj
+          </label>
+          <textarea
+            value={policy.message}
+            onChange={(e) => setPolicy((p) => ({ ...p, message: e.target.value }))}
+            rows={2}
+            placeholder="Güncelleme zorunludur…"
+            className="w-full px-3 py-2.5 rounded-xl border border-slate-200 text-sm resize-none"
+          />
+        </div>
+        {feedback && (
+          <p
+            className={`mt-3 text-sm font-semibold px-3 py-2 rounded-lg ${
+              feedback.startsWith('Kaydedilemedi') ? 'bg-red-50 text-red-700' : 'bg-emerald-50 text-emerald-800'
+            }`}
+          >
+            {feedback}
+          </p>
+        )}
+      </div>
+    </div>
+  );
 }
 
 function LicensesPanel({ tenants }: { tenants: TenantRow[] }) {

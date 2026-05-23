@@ -1,4 +1,5 @@
 const { app, BrowserWindow, shell, ipcMain, net, dialog, Menu } = require('electron');
+const { writeSecureJson, readSecureJson } = require('./secureLocalStore.cjs');
 const path = require('path');
 const { execSync } = require('child_process');
 
@@ -988,10 +989,19 @@ const SUPABASE_ANON_KEY =
   || _fromPort.anon
   || FALLBACK_PRIMARY_SUPABASE_ANON_KEY;
 
-console.log(`[print-agent] Supabase yapılandırması: url=${SUPABASE_URL}, anonKey=***${SUPABASE_ANON_KEY.slice(-8)} (len=${SUPABASE_ANON_KEY.length})`);
+if (!app.isPackaged) {
+  console.log(`[print-agent] Supabase: url=${SUPABASE_URL}, anonKey=***${SUPABASE_ANON_KEY.slice(-8)}`);
+}
 
-const isDev = process.env.NODE_ENV === 'development';
+const isDev = !app.isPackaged;
+/** Üretimde F12 kapalı; destek: SEFPOS_SUPPORT_DEVTOOLS=1 veya Ctrl+Shift+Alt+S */
+let supportDevToolsUnlocked = process.env.SEFPOS_SUPPORT_DEVTOOLS === '1';
+function productionDevToolsAllowed() {
+  return isDev || supportDevToolsUnlocked;
+}
+
 const settingsPath = path.join(app.getPath('userData'), 'settings.json');
+const settingsSecurePath = path.join(app.getPath('userData'), 'settings.secure.json');
 const localDbPath = path.join(app.getPath('userData'), 'localdb.json');
 
 function loadLocalDb() {
@@ -1250,8 +1260,12 @@ function localDbGetTerminalUsers(tenantId) {
 
 function loadSettings() {
   try {
+    const secure = readSecureJson(settingsSecurePath);
+    if (secure && typeof secure === 'object') return secure;
     if (fs.existsSync(settingsPath)) {
-      return JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+      const legacy = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+      saveSettings(legacy);
+      return legacy;
     }
   } catch {}
   return {};
@@ -1260,7 +1274,13 @@ function loadSettings() {
 function saveSettings(data) {
   try {
     const current = loadSettings();
-    fs.writeFileSync(settingsPath, JSON.stringify({ ...current, ...data }, null, 2));
+    const merged = { ...current, ...data };
+    writeSecureJson(settingsSecurePath, merged);
+    try {
+      if (fs.existsSync(settingsPath)) fs.unlinkSync(settingsPath);
+    } catch {
+      /* */
+    }
   } catch {}
 }
 
@@ -2102,9 +2122,12 @@ function createWindow() {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
+      sandbox: false,
       preload: path.join(__dirname, 'preload.cjs'),
       partition: 'persist:shefpos',
       backgroundThrottling: false,
+      devTools: isDev,
+      webSecurity: true,
     },
     // Windows'ta ICO çoklu çözünürlük desteği daha temiz görünür; SEFPOS.ico
     // bulunamazsa PNG'ye düşer.
@@ -2203,19 +2226,28 @@ function createWindow() {
     mainWindow.loadFile(indexPath);
   }
 
-  // Saha tanısı için DevTools kısayolları (production build'de de aktif):
-  //   F12              → Geliştirici Araçları'nı aç/kapat
-  //   Ctrl+Shift+I     → aynısı
-  //   Ctrl+Shift+R     → cache'i atla ve sayfayı yenile (hard reload)
+  // Üretim: DevTools kapalı (müşteri EXE incelemesini zorlaştırır). Destek: Ctrl+Shift+Alt+S kilidi açar.
   mainWindow.webContents.on('before-input-event', (event, input) => {
     try {
       const k = String(input.key || '').toLowerCase();
-      if (k === 'f12' || (input.control && input.shift && k === 'i')) {
-        mainWindow.webContents.toggleDevTools();
+      if (input.control && input.shift && input.alt && k === 's') {
+        supportDevToolsUnlocked = !supportDevToolsUnlocked;
+        try {
+          mainWindow.webContents.setDevToolsEnabled(supportDevToolsUnlocked);
+        } catch {
+          /* */
+        }
         event.preventDefault();
         return;
       }
-      if (input.control && input.shift && k === 'r') {
+      if (k === 'f12' || (input.control && input.shift && k === 'i')) {
+        if (productionDevToolsAllowed()) {
+          mainWindow.webContents.toggleDevTools();
+        }
+        event.preventDefault();
+        return;
+      }
+      if (input.control && input.shift && k === 'r' && productionDevToolsAllowed()) {
         mainWindow.webContents.reloadIgnoringCache();
         event.preventDefault();
       }
@@ -2668,19 +2700,17 @@ ipcMain.handle('register-printers', async (_, { tenantId, branchId, userJwt }) =
     try {
       const sessionPath = path.join(app.getPath('userData'), 'print-agent-session.json');
       fs.mkdirSync(path.dirname(sessionPath), { recursive: true });
-      fs.writeFileSync(
-        sessionPath,
-        JSON.stringify({
-          tenantId,
-          branchId: branchId || null,
-          userJwt,
-          supabaseUrl: SUPABASE_URL,
-          anonKey: SUPABASE_ANON_KEY,
-          printers: printers || [],
-          savedAt: new Date().toISOString(),
-        }),
-        'utf8'
-      );
+      writeSecureJson(sessionPath.replace(/\.json$/, '.secure.json'), {
+        tenantId,
+        branchId: branchId || null,
+        printers: printers || [],
+        savedAt: new Date().toISOString(),
+      });
+      try {
+        if (fs.existsSync(sessionPath)) fs.unlinkSync(sessionPath);
+      } catch {
+        /* */
+      }
       paLog('log', `print-agent-session.json güncellendi (${sessionPath})`);
     } catch (sessErr) {
       paLog('warn', 'print-agent-session yazılamadı: ' + (sessErr?.message || sessErr));
@@ -3669,6 +3699,32 @@ ipcMain.handle('install-update', () => {
 
 ipcMain.handle('get-app-version', () => {
   return app.getVersion();
+});
+
+/** Lisans paneli uzaktan emir: kasa AppData yerel dosyaları (bulut veri değil). */
+ipcMain.handle('wipe-local-data', async () => {
+  try {
+    const ud = app.getPath('userData');
+    const names = [
+      'settings.json',
+      'settings.secure.json',
+      'localdb.json',
+      'print-agent-session.json',
+      'print-agent-session.secure.json',
+    ];
+    for (const name of names) {
+      try {
+        const fp = path.join(ud, name);
+        if (fs.existsSync(fp)) fs.unlinkSync(fp);
+      } catch {
+        /* */
+      }
+    }
+    paLog('info', '[wipe] Yerel kullanıcı verisi temizlendi', { userData: ud });
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err?.message || String(err) };
+  }
 });
 
 // Renderer dinamik olarak pencere başlığını günceller:
