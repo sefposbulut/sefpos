@@ -103,7 +103,7 @@ export function ReprintReceiptModal({
       let q: any = supabase
         .from('orders')
         .select(
-          'id, order_number, total_amount, subtotal, tax_amount, discount_amount, status, payment_method, order_type, table_id, created_at, closed_at, restaurant_tables(table_number)',
+          'id, order_number, total_amount, subtotal, tax_amount, discount_amount, status, payment_method, order_type, table_id, created_at, closed_at, restaurant_tables!orders_table_id_fkey(table_number)',
         )
         .eq('tenant_id', tenant.id)
         .gte('created_at', start)
@@ -116,7 +116,54 @@ export function ReprintReceiptModal({
       if (filterTableId) {
         q = q.eq('table_id', filterTableId);
       }
-      const { data, error } = await q;
+      let data: any[] | null = null;
+      let error: { message: string } | null = null;
+      ({ data, error } = await q);
+
+      if (error?.message?.includes('more than one relationship')) {
+        let q2: any = supabase
+          .from('orders')
+          .select(
+            'id, order_number, total_amount, subtotal, tax_amount, discount_amount, status, payment_method, order_type, table_id, created_at, closed_at',
+          )
+          .eq('tenant_id', tenant.id)
+          .gte('created_at', start)
+          .lte('created_at', end)
+          .order('created_at', { ascending: false })
+          .limit(200);
+        if (activeBranch?.id) {
+          q2 = q2.or(`branch_id.eq.${activeBranch.id},branch_id.is.null`);
+        }
+        if (filterTableId) {
+          q2 = q2.eq('table_id', filterTableId);
+        }
+        ({ data, error } = await q2);
+        if (!error && data?.length) {
+          const tableIds = [
+            ...new Set(
+              data.map((o: { table_id: string | null }) => o.table_id).filter(Boolean),
+            ),
+          ] as string[];
+          const tableNumById = new Map<string, number>();
+          if (tableIds.length > 0) {
+            const { data: tables } = await supabase
+              .from('restaurant_tables')
+              .select('id, table_number')
+              .in('id', tableIds);
+            (tables || []).forEach((t: { id: string; table_number: number }) => {
+              tableNumById.set(t.id, t.table_number);
+            });
+          }
+          data = data.map((o: any) => ({
+            ...o,
+            restaurant_tables:
+              o.table_id && tableNumById.has(o.table_id)
+                ? { table_number: tableNumById.get(o.table_id) }
+                : null,
+          }));
+        }
+      }
+
       if (error) {
         console.warn('[ŞefPOS] geçmiş adisyonlar fetch hatası:', error.message);
         setFetchError(error.message);
@@ -267,11 +314,18 @@ export function ReprintReceiptModal({
     <div className="fixed inset-0 z-[80] bg-black/50 flex items-stretch md:items-center justify-center p-0 md:p-4">
       <div className="bg-white w-full md:max-w-3xl md:rounded-2xl shadow-2xl flex flex-col max-h-screen md:max-h-[90vh] overflow-hidden">
         <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200 bg-gradient-to-r from-orange-500 to-red-500 text-white">
-          <div className="flex items-center gap-2 min-w-0">
-            <Receipt className="w-5 h-5 shrink-0" />
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="shrink-0 w-9 h-9 rounded-lg bg-white/15 border border-white/25 flex items-center justify-center">
+              <Receipt className="w-5 h-5" />
+            </div>
             <div className="min-w-0">
-              <h3 className="font-bold text-base truncate">Geçmiş adisyonlar</h3>
-              <p className="text-xs opacity-90 truncate">
+              <div className="inline-flex flex-col items-start leading-none bg-white/10 border border-white/25 rounded-lg px-2.5 py-1.5">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-white/75">
+                  Geçmiş
+                </span>
+                <span className="text-base font-black text-white mt-0.5">adisyonlar</span>
+              </div>
+              <p className="text-xs opacity-90 truncate mt-1.5">
                 {filterTableNumber != null
                   ? `Masa ${filterTableNumber} — kapanmış siparişleri yeniden yazdır`
                   : 'Kapanmış siparişlerin adisyonunu yeniden yazdır'}

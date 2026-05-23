@@ -43,27 +43,36 @@ export async function searchTakeawayCustomers(
   raw: string,
 ): Promise<TakeawayCustomerSuggestion[]> {
   const q = raw.trim();
-  if (q.length < 2) return [];
+  if (q.length < 3) return [];
 
   const pattern = sanitizePattern(q);
+  const digits = q.replace(/\D/g, '');
+  const phoneFocused = digits.length >= 4 && digits.length / Math.max(q.length, 1) >= 0.55;
 
-  const [deliveryRes, cariRes] = await Promise.all([
-    supabase
-      .from('delivery_customers')
-      .select(DELIVERY_FIELDS)
-      .eq('tenant_id', tenantId)
-      .or(`phone.ilike.${pattern},full_name.ilike.${pattern}`)
-      .order('last_order_at', { ascending: false, nullsFirst: false })
-      .limit(12),
-    supabase
-      .from('customers')
-      .select(CARI_FIELDS)
-      .eq('tenant_id', tenantId)
-      .eq('is_active', true)
-      .or(`name.ilike.${pattern},phone.ilike.${pattern}`)
-      .order('name', { ascending: true })
-      .limit(12),
-  ]);
+  const deliveryQ = supabase
+    .from('delivery_customers')
+    .select(DELIVERY_FIELDS)
+    .eq('tenant_id', tenantId)
+    .order('last_order_at', { ascending: false, nullsFirst: false })
+    .limit(8);
+
+  const cariQ = supabase
+    .from('customers')
+    .select(CARI_FIELDS)
+    .eq('tenant_id', tenantId)
+    .eq('is_active', true)
+    .order('name', { ascending: true })
+    .limit(8);
+
+  if (phoneFocused) {
+    deliveryQ.ilike('phone', pattern);
+    cariQ.ilike('phone', pattern);
+  } else {
+    deliveryQ.or(`phone.ilike.${pattern},full_name.ilike.${pattern}`);
+    cariQ.or(`name.ilike.${pattern},phone.ilike.${pattern}`);
+  }
+
+  const [deliveryRes, cariRes] = await Promise.all([deliveryQ, cariQ]);
 
   const err = deliveryRes.error || cariRes.error;
   if (err) {
@@ -88,5 +97,5 @@ export async function searchTakeawayCustomers(
     merged.push({ kind: 'cari', row: r });
   }
 
-  return merged.slice(0, 16);
+  return merged.slice(0, 10);
 }

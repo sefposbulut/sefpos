@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback, memo, startTransition } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import {
@@ -37,7 +37,7 @@ interface DeliveryOrderFormProps {
   onClose: (result?: { orderId?: string; reload?: boolean }) => void;
 }
 
-export function DeliveryOrderForm({ couriers, editOrder, prefillCustomer, onClose }: DeliveryOrderFormProps) {
+function DeliveryOrderFormInner({ couriers, editOrder, prefillCustomer, onClose }: DeliveryOrderFormProps) {
   const { tenant, user, profile, activeBranch } = useAuth();
 
   const [subtype, setSubtype] = useState<OrderSubtype>(editOrder?.order_type === 'delivery' ? 'delivery' : editOrder?.order_subtype === 'gel_al' ? 'gel_al' : 'takeaway');
@@ -147,28 +147,36 @@ export function DeliveryOrderForm({ couriers, editOrder, prefillCustomer, onClos
       if (!tenant) return;
       const merged = await searchTakeawayCustomers(tenant.id, raw);
       if (seq !== customerSearchSeq.current) return;
-      setCustomerSuggestions(merged);
-      setShowSuggestions(merged.length > 0);
-      setLoadingCustomer(false);
+      startTransition(() => {
+        setCustomerSuggestions(merged);
+        setShowSuggestions(merged.length > 0);
+        setLoadingCustomer(false);
+      });
     },
     [tenant],
   );
 
   const handleCustomerSearchChange = (val: string) => {
     setCustomerPhone(val);
-    setSelectedDeliveryCustomer(null);
-    setSelectedCariCustomer(null);
     if (phoneDebounce.current) clearTimeout(phoneDebounce.current);
     const q = val.trim();
-    if (q.length < 2) {
-      setCustomerSuggestions([]);
-      setShowSuggestions(false);
-      setLoadingCustomer(false);
+    if (q.length < 3) {
+      startTransition(() => {
+        setCustomerSuggestions([]);
+        setShowSuggestions(false);
+        setLoadingCustomer(false);
+      });
       return;
     }
-    setLoadingCustomer(true);
+    if (selectedDeliveryCustomer || selectedCariCustomer) {
+      setSelectedDeliveryCustomer(null);
+      setSelectedCariCustomer(null);
+    }
     const seq = ++customerSearchSeq.current;
-    phoneDebounce.current = setTimeout(() => void searchCustomers(val, seq), 180);
+    phoneDebounce.current = setTimeout(() => {
+      startTransition(() => setLoadingCustomer(true));
+      void searchCustomers(val, seq);
+    }, 420);
   };
 
   useEffect(() => {
@@ -561,11 +569,14 @@ export function DeliveryOrderForm({ couriers, editOrder, prefillCustomer, onClos
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                 <input
-                  type="text"
+                  type="tel"
+                  inputMode="tel"
                   value={customerPhone}
                   onChange={(e) => handleCustomerSearchChange(e.target.value)}
                   onFocus={() => customerSuggestions.length > 0 && setShowSuggestions(true)}
                   placeholder="Cari adı, isim veya 05XX…"
+                  autoComplete="off"
+                  spellCheck={false}
                   className="w-full pl-9 pr-8 py-2.5 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-orange-400 focus:border-transparent"
                 />
                 {loadingCustomer && <div className="absolute right-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 border-2 border-orange-400 border-t-transparent rounded-full animate-spin" />}
@@ -917,3 +928,5 @@ export function DeliveryOrderForm({ couriers, editOrder, prefillCustomer, onClos
     </div>
   );
 }
+
+export const DeliveryOrderForm = memo(DeliveryOrderFormInner);

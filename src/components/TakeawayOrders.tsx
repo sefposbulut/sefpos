@@ -112,8 +112,18 @@ export function TakeawayOrders({ isActive = true }: TakeawayOrdersProps) {
   const [editingOrder, setEditingOrder] = useState<TakeawayOrder | null>(null);
   const [assigningCourierId, setAssigningCourierId] = useState<string | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const formOpenRef = useRef(false);
+  const couriersForFormRef = useRef<Courier[]>([]);
   const [customerQuery, setCustomerQuery] = useState('');
   const deferredCustomerQuery = useDeferredValue(customerQuery);
+
+  const formOpen = showNewOrderForm || !!editingOrder;
+  useEffect(() => {
+    formOpenRef.current = formOpen;
+    if (formOpen) {
+      couriersForFormRef.current = couriers;
+    }
+  }, [formOpen, couriers]);
 
   // ===== Caller ID =====
   const cidAvailable = isCallerIdAvailable();
@@ -282,6 +292,7 @@ export function TakeawayOrders({ isActive = true }: TakeawayOrdersProps) {
   }, [tenant, activeBranch]);
 
   const handleOrderChange = useCallback((payload: any) => {
+    if (formOpenRef.current) return;
     const { eventType, new: newRecord, old: oldRecord } = payload;
     if (!newRecord && !oldRecord) return;
     const record = newRecord || oldRecord;
@@ -322,20 +333,20 @@ export function TakeawayOrders({ isActive = true }: TakeawayOrdersProps) {
   }, [tenant, activeBranch, isActive, loadOrders, loadCouriers]);
 
   useEffect(() => {
-    if (!tenant || !isActive) return;
+    if (!tenant || !isActive || formOpen) return;
     const ch = supabase
       .channel(`takeaway-${tenant.id}-${activeBranch?.id || 'all'}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'orders', filter: `tenant_id=eq.${tenant.id}` }, handleOrderChange)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'couriers', filter: `tenant_id=eq.${tenant.id}` }, debouncedCourierRefresh)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'courier_location_history', filter: `tenant_id=eq.${tenant.id}` }, debouncedCourierRefresh)
       .subscribe();
-    const courierPoll = setInterval(() => { loadCouriers(); }, 8000);
+    const courierPoll = setInterval(() => { loadCouriers(); }, 20_000);
     return () => {
       supabase.removeChannel(ch);
       clearInterval(courierPoll);
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
-  }, [tenant, activeBranch, isActive, handleOrderChange, debouncedCourierRefresh, loadCouriers]);
+  }, [tenant, activeBranch, isActive, formOpen, handleOrderChange, debouncedCourierRefresh, loadCouriers]);
 
   const updateStatus = async (orderId: string, newStatus: string, courierId?: string, courierName?: string) => {
     const updates: Record<string, any> = { delivery_status: newStatus };
@@ -488,10 +499,10 @@ export function TakeawayOrders({ isActive = true }: TakeawayOrdersProps) {
     } as TakeawayOrder & { order_items: unknown[] });
   }, []);
 
-  if (showNewOrderForm || editingOrder) {
+  if (formOpen) {
     return (
       <DeliveryOrderForm
-        couriers={couriers}
+        couriers={couriersForFormRef.current.length > 0 ? couriersForFormRef.current : couriers}
         editOrder={editingOrder}
         prefillCustomer={cidPrefill}
         onClose={handleFormClose}

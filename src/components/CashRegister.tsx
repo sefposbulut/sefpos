@@ -358,7 +358,10 @@ export function CashRegister({ onClose }: CashRegisterProps) {
             title="Geçmiş adisyonlar"
           >
             <Printer className="w-4 h-4" />
-            <span className="font-bold">Geçmiş adisyonlar</span>
+            <span className="flex flex-col items-start leading-none">
+              <span className="text-[10px] font-semibold uppercase tracking-wide opacity-90">Geçmiş</span>
+              <span className="font-bold">adisyonlar</span>
+            </span>
           </button>
           <button onClick={onClose} className="text-white hover:bg-white/20 p-2 rounded-lg transition-all active:scale-95">
             <X className="w-6 h-6 md:w-7 md:h-7" />
