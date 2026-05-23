@@ -22,6 +22,12 @@ import {
 } from '../lib/printService';
 import { isAykaAdminPath } from '../lib/aykaRoute';
 import { startTenantPresenceTracking, stopTenantPresenceTracking } from '../lib/tenantPresence';
+import { hideBootSplash } from '../lib/bootSplash';
+import {
+  clearAuthSessionSnap,
+  persistAuthSessionSnap,
+  readAuthSessionSnap,
+} from '../lib/authSessionSnap';
 
 type Profile = Database['public']['Tables']['profiles']['Row'];
 type Tenant = Database['public']['Tables']['tenants']['Row'];
@@ -244,6 +250,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       /* */
     }
     await supabase.auth.signOut();
+    clearAuthSessionSnap();
     clearWaiterLocalSession();
     localStorage.removeItem('shefpos_admin_tenant_impersonation');
     setImpersonationTenantId(null);
@@ -255,7 +262,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setPermissions(DEFAULT_WAITER_PERMISSIONS);
   };
 
-  const loadBranches = async (tenantId: string, prof: Profile) => {
+  const loadBranches = async (
+    tenantId: string,
+    prof: Profile,
+  ): Promise<{ active: Branch | null; list: Branch[] }> => {
     try {
       let query = supabase.from('branches' as any).select('*').eq('tenant_id', tenantId).eq('is_active', true);
       if (prof.role !== 'owner' && prof.role !== 'admin' && prof.branch_id) {
@@ -281,9 +291,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         prefetchCloudTableGrid(tenantId, nextBranch.id);
       }
       setActiveBranchState(nextBranch);
+      return { active: nextBranch, list: branchList };
     } catch {
       setActiveBranchState(null);
       setBranches([]);
+      return { active: null, list: [] };
     }
   };
 
@@ -361,6 +373,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         };
         setBranches([fakeBranch]);
         setActiveBranchState(fakeBranch);
+        persistAuthSessionSnap({
+          userId,
+          profile: profileData,
+          tenant: fakeTenant,
+          branches: [fakeBranch],
+          activeBranchId: fakeBranch.id,
+          impersonationTenantId: null,
+          permissions: buildPermissionsFromRole(profileData, roleData),
+        });
         return;
       }
 
@@ -433,6 +454,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               branchRows.find((b) => b.is_main) ||
               branchRows[0];
             setActiveBranchState(preferred);
+            const sqlPerms = buildPermissionsFromRole(profileData, roleData);
+            persistAuthSessionSnap({
+              userId,
+              profile: profileData,
+              tenant: fakeTenant,
+              branches: branchRows,
+              activeBranchId: preferred.id,
+              impersonationTenantId: null,
+              permissions: sqlPerms,
+            });
             return;
           }
         }
@@ -449,6 +480,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         };
         setBranches([fakeBranch]);
         setActiveBranchState(fakeBranch);
+        persistAuthSessionSnap({
+          userId,
+          profile: profileData,
+          tenant: fakeTenant,
+          branches: [fakeBranch],
+          activeBranchId: fakeBranch.id,
+          impersonationTenantId: null,
+          permissions: buildPermissionsFromRole(profileData, roleData),
+        });
         return;
       }
 
@@ -556,9 +596,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         .eq('id', effectiveTenantId)
         .maybeSingle();
 
-      setTenant(tenantData as unknown as Tenant);
-      setPermissions(buildPermissionsFromRole(effectiveProfile as unknown as Profile, prof.roles ?? null));
-      await loadBranches(effectiveTenantId, effectiveProfile as unknown as Profile);
+      const tenantRow = tenantData as unknown as Tenant;
+      const perms = buildPermissionsFromRole(effectiveProfile as unknown as Profile, prof.roles ?? null);
+      setTenant(tenantRow);
+      setPermissions(perms);
+      const { active: activeBranch, list: branchList } = await loadBranches(
+        effectiveTenantId,
+        effectiveProfile as unknown as Profile,
+      );
+      persistAuthSessionSnap({
+        userId,
+        profile: effectiveProfile as unknown as Profile,
+        tenant: tenantRow,
+        branches: branchList,
+        activeBranchId: activeBranch?.id ?? null,
+        impersonationTenantId: impersonationTarget,
+        permissions: perms,
+      });
     } catch {
       setProfileLoadFailed(true);
     }
@@ -579,17 +633,41 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           // Reference comparison'i yutmak icin: user state'i sadece id degisirse setle
           setUser((prev) => (prev?.id === session.user.id ? prev : session.user));
           if (loading && !cancelled) setLoading(false);
+          hideBootSplash();
           return;
         }
+        const cached = !opts?.force ? readAuthSessionSnap(session.user.id) : null;
         lastLoadedUserId = session.user.id;
         setUser(session.user);
+        if (cached) {
+          setProfile(cached.profile);
+          setTenant(cached.tenant);
+          setBranches(cached.branches);
+          const active =
+            (cached.activeBranchId
+              ? cached.branches.find((b) => b.id === cached.activeBranchId)
+              : null) ||
+            cached.branches.find((b) => b.is_main) ||
+            cached.branches[0] ||
+            null;
+          setActiveBranchState(active);
+          setPermissions(cached.permissions);
+          setImpersonationTenantId(cached.impersonationTenantId);
+          setProfileLoadFailed(false);
+          if (!cancelled) setLoading(false);
+          hideBootSplash();
+          void loadProfile(session.user.id);
+          return;
+        }
         await loadProfile(session.user.id);
       } else {
         if (lastLoadedUserId === null) {
           if (loading && !cancelled) setLoading(false);
+          hideBootSplash();
           return;
         }
         lastLoadedUserId = null;
+        clearAuthSessionSnap();
         setUser(null);
         setProfile(null);
         setTenant(null);
@@ -599,6 +677,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setProfileLoadFailed(false);
       }
       if (!cancelled) setLoading(false);
+      hideBootSplash();
     };
 
     // Safety net: getSession() bazı Electron / offline senaryolarında çok uzun
@@ -669,10 +748,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       void applySession(session, { force });
     });
 
+    const onPageShow = (ev: PageTransitionEvent) => {
+      if (!ev.persisted) return;
+      void (async () => {
+        try {
+          const { data: { session } } = await supabase.auth.getSession();
+          if (session?.user) {
+            await applySession(session, { force: false });
+          }
+        } catch {
+          /* ignore */
+        }
+      })();
+    };
+    window.addEventListener('pageshow', onPageShow);
+
     return () => {
       cancelled = true;
       window.clearTimeout(safetyTimer);
       subscription.unsubscribe();
+      window.removeEventListener('pageshow', onPageShow);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -779,6 +874,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       console.error('Logout error:', e);
     }
     localStorage.removeItem('shefpos_sql_session');
+    clearAuthSessionSnap();
     localStorage.removeItem('shefpos_active_branch');
     // Beni hatırla ile saklanan telefon/e-posta/kullanıcı adı kalsın (Electron + web giriş ekranı).
     // Kayıtlı şifre güvenlik için çıkışta silinir; tekrar girişte yazılması gerekir.

@@ -743,7 +743,14 @@ function App() {
            sonraki gecisler display:none ile aninda olur. Ilk acilista sadece
            'tables' mounted oldugu icin first paint maliyeti dusuktur. */}
       {wasMounted('tables') && (
-        <div style={{ display: show('tables') ? undefined : 'none' }} className="fixed inset-0 top-14 md:top-20 bg-gradient-to-br from-slate-50 to-slate-100 overflow-auto">
+        <div
+          style={{
+            display: show('tables') ? undefined : 'none',
+            overscrollBehaviorY: 'contain',
+            WebkitOverflowScrolling: 'touch',
+          }}
+          className="fixed inset-0 top-14 md:top-20 bg-gradient-to-br from-slate-50 to-slate-100 overflow-auto"
+        >
           <div className="p-3 md:p-6">
             <TableGrid onSelectTable={setSelectedTable} onRefresh={handleTableGridRefresh} onNavigate={handleNavigate} />
           </div>

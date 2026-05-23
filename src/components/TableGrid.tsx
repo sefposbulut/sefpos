@@ -315,7 +315,7 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
       if (resetGroup) {
         setSelectedGroup(snap.groups.length > 0 ? snap.groups[0].id : null);
       }
-    } else if (!opts?.silent && !hasLiveGrid && !snap) {
+    } else if (!opts?.silent && !hasLiveGrid && !snap && tablesRef.current.length === 0) {
       setLoading(true);
       if (resetGroup) setSelectedGroup(null);
     } else if (opts?.silent || hasLiveGrid || snap) {
@@ -662,7 +662,9 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
   useEffect(() => {
     if (!tenant || !activeBranch) return;
 
-    loadAll(true);
+    const cacheKey = `${tenant.id}:${activeBranch.id}`;
+    const hasCache = tableGridRuntimeCache.has(cacheKey) || tablesRef.current.length > 0;
+    loadAll(!hasCache, { silent: hasCache });
 
     // local mod dışında 30 sn'lik genel poll'a gerek yok; süre etiketleri
     // <LiveDuration> ile kendi başına yenilenir, masa state'i realtime gelir.

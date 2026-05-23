@@ -5,6 +5,7 @@ import './index.css';
 import { AuthProvider } from './contexts/AuthContext';
 import { ElectronDesktopShell } from './components/ElectronDesktopShell';
 import { PublicMenu } from './components/PublicMenu';
+import { hideBootSplash } from './lib/bootSplash';
 
 /**
  * Üst seviye Error Boundary. Tek bir alt component runtime hatası verirse
@@ -152,6 +153,9 @@ const qrTableHint = (params.get('masa') || params.get('table') || '').trim();
 
 const root = createRoot(document.getElementById('root')!);
 
+// Boot splash sonsuz kalmasin (ag hatasi / yavas chunk yuklemesi)
+window.setTimeout(() => hideBootSplash(), 12_000);
+
 if (menuBranchId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(menuBranchId)) {
   root.render(
     <StrictMode>
@@ -160,6 +164,7 @@ if (menuBranchId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{1
       </AppErrorBoundary>
     </StrictMode>
   );
+  requestAnimationFrame(() => hideBootSplash());
 } else {
   root.render(
     <StrictMode>
@@ -171,4 +176,5 @@ if (menuBranchId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{1
       </AppErrorBoundary>
     </StrictMode>
   );
+  requestAnimationFrame(() => hideBootSplash());
 }
