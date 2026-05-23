@@ -16,6 +16,8 @@ import { dispatchPrintToast } from '../lib/printToasts';
 import { BarcodeScannerModal } from './BarcodeScannerModal';
 import { playScanSuccess, playScanError, primeAudio } from '../lib/beep';
 import { ensureCashRegisterRowForPayment } from '../lib/cashRegisterFallback';
+import { isModuleEnabled } from '../lib/modules';
+import { loyaltyApplyForOrder, type LoyaltyPaymentSelection } from '../lib/loyalty';
 import { WhatsAppReceiptModal } from './WhatsAppReceiptModal';
 import type { WhatsAppReceiptInput } from '../lib/whatsappReceipt';
 
@@ -96,6 +98,8 @@ export function QuickSale() {
   const [quickProductBusy, setQuickProductBusy] = useState(false);
   // Mobil sepet alt sayfası (slide-up bottom sheet)
   const [mobileCartOpen, setMobileCartOpen] = useState(false);
+  const [loyaltyPayment, setLoyaltyPayment] = useState<LoyaltyPaymentSelection | null>(null);
+  const loyaltyModuleOn = tenant ? isModuleEnabled('loyalty', tenant as any) : false;
 
   // ─── Veri yükleme ─────────────────────────────────────────────────────────
   const load = useCallback(async () => {
@@ -137,11 +141,20 @@ export function QuickSale() {
     () => cart.reduce((s, l) => s + Number(l.product.price) * l.quantity, 0),
     [cart],
   );
-  const discountAmount = useMemo(
+  const percentDiscountAmount = useMemo(
     () => Math.max(0, (subtotal * Math.max(0, Math.min(100, discount))) / 100),
     [subtotal, discount],
   );
+  const loyaltyDiscount = loyaltyPayment?.discountTl ?? 0;
+  const discountAmount = useMemo(
+    () => percentDiscountAmount + loyaltyDiscount,
+    [percentDiscountAmount, loyaltyDiscount],
+  );
   const total = useMemo(() => Math.max(0, subtotal - discountAmount), [subtotal, discountAmount]);
+  const loyaltyBillBase = useMemo(
+    () => Math.max(0, subtotal - percentDiscountAmount),
+    [subtotal, percentDiscountAmount],
+  );
   const itemCount = useMemo(() => cart.reduce((s, l) => s + l.quantity, 0), [cart]);
 
   // ─── Sepet işlemleri ──────────────────────────────────────────────────────
@@ -177,6 +190,7 @@ export function QuickSale() {
     setCart([]);
     discountTouchedRef.current = false;
     setDiscount(branchDefaultDiscount);
+    setLoyaltyPayment(null);
   }, [branchDefaultDiscount]);
 
   // ─── Barkod arama / okuma ────────────────────────────────────────────────
@@ -435,6 +449,22 @@ export function QuickSale() {
         payment_method: method,
       } as any).eq('id', order.id);
 
+      if (loyaltyPayment?.customerId && loyaltyModuleOn) {
+        const loyaltyRes = await loyaltyApplyForOrder(
+          loyaltyPayment.customerId,
+          order.id,
+          subtotalNow,
+          loyaltyPayment.redeemPoints,
+        );
+        if (!loyaltyRes.ok && !loyaltyRes.skipped) {
+          console.warn('[Sadakat]', loyaltyRes.error);
+          alert(
+            `Ödeme kaydedildi; sadakat puanı işlenemedi: ${loyaltyRes.error || 'bilinmeyen hata'}. ` +
+              'Sadakat menüsünden ayarları kontrol edin.',
+          );
+        }
+      }
+
       void ensureCashRegisterRowForPayment({
         tenantId: tenant.id,
         branchId: branchId,
@@ -544,7 +574,6 @@ export function QuickSale() {
         });
       }
 
-      // 10) UI sıfırlama + son satış göstergesi
       setLastReceiptInfo({
         orderNumber: order.order_number,
         total: totalNow,
@@ -595,7 +624,20 @@ export function QuickSale() {
     } finally {
       setBusy(false);
     }
-  }, [tenant?.id, user?.id, activeBranch?.id, cart, total, subtotal, discount, discountAmount, busy, clearCart]);
+  }, [
+    tenant?.id,
+    user?.id,
+    activeBranch?.id,
+    cart,
+    total,
+    subtotal,
+    discount,
+    discountAmount,
+    busy,
+    clearCart,
+    loyaltyPayment,
+    loyaltyModuleOn,
+  ]);
 
   // ─── UI ───────────────────────────────────────────────────────────────────
   return (
@@ -831,7 +873,13 @@ export function QuickSale() {
               {discount > 0 && (
                 <div className="flex justify-between text-sm text-green-600">
                   <span className="font-medium">İskonto ({discount}%)</span>
-                  <span className="font-bold">-{discountAmount.toFixed(2)} ₺</span>
+                  <span className="font-bold">-{percentDiscountAmount.toFixed(2)} ₺</span>
+                </div>
+              )}
+              {loyaltyDiscount > 0 && (
+                <div className="flex justify-between text-sm text-violet-600">
+                  <span className="font-medium">Sadakat puanı</span>
+                  <span className="font-bold">-{loyaltyDiscount.toFixed(2)} ₺</span>
                 </div>
               )}
               <div className="flex justify-between text-xl pt-1 border-t border-slate-200">
@@ -842,6 +890,7 @@ export function QuickSale() {
             <button
               onClick={() => {
                 if (cart.length === 0) return;
+                setLoyaltyPayment(null);
                 setShowPayment(true);
               }}
               disabled={cart.length === 0 || busy}
@@ -994,7 +1043,13 @@ export function QuickSale() {
                 {discount > 0 && (
                   <div className="flex justify-between text-sm text-green-600">
                     <span className="font-medium">İskonto ({discount}%)</span>
-                    <span className="font-bold">-{discountAmount.toFixed(2)} ₺</span>
+                    <span className="font-bold">-{percentDiscountAmount.toFixed(2)} ₺</span>
+                  </div>
+                )}
+                {loyaltyDiscount > 0 && (
+                  <div className="flex justify-between text-sm text-violet-600">
+                    <span className="font-medium">Sadakat puanı</span>
+                    <span className="font-bold">-{loyaltyDiscount.toFixed(2)} ₺</span>
                   </div>
                 )}
                 <div className="flex justify-between text-lg pt-1 border-t border-slate-200">
@@ -1010,6 +1065,7 @@ export function QuickSale() {
                 onClick={() => {
                   if (cart.length === 0) return;
                   setMobileCartOpen(false);
+                  setLoyaltyPayment(null);
                   setShowPayment(true);
                 }}
                 disabled={cart.length === 0 || busy}
@@ -1029,8 +1085,15 @@ export function QuickSale() {
           discount={discount}
           onDiscountChange={setDiscountSafely}
           onPayment={handlePayment}
-          onClose={() => setShowPayment(false)}
+          onClose={() => {
+            setShowPayment(false);
+            setLoyaltyPayment(null);
+          }}
           loading={busy}
+          loyaltyEnabled={loyaltyModuleOn}
+          loyaltyBillBase={loyaltyBillBase}
+          loyaltyPayment={loyaltyPayment}
+          onLoyaltyChange={setLoyaltyPayment}
         />
       )}
 

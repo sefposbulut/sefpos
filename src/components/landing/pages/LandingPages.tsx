@@ -33,6 +33,7 @@ import { ResellerForm } from '../components/ResellerForm';
 import { TurkeyResellerMap } from '../components/TurkeyResellerMap';
 import { HomeRichPage } from '../sections/HomeRichSections';
 import { FeaturesCatalogPage } from '../sections/FeaturesCatalogPage';
+import { ContactPageSection } from '../sections/ContactPageSection';
 import { APP_VERSION } from '../../../lib/appVersion';
 import { WINDOWS_SETUP_FILENAME, windowsSetupDownloadHref } from '../../../lib/desktopDownload';
 
@@ -231,30 +232,6 @@ export function ResellerPage({ onLogin }: LandingPageProps) {
   );
 }
 
-export function ContactPage({ onLogin }: LandingPageProps) {
-  return (
-    <>
-      <section className="bg-white py-20">
-        <div className="max-w-7xl mx-auto px-4">
-          <h1 className="text-4xl md:text-5xl font-black text-center mb-12">İletişim</h1>
-          <div className="grid md:grid-cols-3 gap-6 max-w-4xl mx-auto">
-            <a href={SITE.phoneTel} className="rounded-2xl border p-6 hover:border-orange-500 transition text-center">
-              <Phone className="w-8 h-8 text-orange-600 mx-auto mb-3" />
-              <p className="font-bold">{SITE.phone}</p>
-            </a>
-            <a href={`mailto:${SITE.email}`} className="rounded-2xl border p-6 hover:border-orange-500 transition text-center">
-              <Mail className="w-8 h-8 text-orange-600 mx-auto mb-3" />
-              <p className="font-bold">{SITE.email}</p>
-            </a>
-            <a href={SITE.whatsapp} target="_blank" rel="noreferrer" className="rounded-2xl border p-6 hover:border-orange-500 transition text-center">
-              <MessageCircle className="w-8 h-8 text-orange-600 mx-auto mb-3" />
-              <p className="font-bold">WhatsApp</p>
-            </a>
-          </div>
-          <p className="text-center text-slate-500 mt-8 flex items-center justify-center gap-2"><MapPin className="w-4 h-4" /> {SITE.address}</p>
-        </div>
-      </section>
-      <CTABand title="Demo randevusu" subtitle="İşletmenize özel 30 dakikalık tanıtım." onPrimary={onLogin} onSecondary={() => { window.location.href = SITE.whatsapp; }} secondaryLabel="WhatsApp" />
-    </>
-  );
+export function ContactPage({ onLogin, onNavigate }: LandingPageProps) {
+  return <ContactPageSection onLogin={onLogin} onNavigate={onNavigate} />;
 }

@@ -1,5 +1,5 @@
 import type { ReactNode, FC } from 'react';
-import { Bike, QrCode, Users, Building2 } from 'lucide-react';
+import { Bike, Gift, QrCode, Sparkles, Users, Building2 } from 'lucide-react';
 import type { FeatureCategory } from '../content/featureCatalog';
 
 const WATERMARK = '/sefpos-round.png';
@@ -13,7 +13,7 @@ function SceneShell({
   children,
   label,
   fullPage,
-  accent = 'from-orange-500/20 to-red-900/30',
+  accent = 'from-orange-500/10 to-amber-100/40',
 }: {
   children: ReactNode;
   label: string;
@@ -21,7 +21,7 @@ function SceneShell({
   accent?: string;
 }) {
   return (
-    <div className={`landing-module-scene ${fullPage ? 'is-full' : ''}`}>
+    <div className={`landing-module-scene ${fullPage ? 'is-full is-light' : ''}`}>
       <img src={WATERMARK} alt="" className="landing-module-scene-watermark" aria-hidden />
       <div className={`landing-module-scene-glow bg-gradient-to-br ${accent}`} aria-hidden />
       <div className="landing-module-scene-inner">{children}</div>
@@ -205,6 +205,54 @@ function PersonelScene({ fullPage }: SceneProps) {
   );
 }
 
+function SadakatScene({ fullPage }: SceneProps) {
+  return (
+    <SceneShell
+      label="Ödeme ekranından puan kazanma ve kullanma"
+      fullPage={fullPage}
+      accent="from-violet-500/5 to-orange-100/50"
+    >
+      <div className="flex flex-col sm:flex-row gap-3 w-full max-w-xl mx-auto items-stretch">
+        <UiChrome title="Ödeme · Masa 5">
+          <div className="text-center py-1 mb-2">
+            <p className="text-slate-400 text-xs">Toplam</p>
+            <p className="text-2xl font-black text-orange-400 tabular-nums">₺248,00</p>
+          </div>
+          <div className="rounded-lg border border-violet-500/30 bg-violet-950/40 p-2.5 space-y-2">
+            <div className="flex items-center gap-2 text-xs">
+              <Gift className="w-4 h-4 text-violet-400 shrink-0" />
+              <span className="font-bold text-violet-200">Sadakat puanı</span>
+            </div>
+            <div className="landing-module-ui-row text-xs bg-slate-900/50 rounded-md">
+              <span className="font-semibold text-slate-200">Ayşe Y.</span>
+              <span className="text-violet-300 font-black tabular-nums">120 p</span>
+            </div>
+            <div className="flex items-center justify-between text-[10px] text-slate-400">
+              <span>Kullan: 80 p</span>
+              <span className="text-emerald-400 font-bold">−8 ₺</span>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-2 mt-3">
+            {['Nakit', 'Kart'].map((m) => (
+              <button key={m} type="button" className="landing-module-ui-chip">
+                {m}
+              </button>
+            ))}
+          </div>
+        </UiChrome>
+        <div className="landing-module-ui-window flex flex-col justify-center p-4 min-w-[9rem] sm:max-w-[10rem]">
+          <Sparkles className="w-8 h-8 text-orange-400 mx-auto mb-2" />
+          <p className="text-[10px] font-bold uppercase tracking-wide text-orange-400 text-center mb-1">
+            Bu ödemede
+          </p>
+          <p className="text-2xl font-black text-emerald-400 text-center tabular-nums">+16</p>
+          <p className="text-[10px] text-slate-400 text-center">puan kazanım</p>
+        </div>
+      </div>
+    </SceneShell>
+  );
+}
+
 function SubeScene({ fullPage }: SceneProps) {
   return (
     <SceneShell label="Çok şube — merkezden canlı izleme" fullPage={fullPage}>
@@ -230,6 +278,7 @@ const SCENES: Record<string, FC<SceneProps>> = {
   stok: StokScene,
   rapor: RaporScene,
   personel: PersonelScene,
+  sadakat: SadakatScene,
   sube: SubeScene,
 };
 

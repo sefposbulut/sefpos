@@ -1,4 +1,4 @@
-import{g as D}from"./supabase-D1w7fZ3n.js";var j={exports:{}},y={};/**
+import{g as D}from"./supabase-B4umY9KP.js";var j={exports:{}},y={};/**
  * @license React
  * react.production.min.js
  *

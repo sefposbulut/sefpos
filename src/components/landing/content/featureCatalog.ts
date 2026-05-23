@@ -15,6 +15,7 @@ import {
   UtensilsCrossed,
   Clock,
   Scale,
+  Gift,
 } from 'lucide-react';
 
 export type CatalogBullet = {
@@ -73,6 +74,11 @@ export const HOME_FEATURE_SPOTLIGHT = [
     icon: Building2,
     title: 'Çok şube',
     desc: 'Birden fazla şubenizi tek panelden izleyin ve karşılaştırın.',
+  },
+  {
+    icon: Gift,
+    title: 'Sadakat puanı',
+    desc: 'Ödeme ekranından puan kazanma ve kullanma; cari hesaptan ayrı müşteri kartı.',
   },
 ] as const;
 
@@ -225,6 +231,7 @@ export const FEATURE_CATALOG: FeatureCategory[] = [
       { title: 'Esnek ödeme', desc: 'Nakit, kredi kartı, karma ödeme; masada veya pakette aynı kolaylık.' },
       { title: 'Hızlı satış', desc: 'Masası olmayan tezgah satışları için ayrı hızlı satış ekranı.' },
       { title: 'Açık hesap (veresiye)', desc: 'Müşteri cari takibi; borç ve tahsilat hareketleri.' },
+      { title: 'Sadakat puanı', desc: 'Ödeme sırasında puan kazanma ve indirim; cari borçtan ayrı çalışır.' },
       { title: 'Geçmiş adisyonlar', desc: 'Kapanmış siparişleri tarihe göre bulun; + ile içeriği görün, fişi yeniden yazdırın.' },
       { title: 'İptal kayıtları', desc: 'Hangi ürün kim tarafından iptal edildi — şeffaf denetim.' },
     ],
@@ -336,6 +343,26 @@ export const FEATURE_CATALOG: FeatureCategory[] = [
       { title: 'Kullanıcı yönetimi', desc: 'Yeni personel ekleme, ayrılan personeli kapatma.' },
     ],
     outro: 'Personel değişimi hızlı, yetkiler net — kasada güvenlik ve hız bir arada.',
+  },
+  {
+    id: 'sadakat',
+    icon: Gift,
+    menuLabel: 'Sadakat Programı',
+    title: 'Müşteri sadakat puanı',
+    lead: 'Düzenli müşterilerinizi ödüllendirin: her ödemede puan kazansınlar, sonraki ziyarette indirim kullansınlar.',
+    pitch:
+      'Sadakat programı cari veresiyeden ayrı çalışır; aynı müşteri kartında puan bakiyesi tutulur. Kasada isim veya telefonla müşteri bulun, puan kullanın veya kazandırın — salon, paket ve hızlı satış ödemelerinde geçerlidir.',
+    highlights: ['Ödeme ekranından puan kullanımı', 'Otomatik puan kazanımı', 'Ayarlar → Sadakat ile kurallar'],
+    visual: 'scene',
+    bullets: [
+      { title: 'Puan kazanma', desc: 'Her X TL harcamada otomatik puan; kurallar işletmeye göre ayarlanır.' },
+      { title: 'Puan kullanma', desc: 'Ödeme modalında müşteri seçip puanı indirime çevirin; minimum kullanım limiti tanımlanabilir.' },
+      { title: 'Hızlı müşteri kartı', desc: 'Kayıtlı değilse ödeme anında isim/telefon ile sadakat müşterisi oluşturun.' },
+      { title: 'Cari hesaptan ayrı', desc: 'Veresiye borcu ile sadakat puanı karışmaz; aynı müşteride iki ayrı bakiye.' },
+      { title: 'Sadakat menüsü', desc: 'En çok puanı olan müşteriler ve işlem geçmişi özeti.' },
+      { title: 'Salon ve hızlı satış', desc: 'Masa adisyonu ve tezgah satışında aynı sadakat akışı.' },
+    ],
+    outro: 'Müşteri bağlılığını artırın; puan kazanma ve kullanma kasada birkaç dokunuşla biter.',
   },
   {
     id: 'sube',

@@ -56,7 +56,7 @@ export function AykaLogin({ onBackToLanding }: AykaLoginProps) {
         const isSuper = prof?.is_super_admin === true;
         const profEmail = String(prof?.email || '').toLowerCase();
         if (!isSuper || (profEmail && !isAdminAllowedEmail(profEmail))) {
-          await supabase.auth.signOut();
+          await supabase.auth.signOut({ scope: 'local' });
           setError(GENERIC_ERROR);
           setLoading(false);
           return;

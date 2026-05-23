@@ -30,6 +30,7 @@ export const SEO_FEATURES_SHORT = [
   'Caller ID ile hızlı paket siparişi',
   'Bulut yedekleme ve otomatik güncelleme',
   'Türkçe arayüz ve yerel destek',
+  'Müşteri sadakat puanı (kazanma ve ödeme indirimi)',
   'Windows masaüstü + web erişim',
 ] as const;
 

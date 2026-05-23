@@ -282,24 +282,27 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
     return 6;
   }, []);
 
-  const loadAll = useCallback(async (resetGroup = false) => {
+  const loadAll = useCallback(async (resetGroup = false, opts?: { silent?: boolean }) => {
     if (!tenant || !activeBranch) return;
     const cacheKey = `${tenant.id}:${activeBranch.id}`;
     // RAM yoksa sessionStorage'dan dene (ilk login + sekme yenilemesi icin kritik).
     // SQL modunda eski (bos) cloud onbellegini kullanma — Ayarlar’da 32 masa varken grid bos kalmasin.
+    const hasLiveGrid = tableGridRuntimeCache.has(cacheKey);
     const snap = isSqlServerMode() || isHardPageReload() ? null : readSnapshotForKey(cacheKey);
-    if (snap) {
+    const skipSnapPaint = opts?.silent && hasLiveGrid;
+
+    if (snap && !skipSnapPaint) {
       setTableGroups(snap.groups);
       setTables(snap.tables);
       setLoading(false);
       if (resetGroup) {
-        // Branch degisti: yeni subenin ilk grubunu sec.
         setSelectedGroup(snap.groups.length > 0 ? snap.groups[0].id : null);
       }
-    } else {
-      // Snapshot yok; spinner yerine skeleton gosterilsin.
+    } else if (!opts?.silent && !hasLiveGrid && !snap) {
       setLoading(true);
       if (resetGroup) setSelectedGroup(null);
+    } else if (opts?.silent || hasLiveGrid || snap) {
+      setLoading(false);
     }
 
     if (isLocalMode()) {
@@ -439,14 +442,33 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
   useEffect(() => {
     if (!tenant?.id || !activeBranch?.id || isLocalMode() || isSqlServerMode()) return;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    const hiddenSinceRef = { at: 0 as number };
+    const lastVisRefreshRef = { at: 0 as number };
+    const cacheKey = `${tenant.id}:${activeBranch.id}`;
+
     const onVis = () => {
+      if (document.visibilityState === 'hidden') {
+        hiddenSinceRef.at = Date.now();
+        return;
+      }
       if (document.visibilityState !== 'visible') return;
+
+      const hiddenMs = hiddenSinceRef.at ? Date.now() - hiddenSinceRef.at : 0;
+      hiddenSinceRef.at = 0;
+
+      // Kisa sekme degisimi (WhatsApp, baska site) — ekrani yeniden cizme; realtime zaten akar.
+      if (hiddenMs > 0 && hiddenMs < 20_000) return;
+      if (Date.now() - lastVisRefreshRef.current < 45_000) return;
+
       if (timer) clearTimeout(timer);
       timer = setTimeout(async () => {
         timer = null;
+        if (document.visibilityState !== 'visible') return;
+        if (!tableGridRuntimeCache.has(cacheKey)) return;
+        lastVisRefreshRef.current = Date.now();
         await maybeUnlockStalePaymentLocks();
-        void loadAll(false);
-      }, 600);
+        void loadAll(false, { silent: true });
+      }, 400);
     };
     document.addEventListener('visibilitychange', onVis);
     return () => {

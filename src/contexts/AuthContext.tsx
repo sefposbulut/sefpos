@@ -773,7 +773,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           /* tablo yok / RLS */
         }
       }
-      await supabase.auth.signOut();
+      // Yalnızca bu cihaz/tarayıcı — diğer kasa/tablet oturumları açık kalır.
+      await supabase.auth.signOut({ scope: 'local' });
     } catch (e) {
       console.error('Logout error:', e);
     }

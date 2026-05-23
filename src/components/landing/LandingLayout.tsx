@@ -194,10 +194,18 @@ export function LandingLayout({ parsed, onNavigate, onLogin, children }: Props) 
               <BrandLogo size="xl" onDark />
             </div>
             <p className="text-slate-400 max-w-md leading-relaxed mb-4">{SITE.tagline}. Türkiye genelinde restoran, cafe ve paket servis işletmeleri için tasarlandı.</p>
+            <p className="text-sm font-bold text-white/90 mb-2">{SITE.companyName}</p>
             <div className="space-y-2 text-sm">
               <a href={SITE.phoneTel} className="flex items-center gap-2 hover:text-orange-400"><Phone className="w-4 h-4" /> {SITE.phone}</a>
               <a href={`mailto:${SITE.email}`} className="flex items-center gap-2 hover:text-orange-400">{SITE.email}</a>
-              <p className="flex items-center gap-2"><MapPin className="w-4 h-4" /> {SITE.address}</p>
+              <p className="flex items-start gap-2 text-slate-400 leading-snug">
+                <MapPin className="w-4 h-4 shrink-0 mt-0.5" />
+                <span>
+                  {SITE.addressLine}
+                  <br />
+                  {SITE.addressCity}
+                </span>
+              </p>
             </div>
           </div>
           <div>

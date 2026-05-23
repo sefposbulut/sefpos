@@ -2146,21 +2146,29 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
     const stockItemsSnapshot = existingOrderItems;
     const orderItemsSnapshot = existingOrderItems;
 
-    if (loyaltyPayment?.customerId && loyaltyModuleOn) {
-      const { subtotal: orderSubtotal } = calculateTotal();
-      const loyaltyRes = await loyaltyApplyForOrder(
-        loyaltyPayment.customerId,
-        currentOrder.id,
-        orderSubtotal,
-        loyaltyPayment.redeemPoints,
-      );
-      if (!loyaltyRes.ok && !loyaltyRes.skipped) {
-        console.warn('[Sadakat]', loyaltyRes.error);
-        alert(
-          `Ödeme kaydedildi; sadakat puanı işlenemedi: ${loyaltyRes.error || 'bilinmeyen hata'}. ` +
-            'Sadakat menüsünden ayarları kontrol edin.',
+    setHuginGate(null);
+    huginOpenDocIdRef.current = null;
+    huginCtxRef.current = null;
+    setLoyaltyPayment(null);
+    setShowPayment(false);
+    onClose();
+
+    const loyaltySnapshot = loyaltyPayment;
+    const orderIdForLoyalty = currentOrder.id;
+    const { subtotal: orderSubtotalForLoyalty } = calculateTotal();
+
+    if (loyaltySnapshot?.customerId && loyaltyModuleOn) {
+      void (async () => {
+        const loyaltyRes = await loyaltyApplyForOrder(
+          loyaltySnapshot.customerId,
+          orderIdForLoyalty,
+          orderSubtotalForLoyalty,
+          loyaltySnapshot.redeemPoints,
         );
-      }
+        if (!loyaltyRes.ok && !loyaltyRes.skipped) {
+          console.warn('[Sadakat]', loyaltyRes.error);
+        }
+      })();
     }
 
     void Promise.all([
@@ -2220,13 +2228,6 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
         }
       });
     }
-
-    setHuginGate(null);
-    huginOpenDocIdRef.current = null;
-    huginCtxRef.current = null;
-    setLoyaltyPayment(null);
-    setShowPayment(false);
-    onClose();
   };
 
   const checkAndCompleteOrder = async (

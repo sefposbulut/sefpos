@@ -1447,8 +1447,22 @@ input[type="range"]::-moz-range-thumb {
 }
 
 .landing-feature-fullpage-hero {
-  background: linear-gradient(180deg, #0f172a 0%, #1e293b 45%, #0f172a 100%);
-  border-bottom: 1px solid rgba(249, 115, 22, 0.15);
+  background: linear-gradient(180deg, #fff7ed 0%, #ffffff 55%, #f8fafc 100%);
+  border-bottom: 1px solid #fed7aa;
+}
+
+.landing-module-scene.is-light .landing-module-scene-watermark {
+  opacity: 0.04;
+}
+
+.landing-module-scene.is-light .landing-module-scene-caption {
+  color: #64748b;
+}
+
+.landing-module-scene.is-light .landing-module-ui-window {
+  box-shadow:
+    0 16px 40px rgba(15, 23, 42, 0.12),
+    0 0 0 1px rgba(249, 115, 22, 0.12);
 }
 
 .landing-module-hero-full {

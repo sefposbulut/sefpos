@@ -21,18 +21,69 @@ import {
   Cloud,
   Server,
   Sparkles,
+  Gift,
 } from 'lucide-react';
 
 export const SITE = {
   name: 'ŞefPOS',
+  /** Ticari / iletişim unvanı */
+  companyName: 'ŞefPOS Adisyon',
   tagline: 'Restoran operasyonlarının tek komuta merkezi',
   phone: '0544 244 90 80',
   phoneTel: 'tel:+905442449080',
   whatsapp: 'https://wa.me/905442449080',
   email: 'bilgi@sefpos.com.tr',
-  address: 'Turgutlu, Manisa',
+  /** Merkez ofis — tam adres */
+  addressLine: 'Acalar Mahallesi, Hanım Eli Sokak No:10',
+  addressCity: 'Turgutlu / Manisa',
+  address: 'Acalar Mahallesi, Hanım Eli Sokak No:10 — Turgutlu / Manisa',
+  /** Google Haritalar arama metni */
+  mapsQuery: 'Acalar Mahallesi Hanım Eli Sokak No 10 Turgutlu Manisa Türkiye',
   trialDays: 14,
 } as const;
+
+export function googleMapsSearchUrl(query: string = SITE.mapsQuery): string {
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
+}
+
+export function googleMapsEmbedUrl(query: string = SITE.mapsQuery): string {
+  return `https://maps.google.com/maps?q=${encodeURIComponent(query)}&hl=tr&z=16&output=embed`;
+}
+
+export const CONTACT_HOURS = 'Pazartesi – Cumartesi · 09:00 – 18:00';
+
+export const CONTACT_CHANNELS = [
+  {
+    id: 'phone',
+    label: 'Telefon',
+    value: SITE.phone,
+    href: SITE.phoneTel,
+    hint: 'Satış ve teknik destek',
+  },
+  {
+    id: 'email',
+    label: 'E-posta',
+    value: SITE.email,
+    href: `mailto:${SITE.email}`,
+    hint: 'Teklif ve genel bilgi',
+  },
+  {
+    id: 'whatsapp',
+    label: 'WhatsApp',
+    value: 'Hızlı mesaj',
+    href: SITE.whatsapp,
+    hint: 'Kurulum ve destek hattı',
+    external: true,
+  },
+] as const;
+
+export const CONTACT_SUPPORT_TOPICS = [
+  'Ücretsiz deneme ve demo randevusu',
+  'Kurulum, eğitim ve uzaktan bağlantı desteği',
+  'Getir, Yemeksepeti, Trendyol entegrasyonları',
+  'Windows kasa programı ve güncelleme',
+  'Bayi / iş ortaklığı başvurusu',
+] as const;
 
 export type LandingRoute =
   | '/'
@@ -124,6 +175,7 @@ export const MODULE_HIGHLIGHTS = [
   { label: 'Personel', icon: Users },
   { label: 'Yazıcı', icon: Printer },
   { label: 'Vardiya', icon: Clock },
+  { label: 'Sadakat', icon: Gift },
   { label: 'Bildirim', icon: Sparkles },
 ] as const;
 
@@ -164,7 +216,7 @@ export const CORE_FEATURES: FeatureItem[] = [
 
 export const ADVANCED_FEATURES: FeatureItem[] = [
   { icon: Users, title: 'Personel & yetkiler', desc: 'Garson, kasiyer, mutfak, yönetici rolleri; PIN kilidi ve cihaz bağlama.' },
-  { icon: Wallet, title: 'Kasa & ödeme', desc: 'Nakit, kart, parçalı ödeme, açık hesap ve hızlı satış modu.' },
+  { icon: Wallet, title: 'Kasa & ödeme', desc: 'Nakit, kart, parçalı ödeme, açık hesap, sadakat puanı ve hızlı satış modu.' },
   { icon: Scale, title: 'Stok & sayım', desc: 'Ürün sayımı, stok hareketleri ve mutfak reçete takibi.' },
   { icon: Printer, title: 'Yazıcı & terazi', desc: 'Mutfak/adisyon fişi, online sipariş fişi; terazi entegrasyonu.' },
   { icon: Bell, title: 'Garson çağrı zili', desc: 'QR veya masa üzerinden garson talebi — anlık bildirim.' },
@@ -174,6 +226,7 @@ export const ADVANCED_FEATURES: FeatureItem[] = [
   { icon: Shield, title: 'Güvenlik & lisans', desc: 'Kiracı izolasyonu, lisans paneli, otomatik masaüstü güncelleme.' },
   { icon: Database, title: 'Merkezi veri', desc: 'Tüm şubeler tek panelden; gerçek zamanlı senkronizasyon.' },
   { icon: Sparkles, title: 'Kurumsal bildirim', desc: 'Lisans panelinden anlık duyuru; restoran ekranında canlı banner.' },
+  { icon: Gift, title: 'Sadakat programı', desc: 'Ödeme ekranından puan kazanma ve kullanma; cari borçtan bağımsız müşteri kartı.' },
 ];
 
 export type IntegrationItem = {
@@ -222,6 +275,7 @@ export const COMPARISON_ROWS = [
   { label: '1000+ açık paket performansı', sefpos: true, generic: false },
   { label: 'Geçmiş adisyon & kalem görüntüleme', sefpos: true, generic: 'Kısıtlı' },
   { label: 'QR menü + garson çağrısı', sefpos: true, generic: 'Kısıtlı' },
+  { label: 'Sadakat puanı (kazan / kullan)', sefpos: true, generic: 'Kısıtlı' },
   { label: 'Şube SQL + bulut hibrit', sefpos: true, generic: false },
   { label: 'Otomatik masaüstü güncelleme', sefpos: true, generic: 'Manuel' },
   { label: 'Türkçe destek & yerel kurulum', sefpos: true, generic: 'Değişken' },
@@ -309,7 +363,7 @@ export const PRICING_PLANS: PricingPlan[] = [
       },
       {
         title: 'Kasa ve Ödeme',
-        items: ['Parçalı / karma ödeme', 'Veresiye (cari)', 'Geçmiş adisyon', 'İptal kayıtları'],
+        items: ['Parçalı / karma ödeme', 'Veresiye (cari)', 'Sadakat puanı', 'Geçmiş adisyon', 'İptal kayıtları'],
       },
       {
         title: 'QR Menü',
