@@ -28,7 +28,8 @@ import {
 import { notifyHemenYolda } from '../lib/hemenyoldaApi';
 import {
   fetchTakeawayOrderById,
-  fetchTakeawayOrders,
+  fetchTakeawayActiveOrders,
+  fetchTakeawayCompletedOrders,
   takeawayItemCount,
   type TakeawayOrderListRow,
 } from '../lib/takeawayOrdersApi';
@@ -64,6 +65,9 @@ export type TakeawayOrder = TakeawayOrderListRow;
 
 type StatusFilter = 'all' | 'pending' | 'preparing' | 'ready' | 'on_the_way' | 'delivered';
 type TypeFilter = 'all' | 'takeaway' | 'delivery' | 'gel_al';
+
+/** Ekranda aynı anda çizilen kart üst sınırı — çok pakette donmayı önler */
+const MAX_VISIBLE_ORDER_CARDS = 120;
 
 export const DELIVERY_STATUSES: { key: string; label: string; color: string; bg: string; dotColor: string }[] = [
   { key: 'pending',    label: 'Bekliyor',       color: 'text-amber-700',  bg: 'bg-amber-100',  dotColor: 'bg-amber-500' },
@@ -112,12 +116,18 @@ export function TakeawayOrders({ isActive = true }: TakeawayOrdersProps) {
   const [editingOrder, setEditingOrder] = useState<TakeawayOrder | null>(null);
   const [assigningCourierId, setAssigningCourierId] = useState<string | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const realtimeFlushRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingInsertIdsRef = useRef<Set<string>>(new Set());
+  const showCompletedRef = useRef(showCompleted);
   const formOpenRef = useRef(false);
   const couriersForFormRef = useRef<Courier[]>([]);
   const [customerQuery, setCustomerQuery] = useState('');
   const deferredCustomerQuery = useDeferredValue(customerQuery);
 
   const formOpen = showNewOrderForm || !!editingOrder;
+  useEffect(() => {
+    showCompletedRef.current = showCompleted;
+  }, [showCompleted]);
   useEffect(() => {
     formOpenRef.current = formOpen;
     if (formOpen) {
@@ -278,7 +288,9 @@ export function TakeawayOrders({ isActive = true }: TakeawayOrdersProps) {
 
   const loadOrders = useCallback(async () => {
     if (!tenant) return;
-    const data = await fetchTakeawayOrders(tenant.id, activeBranch?.id, 1000);
+    const data = showCompletedRef.current
+      ? await fetchTakeawayCompletedOrders(tenant.id, activeBranch?.id, 200)
+      : await fetchTakeawayActiveOrders(tenant.id, activeBranch?.id, 400);
     setOrders(data);
     setLoading(false);
   }, [tenant, activeBranch]);
@@ -291,34 +303,65 @@ export function TakeawayOrders({ isActive = true }: TakeawayOrdersProps) {
     if (data) setCouriers(data as Courier[]);
   }, [tenant, activeBranch]);
 
-  const handleOrderChange = useCallback((payload: any) => {
-    if (formOpenRef.current) return;
-    const { eventType, new: newRecord, old: oldRecord } = payload;
-    if (!newRecord && !oldRecord) return;
-    const record = newRecord || oldRecord;
-    if (!record) return;
-    if (!['takeaway', 'delivery'].includes(record.order_type)) return;
-    if (record.table_id) return;
-
-    if (eventType === 'INSERT') {
-      void (async () => {
-        const row = await fetchTakeawayOrderById(record.id);
-        if (!row) return;
-        setOrders((prev) => {
-          if (prev.some((o) => o.id === row.id)) return prev;
-          return [row, ...prev].slice(0, 1000);
-        });
-      })();
-    } else if (eventType === 'UPDATE') {
+  const flushPendingInserts = useCallback(() => {
+    const ids = [...pendingInsertIdsRef.current];
+    pendingInsertIdsRef.current.clear();
+    if (!ids.length || !tenant) return;
+    void (async () => {
+      const rows = await Promise.all(ids.map((id) => fetchTakeawayOrderById(id)));
+      const valid = rows.filter(Boolean) as TakeawayOrder[];
+      if (!valid.length) return;
+      const viewingCompleted = showCompletedRef.current;
       setOrders((prev) => {
-        const exists = prev.find((o) => o.id === record.id);
-        if (!exists) return prev;
-        return prev.map((o) => (o.id === record.id ? { ...o, ...record } : o));
+        let next = [...prev];
+        for (const row of valid) {
+          const isDone = row.status === 'completed' || row.status === 'cancelled';
+          if (viewingCompleted !== isDone) continue;
+          if (next.some((o) => o.id === row.id)) continue;
+          next = [row, ...next];
+        }
+        return next.slice(0, viewingCompleted ? 200 : 400);
       });
-    } else if (eventType === 'DELETE') {
-      setOrders((prev) => prev.filter((o) => o.id !== oldRecord?.id));
-    }
-  }, []);
+    })();
+  }, [tenant]);
+
+  const handleOrderChange = useCallback(
+    (payload: any) => {
+      if (formOpenRef.current) return;
+      const { eventType, new: newRecord, old: oldRecord } = payload;
+      if (!newRecord && !oldRecord) return;
+      const record = newRecord || oldRecord;
+      if (!record) return;
+      if (!['takeaway', 'delivery'].includes(record.order_type)) return;
+      if (record.table_id) return;
+
+      const isDone = record.status === 'completed' || record.status === 'cancelled';
+      const viewingCompleted = showCompletedRef.current;
+
+      if (eventType === 'INSERT') {
+        if (viewingCompleted !== isDone) return;
+        pendingInsertIdsRef.current.add(record.id);
+        if (realtimeFlushRef.current) clearTimeout(realtimeFlushRef.current);
+        realtimeFlushRef.current = setTimeout(() => {
+          realtimeFlushRef.current = null;
+          flushPendingInserts();
+        }, 350);
+      } else if (eventType === 'UPDATE') {
+        setOrders((prev) => {
+          const exists = prev.find((o) => o.id === record.id);
+          if (exists && viewingCompleted !== isDone) {
+            return prev.filter((o) => o.id !== record.id);
+          }
+          if (!exists && viewingCompleted === isDone) return prev;
+          if (!exists) return prev;
+          return prev.map((o) => (o.id === record.id ? { ...o, ...record } : o));
+        });
+      } else if (eventType === 'DELETE') {
+        setOrders((prev) => prev.filter((o) => o.id !== oldRecord?.id));
+      }
+    },
+    [flushPendingInserts],
+  );
 
   const debouncedCourierRefresh = useCallback(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
@@ -328,9 +371,9 @@ export function TakeawayOrders({ isActive = true }: TakeawayOrdersProps) {
   useEffect(() => {
     if (!tenant || !isActive) return;
     setLoading(true);
-    loadOrders();
-    loadCouriers();
-  }, [tenant, activeBranch, isActive, loadOrders, loadCouriers]);
+    void loadOrders();
+    void loadCouriers();
+  }, [tenant, activeBranch, isActive, showCompleted, loadOrders, loadCouriers]);
 
   useEffect(() => {
     if (!tenant || !isActive || formOpen) return;
@@ -345,6 +388,7 @@ export function TakeawayOrders({ isActive = true }: TakeawayOrdersProps) {
       supabase.removeChannel(ch);
       clearInterval(courierPoll);
       if (debounceRef.current) clearTimeout(debounceRef.current);
+      if (realtimeFlushRef.current) clearTimeout(realtimeFlushRef.current);
     };
   }, [tenant, activeBranch, isActive, formOpen, handleOrderChange, debouncedCourierRefresh, loadCouriers]);
 
@@ -431,13 +475,13 @@ export function TakeawayOrders({ isActive = true }: TakeawayOrdersProps) {
   );
 
   const activeOrders = useMemo(
-    () => orders.filter((o) => o.status !== 'completed' && o.status !== 'cancelled'),
-    [orders],
+    () => (showCompleted ? [] : orders),
+    [orders, showCompleted],
   );
 
   const completedOrders = useMemo(
-    () => orders.filter((o) => o.status === 'completed' || o.status === 'cancelled'),
-    [orders],
+    () => (showCompleted ? orders : []),
+    [orders, showCompleted],
   );
 
   const statusCounts = useMemo(() => {
@@ -468,6 +512,12 @@ export function TakeawayOrders({ isActive = true }: TakeawayOrdersProps) {
     });
   }, [showCompleted, completedOrders, activeOrders, typeFilter, statusFilter, deferredCustomerQuery]);
 
+  const visibleOrders = useMemo(
+    () => displayOrders.slice(0, MAX_VISIBLE_ORDER_CARDS),
+    [displayOrders],
+  );
+  const hiddenOrderCount = Math.max(0, displayOrders.length - visibleOrders.length);
+
   const availableCouriers = useMemo(() => couriers.filter((c) => c.status === 'available'), [couriers]);
 
   const handleFormClose = useCallback(
@@ -478,7 +528,7 @@ export function TakeawayOrders({ isActive = true }: TakeawayOrdersProps) {
       if (result?.orderId && tenant) {
         void fetchTakeawayOrderById(result.orderId).then((row) => {
           if (!row) return;
-          setOrders((prev) => [row, ...prev.filter((o) => o.id !== row.id)].slice(0, 1000));
+          setOrders((prev) => [row, ...prev.filter((o) => o.id !== row.id)].slice(0, 400));
         });
       } else if (result?.reload !== false) {
         void loadOrders();
@@ -795,8 +845,18 @@ export function TakeawayOrders({ isActive = true }: TakeawayOrdersProps) {
             )}
           </div>
         ) : (
+          <>
+          {hiddenOrderCount > 0 && (
+            <div className="mb-3 px-4 py-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-sm flex flex-wrap items-center gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span>
+                <strong>{hiddenOrderCount}</strong> sipariş daha var — liste performansı için ilk{' '}
+                {MAX_VISIBLE_ORDER_CARDS} gösteriliyor. Arama veya durum filtresi kullanın.
+              </span>
+            </div>
+          )}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
-            {displayOrders.map((order) => (
+            {visibleOrders.map((order) => (
               <OrderCard
                 key={order.id}
                 order={order}
@@ -814,6 +874,7 @@ export function TakeawayOrders({ isActive = true }: TakeawayOrdersProps) {
               />
             ))}
           </div>
+          </>
         )}
       </div>
 
