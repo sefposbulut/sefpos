@@ -1702,19 +1702,12 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
           return sum + fp * item.quantity;
         }, 0);
         const taxAmount = 0;
-        const orderNumber =
-          table.table_number === 0
-            ? `PAKET-${Date.now().toString().slice(-6)}`
-            : `M${table.table_number}-${Date.now().toString().slice(-6)}`;
         const waiterName = profile?.full_name || profile?.email || user.email || '';
 
         const orderData = await runWithRetry(async () => {
-          const r = await supabase
-            .from('orders')
-            .insert({
+          const insertPayload: Record<string, unknown> = {
               tenant_id: tenant.id,
               branch_id: (table as any).branch_id || null,
-              order_number: orderNumber,
               table_id: table.table_number === 0 ? null : table.id,
               order_type: table.table_number === 0 ? 'takeaway' : 'dine_in',
               status: 'open',
@@ -1726,7 +1719,13 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
               waiter_id: user.id,
               waiter_name: waiterName,
               created_by: user.id,
-            } as any)
+          };
+          if (table.table_number !== 0) {
+            insertPayload.order_number = `M${table.table_number}-${Date.now().toString().slice(-6)}`;
+          }
+          const r = await supabase
+            .from('orders')
+            .insert(insertPayload as any)
             .select()
             .single();
           if (r.error) throw r.error;

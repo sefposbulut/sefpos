@@ -64,10 +64,13 @@ function DeliveryOrderFormInner({ couriers, editOrder, prefillCustomer, onClose 
   const [lastOrders, setLastOrders] = useState<any[]>([]);
   const [showLastOrders, setShowLastOrders] = useState(false);
   const [loadingCustomer, setLoadingCustomer] = useState(false);
+  const [fieldError, setFieldError] = useState<'name' | 'phone' | 'address' | 'cart' | null>(null);
   const phoneDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
   const customerSearchSeq = useRef(0);
   const customerSearchRef = useRef<HTMLDivElement | null>(null);
   const nameInputRef = useRef<HTMLInputElement | null>(null);
+  const phoneInputRef = useRef<HTMLInputElement | null>(null);
+  const addressInputRef = useRef<HTMLTextAreaElement | null>(null);
 
   const availableCouriers = couriers.filter(c => c.status === 'available');
   const isDelivery = subtype === 'delivery';
@@ -156,7 +159,27 @@ function DeliveryOrderFormInner({ couriers, editOrder, prefillCustomer, onClose 
     [tenant],
   );
 
+  const focusCustomerField = useCallback((field: 'name' | 'phone' | 'address') => {
+    setShowSuggestions(false);
+    requestAnimationFrame(() => {
+      window.setTimeout(() => {
+        if (field === 'name') nameInputRef.current?.focus();
+        else if (field === 'phone') phoneInputRef.current?.focus();
+        else addressInputRef.current?.focus();
+      }, 0);
+    });
+  }, []);
+
+  const showValidationError = useCallback(
+    (field: 'name' | 'phone' | 'address' | 'cart') => {
+      setFieldError(field);
+      if (field !== 'cart') focusCustomerField(field);
+    },
+    [focusCustomerField],
+  );
+
   const handleCustomerSearchChange = (val: string) => {
+    if (fieldError === 'phone') setFieldError(null);
     setCustomerPhone(val);
     if (phoneDebounce.current) clearTimeout(phoneDebounce.current);
     const q = val.trim();
@@ -266,9 +289,22 @@ function DeliveryOrderFormInner({ couriers, editOrder, prefillCustomer, onClose 
     }
   };
 
+  const looksLikePhone = (raw: string) => {
+    const digits = raw.replace(/\D/g, '');
+    return digits.length >= 7;
+  };
+
   const resolveCustomerFields = () => {
-    const name = customerName.trim();
-    const phone = customerPhone.trim() || selectedCariCustomer?.phone?.trim() || '';
+    const phoneRaw = customerPhone.trim();
+    let name =
+      customerName.trim() ||
+      selectedDeliveryCustomer?.full_name?.trim() ||
+      selectedCariCustomer?.name?.trim() ||
+      '';
+    if (!name && phoneRaw && !looksLikePhone(phoneRaw)) {
+      name = phoneRaw;
+    }
+    const phone = phoneRaw || selectedCariCustomer?.phone?.trim() || '';
     let address =
       deliveryAddress.trim() ||
       selectedCariCustomer?.address?.trim() ||
@@ -378,14 +414,25 @@ function DeliveryOrderFormInner({ couriers, editOrder, prefillCustomer, onClose 
 
   const handleSubmit = async () => {
     if (!tenant || !user) return;
+    setFieldError(null);
+    setShowSuggestions(false);
     const { name, phone, address } = resolveCustomerFields();
-    if (!name) { alert('Müşteri adı zorunludur'); return; }
-    if (!selectedCariCustomer && !phone) { alert('Telefon zorunludur'); return; }
-    if (isDelivery && !deliveryAddress.trim() && !selectedCariCustomer?.address?.trim()) {
-      alert('Teslimat için adres zorunludur');
+    if (!name) {
+      showValidationError('name');
       return;
     }
-    if (cart.length === 0) { alert('En az 1 ürün ekleyin'); return; }
+    if (!selectedCariCustomer && !phone) {
+      showValidationError('phone');
+      return;
+    }
+    if (isDelivery && !deliveryAddress.trim() && !selectedCariCustomer?.address?.trim()) {
+      showValidationError('address');
+      return;
+    }
+    if (cart.length === 0) {
+      showValidationError('cart');
+      return;
+    }
     setSubmitting(true);
 
     const deliveryCustomerId = await upsertDeliveryCustomer(
@@ -569,6 +616,7 @@ function DeliveryOrderFormInner({ couriers, editOrder, prefillCustomer, onClose 
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                 <input
+                  ref={phoneInputRef}
                   type="tel"
                   inputMode="tel"
                   value={customerPhone}
@@ -577,7 +625,9 @@ function DeliveryOrderFormInner({ couriers, editOrder, prefillCustomer, onClose 
                   placeholder="Cari adı, isim veya 05XX…"
                   autoComplete="off"
                   spellCheck={false}
-                  className="w-full pl-9 pr-8 py-2.5 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-orange-400 focus:border-transparent"
+                  className={`w-full pl-9 pr-8 py-2.5 border rounded-xl text-sm focus:ring-2 focus:ring-orange-400 focus:border-transparent ${
+                    fieldError === 'phone' ? 'border-red-400 bg-red-50/50' : 'border-slate-300'
+                  }`}
                 />
                 {loadingCustomer && <div className="absolute right-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 border-2 border-orange-400 border-t-transparent rounded-full animate-spin" />}
                 {(selectedDeliveryCustomer || selectedCariCustomer) && (
@@ -585,8 +635,14 @@ function DeliveryOrderFormInner({ couriers, editOrder, prefillCustomer, onClose 
                 )}
               </div>
 
+              {fieldError === 'phone' && (
+                <p className="mt-1.5 text-xs font-semibold text-red-600" role="alert">
+                  Telefon numarası zorunludur.
+                </p>
+              )}
+
               {showSuggestions && customerSuggestions.length > 0 && (
-                <div className="absolute z-30 top-full mt-1 left-0 right-0 bg-white border border-slate-200 rounded-xl shadow-xl overflow-hidden max-h-48 overflow-y-auto">
+                <div className="mt-1 bg-white border border-slate-200 rounded-xl shadow-md overflow-hidden max-h-40 overflow-y-auto">
                   <div className="px-3 py-1.5 bg-slate-50 border-b border-slate-100">
                     <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">Eşleşen kayıtlar</p>
                   </div>
@@ -650,18 +706,28 @@ function DeliveryOrderFormInner({ couriers, editOrder, prefillCustomer, onClose 
               )}
             </div>
 
-            <div className="relative z-10">
+            <div>
               <label className="text-xs font-bold text-slate-600 mb-1 block">Ad Soyad *</label>
               <input
                 ref={nameInputRef}
                 type="text"
                 value={customerName}
-                onChange={e => setCustomerName(e.target.value)}
+                onChange={e => {
+                  if (fieldError === 'name') setFieldError(null);
+                  setCustomerName(e.target.value);
+                }}
                 onFocus={() => setShowSuggestions(false)}
                 placeholder="Örn. Ahmet Yılmaz"
                 autoComplete="name"
-                className="w-full px-3 py-2.5 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-orange-400 focus:border-transparent bg-white"
+                className={`w-full px-3 py-2.5 border rounded-xl text-sm focus:ring-2 focus:ring-orange-400 focus:border-transparent bg-white ${
+                  fieldError === 'name' ? 'border-red-400 ring-2 ring-red-200' : 'border-slate-300'
+                }`}
               />
+              {fieldError === 'name' && (
+                <p className="mt-1.5 text-xs font-semibold text-red-600" role="alert">
+                  Müşteri adı zorunludur — hemen bu alana yazabilirsiniz.
+                </p>
+              )}
             </div>
 
             <div>
@@ -669,12 +735,23 @@ function DeliveryOrderFormInner({ couriers, editOrder, prefillCustomer, onClose 
                 Adres {isDelivery ? <span className="text-red-500">*</span> : <span className="text-slate-400 font-normal">(opsiyonel)</span>}
               </label>
               <textarea
+                ref={addressInputRef}
                 value={deliveryAddress}
-                onChange={e => setDeliveryAddress(e.target.value)}
+                onChange={e => {
+                  if (fieldError === 'address') setFieldError(null);
+                  setDeliveryAddress(e.target.value);
+                }}
                 placeholder="Mahalle, sokak, bina, daire..."
                 rows={2}
-                className="w-full px-3 py-2.5 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-orange-400 focus:border-transparent resize-none"
+                className={`w-full px-3 py-2.5 border rounded-xl text-sm focus:ring-2 focus:ring-orange-400 focus:border-transparent resize-none ${
+                  fieldError === 'address' ? 'border-red-400 bg-red-50/50' : 'border-slate-300'
+                }`}
               />
+              {fieldError === 'address' && (
+                <p className="mt-1.5 text-xs font-semibold text-red-600" role="alert">
+                  Teslimat için adres zorunludur.
+                </p>
+              )}
             </div>
 
             <div>
@@ -908,7 +985,13 @@ function DeliveryOrderFormInner({ couriers, editOrder, prefillCustomer, onClose 
                   <span className="text-sm font-semibold text-slate-600">Toplam</span>
                   <span className="text-xl font-black text-orange-600">{cartTotal.toFixed(2)}₺</span>
                 </div>
+                {fieldError === 'cart' && (
+                  <p className="mb-2 text-xs font-semibold text-red-600 text-center" role="alert">
+                    En az 1 ürün ekleyin.
+                  </p>
+                )}
                 <button
+                  type="button"
                   onClick={handleSubmit}
                   disabled={submitting || cart.length === 0}
                   className="w-full py-3 bg-gradient-to-r from-orange-500 to-red-600 text-white font-bold rounded-xl transition active:scale-95 disabled:opacity-50 flex items-center justify-center gap-2 shadow-md"

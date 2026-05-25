@@ -105,7 +105,7 @@ export function buildPlaceholderOrder(params: {
 }): Order {
   const orderNumber =
     params.table.table_number === 0
-      ? `PAKET-${Date.now().toString().slice(-6)}`
+      ? 'PAKET-…'
       : `M${params.table.table_number}-${Date.now().toString().slice(-6)}`;
 
   return {
