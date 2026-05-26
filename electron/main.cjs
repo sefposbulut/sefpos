@@ -85,35 +85,67 @@ let _manualUpdateCheckUntil = 0;
 let _pendingUpdateAvailablePayload = null;
 let _pendingUpdateDownloadedPayload = null;
 let _updaterPeriodicHandle = null;
-let _firstUpdaterCheckDone = false;
+let _updaterPeriodicStarted = false;
+let _initialUpdaterChecksScheduled = false;
 /** `updater-listeners-ready` ile planlanan ilk kontrol zamanlayıcısı (çift planlamayı önler). */
 let _rendererReadyTimer = null;
 /** Pencere odağı / geri dönüş ile yapılan ek kontroller (çift istek önleme). */
 let _lastUserActivityUpdateCheckAt = 0;
-const USER_ACTIVITY_UPDATE_CHECK_MS = 18 * 60 * 1000;
-/** Periyodik arka plan kontrolü (4 saat → daha sık: açık kalan eski sürümler yeni release'i yakalasın). */
-const UPDATER_PERIODIC_MS = 90 * 60 * 1000;
+let _autoUpdaterErrorSent = false;
+let _appStartMs = Date.now();
+const USER_ACTIVITY_UPDATE_CHECK_MS = 5 * 60 * 1000;
+/** Periyodik arka plan kontrolü — açık kalan kasalar yeni sürümü yakalasın. */
+const UPDATER_PERIODIC_MS = 45 * 60 * 1000;
+const UPDATER_INITIAL_DELAYS_MS = [4000, 30000, 120000];
 /** `checkForUpdatesAndNotify` Windows'ta İngilizce yerel bildirim açar; yalnız `checkForUpdates` + olaylar → renderer Türkçe UI. */
+
+function notifyUpdaterErrorToRenderer(err) {
+  const manualWindow =
+    _manualUpdateCheckInFlight || Date.now() < _manualUpdateCheckUntil;
+  const earlySession = Date.now() - _appStartMs < 15 * 60 * 1000;
+  if (!manualWindow && !(earlySession && !_autoUpdaterErrorSent)) return;
+  if (!manualWindow) _autoUpdaterErrorSent = true;
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('update-error', {
+      message: friendlyUpdateError(err),
+    });
+  }
+}
+
+function triggerUpdaterCheck(reason) {
+  if (!autoUpdater || process.env.NODE_ENV === 'development') return;
+  _lastUserActivityUpdateCheckAt = Date.now();
+  autoUpdater.checkForUpdates().catch((err) => {
+    paLog('warn', `[updater] kontrol basarisiz (${reason})`, {
+      message: err?.message || String(err),
+    });
+    notifyUpdaterErrorToRenderer(err);
+  });
+}
+
+function startUpdaterPeriodicIfNeeded() {
+  if (_updaterPeriodicStarted || !autoUpdater || process.env.NODE_ENV === 'development') return;
+  _updaterPeriodicStarted = true;
+  _updaterPeriodicHandle = setInterval(() => {
+    triggerUpdaterCheck('periodic');
+  }, UPDATER_PERIODIC_MS);
+}
+
+function scheduleInitialUpdaterChecks() {
+  if (!autoUpdater || process.env.NODE_ENV === 'development') return;
+  if (_initialUpdaterChecksScheduled) return;
+  _initialUpdaterChecksScheduled = true;
+  startUpdaterPeriodicIfNeeded();
+  for (const ms of UPDATER_INITIAL_DELAYS_MS) {
+    setTimeout(() => triggerUpdaterCheck(`initial-${ms}`), ms);
+  }
+}
 
 function maybeCheckUpdatesOnUserActivity() {
   if (!autoUpdater || process.env.NODE_ENV === 'development') return;
   const now = Date.now();
   if (now - _lastUserActivityUpdateCheckAt < USER_ACTIVITY_UPDATE_CHECK_MS) return;
-  _lastUserActivityUpdateCheckAt = now;
-  autoUpdater.checkForUpdates().catch(() => {});
-}
-
-function runFirstUpdaterCheckOnce() {
-  if (!autoUpdater || process.env.NODE_ENV === 'development') return;
-  if (_firstUpdaterCheckDone) return;
-  _firstUpdaterCheckDone = true;
-  _lastUserActivityUpdateCheckAt = Date.now();
-  autoUpdater.checkForUpdates().catch(() => {});
-  if (!_updaterPeriodicHandle) {
-    _updaterPeriodicHandle = setInterval(() => {
-      autoUpdater.checkForUpdates().catch(() => {});
-    }, UPDATER_PERIODIC_MS);
-  }
+  triggerUpdaterCheck('focus');
 }
 
 /**
@@ -215,21 +247,13 @@ function setupAutoUpdater() {
 
   autoUpdater.on('error', (err) => {
     paLog('error', '[updater] Güncelleme hatası', { message: err?.message });
-    const manualWindow =
-      _manualUpdateCheckInFlight || Date.now() < _manualUpdateCheckUntil;
-    if (!manualWindow) return;
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('update-error', {
-        message: friendlyUpdateError(err),
-      });
-    }
+    notifyUpdaterErrorToRenderer(err);
   });
 
-  // İlk kontrol: renderer `updater-listeners-ready` dedikten ~4 sn sonra (IPC aboneliği kaçırılmasın).
-  // Arayüz hiç hazır olmazsa en geç 90 sn sonra yine bir kez dene; sonra UPDATER_PERIODIC_MS.
+  // Arayüz hazır olmazsa yedek: ~45 sn sonra ilk kontrol planı.
   setTimeout(() => {
-    runFirstUpdaterCheckOnce();
-  }, 90 * 1000);
+    scheduleInitialUpdaterChecks();
+  }, 45 * 1000);
 }
 
 let bcryptjs = null;
@@ -3668,8 +3692,8 @@ ipcMain.handle('updater-listeners-ready', async () => {
   if (!autoUpdater || process.env.NODE_ENV === 'development') return false;
   if (_rendererReadyTimer != null) return true;
   _rendererReadyTimer = setTimeout(() => {
-    runFirstUpdaterCheckOnce();
-  }, 4000);
+    scheduleInitialUpdaterChecks();
+  }, 500);
   return true;
 });
 
