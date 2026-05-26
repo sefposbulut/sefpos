@@ -65,6 +65,7 @@ function DeliveryOrderFormInner({ couriers, editOrder, prefillCustomer, onClose 
   const [showLastOrders, setShowLastOrders] = useState(false);
   const [loadingCustomer, setLoadingCustomer] = useState(false);
   const [fieldError, setFieldError] = useState<'name' | 'phone' | 'address' | 'cart' | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
   const phoneDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
   const customerSearchSeq = useRef(0);
   const customerSearchRef = useRef<HTMLDivElement | null>(null);
@@ -415,6 +416,7 @@ function DeliveryOrderFormInner({ couriers, editOrder, prefillCustomer, onClose 
   const handleSubmit = async () => {
     if (!tenant || !user) return;
     setFieldError(null);
+    setSubmitError(null);
     setShowSuggestions(false);
     const { name, phone, address } = resolveCustomerFields();
     if (!name) {
@@ -435,6 +437,7 @@ function DeliveryOrderFormInner({ couriers, editOrder, prefillCustomer, onClose 
     }
     setSubmitting(true);
 
+    try {
     const deliveryCustomerId = await upsertDeliveryCustomer(
       name,
       phone,
@@ -484,7 +487,14 @@ function DeliveryOrderFormInner({ couriers, editOrder, prefillCustomer, onClose 
       await supabase.from('order_items').delete().eq('order_id', orderId);
     } else {
       const { data: created, error } = await supabase.from('orders').insert(orderPayload).select('id, order_number').single();
-      if (error || !created) { alert('Hata: ' + error?.message); setSubmitting(false); return; }
+      if (error || !created) {
+        const msg = error?.message || 'Sipariş kaydedilemedi';
+        const friendly = msg.includes('orders_tenant_id_order_number_key') || msg.includes('duplicate key')
+          ? 'Sipariş numarası çakıştı. Lütfen «Siparişi Oluştur»a bir kez daha basın.'
+          : msg;
+        setSubmitError(friendly);
+        return;
+      }
       orderId = created.id;
       savedOrderNumber = created.order_number || orderId.slice(0, 8).toUpperCase();
       if (courier) {
@@ -562,8 +572,13 @@ function DeliveryOrderFormInner({ couriers, editOrder, prefillCustomer, onClose 
       notifyHemenYolda(orderId, editOrder ? 'update' : 'new', activeBranch?.id ?? null);
     }
 
-    setSubmitting(false);
     onClose(editOrder ? { reload: true } : { orderId });
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'Sipariş kaydedilemedi';
+      setSubmitError(msg);
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const SUBTYPES: { key: OrderSubtype; label: string; icon: any; color: string; active: string }[] = [
@@ -988,6 +1003,11 @@ function DeliveryOrderFormInner({ couriers, editOrder, prefillCustomer, onClose 
                 {fieldError === 'cart' && (
                   <p className="mb-2 text-xs font-semibold text-red-600 text-center" role="alert">
                     En az 1 ürün ekleyin.
+                  </p>
+                )}
+                {submitError && (
+                  <p className="mb-2 text-xs font-semibold text-red-600 text-center px-1" role="alert">
+                    {submitError}
                   </p>
                 )}
                 <button
