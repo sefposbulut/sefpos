@@ -4,11 +4,13 @@ import {
   ArrowDown,
   ArrowUp,
   Bell,
+  Flame,
   LayoutGrid,
   LogOut,
+  Receipt,
   Settings,
+  ShoppingBag,
   TrendingUp,
-  Zap,
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { publicAsset } from '../../lib/assetUrl';
@@ -27,7 +29,12 @@ import { startAdaptivePoller } from '../../lib/pollSchedule';
 import { isActivePosPage } from '../../lib/pageActivity';
 import { subscribeLiveTick } from '../../lib/liveTick';
 import { readElectronHomeCache, writeElectronHomeCache } from '../../lib/electronHomeCache';
-import { buildPosMenuTiles, type PosMenuTile } from '../../lib/posMenuItems';
+import {
+  buildPosMenuTiles,
+  groupPosMenuTilesForHub,
+  POS_HUB_TILE_GRADIENT,
+  type PosMenuTile,
+} from '../../lib/posMenuItems';
 import {
   countUnreadNotifications,
   fetchSupportNotifications,
@@ -36,10 +43,8 @@ import {
 import { INVENTORY_TAB_STORAGE_KEY } from '../../lib/inventoryNav';
 import { REPORTS_INITIAL_TAB_STORAGE_KEY, REPORTS_MENU_LAST_KEY } from '../../lib/reportsNav';
 import {
-  ELECTRON_HEADER_BAR_CLASS,
+  ELECTRON_HEADER_ICON_BTN_CLASS,
   ELECTRON_HEADER_LOGO_CLASS,
-  ELECTRON_HEADER_PADDING,
-  ELECTRON_HEADER_ROW_CLASS,
 } from '../../lib/electronLayout';
 import { RecentActivityDetailModal } from './RecentActivityDetailModal';
 
@@ -70,8 +75,6 @@ const roleLabels: Record<string, string> = {
   courier: 'Kurye',
   kitchen: 'Mutfak',
 };
-
-const PRIMARY_ORDER = ['tables', 'takeaway', 'online-orders', 'quick-sale'] as const;
 
 export function ElectronDesktopHome({
   onNavigate,
@@ -108,33 +111,22 @@ export function ElectronDesktopHome({
     [permissions, tenant, shiftsEnabled],
   );
 
-  const primaryTiles = useMemo(() => {
-    const byId = new Map(allTiles.map((t) => [t.id, t]));
-    const ordered: PosMenuTile[] = [];
-    for (const id of PRIMARY_ORDER) {
-      const t = byId.get(id);
-      if (t) ordered.push(t);
-    }
-    return ordered;
-  }, [allTiles]);
+  const settingsTile = useMemo((): PosMenuTile | null => {
+    if (!canOpenSettings || !onOpenSettings) return null;
+    return {
+      id: 'settings',
+      label: 'Ayarlar',
+      description: 'Sistem ve yazıcı',
+      icon: Settings,
+      show: true,
+      page: 'settings',
+    };
+  }, [canOpenSettings, onOpenSettings]);
 
-  const quickSaleTile = allTiles.find((t) => t.id === 'quick-sale');
-
-  const moduleTiles = useMemo(() => {
-    const skip = new Set<string>([...PRIMARY_ORDER]);
-    const mods = allTiles.filter((t) => !skip.has(t.id as (typeof PRIMARY_ORDER)[number]));
-    if (canOpenSettings && onOpenSettings) {
-      mods.push({
-        id: 'settings',
-        label: 'Ayarlar',
-        description: 'Sistem ayarları',
-        icon: Settings,
-        show: true,
-        page: 'settings',
-      });
-    }
-    return mods;
-  }, [allTiles, canOpenSettings, onOpenSettings]);
+  const menuGroups = useMemo(
+    () => groupPosMenuTilesForHub(allTiles, settingsTile ? [settingsTile] : []),
+    [allTiles, settingsTile],
+  );
 
   const unreadBell =
     countUnreadNotifications(systemNotifs, tenant?.id || '') + (stats?.pendingOnlineCount ?? 0);
@@ -227,188 +219,230 @@ export function ElectronDesktopHome({
     year: 'numeric',
   });
   const timeFooter = now.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
+  const firstName = displayName.split(' ')[0];
+
+  const kpiCards = [
+    {
+      key: 'receipts',
+      icon: Receipt,
+      value: branchId ? String(stats.todayOrderCount) : '—',
+      label: 'Bugün fiş',
+    },
+    {
+      key: 'revenue',
+      icon: TrendingUp,
+      value: branchId ? formatMoneyTr(stats.todayRevenue) : '—',
+      label: 'Günlük ciro',
+    },
+    {
+      key: 'tables',
+      icon: LayoutGrid,
+      value: branchId
+        ? stats.totalTables > 0
+          ? `${stats.occupiedTables}/${stats.totalTables}`
+          : String(stats.openTablesWithOrder)
+        : '—',
+      label: stats.totalTables > 0 ? 'Dolu masa' : 'Açık masa',
+    },
+    {
+      key: 'online',
+      icon: ShoppingBag,
+      value: branchId ? String(stats.pendingOnlineCount) : '—',
+      label: 'Bekleyen online',
+      highlight: (stats.pendingOnlineCount ?? 0) > 0,
+    },
+  ];
 
   return (
-    <div className="fixed inset-0 z-[30] flex flex-col bg-gradient-to-br from-slate-50 to-slate-100 text-slate-900 overflow-hidden">
-      <header className={ELECTRON_HEADER_BAR_CLASS}>
-        <div className={ELECTRON_HEADER_PADDING}>
-          <div className={ELECTRON_HEADER_ROW_CLASS}>
-          <div className="flex items-center gap-3 min-w-0">
-            <img
-              src={roundLogoSrc}
-              alt="ŞefPOS"
-              className={ELECTRON_HEADER_LOGO_CLASS}
-              onError={(e) => {
-                (e.currentTarget as HTMLImageElement).src = publicAsset('logo.png');
-              }}
-            />
-            <span className="text-sm md:text-base font-black tracking-wide truncate uppercase text-white">
-              {tenantName}
-            </span>
-          </div>
-
-          <div className="flex items-center gap-2 md:gap-4">
-            <div className="relative">
-              <button
-                type="button"
-                onClick={() => setNotifOpen((v) => !v)}
-                className="relative p-2 rounded-lg hover:bg-white/10 transition"
-                title="Bildirimler"
-              >
-                <Bell className="w-5 h-5 text-white" />
-                {unreadBell > 0 && (
-                  <span className="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] px-1 rounded-full bg-white text-orange-700 text-[10px] font-black flex items-center justify-center">
-                    {unreadBell > 9 ? '9+' : unreadBell}
-                  </span>
+    <div className="fixed inset-0 z-[30] flex flex-col bg-slate-100 text-slate-900 overflow-hidden">
+      {/* Üst özet şeridi — görsel örnekteki mavi hub bandı (ŞefPOS turuncu) */}
+      <section className="flex-shrink-0 bg-gradient-to-r from-orange-600 via-orange-600 to-orange-700 text-white shadow-lg">
+        <div className="px-4 md:px-8 pt-4 pb-5 md:pt-5 md:pb-6">
+          <div className="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-4">
+            <div className="flex items-start gap-3 min-w-0">
+              <img
+                src={roundLogoSrc}
+                alt="ŞefPOS"
+                className={`${ELECTRON_HEADER_LOGO_CLASS} hidden sm:block`}
+                onError={(e) => {
+                  (e.currentTarget as HTMLImageElement).src = publicAsset('logo.png');
+                }}
+              />
+              <div className="min-w-0">
+                <p className="text-xs md:text-sm font-semibold text-white/85 uppercase tracking-wide">
+                  Günlük özet
+                </p>
+                <h1 className="text-xl md:text-2xl font-black leading-tight mt-0.5">
+                  Hoş geldiniz, {firstName}
+                </h1>
+                <p className="text-sm md:text-base font-bold text-white/95 mt-1 truncate">
+                  {tenantName}
+                  {activeBranch?.name ? (
+                    <span className="font-semibold text-white/80"> · {activeBranch.name}</span>
+                  ) : null}
+                </p>
+                {roleLabel ? (
+                  <p className="text-[11px] text-white/70 font-medium mt-0.5">{roleLabel}</p>
+                ) : null}
+                {!branchId && (
+                  <p className="mt-2 text-xs font-semibold text-amber-100 bg-white/10 border border-white/20 rounded-lg px-3 py-1.5 inline-block">
+                    Özet için üst menüden şube seçin
+                  </p>
                 )}
-              </button>
-              {notifOpen && (
-                <>
-                  <div className="fixed inset-0 z-20" onClick={() => setNotifOpen(false)} />
-                  <div className="absolute right-0 top-full mt-2 z-30 w-80 max-h-72 overflow-y-auto rounded-xl bg-white text-slate-800 shadow-2xl border border-slate-200 py-2">
-                    {systemNotifs.length === 0 && (stats?.pendingOnlineCount ?? 0) === 0 ? (
-                      <p className="px-4 py-6 text-sm text-slate-500 text-center">Bildirim yok</p>
-                    ) : (
-                      <>
-                        {(stats?.pendingOnlineCount ?? 0) > 0 && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setNotifOpen(false);
-                              onNavigate('online-orders');
-                            }}
-                            className="w-full text-left px-4 py-3 hover:bg-orange-50 border-b border-slate-100"
-                          >
-                            <p className="text-xs font-bold text-orange-600">Online sipariş</p>
-                            <p className="text-sm font-semibold">{stats?.pendingOnlineCount} bekleyen sipariş</p>
-                          </button>
-                        )}
-                        {systemNotifs.slice(0, 8).map((n) => (
-                          <div key={n.id} className="px-4 py-2.5 border-b border-slate-50 last:border-0">
-                            <p className="text-xs font-bold text-slate-800">{n.title}</p>
-                            <p className="text-[11px] text-slate-500 line-clamp-2">{n.message}</p>
-                          </div>
-                        ))}
-                      </>
+              </div>
+            </div>
+
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 xl:gap-4">
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 md:gap-3 flex-1 min-w-0">
+                {kpiCards.map((kpi) => (
+                  <KpiGlassCard
+                    key={kpi.key}
+                    icon={kpi.icon}
+                    value={kpi.value}
+                    label={kpi.label}
+                    highlight={kpi.highlight}
+                  />
+                ))}
+              </div>
+
+              <div className="flex items-center justify-end gap-1 sm:pl-2 sm:border-l sm:border-white/25 shrink-0">
+                <div className="relative">
+                  <button
+                    type="button"
+                    onClick={() => setNotifOpen((v) => !v)}
+                    className={ELECTRON_HEADER_ICON_BTN_CLASS}
+                    title="Bildirimler"
+                  >
+                    <Bell className="w-5 h-5" />
+                    {unreadBell > 0 && (
+                      <span className="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] px-1 rounded-full bg-white text-orange-700 text-[10px] font-black flex items-center justify-center">
+                        {unreadBell > 9 ? '9+' : unreadBell}
+                      </span>
                     )}
+                  </button>
+                  {notifOpen && (
+                    <>
+                      <div className="fixed inset-0 z-20" onClick={() => setNotifOpen(false)} />
+                      <div className="absolute right-0 top-full mt-2 z-30 w-80 max-h-72 overflow-y-auto rounded-xl bg-white text-slate-800 shadow-2xl border border-slate-200 py-2">
+                        {systemNotifs.length === 0 && (stats?.pendingOnlineCount ?? 0) === 0 ? (
+                          <p className="px-4 py-6 text-sm text-slate-500 text-center">Bildirim yok</p>
+                        ) : (
+                          <>
+                            {(stats?.pendingOnlineCount ?? 0) > 0 && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setNotifOpen(false);
+                                  onNavigate('online-orders');
+                                }}
+                                className="w-full text-left px-4 py-3 hover:bg-orange-50 border-b border-slate-100"
+                              >
+                                <p className="text-xs font-bold text-orange-600">Online sipariş</p>
+                                <p className="text-sm font-semibold">
+                                  {stats?.pendingOnlineCount} bekleyen sipariş
+                                </p>
+                              </button>
+                            )}
+                            {systemNotifs.slice(0, 8).map((n) => (
+                              <div
+                                key={n.id}
+                                className="px-4 py-2.5 border-b border-slate-50 last:border-0"
+                              >
+                                <p className="text-xs font-bold text-slate-800">{n.title}</p>
+                                <p className="text-[11px] text-slate-500 line-clamp-2">{n.message}</p>
+                              </div>
+                            ))}
+                          </>
+                        )}
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                {canOpenSettings && onOpenSettings && (
+                  <button
+                    type="button"
+                    onClick={onOpenSettings}
+                    className={ELECTRON_HEADER_ICON_BTN_CLASS}
+                    title="Ayarlar"
+                  >
+                    <Settings className="w-5 h-5" />
+                  </button>
+                )}
+
+                <div className="hidden md:flex items-center gap-2 pl-2">
+                  <div className="w-9 h-9 rounded-full bg-white/20 ring-2 ring-white/30 flex items-center justify-center text-sm font-black">
+                    {displayName.charAt(0).toUpperCase()}
                   </div>
-                </>
-              )}
-            </div>
-
-            {canOpenSettings && onOpenSettings && (
-              <button
-                type="button"
-                onClick={onOpenSettings}
-                className="p-2 rounded-lg hover:bg-white/10 transition"
-                title="Ayarlar"
-              >
-                <Settings className="w-5 h-5 text-white" />
-              </button>
-            )}
-
-            <div className="hidden sm:flex items-center gap-2 pl-2 border-l border-white/25">
-              <div className="text-right text-white">
-                <p className="text-sm font-bold leading-tight text-white">{displayName}</p>
-                <p className="text-[10px] text-white/80 font-semibold">{roleLabel}</p>
+                  <button
+                    type="button"
+                    onClick={() => void signOut()}
+                    className={ELECTRON_HEADER_ICON_BTN_CLASS}
+                    title="Çıkış"
+                  >
+                    <LogOut className="w-4 h-4" />
+                  </button>
+                </div>
               </div>
-              <div className="w-9 h-9 rounded-full bg-white/20 ring-2 ring-white/30 flex items-center justify-center text-sm font-black text-white">
-                {displayName.charAt(0).toUpperCase()}
-              </div>
-              <button
-                type="button"
-                onClick={() => void signOut()}
-                className="p-2 rounded-lg hover:bg-white/10 text-white"
-                title="Çıkış"
-              >
-                <LogOut className="w-4 h-4 text-white" />
-              </button>
             </div>
-          </div>
           </div>
         </div>
-      </header>
+      </section>
 
       <div className="flex-1 flex min-h-0 overflow-hidden">
-        <div className="flex-1 overflow-y-auto">
-          <div className="max-w-5xl mx-auto px-5 md:px-8 py-5 md:py-6 space-y-5">
-            <section className="bg-white rounded-2xl shadow-md border border-slate-200/80 p-5 md:p-6">
-              <h1 className="text-2xl md:text-3xl font-black text-slate-900">
-                Merhaba, {displayName.split(' ')[0]}
-              </h1>
-              <p className="text-sm text-slate-600 mt-1 font-medium">
-                {tenantName}
-                {activeBranch?.name ? ` · ${activeBranch.name}` : ''}
+        <main className="flex-1 overflow-y-auto">
+          <div className="max-w-6xl mx-auto px-4 md:px-8 py-5 md:py-7 space-y-7 md:space-y-8">
+            {menuGroups.length === 0 ? (
+              <p className="text-sm text-slate-500 text-center py-12">
+                Bu hesap için görünür modül yok. Yöneticinizle yetkileri kontrol edin.
               </p>
-              {activeBranch?.id ? (
-                <div className="flex flex-wrap gap-2 mt-4">
-                  <StatChip
-                    label={`Açık masa`}
-                    value={String(stats.openTablesWithOrder)}
-                  />
-                  <StatChip
-                    label="Dolu masa"
-                    value={`${stats.occupiedTables} / ${stats.totalTables || '—'}`}
-                  />
-                  <StatChip label="Bugün adisyon" value={String(stats.todayOrderCount)} accent />
-                </div>
-              ) : (
-                <p className="mt-3 text-sm text-amber-700 font-semibold bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 inline-block">
-                  Özet için üst menüden şube seçin.
-                </p>
-              )}
-            </section>
-
-            <section>
-              <SectionLabel title="Ana işlemler" />
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 md:gap-4 min-h-[168px]">
-                {primaryTiles.map((tile) => (
-                  <PrimaryActionCard key={tile.id} tile={tile} onClick={() => handleTileClick(tile.page)} />
-                ))}
-              </div>
-            </section>
-
-            <section>
-              <SectionLabel title="Modüller" />
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 min-h-[120px]">
-                {moduleTiles.map((tile) => (
-                  <ModuleCard key={tile.id} tile={tile} onClick={() => handleTileClick(tile.page)} />
-                ))}
-              </div>
-            </section>
+            ) : (
+              menuGroups.map((group) => (
+                <section key={group.title}>
+                  <h2 className="text-[11px] md:text-xs font-black uppercase tracking-widest text-slate-500 mb-3 md:mb-4">
+                    {group.title}
+                  </h2>
+                  <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3 md:gap-4">
+                    {group.tiles.map((tile) => (
+                      <HubMenuTile
+                        key={tile.id}
+                        tile={tile}
+                        onClick={() => handleTileClick(tile.page)}
+                      />
+                    ))}
+                  </div>
+                </section>
+              ))
+            )}
           </div>
-        </div>
+        </main>
 
-        <aside className="hidden lg:flex w-[300px] xl:w-[340px] flex-shrink-0 flex-col border-l border-orange-200/60 bg-white shadow-[inset_4px_0_12px_rgba(0,0,0,0.02)] overflow-hidden">
-          {quickSaleTile && (
-            <div className="p-4 border-b border-orange-100 bg-gradient-to-r from-orange-50 to-white">
+        <aside className="hidden lg:flex w-[280px] xl:w-[320px] flex-shrink-0 flex-col border-l border-slate-200 bg-white shadow-sm overflow-hidden">
+          <div className="p-4 border-b border-slate-100">
+            <div className="flex items-center justify-between gap-2 mb-3">
+              <p className="text-[10px] font-black uppercase tracking-wider text-orange-600 flex items-center gap-1.5">
+                <Flame className="w-3.5 h-3.5" />
+                En çok satan
+              </p>
               <button
                 type="button"
-                onClick={() => handleTileClick('quick-sale')}
-                className="w-full flex items-center justify-center gap-2 py-3.5 rounded-xl bg-gradient-to-br from-amber-400 via-orange-500 to-red-500 hover:from-amber-500 hover:via-orange-600 hover:to-red-600 text-white font-black text-sm shadow-lg border-2 border-orange-600 transition active:scale-[0.99]"
+                onClick={() => handleTileClick('reports')}
+                className="text-[10px] font-bold text-orange-600 hover:text-orange-700"
               >
-                <Zap className="w-5 h-5" strokeWidth={2.5} />
-                Hızlı Satış
+                Raporlar →
               </button>
             </div>
-          )}
-
-          <div className="p-4 border-b border-slate-100">
-            <PanelTitle
-              icon={TrendingUp}
-              title="En çok satanlar"
-              subtitle={topSellers.length > 5 ? `Bugün · ${topSellers.length} ürün` : 'Bugün · salon satışları'}
-            />
+            <p className="text-[10px] text-slate-400 font-medium -mt-2 mb-2">Bugün · salon</p>
             <div
-              className={`mt-2 space-y-1.5 pr-0.5 ${
+              className={`space-y-1.5 ${
                 topSellers.length === 0
-                  ? 'min-h-[120px] flex items-center justify-center'
-                  : 'max-h-[228px] overflow-y-auto overflow-x-hidden scroll-smooth [scrollbar-width:thin] [scrollbar-color:rgba(249,115,22,0.5)_transparent]'
+                  ? 'min-h-[100px] flex items-center justify-center'
+                  : 'max-h-[200px] overflow-y-auto [scrollbar-width:thin]'
               }`}
             >
               {topSellers.length === 0 ? (
-                <p className="text-xs text-slate-400 text-center">
-                  {branchId ? (dataReady ? 'Bugün satış yok' : 'Yükleniyor…') : 'Şube seçin'}
+                <p className="text-xs text-slate-400 text-center px-2">
+                  {branchId ? (dataReady ? 'Bu dönemde satış yok' : 'Yükleniyor…') : 'Şube seçin'}
                 </p>
               ) : (
                 topSellers.map((row, idx) => (
@@ -418,14 +452,15 @@ export function ElectronDesktopHome({
             </div>
           </div>
 
-          <div className="p-4 border-b border-slate-100">
-            <p className="text-[10px] font-black uppercase tracking-wider text-orange-600 mb-1">Günlük özet</p>
-            <p className="text-xs text-slate-500 mb-2">{formatDashboardDateLabel()}</p>
-            <p className="text-[10px] font-bold text-slate-500 uppercase">Toplam ciro</p>
+          <div className="p-4 border-b border-slate-100 bg-slate-50/80">
+            <p className="text-[10px] font-black uppercase tracking-wider text-slate-500 mb-1">
+              Günlük ciro
+            </p>
+            <p className="text-xs text-slate-400 mb-2">{formatDashboardDateLabel()}</p>
             <p className="text-2xl font-black text-emerald-600 tabular-nums">
               {formatMoneyTr(stats.todayRevenue)}
             </p>
-            <div className="flex items-center gap-2 mt-1 text-xs text-slate-500">
+            <div className="flex items-center gap-2 mt-1 text-xs text-slate-500 flex-wrap">
               <span>Dün: {formatMoneyTr(stats.yesterdayRevenue)}</span>
               {revPct != null && (
                 <span
@@ -439,23 +474,16 @@ export function ElectronDesktopHome({
               )}
             </div>
             <div className="grid grid-cols-2 gap-2 mt-3">
-              <MiniMetric label="Adisyon" value={String(stats.todayOrderCount)} />
-              <MiniMetric
-                label="Ort. tutar"
-                value={
-                  stats.todayOrderCount > 0
-                    ? formatMoneyTr(stats.todayRevenue / stats.todayOrderCount)
-                    : '—'
-                }
-              />
               <MiniMetric label="Paket" value={String(stats.todayTakeawayCount)} />
               <MiniMetric label="Online" value={String(stats.todayOnlineCount)} />
             </div>
           </div>
 
           <div className="p-4 flex-1 min-h-0 overflow-y-auto">
-            <PanelTitle title="Son işlemler" subtitle="Canlı" />
-            <div className="mt-2 space-y-1.5 min-h-[140px]">
+            <p className="text-[10px] font-black uppercase tracking-wider text-slate-500 mb-2">
+              Son işlemler
+            </p>
+            <div className="space-y-1.5 min-h-[120px]">
               {recent.length === 0 ? (
                 <p className="text-xs text-slate-400 py-6 text-center">
                   {branchId ? (dataReady ? 'Henüz işlem yok' : 'Yükleniyor…') : 'Şube seçin'}
@@ -496,7 +524,14 @@ export function ElectronDesktopHome({
         <span className="hidden md:inline capitalize text-white/90">
           {dateFooter} · {timeFooter}
         </span>
-        <a href="tel:+905442449080" className="hover:text-white transition text-white/95">
+        <button
+          type="button"
+          onClick={() => void signOut()}
+          className="md:hidden text-white/95 hover:text-white font-bold"
+        >
+          Çıkış
+        </button>
+        <a href="tel:+905442449080" className="hidden md:inline hover:text-white transition text-white/95">
           0544 244 90 80
         </a>
       </footer>
@@ -504,93 +539,76 @@ export function ElectronDesktopHome({
   );
 }
 
-function PanelTitle({
-  title,
-  subtitle,
+function KpiGlassCard({
   icon: Icon,
-}: {
-  title: string;
-  subtitle?: string;
-  icon?: LucideIcon;
-}) {
-  return (
-    <div className="flex items-center justify-between gap-2">
-      <p className="text-[10px] font-black uppercase tracking-wider text-orange-600 flex items-center gap-1.5">
-        {Icon ? <Icon className="w-3.5 h-3.5" /> : null}
-        {title}
-      </p>
-      {subtitle ? <span className="text-[9px] font-bold text-slate-400">{subtitle}</span> : null}
-    </div>
-  );
-}
-
-function SectionLabel({ title }: { title: string }) {
-  return (
-    <h2 className="text-[11px] font-black uppercase tracking-wider text-slate-500 mb-3 flex items-center gap-2">
-      <LayoutGrid className="w-3.5 h-3.5 text-orange-500" />
-      {title}
-    </h2>
-  );
-}
-
-function StatChip({
-  label,
   value,
-  accent,
+  label,
+  highlight,
 }: {
-  label: string;
+  icon: LucideIcon;
   value: string;
-  accent?: boolean;
+  label: string;
+  highlight?: boolean;
 }) {
   return (
     <div
-      className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border shadow-sm ${
-        accent
-          ? 'bg-orange-50 border-orange-200'
-          : 'bg-slate-50 border-slate-200'
+      className={`rounded-xl border px-3 py-2.5 md:px-4 md:py-3 backdrop-blur-sm transition ${
+        highlight
+          ? 'bg-white text-orange-800 border-white shadow-md'
+          : 'bg-white/15 border-white/25 text-white hover:bg-white/20'
       }`}
     >
-      <span className="text-xs font-bold text-slate-500">{label}:</span>
-      <span className={`text-sm font-black tabular-nums ${accent ? 'text-orange-700' : 'text-slate-900'}`}>
-        {value}
-      </span>
+      <div className="flex items-center gap-2 md:gap-3">
+        <span
+          className={`flex-shrink-0 w-9 h-9 md:w-10 md:h-10 rounded-lg flex items-center justify-center ${
+            highlight ? 'bg-orange-100 text-orange-600' : 'bg-white/20 text-white'
+          }`}
+        >
+          <Icon className="w-4 h-4 md:w-5 md:h-5" strokeWidth={2.2} />
+        </span>
+        <div className="min-w-0">
+          <p
+            className={`text-lg md:text-xl font-black tabular-nums leading-none truncate ${
+              highlight ? 'text-orange-700' : 'text-white'
+            }`}
+          >
+            {value}
+          </p>
+          <p
+            className={`text-[9px] md:text-[10px] font-bold uppercase tracking-wide mt-0.5 ${
+              highlight ? 'text-orange-600/90' : 'text-white/80'
+            }`}
+          >
+            {label}
+          </p>
+        </div>
+      </div>
     </div>
   );
 }
 
-function PrimaryActionCard({ tile, onClick }: { tile: PosMenuTile; onClick: () => void }) {
+function HubMenuTile({ tile, onClick }: { tile: PosMenuTile; onClick: () => void }) {
   const Icon = tile.icon;
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="group flex items-center gap-4 p-4 md:p-5 rounded-2xl bg-white border-2 border-orange-200/80 shadow-md hover:shadow-lg hover:border-orange-400 transition-all text-left active:scale-[0.99]"
-    >
-      <span className="flex-shrink-0 w-14 h-14 rounded-2xl bg-gradient-to-br from-amber-400 via-orange-500 to-red-500 flex items-center justify-center shadow-md border border-orange-600 group-hover:scale-[1.02] transition">
-        <Icon className="w-7 h-7 text-white" strokeWidth={2.2} />
-      </span>
-      <span className="min-w-0 pt-0.5">
-        <span className="block text-lg font-extrabold text-slate-900">{tile.label}</span>
-        {tile.description && (
-          <span className="block text-sm text-slate-500 font-medium mt-0.5">{tile.description}</span>
-        )}
-      </span>
-    </button>
-  );
-}
+  const gradient = POS_HUB_TILE_GRADIENT[tile.id] ?? 'from-slate-500 to-slate-700';
 
-function ModuleCard({ tile, onClick }: { tile: PosMenuTile; onClick: () => void }) {
-  const Icon = tile.icon;
   return (
     <button
       type="button"
       onClick={onClick}
-      className="flex flex-col items-center justify-center gap-2 p-4 rounded-xl bg-white border border-slate-200 shadow-sm hover:border-orange-300 hover:shadow-md transition active:scale-[0.98] min-h-[96px]"
+      className={`group relative flex flex-col items-start justify-between min-h-[120px] md:min-h-[140px] p-4 md:p-5 rounded-2xl bg-gradient-to-br ${gradient} text-white shadow-md hover:shadow-xl hover:scale-[1.02] active:scale-[0.99] transition-all text-left overflow-hidden`}
     >
-      <span className="w-11 h-11 rounded-xl bg-orange-50 border border-orange-200 flex items-center justify-center">
-        <Icon className="w-5 h-5 text-orange-600" strokeWidth={2} />
+      <span className="absolute -right-3 -bottom-3 w-20 h-20 rounded-full bg-white/10 pointer-events-none" />
+      <span className="relative w-11 h-11 md:w-12 md:h-12 rounded-xl bg-white/20 flex items-center justify-center border border-white/25 group-hover:bg-white/30 transition">
+        <Icon className="w-6 h-6 md:w-7 md:h-7" strokeWidth={2} />
       </span>
-      <span className="text-xs font-bold text-slate-800 text-center leading-tight">{tile.label}</span>
+      <span className="relative mt-3 md:mt-4 min-w-0 w-full">
+        <span className="block text-base md:text-lg font-black leading-tight">{tile.label}</span>
+        {tile.description ? (
+          <span className="block text-[11px] md:text-xs font-medium text-white/85 mt-1 line-clamp-2">
+            {tile.description}
+          </span>
+        ) : null}
+      </span>
     </button>
   );
 }
@@ -618,7 +636,7 @@ function TopSellerRow({ rank, row }: { rank: number; row: TopSellerRow }) {
 
 function MiniMetric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg bg-orange-50/50 border border-orange-100 px-2.5 py-2">
+    <div className="rounded-lg bg-white border border-slate-200 px-2.5 py-2">
       <p className="text-[9px] font-bold text-slate-500 uppercase">{label}</p>
       <p className="text-sm font-black text-slate-800 tabular-nums truncate">{value}</p>
     </div>
@@ -641,7 +659,7 @@ function RecentRow({ row, onOpen }: { row: RecentActivityRow; onOpen: () => void
     <button
       type="button"
       onClick={onOpen}
-      className="w-full flex items-center gap-2.5 p-2.5 rounded-xl bg-white border border-slate-100 hover:border-orange-200 hover:bg-orange-50/40 transition text-left"
+      className="w-full flex items-center gap-2.5 p-2.5 rounded-xl bg-slate-50 border border-slate-100 hover:border-orange-200 hover:bg-orange-50/40 transition text-left"
     >
       <span className="w-9 h-9 rounded-lg bg-orange-50 border border-orange-100 flex items-center justify-center shrink-0">
         <KindIcon className="w-4 h-4 text-orange-600" />

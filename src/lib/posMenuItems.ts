@@ -207,3 +207,85 @@ export function buildPosMenuTiles({
 
   return tiles.filter((t) => t.show);
 }
+
+export type PosMenuHubGroup = {
+  id: string;
+  title: string;
+  /** Gruba dahil tile id sırası */
+  tileIds: string[];
+};
+
+/** Electron ana sayfa — kategorili hub kutuları (yalnızca görünür tile'lar). */
+export const POS_MENU_HUB_GROUPS: PosMenuHubGroup[] = [
+  {
+    id: 'sales',
+    title: 'Satış & operasyon',
+    tileIds: ['tables', 'quick-sale', 'takeaway', 'online-orders'],
+  },
+  {
+    id: 'stock',
+    title: 'Stok & ürün',
+    tileIds: ['products', 'inventory', 'product-stock-count'],
+  },
+  {
+    id: 'finance',
+    title: 'Finans & rapor',
+    tileIds: ['reports', 'cashier', 'shifts', 'endofday', 'loyalty'],
+  },
+  {
+    id: 'admin',
+    title: 'Yönetim',
+    tileIds: ['customers', 'users', 'cancel-logs'],
+  },
+];
+
+/** Hub kutusu arka plan gradyanı (Tailwind sınıfları). */
+export const POS_HUB_TILE_GRADIENT: Record<string, string> = {
+  tables: 'from-blue-500 to-blue-700',
+  'quick-sale': 'from-amber-500 to-orange-600',
+  takeaway: 'from-emerald-500 to-teal-600',
+  'online-orders': 'from-violet-500 to-purple-700',
+  products: 'from-sky-500 to-blue-600',
+  inventory: 'from-cyan-600 to-blue-700',
+  'product-stock-count': 'from-teal-500 to-emerald-700',
+  customers: 'from-orange-500 to-amber-600',
+  loyalty: 'from-pink-500 to-rose-600',
+  reports: 'from-green-500 to-emerald-700',
+  cashier: 'from-indigo-500 to-indigo-700',
+  shifts: 'from-slate-600 to-slate-800',
+  endofday: 'from-amber-600 to-orange-700',
+  users: 'from-zinc-600 to-zinc-800',
+  'cancel-logs': 'from-red-500 to-red-700',
+  settings: 'from-slate-500 to-slate-700',
+};
+
+export function groupPosMenuTilesForHub(
+  tiles: PosMenuTile[],
+  extraTiles: PosMenuTile[] = [],
+): { title: string; tiles: PosMenuTile[] }[] {
+  const byId = new Map<string, PosMenuTile>();
+  for (const t of [...tiles, ...extraTiles]) {
+    if (t.show) byId.set(t.id, t);
+  }
+  const used = new Set<string>();
+  const groups: { title: string; tiles: PosMenuTile[] }[] = [];
+
+  for (const g of POS_MENU_HUB_GROUPS) {
+    const row: PosMenuTile[] = [];
+    for (const id of g.tileIds) {
+      const tile = byId.get(id);
+      if (tile) {
+        row.push(tile);
+        used.add(id);
+      }
+    }
+    if (row.length > 0) groups.push({ title: g.title, tiles: row });
+  }
+
+  const rest = [...byId.values()].filter((t) => !used.has(t.id));
+  if (rest.length > 0) {
+    groups.push({ title: 'Diğer', tiles: rest });
+  }
+
+  return groups;
+}
