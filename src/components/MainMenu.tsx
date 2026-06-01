@@ -16,16 +16,9 @@ interface MainMenuProps {
 export function MainMenu({ onNavigate, currentPage, onOpenSettings, onLockScreen }: MainMenuProps) {
   const { tenant, permissions, shiftsEnabled } = useAuth();
   const [menuOpen, setMenuOpen] = useState(false);
-  const [reportsExpanded, setReportsExpanded] = useState(false);
   const [stockMgmtExpanded, setStockMgmtExpanded] = useState(false);
   const isElectron = !!(window as any).electronAPI;
   const { headerHidden } = useUiPrefs();
-
-  useEffect(() => {
-    if (currentPage === 'reports' || currentPage === 'reports-stock-count') {
-      setReportsExpanded(true);
-    }
-  }, [currentPage]);
 
   useEffect(() => {
     if (currentPage === 'products' || currentPage === 'inventory' || currentPage === 'product-stock-count') {
@@ -110,66 +103,6 @@ export function MainMenu({ onNavigate, currentPage, onOpenSettings, onLockScreen
 
             <div className="space-y-1.5 md:space-y-2">
               {availableItems.map((item) => {
-                if (item.id === 'reports') {
-                  const Icon = item.icon;
-                  const reportsSectionActive =
-                    currentPage === 'reports' || currentPage === 'reports-stock-count';
-                  return (
-                    <div key="reports-nav">
-                      <button
-                        type="button"
-                        onClick={() => setReportsExpanded((e) => !e)}
-                        className={`w-full flex items-center justify-between gap-3 md:gap-4 px-4 md:px-6 py-3 md:py-4 rounded-lg md:rounded-xl transition-all active:scale-95 ${
-                          reportsSectionActive
-                            ? 'bg-white text-orange-600 shadow-lg font-bold'
-                            : 'text-white hover:bg-white/10'
-                        }`}
-                      >
-                        <span className="flex items-center gap-3 md:gap-4 min-w-0">
-                          <Icon size={20} className="md:w-6 md:h-6 shrink-0" />
-                          <span className="text-sm md:text-lg font-medium truncate">{item.label}</span>
-                        </span>
-                        <ChevronDown
-                          size={18}
-                          className={`shrink-0 transition-transform opacity-90 ${reportsExpanded ? 'rotate-180' : ''}`}
-                        />
-                      </button>
-                      {reportsExpanded && (
-                        <div className="mt-1 ml-3 md:ml-4 pl-3 md:pl-4 border-l-2 border-white/40 space-y-1">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              onNavigate('reports');
-                              setMenuOpen(false);
-                            }}
-                            className={`w-full text-left px-3 py-2.5 rounded-lg text-sm font-semibold transition ${
-                              currentPage === 'reports'
-                                ? 'bg-white text-orange-600'
-                                : 'text-white/95 hover:bg-white/10'
-                            }`}
-                          >
-                            Genel raporlar
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              onNavigate('reports-stock-count');
-                              setMenuOpen(false);
-                            }}
-                            className={`w-full flex items-center gap-2 px-3 py-2.5 rounded-lg text-sm font-semibold transition ${
-                              currentPage === 'reports-stock-count'
-                                ? 'bg-white text-orange-600'
-                                : 'text-white/95 hover:bg-white/10'
-                            }`}
-                          >
-                            <ClipboardList size={16} className="shrink-0 opacity-90" />
-                            Sayım raporu
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  );
-                }
                 if (item.id === 'stock-management') {
                   const Icon = item.icon;
                   const stockSectionActive =

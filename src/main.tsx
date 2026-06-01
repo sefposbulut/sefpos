@@ -1,6 +1,6 @@
 import { StrictMode, Component, type ErrorInfo, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
-import App from './App.tsx';
+import App from './App';
 import './index.css';
 import { AuthProvider } from './contexts/AuthContext';
 import { ElectronDesktopShell } from './components/ElectronDesktopShell';
@@ -154,7 +154,7 @@ const qrTableHint = (params.get('masa') || params.get('table') || '').trim();
 const root = createRoot(document.getElementById('root')!);
 
 // Boot splash sonsuz kalmasin (ag hatasi / yavas chunk yuklemesi)
-window.setTimeout(() => hideBootSplash(), 12_000);
+window.setTimeout(() => hideBootSplash(), 10_000);
 
 if (menuBranchId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(menuBranchId)) {
   root.render(
@@ -164,7 +164,6 @@ if (menuBranchId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{1
       </AppErrorBoundary>
     </StrictMode>
   );
-  requestAnimationFrame(() => hideBootSplash());
 } else {
   root.render(
     <StrictMode>
@@ -176,5 +175,4 @@ if (menuBranchId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{1
       </AppErrorBoundary>
     </StrictMode>
   );
-  requestAnimationFrame(() => hideBootSplash());
 }

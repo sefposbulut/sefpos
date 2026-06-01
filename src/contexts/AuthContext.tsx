@@ -689,7 +689,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (!cancelled) {
         setLoading((prev) => (prev ? false : prev));
       }
-    }, 8000);
+    }, 5000);
 
     void (async () => {
       try {
@@ -700,7 +700,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             break;
           } catch {
             if (cancelled) return;
-            await new Promise((r) => setTimeout(r, 350 * (attempt + 1)));
+            await new Promise((r) => setTimeout(r, 180 * (attempt + 1)));
           }
         }
       } finally {

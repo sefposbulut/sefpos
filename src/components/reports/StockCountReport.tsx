@@ -357,7 +357,12 @@ function exportBatchPdf(
   doc.save(`sayim-${safeSheetName(ref)}.pdf`);
 }
 
-export function StockCountReport() {
+interface StockCountReportProps {
+  /** Raporlar ekranı içinde sekme olarak gösterilir */
+  embedded?: boolean;
+}
+
+export function StockCountReport({ embedded = false }: StockCountReportProps) {
   const { tenant, branches } = useAuth();
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const [dateFrom, setDateFrom] = useState(() => {
@@ -542,15 +547,24 @@ export function StockCountReport() {
     });
   };
 
+  const shellClass = embedded
+    ? 'p-4 md:p-6'
+    : 'fixed inset-0 top-14 md:top-20 bg-gradient-to-br from-slate-50 to-slate-100 overflow-auto';
+  const innerClass = embedded ? '' : 'p-4 md:p-6 max-w-7xl mx-auto';
+
   return (
-    <div className="fixed inset-0 top-14 md:top-20 bg-gradient-to-br from-slate-50 to-slate-100 overflow-auto">
-      <div className="p-4 md:p-6 max-w-7xl mx-auto">
+    <div className={shellClass}>
+      <div className={innerClass}>
         <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-4">
           <div>
-            <h1 className="text-2xl md:text-3xl font-bold text-slate-900 flex items-center gap-2">
-              <ClipboardList className="w-7 h-7 text-amber-600" />
+            <h2
+              className={`font-bold text-slate-900 flex items-center gap-2 ${
+                embedded ? 'text-lg md:text-xl' : 'text-2xl md:text-3xl'
+              }`}
+            >
+              <ClipboardList className={`text-amber-600 ${embedded ? 'w-6 h-6' : 'w-7 h-7'}`} />
               Sayım raporu
-            </h1>
+            </h2>
             <p className="text-sm text-slate-500 mt-1">
               Belgeler liste halinde; satıra tıklayınca ürün detayı açılır. A4 yazdırma ve Excel/PDF dışa aktarma
               desteklenir. Özet satış tutarı, nottaki sistem/sayım bilgisinden hesaplanır.

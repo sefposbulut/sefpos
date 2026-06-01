@@ -60,14 +60,63 @@
         gap: 16px;
         text-align: center;
       }
+      #boot-splash .logo-wrap {
+        position: relative;
+        width: 120px;
+        height: 120px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
       #boot-splash .logo {
+        position: relative;
+        z-index: 2;
         width: 120px;
         height: 120px;
         border-radius: 50%;
         object-fit: contain;
         background: #ffffff;
-        box-shadow: 0 12px 32px rgba(15, 23, 42, .08);
+        box-shadow: 0 12px 32px rgba(15, 23, 42, .1);
         padding: 6px;
+        animation: sefpos-splash-logo-breathe 2.4s ease-in-out infinite;
+      }
+      #boot-splash .sefpos-splash-glow {
+        position: absolute;
+        inset: -12%;
+        border-radius: 50%;
+        background: radial-gradient(circle, rgba(249, 115, 22, 0.28) 0%, rgba(249, 115, 22, 0) 68%);
+        animation: sefpos-splash-glow-pulse 2.4s ease-in-out infinite;
+        pointer-events: none;
+      }
+      #boot-splash .sefpos-splash-orbit {
+        position: absolute;
+        inset: -6px;
+        border-radius: 50%;
+        border: 1px dashed rgba(249, 115, 22, 0.22);
+        animation: sefpos-splash-orbit-spin 5s linear infinite;
+        pointer-events: none;
+      }
+      #boot-splash .sefpos-splash-orbit-dot {
+        position: absolute;
+        top: -3px;
+        left: 50%;
+        width: 7px;
+        height: 7px;
+        margin-left: -3.5px;
+        border-radius: 50%;
+        background: #f97316;
+        box-shadow: 0 0 10px rgba(249, 115, 22, 0.55);
+      }
+      @keyframes sefpos-splash-logo-breathe {
+        0%, 100% { transform: scale(1); }
+        50% { transform: scale(1.06); }
+      }
+      @keyframes sefpos-splash-glow-pulse {
+        0%, 100% { opacity: 0.35; transform: scale(0.92); }
+        50% { opacity: 0.65; transform: scale(1.08); }
+      }
+      @keyframes sefpos-splash-orbit-spin {
+        to { transform: rotate(360deg); }
       }
       #boot-splash .name {
         font-size: 22px;
@@ -87,18 +136,30 @@
         border-radius: 50%;
         border: 3px solid rgba(15, 23, 42, .08);
         border-top-color: #f97316;
-        animation: bs-spin .8s linear infinite;
+        animation: sefpos-splash-spin 0.75s linear infinite;
       }
-      @keyframes bs-spin {
+      @keyframes sefpos-splash-spin {
         to { transform: rotate(360deg); }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        #boot-splash .logo,
+        #boot-splash .sefpos-splash-glow,
+        #boot-splash .sefpos-splash-orbit,
+        #boot-splash .ring {
+          animation: none !important;
+        }
       }
     </style>
     <div id="root"></div>
     <div id="boot-splash" aria-hidden="true">
       <div class="wrap">
-        <img src="./logo.png?v=2" alt="ŞefPOS" class="logo" onerror="this.style.display='none'" />
+        <div class="logo-wrap">
+          <div class="sefpos-splash-glow" aria-hidden="true"></div>
+          <div class="sefpos-splash-orbit" aria-hidden="true"><span class="sefpos-splash-orbit-dot"></span></div>
+          <img src="./logo.png?v=2" alt="ŞefPOS" class="logo" onerror="this.style.display='none'" />
+        </div>
         <div class="name">ŞefPOS</div>
-        <div class="tag">Sistem hazirlaniyor...</div>
+        <div class="tag">Ortam yükleniyor…</div>
         <div class="ring"></div>
       </div>
     </div>

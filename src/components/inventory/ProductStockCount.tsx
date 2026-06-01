@@ -733,7 +733,7 @@ export function ProductStockCount() {
               </div>
               <p className="text-xs text-slate-500">
                 Sayım sonrası satış, transfer ve diğer stok hareketlerini görmek için{' '}
-                <strong>Raporlar → Sayım raporu</strong> ekranında bu belgeyi açıp &quot;Sayım sonrası hareketler&quot;i
+                <strong>Raporlar → Sayım</strong> sekmesinde bu belgeyi açıp &quot;Sayım sonrası hareketler&quot;i
                 genişletin.
               </p>
             </div>

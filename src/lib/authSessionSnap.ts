@@ -44,3 +44,17 @@ export function clearAuthSessionSnap(): void {
     /* ignore */
   }
 }
+
+/** F5 sonrası kısa süre user=null iken pazarlama sayfası göstermemek için */
+export function hasLikelyStoredAuthSession(): boolean {
+  try {
+    if (sessionStorage.getItem(AUTH_SNAP_KEY)) return true;
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && (k.endsWith('-auth-token') || k.includes('supabase.auth'))) return true;
+    }
+  } catch {
+    /* ignore */
+  }
+  return false;
+}

@@ -232,6 +232,8 @@ export function TableGrid({
   });
   // Snapshot varsa loading'i baslangictan false yap; aksi halde skeleton gosterelim.
   const [loading, setLoading] = useState<boolean>(() => !initialSnapshot);
+  /** İlk fetch bitmeden "12 Masa Oluştur" gösterme (F5'te kısa flaş) */
+  const [gridFetchDone, setGridFetchDone] = useState(() => !!initialSnapshot);
 
   // Footer kuşağı state'i: kullanıcı sağ tıklayınca açık masa toplam tutarını
   // gizleyebilsin (kişisel tercih, cihaza yazılır). Saat/tarih için 30 sn'lik
@@ -308,7 +310,10 @@ export function TableGrid({
   }, []);
 
   const loadAll = useCallback(async (resetGroup = false, opts?: { silent?: boolean }) => {
-    if (!tenant || !activeBranch) return;
+    if (!tenant || !activeBranch) {
+      setGridFetchDone(false);
+      return;
+    }
     const cacheKey = `${tenant.id}:${activeBranch.id}`;
     // RAM yoksa sessionStorage'dan dene (ilk login + sekme yenilemesi icin kritik).
     // SQL modunda eski (bos) cloud onbellegini kullanma — Ayarlar’da 32 masa varken grid bos kalmasin.
@@ -376,6 +381,7 @@ export function TableGrid({
         setTables([]);
       }
       setLoading(false);
+      setGridFetchDone(true);
       return;
     }
 
@@ -446,6 +452,7 @@ export function TableGrid({
     }
 
     setLoading(false);
+    setGridFetchDone(true);
   }, [tenant, activeBranch]);
 
   const tablesReloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -956,10 +963,10 @@ export function TableGrid({
     [tables, selectedGroup]
   );
 
-  if (loading) {
+  if (loading || !gridFetchDone) {
     // Spinner yerine skeleton: kullanici bos ekran/spinner yerine ileride
     // gelecek kutularin iskeletini gorur, algilanan yuklenme cok daha hizli olur.
-    const skeletonCount = 12;
+    const skeletonCount = Math.min(12, Math.max(6, desktopTableCols * 2));
     return (
       <div className="h-full flex flex-col">
         <div className="bg-white rounded-lg md:rounded-2xl shadow-md p-2 md:p-4 mb-3 md:mb-6">
@@ -997,7 +1004,7 @@ export function TableGrid({
     );
   }
 
-  if (tables.length === 0) {
+  if (gridFetchDone && tables.length === 0) {
     return (
       <div className="text-center py-16">
         <p className="text-gray-500 text-lg mb-4">Henüz masa bulunmamaktadır.</p>

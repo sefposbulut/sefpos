@@ -593,12 +593,14 @@ export function TakeawayOrders({ isActive = true }: TakeawayOrdersProps) {
 
   if (formOpen) {
     return (
-      <DeliveryOrderForm
-        couriers={couriersForFormRef.current.length > 0 ? couriersForFormRef.current : couriers}
-        editOrder={editingOrder}
-        prefillCustomer={cidPrefill}
-        onClose={handleFormClose}
-      />
+      <div className="fixed inset-0 top-14 md:top-20 z-30 flex flex-col min-h-0 bg-slate-50">
+        <DeliveryOrderForm
+          couriers={couriersForFormRef.current.length > 0 ? couriersForFormRef.current : couriers}
+          editOrder={editingOrder}
+          prefillCustomer={cidPrefill}
+          onClose={handleFormClose}
+        />
+      </div>
     );
   }
 

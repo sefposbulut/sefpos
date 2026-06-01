@@ -2,7 +2,6 @@ import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react'
 import { useAuth } from './contexts/AuthContext';
 import { isAykaAdminPath } from './lib/aykaRoute';
 import { canAccessAdminPanel, clearAykaSessionFlag } from './lib/adminAccess';
-import { publicAsset } from './lib/assetUrl';
 import { Auth } from './components/Auth';
 import { AykaLogin } from './components/AykaLogin';
 import { ElectronAuth } from './components/ElectronAuth';
@@ -33,7 +32,8 @@ import { Customers } from './components/customers/Customers';
 import { LoyaltyPage } from './components/loyalty/LoyaltyPage';
 import { EndOfDay } from './components/EndOfDay';
 import { Reports } from './components/reports/Reports';
-import { StockCountReport } from './components/reports/StockCountReport';
+import { primeReportsStockCountTab } from './lib/reportsNav';
+import { hasLikelyStoredAuthSession } from './lib/authSessionSnap';
 import { CancelLogs } from './components/CancelLogs';
 import { PinLockScreen } from './components/PinLockScreen';
 import { Inventory } from './components/inventory/Inventory';
@@ -60,6 +60,7 @@ import { GlobalGetirSync } from './components/GlobalGetirSync';
 import { PrintStatusToast } from './components/PrintStatusToast';
 import { TerminalLogin, TerminalApp, isTerminalMode, exitTerminalMode } from './components/TerminalMode';
 import { isCapacitorNative } from './lib/capacitorPlatform';
+import { BrandSplash } from './components/BrandSplash';
 
 interface SystemNotification {
   id: string;
@@ -70,41 +71,16 @@ interface SystemNotification {
 
 type Table = Database['public']['Tables']['restaurant_tables']['Row'];
 
-/**
- * Marka splash: ilk login / Electron baslatma sirasinda kullaniciya bos ekran
- * yerine ŞefPOS logosu + spinner gosterir. index.html'deki #boot-splash ile ayni
- * goruntu, ama React mount sonrasi auth/dbMode loading durumlari icin de.
- */
-const BrandSplash = React.memo(function BrandSplash({ hint }: { hint?: string }) {
-  return (
-    <div
-      className="fixed inset-0 z-[2147483646] flex items-center justify-center"
-      style={{
-        background: '#ffffff',
-        color: '#0f172a',
-        fontFamily: '"Inter", "Segoe UI", Arial, sans-serif',
-      }}
-    >
-      <div className="flex flex-col items-center gap-3 text-center">
-        <img
-          src={publicAsset('logo.png')}
-          alt="SefPOS"
-          className="w-28 h-28 rounded-full object-contain bg-white"
-          style={{ boxShadow: '0 12px 32px rgba(15, 23, 42, .08)', padding: 6 }}
-          onError={(e) => {
-            (e.currentTarget as HTMLImageElement).style.display = 'none';
-          }}
-        />
-        <div className="text-2xl font-extrabold tracking-wide text-slate-900">SefPOS</div>
-        <div className="text-sm font-medium text-slate-500">{hint || 'Yukleniyor...'}</div>
-        <div
-          className="mt-1 w-6 h-6 rounded-full border-[3px] animate-spin"
-          style={{ borderColor: 'rgba(15, 23, 42, 0.08)', borderTopColor: '#f97316' }}
-        />
-      </div>
-    </div>
-  );
-});
+function readInitialElectronDbMode(): 'cloud' | 'sqlserver' | null {
+  if (!(window as Window & { electronAPI?: unknown }).electronAPI) return null;
+  try {
+    const saved = localStorage.getItem('dbMode');
+    if (saved === 'sqlserver' || saved === 'cloud') return saved;
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
 
 const isCourierMode = () => {
   const params = new URLSearchParams(window.location.search);
@@ -120,7 +96,7 @@ const isWaiterAppRoute = () => {
 // UpdateBanner kaldırıldı — ElectronDesktopShell (main.tsx, AuthProvider altinda)
 // dinamik pencere başlığı + auto-update bildirimi işlevini yapıyor.
 
-function App() {
+export default function App() {
   const [courierMode, setCourierMode] = useState(isCourierMode);
   const [terminalSetup, setTerminalSetup] = useState<'login' | 'app' | null>(() => {
     if (isTerminalMode()) return 'app';
@@ -181,7 +157,7 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tenant?.id]);
   const [showShiftQuickClose, setShowShiftQuickClose] = useState(false);
-  const [dbMode, setDbMode] = useState<'cloud' | 'sqlserver' | null | 'loading'>('loading');
+  const [dbMode, setDbMode] = useState<'cloud' | 'sqlserver' | null>(readInitialElectronDbMode);
   // Always-mounted sayfalar yalnizca bir kez ziyaret edildiklerinde DOM'a girer
   // ve sonrasinda display:none ile saklanir. POS sicak yolu (tables) en bastan
   // mount edilir; nadir sayfalar (Products, OnlineOrders, vs.) baslangic
@@ -213,16 +189,17 @@ function App() {
     try {
       const path = (window.location.pathname || '/').toLowerCase();
       if (isAuthRoutePath(path)) return true;
-      if (isLandingPath(path)) return false;
-      const params = new URLSearchParams(window.location.search);
-      if (params.has('landing')) return false;
       const host = window.location.hostname;
       const isLocalHost =
         host === 'localhost' ||
         host === '127.0.0.1' ||
         host === '[::1]' ||
         host.endsWith('.local');
+      // Yerel geliştirme: kök URL pazarlama değil, giriş / POS
       if (import.meta.env.DEV && isLocalHost && path === '/') return true;
+      if (isLandingPath(path)) return false;
+      const params = new URLSearchParams(window.location.search);
+      if (params.has('landing')) return false;
     } catch {
       /* ignore */
     }
@@ -279,36 +256,39 @@ function App() {
       return;
     }
     const api = (window as any).electronAPI;
-    const timeout = setTimeout(() => {
-      const savedMode = localStorage.getItem('dbMode') as 'cloud' | 'sqlserver' | null;
-      setDbMode(savedMode);
-    }, 3000);
-    Promise.race([
-      api.getDbMode(),
-      new Promise<null>(resolve => setTimeout(() => resolve(null), 4000))
-    ]).then(async (mode: 'cloud' | 'sqlserver' | null) => {
-      clearTimeout(timeout);
-      if (mode === 'sqlserver') {
-        localStorage.setItem('dbMode', 'sqlserver');
-      } else if (mode !== null) {
-        localStorage.removeItem('dbMode');
-      } else {
-        mode = localStorage.getItem('dbMode') as 'cloud' | 'sqlserver' | null;
-      }
-      setDbMode(mode);
-      if (mode === 'sqlserver') {
-        try {
-          const cfg = await api.getSqlServerConfig?.();
-          const isConfigured = !!(cfg?.host && cfg?.username);
-          setSqlServerConfigured(isConfigured);
-          if (!isConfigured) setShowSqlServerSettings(true);
-        } catch {}
-      }
-    }).catch(() => {
-      clearTimeout(timeout);
-      const savedMode = localStorage.getItem('dbMode') as 'cloud' | 'sqlserver' | null;
-      setDbMode(savedMode);
-    });
+    void Promise.race([
+      api.getDbMode?.() ?? Promise.resolve(null),
+      new Promise<null>((resolve) => window.setTimeout(() => resolve(null), 600)),
+    ])
+      .then(async (mode: 'cloud' | 'sqlserver' | null) => {
+        if (mode === 'sqlserver') {
+          localStorage.setItem('dbMode', 'sqlserver');
+          setDbMode('sqlserver');
+        } else if (mode === 'cloud') {
+          localStorage.setItem('dbMode', 'cloud');
+          setDbMode('cloud');
+        } else if (mode === null) {
+          const saved = localStorage.getItem('dbMode') as 'cloud' | 'sqlserver' | null;
+          if (saved === 'sqlserver' || saved === 'cloud') setDbMode(saved);
+        }
+        const effectiveMode =
+          mode === 'sqlserver'
+            ? 'sqlserver'
+            : (localStorage.getItem('dbMode') as 'cloud' | 'sqlserver' | null);
+        if (effectiveMode === 'sqlserver') {
+          try {
+            const cfg = await api.getSqlServerConfig?.();
+            const isConfigured = !!(cfg?.host && cfg?.username);
+            setSqlServerConfigured(isConfigured);
+            if (!isConfigured) setShowSqlServerSettings(true);
+          } catch {
+            /* ignore */
+          }
+        }
+      })
+      .catch(() => {
+        /* localStorage ile zaten acildi */
+      });
   }, [isElectron]);
 
   const showNewNotification = useCallback((n: { id: string; title: string; message: string; type: string }) => {
@@ -324,7 +304,7 @@ function App() {
 
   /** Electron ana sayfa verisi masalar ekranina gecmeden once yuklensin (cache). */
   useEffect(() => {
-    if (!isElectron || !tenant?.id || !activeBranch?.id || dbMode === 'loading') return;
+    if (!isElectron || !tenant?.id || !activeBranch?.id) return;
     preloadElectronHomeData(tenant.id, activeBranch.id);
   }, [isElectron, tenant?.id, activeBranch?.id, dbMode]);
 
@@ -390,6 +370,11 @@ function App() {
     }
     if (isSqlOnlineOnlyPage(page)) {
       window.alert(sqlOnlineOnlyPageMessage(page));
+      return;
+    }
+    if (page === 'reports-stock-count') {
+      primeReportsStockCountTab();
+      setCurrentPage('reports');
       return;
     }
     setCurrentPage(page);
@@ -467,10 +452,6 @@ function App() {
     }} />;
   }
 
-  if (isElectron && dbMode === 'loading') {
-    return <BrandSplash hint="Yerel veritabanı hazırlanıyor..." />;
-  }
-
   if (isElectron && dbMode === null) {
     return <ElectronConnectionMenu onSelect={handleDbModeSelect} />;
   }
@@ -498,7 +479,10 @@ function App() {
     );
   }
 
-  if (loading) return <BrandSplash hint="Oturum kontrol ediliyor..." />;
+  const sessionRestoring = loading || (!user && hasLikelyStoredAuthSession());
+  if (sessionRestoring) {
+    return <BrandSplash hint="Oturum açılıyor…" />;
+  }
 
   if (
     user &&
@@ -816,7 +800,6 @@ function App() {
 
       {show('reports') && <Reports />}
 
-      {show('reports-stock-count') && <StockCountReport />}
 
       {show('endofday') && <EndOfDay />}
 
@@ -871,5 +854,3 @@ function App() {
     </div>
   );
 }
-
-export default App;

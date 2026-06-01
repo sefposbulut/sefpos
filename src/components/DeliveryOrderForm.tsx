@@ -66,6 +66,9 @@ function DeliveryOrderFormInner({ couriers, editOrder, prefillCustomer, onClose 
   const [loadingCustomer, setLoadingCustomer] = useState(false);
   const [fieldError, setFieldError] = useState<'name' | 'phone' | 'address' | 'cart' | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  /** Mobil paket: 1=ürün seç, 2=müşteri + onay (masaüstünde yok sayılır) */
+  const [mobileStep, setMobileStep] = useState<1 | 2>(1);
+  const productsSectionRef = useRef<HTMLDivElement | null>(null);
   const phoneDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
   const customerSearchSeq = useRef(0);
   const customerSearchRef = useRef<HTMLDivElement | null>(null);
@@ -174,7 +177,13 @@ function DeliveryOrderFormInner({ couriers, editOrder, prefillCustomer, onClose 
   const showValidationError = useCallback(
     (field: 'name' | 'phone' | 'address' | 'cart') => {
       setFieldError(field);
-      if (field !== 'cart') focusCustomerField(field);
+      if (field === 'cart') {
+        setMobileStep(1);
+        productsSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      } else {
+        setMobileStep(2);
+        focusCustomerField(field);
+      }
     },
     [focusCustomerField],
   );
@@ -623,9 +632,12 @@ function DeliveryOrderFormInner({ couriers, editOrder, prefillCustomer, onClose 
         <button type="button" onClick={() => onClose()} className="p-2 hover:bg-slate-100 rounded-xl transition">
           <ChevronLeft className="w-5 h-5 text-slate-600" />
         </button>
-        <div className="flex-1">
+        <div className="flex-1 min-w-0">
           <h1 className="text-lg font-black text-slate-800">{editOrder ? 'Sipariş Düzenle' : 'Yeni Sipariş'}</h1>
-          <p className="text-xs text-slate-500">Müşteri bilgilerini girin ve ürünleri ekleyin</p>
+          <p className="text-xs text-slate-500 lg:hidden">
+            {mobileStep === 1 ? '1/2 Ürün seçin' : '2/2 Müşteri bilgisi'}
+          </p>
+          <p className="text-xs text-slate-500 hidden lg:block">Müşteri bilgilerini girin ve ürünleri ekleyin</p>
         </div>
         {cart.length > 0 && (
           <div className="bg-orange-500 text-white rounded-xl px-3 py-1.5 text-sm font-black">
@@ -634,8 +646,39 @@ function DeliveryOrderFormInner({ couriers, editOrder, prefillCustomer, onClose 
         )}
       </div>
 
-      <div className="flex-1 overflow-hidden flex flex-col lg:flex-row">
-        <div className="lg:w-80 xl:w-96 bg-white border-b lg:border-b-0 lg:border-r border-slate-200 flex flex-col shrink-0 overflow-y-auto">
+      <div className="lg:hidden shrink-0 flex gap-1 px-3 py-2 bg-white border-b border-slate-100">
+        <button
+          type="button"
+          onClick={() => setMobileStep(1)}
+          className={`flex-1 py-2 rounded-lg text-xs font-bold ${
+            mobileStep === 1 ? 'bg-orange-500 text-white' : 'bg-slate-100 text-slate-600'
+          }`}
+        >
+          1. Ürünler {cart.length > 0 ? `(${cart.reduce((s, i) => s + i.quantity, 0)})` : ''}
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            if (cart.length === 0) {
+              showValidationError('cart');
+              return;
+            }
+            setMobileStep(2);
+          }}
+          className={`flex-1 py-2 rounded-lg text-xs font-bold ${
+            mobileStep === 2 ? 'bg-orange-500 text-white' : 'bg-slate-100 text-slate-600'
+          }`}
+        >
+          2. Müşteri
+        </button>
+      </div>
+
+      <div className="flex-1 min-h-0 overflow-hidden flex flex-col lg:flex-row">
+        <div
+          className={`${
+            mobileStep === 2 ? 'flex' : 'hidden'
+          } lg:flex shrink-0 lg:w-80 xl:w-96 lg:overflow-y-auto lg:max-h-full bg-white border-b lg:border-b-0 lg:border-r border-slate-200 flex-col min-h-0 max-lg:flex-1 max-lg:overflow-y-auto`}
+        >
           <div className="p-4 space-y-4">
             <div className="flex gap-1.5">
               {SUBTYPES.map(s => {
@@ -654,8 +697,8 @@ function DeliveryOrderFormInner({ couriers, editOrder, prefillCustomer, onClose 
             </div>
 
             <div className="relative" ref={customerSearchRef}>
-              <label className="text-xs font-bold text-slate-600 mb-1 block">Müşteri ara (cari adı, teslimat kaydı veya telefon)</label>
-              <p className="text-[11px] text-slate-500 mb-1.5">
+              <label className="text-xs font-bold text-slate-600 mb-1 block">Telefon veya cari ara</label>
+              <p className="text-[11px] text-slate-500 mb-1.5 hidden lg:block">
                 Üst kutu arama içindir. Müşteri adını <strong>aşağıdaki «Ad Soyad»</strong> alanına yazın.
               </p>
               <div className="relative">
@@ -927,7 +970,12 @@ function DeliveryOrderFormInner({ couriers, editOrder, prefillCustomer, onClose 
           </div>
         </div>
 
-        <div className="flex-1 overflow-hidden flex flex-col">
+        <div
+          ref={productsSectionRef}
+          className={`${
+            mobileStep === 1 ? 'flex' : 'hidden'
+          } lg:flex flex-col flex-1 min-h-0 lg:overflow-hidden`}
+        >
           <div className="border-b bg-white p-3 space-y-2 shrink-0">
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
@@ -959,9 +1007,14 @@ function DeliveryOrderFormInner({ couriers, editOrder, prefillCustomer, onClose 
             </div>
           </div>
 
-          <div className="flex-1 overflow-hidden flex flex-col md:flex-row">
-            <div className="flex-1 overflow-y-auto p-3">
-              {filteredProducts.length === 0 ? (
+          <div className="flex flex-col lg:flex-row lg:flex-1 lg:min-h-0 lg:overflow-hidden min-h-0">
+            <div className="flex-1 min-h-0 overflow-y-auto p-3 pb-2">
+              {products.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-32 text-slate-400 text-sm gap-2">
+                  <RefreshCw className="w-6 h-6 animate-spin text-orange-400" />
+                  Ürünler yükleniyor…
+                </div>
+              ) : filteredProducts.length === 0 ? (
                 <div className="flex items-center justify-center h-32 text-slate-400 text-sm">Ürün bulunamadı</div>
               ) : (
                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-2 lg:grid-cols-3 gap-2">
@@ -987,7 +1040,45 @@ function DeliveryOrderFormInner({ couriers, editOrder, prefillCustomer, onClose 
               )}
             </div>
 
-            <div className="w-full md:w-64 lg:w-72 border-t md:border-t-0 md:border-l bg-white flex flex-col max-h-96 md:max-h-full">
+            {cart.length > 0 && (
+              <div className="lg:hidden shrink-0 border-t border-slate-200 bg-white max-h-36 overflow-y-auto">
+                <div className="px-3 py-2 flex items-center justify-between border-b border-slate-100">
+                  <span className="text-xs font-bold text-slate-600">Sepet</span>
+                  <button type="button" onClick={() => setCart([])} className="text-xs text-red-500 font-semibold">
+                    Temizle
+                  </button>
+                </div>
+                <div className="p-2 space-y-1.5">
+                  {cart.map((item) => (
+                    <div key={item.product.id} className="flex items-center gap-2 bg-slate-50 rounded-lg px-2 py-1.5">
+                      <div className="flex-1 min-w-0 text-xs font-semibold text-slate-800 truncate">{item.product.name}</div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => updateQty(item.product.id, -1)}
+                          className="w-7 h-7 bg-slate-200 rounded-lg flex items-center justify-center"
+                        >
+                          <Minus className="w-3 h-3" />
+                        </button>
+                        <span className="w-5 text-center text-xs font-black">{item.quantity}</span>
+                        <button
+                          type="button"
+                          onClick={() => updateQty(item.product.id, 1)}
+                          className="w-7 h-7 bg-orange-500 text-white rounded-lg flex items-center justify-center"
+                        >
+                          <Plus className="w-3 h-3" />
+                        </button>
+                      </div>
+                      <span className="text-xs font-black text-orange-600 w-14 text-right shrink-0">
+                        {(item.product.price * item.quantity).toFixed(0)}₺
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="hidden lg:flex w-72 border-l bg-white flex-col shrink-0 min-h-0">
               <div className="p-3 border-b flex items-center justify-between">
                 <span className="font-bold text-slate-700 text-sm">Sepet</span>
                 {cart.length > 0 && (
@@ -1057,6 +1148,69 @@ function DeliveryOrderFormInner({ couriers, editOrder, prefillCustomer, onClose 
             </div>
           </div>
         </div>
+      </div>
+
+      <div className="lg:hidden shrink-0 border-t border-slate-200 bg-white px-3 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] shadow-[0_-8px_24px_rgba(15,23,42,0.1)] z-20">
+        {fieldError === 'cart' && mobileStep === 1 && (
+          <p className="text-xs font-semibold text-red-600 text-center mb-2" role="alert">
+            En az 1 ürün ekleyin.
+          </p>
+        )}
+        {(fieldError === 'name' || fieldError === 'phone' || fieldError === 'address') && mobileStep === 2 && (
+          <p className="text-xs font-semibold text-red-600 text-center mb-2" role="alert">
+            Zorunlu müşteri alanlarını doldurun.
+          </p>
+        )}
+        {submitError && (
+          <p className="text-xs font-semibold text-red-600 text-center mb-2 px-1" role="alert">
+            {submitError}
+          </p>
+        )}
+        <div className="flex items-center justify-between gap-3 mb-2">
+          <span className="text-sm text-slate-600">
+            {cart.length > 0
+              ? `${cart.reduce((s, i) => s + i.quantity, 0)} ürün`
+              : 'Sepet boş'}
+          </span>
+          <span className="text-xl font-black text-orange-600">{cartTotal.toFixed(2)} ₺</span>
+        </div>
+        {mobileStep === 1 ? (
+          <button
+            type="button"
+            disabled={cart.length === 0}
+            onClick={() => {
+              setFieldError(null);
+              setMobileStep(2);
+            }}
+            className="w-full py-3.5 bg-gradient-to-r from-orange-500 to-red-600 text-white font-bold rounded-xl disabled:opacity-50 flex items-center justify-center gap-2"
+          >
+            Devam — müşteri bilgisi
+            <ChevronRight className="w-5 h-5" />
+          </button>
+        ) : (
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => setMobileStep(1)}
+              className="shrink-0 px-4 py-3.5 rounded-xl border-2 border-slate-200 text-slate-700 font-bold text-sm"
+            >
+              Ürünler
+            </button>
+            <button
+              type="button"
+              onClick={handleSubmit}
+              disabled={submitting || cart.length === 0}
+              className="flex-1 py-3.5 bg-gradient-to-r from-orange-500 to-red-600 text-white font-bold rounded-xl disabled:opacity-50 flex items-center justify-center gap-2 min-w-0"
+            >
+              {submitting ? (
+                <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+              ) : (
+                <Check className="w-5 h-5 shrink-0" />
+              )}
+              <span className="truncate">{editOrder ? 'Güncelle' : 'Siparişi Oluştur'}</span>
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
