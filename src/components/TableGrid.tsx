@@ -126,6 +126,8 @@ interface TableGridProps {
   onRefresh?: (fn: () => void) => void;
   onNavigate?: (page: string) => void;
   showTakeawayButton?: boolean;
+  /** false iken realtime ve poll durur (paket ekranındayken arka plan yükü kesilir). */
+  isActive?: boolean;
 }
 
 const naturalSort = (a: TableWithOrder, b: TableWithOrder) =>
@@ -206,7 +208,13 @@ function initDesktopColsState(): { cols: number; touched: boolean } {
   return { cols: 6, touched: false };
 }
 
-export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayButton = true }: TableGridProps) {
+export function TableGrid({
+  onSelectTable,
+  onRefresh,
+  onNavigate,
+  showTakeawayButton = true,
+  isActive = true,
+}: TableGridProps) {
   const { tenant, user, profile, activeBranch, permissions } = useAuth();
   const { headerHidden } = useUiPrefs();
   const mobileColsStorageKey = MOBILE_COLS_KEY;
@@ -660,7 +668,11 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
   }, [tables.length, mobileColsTouched, desktopColsTouched, colsPrefsReady, getAutoMobileCols, getAutoDesktopCols]);
 
   useEffect(() => {
-    if (!tenant || !activeBranch) return;
+    if (!tenant || !activeBranch || !isActive) {
+      channelsRef.current.forEach((ch) => supabase.removeChannel(ch));
+      channelsRef.current = [];
+      return;
+    }
 
     const cacheKey = `${tenant.id}:${activeBranch.id}`;
     const hasCache = tableGridRuntimeCache.has(cacheKey) || tablesRef.current.length > 0;
@@ -771,7 +783,7 @@ export function TableGrid({ onSelectTable, onRefresh, onNavigate, showTakeawayBu
       channelsRef.current.forEach(ch => supabase.removeChannel(ch));
       channelsRef.current = [];
     };
-  }, [tenant?.id, activeBranch?.id, loadAll, scheduleUpdate, findTableIdByOrderId, scheduleGroupsReload]);
+  }, [tenant?.id, activeBranch?.id, isActive, loadAll, scheduleUpdate, findTableIdByOrderId, scheduleGroupsReload]);
 
   useEffect(() => {
     if (onRefresh) onRefresh(loadAll);

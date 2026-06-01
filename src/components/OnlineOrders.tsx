@@ -163,8 +163,12 @@ const KITCHEN_READY_STATUSES = new Set([
 ]);
 const PENDING_APPROVAL_STATUSES = new Set(['new', 'scheduled_new']);
 
-export function OnlineOrders() {
+export function OnlineOrders({ isActive = true }: { isActive?: boolean }) {
   const { tenant, user } = useAuth();
+  const isActiveRef = useRef(isActive);
+  useEffect(() => {
+    isActiveRef.current = isActive;
+  }, [isActive]);
   const [orders, setOrders] = useState<OrderWithDetails[]>([]);
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -374,15 +378,17 @@ export function OnlineOrders() {
   }, [tenant?.id]);
 
   useEffect(() => {
-    if (!tenant) return;
+    if (!tenant || !isActive) return;
 
     loadOrders(true);
 
     let reloadTimer: ReturnType<typeof setTimeout> | null = null;
     const scheduleReload = () => {
+      if (!isActiveRef.current) return;
       if (reloadTimer) clearTimeout(reloadTimer);
       reloadTimer = setTimeout(() => {
         reloadTimer = null;
+        if (!isActiveRef.current) return;
         void loadOrders();
       }, 350);
     };
@@ -407,7 +413,7 @@ export function OnlineOrders() {
       if (reloadTimer) clearTimeout(reloadTimer);
       supabase.removeChannel(channel);
     };
-  }, [tenant, loadOrders]);
+  }, [tenant, isActive, loadOrders]);
 
   // Sayfa kapatildiginda / kullanici baska ekrana gectiğinde tum alarmlari durdur
   useEffect(() => {
@@ -524,7 +530,7 @@ export function OnlineOrders() {
   useEffect(() => {
     if (!tenant) return;
     const onPolled = () => {
-      if (busyOrderIdRef.current) return;
+      if (!isActiveRef.current || busyOrderIdRef.current) return;
       void loadOrders();
       const ts = new Date().toLocaleTimeString('tr-TR');
       setGetirPollInfo({ fetched: 0, saved: 0, ts });
@@ -536,12 +542,12 @@ export function OnlineOrders() {
 
   // Realtime birincil; hafif DB imza poll yedek (gizli sekme: yok, boşta: seyrek).
   useEffect(() => {
-    if (!tenant) return;
+    if (!tenant || !isActive) return;
     let stopped = false;
     let lastSignature = '';
 
     const tick = async () => {
-      if (stopped || document.visibilityState !== 'visible') return;
+      if (stopped || !isActiveRef.current || document.visibilityState !== 'visible') return;
       if (busyOrderIdRef.current) return;
       try {
         const { data } = await supabase
@@ -575,7 +581,7 @@ export function OnlineOrders() {
       window.clearTimeout(firstId);
       stopPoll();
     };
-  }, [tenant, loadOrders]);
+  }, [tenant, isActive, loadOrders]);
 
   // filter UI tarafında uygulanıyor; ek loadOrders gereksiz.
 
@@ -1216,7 +1222,7 @@ export function OnlineOrders() {
       setAudioBlocked(s.state === 'suspended' || (!s.unlocked && s.state !== 'running'));
     };
     check();
-    const id = window.setInterval(check, 2000);
+    const id = window.setInterval(check, isActive ? 2000 : 8000);
     return () => window.clearInterval(id);
   }, []);
 

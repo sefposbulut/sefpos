@@ -120,6 +120,8 @@ export function TakeawayOrders({ isActive = true }: TakeawayOrdersProps) {
   const pendingInsertIdsRef = useRef<Set<string>>(new Set());
   const showCompletedRef = useRef(showCompleted);
   const formOpenRef = useRef(false);
+  const activeBranchRef = useRef(activeBranch?.id ?? null);
+  const lastCourierLoadRef = useRef(0);
   const couriersForFormRef = useRef<Courier[]>([]);
   const [customerQuery, setCustomerQuery] = useState('');
   const deferredCustomerQuery = useDeferredValue(customerQuery);
@@ -128,6 +130,9 @@ export function TakeawayOrders({ isActive = true }: TakeawayOrdersProps) {
   useEffect(() => {
     showCompletedRef.current = showCompleted;
   }, [showCompleted]);
+  useEffect(() => {
+    activeBranchRef.current = activeBranch?.id ?? null;
+  }, [activeBranch?.id]);
   useEffect(() => {
     formOpenRef.current = formOpen;
     if (formOpen) {
@@ -290,7 +295,7 @@ export function TakeawayOrders({ isActive = true }: TakeawayOrdersProps) {
     if (!tenant) return;
     const data = showCompletedRef.current
       ? await fetchTakeawayCompletedOrders(tenant.id, activeBranch?.id, 200)
-      : await fetchTakeawayActiveOrders(tenant.id, activeBranch?.id, 400);
+      : await fetchTakeawayActiveOrders(tenant.id, activeBranch?.id, 250);
     setOrders(data);
     setLoading(false);
   }, [tenant, activeBranch]);
@@ -320,10 +325,26 @@ export function TakeawayOrders({ isActive = true }: TakeawayOrdersProps) {
           if (next.some((o) => o.id === row.id)) continue;
           next = [row, ...next];
         }
-        return next.slice(0, viewingCompleted ? 200 : 400);
+        return next.slice(0, viewingCompleted ? 200 : 250);
       });
     })();
   }, [tenant]);
+
+  const isPaketOrderRow = useCallback((row: { order_type?: string; table_id?: string | null; branch_id?: string | null } | null) => {
+    if (!row) return false;
+    if (row.table_id) return false;
+    if (!['takeaway', 'delivery'].includes(String(row.order_type || ''))) return false;
+    const branchId = activeBranchRef.current;
+    if (branchId && row.branch_id && row.branch_id !== branchId) return false;
+    return true;
+  }, []);
+
+  const loadCouriersThrottled = useCallback(() => {
+    const now = Date.now();
+    if (now - lastCourierLoadRef.current < 45_000) return;
+    lastCourierLoadRef.current = now;
+    void loadCouriers();
+  }, [loadCouriers]);
 
   const handleOrderChange = useCallback(
     (payload: any) => {
@@ -332,8 +353,11 @@ export function TakeawayOrders({ isActive = true }: TakeawayOrdersProps) {
       if (!newRecord && !oldRecord) return;
       const record = newRecord || oldRecord;
       if (!record) return;
-      if (!['takeaway', 'delivery'].includes(record.order_type)) return;
-      if (record.table_id) return;
+      if (eventType === 'DELETE') {
+        if (!oldRecord?.id) return;
+      } else if (!isPaketOrderRow(record)) {
+        return;
+      }
 
       const isDone = record.status === 'completed' || record.status === 'cancelled';
       const viewingCompleted = showCompletedRef.current;
@@ -348,31 +372,52 @@ export function TakeawayOrders({ isActive = true }: TakeawayOrdersProps) {
         }, 350);
       } else if (eventType === 'UPDATE') {
         setOrders((prev) => {
-          const exists = prev.find((o) => o.id === record.id);
-          if (exists && viewingCompleted !== isDone) {
+          const idx = prev.findIndex((o) => o.id === record.id);
+          if (idx < 0) {
+            if (viewingCompleted === isDone) return prev;
+            return prev;
+          }
+          if (viewingCompleted !== isDone) {
             return prev.filter((o) => o.id !== record.id);
           }
-          if (!exists && viewingCompleted === isDone) return prev;
-          if (!exists) return prev;
-          return prev.map((o) => (o.id === record.id ? { ...o, ...record } : o));
+          const cur = prev[idx];
+          const merged = { ...cur, ...record };
+          if (
+            cur.delivery_status === merged.delivery_status &&
+            cur.status === merged.status &&
+            cur.courier_id === merged.courier_id &&
+            cur.total_amount === merged.total_amount &&
+            cur.payment_collected === merged.payment_collected
+          ) {
+            return prev;
+          }
+          const next = prev.slice();
+          next[idx] = merged;
+          return next;
         });
       } else if (eventType === 'DELETE') {
-        setOrders((prev) => prev.filter((o) => o.id !== oldRecord?.id));
+        setOrders((prev) => {
+          if (!prev.some((o) => o.id === oldRecord?.id)) return prev;
+          return prev.filter((o) => o.id !== oldRecord?.id);
+        });
       }
     },
-    [flushPendingInserts],
+    [flushPendingInserts, isPaketOrderRow],
   );
 
   const debouncedCourierRefresh = useCallback(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => { loadCouriers(); }, 500);
-  }, [loadCouriers]);
+    debounceRef.current = setTimeout(() => {
+      loadCouriersThrottled();
+    }, 800);
+  }, [loadCouriersThrottled]);
 
   useEffect(() => {
     if (!tenant || !isActive) return;
     setLoading(true);
     void loadOrders();
     void loadCouriers();
+    lastCourierLoadRef.current = Date.now();
   }, [tenant, activeBranch, isActive, showCompleted, loadOrders, loadCouriers]);
 
   useEffect(() => {
@@ -381,16 +426,13 @@ export function TakeawayOrders({ isActive = true }: TakeawayOrdersProps) {
       .channel(`takeaway-${tenant.id}-${activeBranch?.id || 'all'}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'orders', filter: `tenant_id=eq.${tenant.id}` }, handleOrderChange)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'couriers', filter: `tenant_id=eq.${tenant.id}` }, debouncedCourierRefresh)
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'courier_location_history', filter: `tenant_id=eq.${tenant.id}` }, debouncedCourierRefresh)
       .subscribe();
-    const courierPoll = setInterval(() => { loadCouriers(); }, 20_000);
     return () => {
       supabase.removeChannel(ch);
-      clearInterval(courierPoll);
       if (debounceRef.current) clearTimeout(debounceRef.current);
       if (realtimeFlushRef.current) clearTimeout(realtimeFlushRef.current);
     };
-  }, [tenant, activeBranch, isActive, formOpen, handleOrderChange, debouncedCourierRefresh, loadCouriers]);
+  }, [tenant, activeBranch, isActive, formOpen, handleOrderChange, debouncedCourierRefresh, loadCouriersThrottled]);
 
   const updateStatus = async (orderId: string, newStatus: string, courierId?: string, courierName?: string) => {
     const updates: Record<string, any> = { delivery_status: newStatus };
@@ -528,7 +570,7 @@ export function TakeawayOrders({ isActive = true }: TakeawayOrdersProps) {
       if (result?.orderId && tenant) {
         void fetchTakeawayOrderById(result.orderId).then((row) => {
           if (!row) return;
-          setOrders((prev) => [row, ...prev.filter((o) => o.id !== row.id)].slice(0, 400));
+          setOrders((prev) => [row, ...prev.filter((o) => o.id !== row.id)].slice(0, 250));
         });
       } else if (result?.reload !== false) {
         void loadOrders();
@@ -860,7 +902,7 @@ export function TakeawayOrders({ isActive = true }: TakeawayOrdersProps) {
               <OrderCard
                 key={order.id}
                 order={order}
-                couriers={couriers}
+                courier={order.courier_id ? couriers.find((c) => c.id === order.courier_id) : undefined}
                 availableCouriers={availableCouriers}
                 assigningCourierId={assigningCourierId}
                 setAssigningCourierId={setAssigningCourierId}
@@ -893,16 +935,14 @@ export function TakeawayOrders({ isActive = true }: TakeawayOrdersProps) {
 
 function CourierLocationBadge({
   order,
-  courierId,
-  couriers,
+  courier,
   onOpenLiveMap,
 }: {
   order: TakeawayOrder;
-  courierId: string | null;
-  couriers: Courier[];
+  courier?: Courier;
   onOpenLiveMap: (order: CourierLiveMapOrder) => void;
 }) {
-  const courier = courierId ? couriers.find((c) => c.id === courierId) : undefined;
+  const courierId = order.courier_id;
   const hasLocation = courier?.latitude != null && courier?.longitude != null;
   const locationAge = courier?.location_updated_at
     ? Math.floor((Date.now() - new Date(courier.location_updated_at).getTime()) / 60000)
@@ -945,7 +985,7 @@ function CourierLocationBadge({
 
 interface OrderCardProps {
   order: TakeawayOrder;
-  couriers: Courier[];
+  courier?: Courier;
   availableCouriers: Courier[];
   assigningCourierId: string | null;
   setAssigningCourierId: (id: string | null) => void;
@@ -960,7 +1000,7 @@ interface OrderCardProps {
 
 const OrderCard = memo(function OrderCard({
   order,
-  couriers,
+  courier,
   availableCouriers,
   assigningCourierId,
   setAssigningCourierId,
@@ -1048,8 +1088,7 @@ const OrderCard = memo(function OrderCard({
         {order.courier_id && order.courier_name && order.delivery_status !== 'delivered' && order.delivery_status !== 'cancelled' && (
           <CourierLocationBadge
             order={order}
-            courierId={order.courier_id}
-            couriers={couriers}
+            courier={courier}
             onOpenLiveMap={onOpenLiveMap}
           />
         )}

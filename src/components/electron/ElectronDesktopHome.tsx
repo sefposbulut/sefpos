@@ -24,6 +24,7 @@ import {
   type TopSellerRow,
 } from '../../lib/electronDashboardData';
 import { startAdaptivePoller } from '../../lib/pollSchedule';
+import { isActivePosPage } from '../../lib/pageActivity';
 import { subscribeLiveTick } from '../../lib/liveTick';
 import { readElectronHomeCache, writeElectronHomeCache } from '../../lib/electronHomeCache';
 import { buildPosMenuTiles, type PosMenuTile } from '../../lib/posMenuItems';
@@ -177,10 +178,13 @@ export function ElectronDesktopHome({
     void refreshData();
     const stopTick = subscribeLiveTick(() => setNow(new Date()));
     const stopPoll = startAdaptivePoller({
-      baseMs: 90_000,
-      idleMs: 180_000,
+      baseMs: 120_000,
+      idleMs: 240_000,
       hiddenMs: 0,
-      run: () => void refreshData(),
+      run: () => {
+        if (!isActivePosPage('desktop-home')) return;
+        void refreshData();
+      },
       immediate: false,
     });
     return () => {

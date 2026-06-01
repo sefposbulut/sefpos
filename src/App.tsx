@@ -9,6 +9,7 @@ import { ElectronAuth } from './components/ElectronAuth';
 import { ElectronConnectionMenu, type ElectronConnectMode } from './components/electron/ElectronConnectionMenu';
 import { ElectronDesktopHome } from './components/electron/ElectronDesktopHome';
 import { preloadElectronHomeData } from './lib/electronDashboardData';
+import { setActivePosPage } from './lib/pageActivity';
 import { SqlServerSettings } from './components/SqlServerSettings';
 import { LandingPage } from './components/landing/LandingPage';
 import { isLandingPath } from './components/landing/landingRoutes';
@@ -196,6 +197,9 @@ function App() {
   }
   useEffect(() => {
     setMountedPagesVersion((v) => v + 1);
+  }, [currentPage]);
+  useEffect(() => {
+    setActivePosPage(currentPage);
   }, [currentPage]);
   const [sqlServerConfigured, setSqlServerConfigured] = useState(false);
   const [showSqlServerSettings, setShowSqlServerSettings] = useState(false);
@@ -752,7 +756,12 @@ function App() {
           className="fixed inset-0 top-14 md:top-20 bg-gradient-to-br from-slate-50 to-slate-100 overflow-auto"
         >
           <div className="p-3 md:p-6">
-            <TableGrid onSelectTable={setSelectedTable} onRefresh={handleTableGridRefresh} onNavigate={handleNavigate} />
+            <TableGrid
+              isActive={currentPage === 'tables'}
+              onSelectTable={setSelectedTable}
+              onRefresh={handleTableGridRefresh}
+              onNavigate={handleNavigate}
+            />
           </div>
         </div>
       )}
@@ -765,7 +774,7 @@ function App() {
 
       {wasMounted('online-orders') && (
         <div style={{ display: show('online-orders') ? undefined : 'none' }} className="fixed inset-0 top-14 md:top-20 overflow-auto">
-          <OnlineOrders />
+          <OnlineOrders isActive={currentPage === 'online-orders'} />
         </div>
       )}
 

@@ -412,7 +412,7 @@ export function ShiftManager() {
       if (!cancelled) setLiveStats(stats);
     };
     compute();
-    const id = window.setInterval(compute, 20_000);
+    const id = window.setInterval(compute, 45_000);
     return () => { cancelled = true; window.clearInterval(id); };
   }, [activeShift, tenantId]);
 

@@ -438,12 +438,26 @@ function DeliveryOrderFormInner({ couriers, editOrder, prefillCustomer, onClose 
     setSubmitting(true);
 
     try {
-    const deliveryCustomerId = await upsertDeliveryCustomer(
-      name,
-      phone,
-      address,
-      selectedCariCustomer,
-    );
+    let deliveryCustomerId =
+      selectedDeliveryCustomer?.id ??
+      null;
+    if (deliveryCustomerId) {
+      void supabase
+        .from('delivery_customers')
+        .update({
+          full_name: name,
+          address: address,
+          last_order_at: new Date().toISOString(),
+        })
+        .eq('id', deliveryCustomerId);
+    } else {
+      deliveryCustomerId = await upsertDeliveryCustomer(
+        name,
+        phone,
+        address,
+        selectedCariCustomer,
+      );
+    }
     const courier = assignCourierId ? couriers.find(c => c.id === assignCourierId) : null;
 
     const orderPayload: Record<string, any> = {
@@ -497,15 +511,6 @@ function DeliveryOrderFormInner({ couriers, editOrder, prefillCustomer, onClose 
       }
       orderId = created.id;
       savedOrderNumber = created.order_number || orderId.slice(0, 8).toUpperCase();
-      if (courier) {
-        await sendCourierAssignmentNotification(
-          tenant.id,
-          courier.id,
-          orderId,
-          savedOrderNumber,
-          address || null,
-        );
-      }
     }
 
     const items = cart.map((i) => {
@@ -523,14 +528,32 @@ function DeliveryOrderFormInner({ couriers, editOrder, prefillCustomer, onClose 
         notes: i.note || null,
       };
     });
-    await supabase.from('order_items').insert(items);
+    const { error: itemsErr } = await supabase.from('order_items').insert(items);
+    if (itemsErr) {
+      setSubmitError(itemsErr.message || 'Ürün satırları kaydedilemedi');
+      return;
+    }
+
+    const receiptOrderNumber = savedOrderNumber || orderId.slice(0, 8).toUpperCase();
+    const printSnapshot = {
+      name,
+      phone,
+      address,
+      deliveryNote: deliveryNote.trim(),
+      cart: [...cart],
+      cartTotal,
+      courierName: courier?.full_name,
+      estimatedMinutes: isDelivery ? parseInt(estimatedMinutes) || 30 : 0,
+    };
+
+    onClose(editOrder ? { reload: true } : { orderId });
 
     if (paymentCollected) {
-      await recordTakeawayPaymentIfNeeded({
+      void recordTakeawayPaymentIfNeeded({
         tenantId: tenant.id,
         branchId: activeBranch?.id ?? null,
         orderId,
-        orderNumber: savedOrderNumber || orderId.slice(0, 8).toUpperCase(),
+        orderNumber: receiptOrderNumber,
         orderType: isDelivery ? 'delivery' : 'takeaway',
         orderSubtype: subtype === 'gel_al' ? 'gel_al' : null,
         paymentMethod,
@@ -540,39 +563,46 @@ function DeliveryOrderFormInner({ couriers, editOrder, prefillCustomer, onClose 
       });
     }
 
-    if (courier) await supabase.from('couriers').update({ status: 'busy' }).eq('id', courier.id);
+    if (courier) {
+      void supabase.from('couriers').update({ status: 'busy' }).eq('id', courier.id);
+      void sendCourierAssignmentNotification(
+        tenant.id,
+        courier.id,
+        orderId,
+        receiptOrderNumber,
+        address || null,
+      );
+    }
 
     if (!editOrder) {
       const printSettings = loadPrintSettings();
       if ((printSettings as any).autoPrintTakeaway !== false) {
-        printTakeawayReceipt({
+        void printTakeawayReceipt({
           settings: printSettings,
           orderType: isDelivery ? 'delivery' : 'takeaway',
-          orderNumber: '',
-          customerName: name,
-          customerPhone: phone,
-          deliveryAddress: address,
-          deliveryNote: deliveryNote.trim(),
-          courierName: courier?.full_name,
-          estimatedMinutes: isDelivery ? parseInt(estimatedMinutes) || 30 : 0,
-          items: cart.map(i => ({
+          orderNumber: receiptOrderNumber,
+          customerName: printSnapshot.name,
+          customerPhone: printSnapshot.phone,
+          deliveryAddress: printSnapshot.address,
+          deliveryNote: printSnapshot.deliveryNote,
+          courierName: printSnapshot.courierName,
+          estimatedMinutes: printSnapshot.estimatedMinutes,
+          items: printSnapshot.cart.map((i) => ({
             productName: i.product.name,
             quantity: i.quantity,
             unitPrice: i.product.price,
             totalAmount: i.product.price * i.quantity,
             notes: i.note || null,
           })),
-          subtotal: cartTotal,
-          total: cartTotal,
-        });
+          subtotal: printSnapshot.cartTotal,
+          total: printSnapshot.cartTotal,
+        }).catch((e) => console.warn('[paket] fiş yazdırma:', e));
       }
     }
 
     if (subtype !== 'gel_al') {
       notifyHemenYolda(orderId, editOrder ? 'update' : 'new', activeBranch?.id ?? null);
     }
-
-    onClose(editOrder ? { reload: true } : { orderId });
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : 'Sipariş kaydedilemedi';
       setSubmitError(msg);

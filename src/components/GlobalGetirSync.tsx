@@ -8,15 +8,18 @@ import {
 } from '../lib/getirApi';
 import { isPageVisible, startAdaptivePoller } from '../lib/pollSchedule';
 import { isSqlServerMode } from '../lib/sqlDb';
+import { wantsFrequentGetirSync } from '../lib/pageActivity';
 
 export const GETIR_STORE_STATUS_EVENT = 'sefpos:getir-store-status';
 export const GETIR_ORDERS_POLLED_EVENT = 'sefpos:getir-orders-polled';
 
-/** Tek merkez: masalar ekranindayken de Getir; OnlineOrders ile cift poll yapilmaz. */
-const ORDER_BASE_MS = 35_000;
-const ORDER_IDLE_MS = 55_000;
-const STORE_BASE_MS = 90_000;
-const STORE_IDLE_MS = 180_000;
+/** Online / masa / ana sayfa: sık. Paket vb. yoğun ekran: seyrek (sayfa değişince run içinde okunur). */
+const ORDER_BASE_FAST_MS = 40_000;
+const ORDER_BASE_SLOW_MS = 120_000;
+const ORDER_IDLE_MS = 90_000;
+const STORE_BASE_FAST_MS = 90_000;
+const STORE_BASE_SLOW_MS = 240_000;
+const STORE_IDLE_MS = 300_000;
 
 /**
  * Tüm POS ekranlarında arka planda Getir senkronu:
@@ -51,6 +54,7 @@ export function GlobalGetirSync() {
 
     const syncStore = async () => {
       if (stopped || !isPageVisible()) return;
+      if (!wantsFrequentGetirSync()) return;
       if (isGetirRateLimited()) return;
       const platformId = await resolvePlatformId();
       if (!platformId) return;
@@ -73,6 +77,7 @@ export function GlobalGetirSync() {
 
     const pollOrders = async () => {
       if (stopped || !isPageVisible()) return;
+      if (!wantsFrequentGetirSync()) return;
       if (isGetirRateLimited()) return;
       const platformId = await resolvePlatformId();
       if (!platformId) return;
@@ -121,20 +126,33 @@ export function GlobalGetirSync() {
     const firstOrder = window.setTimeout(() => void pollOrders(), 2_500);
     const firstStore = window.setTimeout(() => void syncStore(), 1_000);
 
-    const stopOrders = startAdaptivePoller({
-      baseMs: ORDER_BASE_MS,
+    const orderPollOpts = () => ({
+      baseMs: wantsFrequentGetirSync() ? ORDER_BASE_FAST_MS : ORDER_BASE_SLOW_MS,
       idleMs: ORDER_IDLE_MS,
-      hiddenMs: 0,
+      hiddenMs: 0 as const,
       run: pollOrders,
-      immediate: false,
+      immediate: false as const,
     });
-    const stopStore = startAdaptivePoller({
-      baseMs: STORE_BASE_MS,
+    const storePollOpts = () => ({
+      baseMs: wantsFrequentGetirSync() ? STORE_BASE_FAST_MS : STORE_BASE_SLOW_MS,
       idleMs: STORE_IDLE_MS,
-      hiddenMs: 0,
+      hiddenMs: 0 as const,
       run: syncStore,
-      immediate: false,
+      immediate: false as const,
     });
+
+    let stopOrders = startAdaptivePoller(orderPollOpts());
+    let stopStore = startAdaptivePoller(storePollOpts());
+
+    const restartPollersForPage = () => {
+      stopOrders();
+      stopStore();
+      stopOrders = startAdaptivePoller(orderPollOpts());
+      stopStore = startAdaptivePoller(storePollOpts());
+    };
+
+    const onPageChange = () => restartPollersForPage();
+    window.addEventListener('sefpos:page-change', onPageChange);
 
     const onVisible = () => {
       if (document.visibilityState === 'visible') kick();
@@ -147,6 +165,7 @@ export function GlobalGetirSync() {
       window.clearTimeout(firstStore);
       stopOrders();
       stopStore();
+      window.removeEventListener('sefpos:page-change', onPageChange);
       document.removeEventListener('visibilitychange', onVisible);
       platformIdRef.current = null;
       orderTickRef.current = 0;

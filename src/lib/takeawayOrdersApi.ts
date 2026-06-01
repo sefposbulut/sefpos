@@ -78,7 +78,7 @@ function takeawayBaseQuery(tenantId: string, branchId: string | null | undefined
 export async function fetchTakeawayActiveOrders(
   tenantId: string,
   branchId: string | null | undefined,
-  limit = 400,
+  limit = 250,
 ): Promise<TakeawayOrderListRow[]> {
   const q = takeawayBaseQuery(tenantId, branchId)
     .not('status', 'in', '(completed,cancelled)')

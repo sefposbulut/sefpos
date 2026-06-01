@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
+import { isActivePosPage } from '../lib/pageActivity';
 
 interface WaiterCall {
   id: string;
@@ -144,8 +145,9 @@ export function WaiterCallBell({ headerVariant = 'default' }: WaiterCallBellProp
   useEffect(() => {
     if (!tenant?.id) return;
 
-    const POLL_MS = 12_000;
+    const POLL_MS = 45_000;
     const pollTimer = window.setInterval(() => {
+      if (!isActivePosPage('tables', 'waiter-app')) return;
       void pullLatest({ notifyNew: true });
     }, POLL_MS);
 
