@@ -1,4 +1,5 @@
 import { supabase } from './supabase';
+import { startAdaptivePoller } from './pollSchedule';
 
 export const PROFILE_BASE_SELECT =
   'id, tenant_id, full_name, email, role, branch_id' as const;
@@ -93,10 +94,11 @@ export async function fetchOnlineProfileIdsByTenant(
   return map;
 }
 
-/** Açık uygulama: ~60 sn'de bir DB ping (sekme görünürken). Realtime yok — sunucuyu yormaz. */
-const LAST_ACTIVE_PING_MS = 60_000;
+/** Açık uygulama: ~90 sn nabız (gizli sekme: yok). Admin çevrimiçi göstergesi için. */
+const LAST_ACTIVE_PING_MS = 90_000;
+const LAST_ACTIVE_PING_IDLE_MS = 180_000;
 
-let pingTimer: ReturnType<typeof setInterval> | null = null;
+let stopPingPoller: (() => void) | null = null;
 let kickoffTimer: ReturnType<typeof setTimeout> | null = null;
 let pingUserId: string | null = null;
 let lifecycleBound = false;
@@ -169,18 +171,22 @@ export function startTenantPresenceTracking(opts: {
     kickoffTimer = null;
     if (pingUserId === userId) void touchLastActive(userId);
   }, 8_000);
-  pingTimer = setInterval(() => {
-    void touchLastActive(userId);
-  }, LAST_ACTIVE_PING_MS);
+  stopPingPoller = startAdaptivePoller({
+    baseMs: LAST_ACTIVE_PING_MS,
+    idleMs: LAST_ACTIVE_PING_IDLE_MS,
+    hiddenMs: 0,
+    run: () => touchLastActive(userId),
+    immediate: false,
+  });
 }
 
 /** Oturum bitti — ping durur; veritabanında çevrimdışı (çıkışta await edin). */
 export async function stopTenantPresenceTracking(userIdToClear?: string | null): Promise<void> {
   const uid = userIdToClear ?? pingUserId;
 
-  if (pingTimer) {
-    clearInterval(pingTimer);
-    pingTimer = null;
+  if (stopPingPoller) {
+    stopPingPoller();
+    stopPingPoller = null;
   }
   if (kickoffTimer) {
     clearTimeout(kickoffTimer);

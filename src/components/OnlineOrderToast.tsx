@@ -58,6 +58,7 @@ export function OnlineOrderToast({ onOpenOnlineOrders, currentPage }: Props) {
   const [toasts, setToasts] = useState<ToastOrder[]>([]);
   const [busyId, setBusyId] = useState<string | null>(null);
   const seenIds = useRef<Set<string>>(new Set());
+  const SEEN_TOAST_IDS_CAP = 500;
   const platformCache = useRef<Map<string, { code: string; name: string }>>(new Map());
 
   useEffect(() => {
@@ -130,6 +131,13 @@ export function OnlineOrderToast({ onOpenOnlineOrders, currentPage }: Props) {
       if (!row?.id || seenIds.current.has(row.id)) return;
       if (!NEWISH_STATUSES.has(row.status || '')) return;
       seenIds.current.add(row.id);
+      if (seenIds.current.size > SEEN_TOAST_IDS_CAP) {
+        let drop = seenIds.current.size - SEEN_TOAST_IDS_CAP;
+        for (const id of seenIds.current) {
+          seenIds.current.delete(id);
+          if (--drop <= 0) break;
+        }
+      }
 
       const [plat, items] = await Promise.all([
         fetchPlatform(row.platform_id ?? null),

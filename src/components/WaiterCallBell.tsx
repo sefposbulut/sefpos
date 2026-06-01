@@ -6,6 +6,7 @@ import {
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
 import { isActivePosPage } from '../lib/pageActivity';
+import { startAdaptivePoller } from '../lib/pollSchedule';
 
 interface WaiterCall {
   id: string;
@@ -145,11 +146,16 @@ export function WaiterCallBell({ headerVariant = 'default' }: WaiterCallBellProp
   useEffect(() => {
     if (!tenant?.id) return;
 
-    const POLL_MS = 45_000;
-    const pollTimer = window.setInterval(() => {
-      if (!isActivePosPage('tables', 'waiter-app')) return;
-      void pullLatest({ notifyNew: true });
-    }, POLL_MS);
+    const stopPoll = startAdaptivePoller({
+      baseMs: 60_000,
+      idleMs: 120_000,
+      hiddenMs: 0,
+      run: () => {
+        if (!isActivePosPage('tables', 'waiter-app', 'desktop-home')) return;
+        void pullLatest({ notifyNew: true });
+      },
+      immediate: false,
+    });
 
     const onVisible = () => {
       if (document.visibilityState === 'visible') void pullLatest({ notifyNew: true });
@@ -209,7 +215,7 @@ export function WaiterCallBell({ headerVariant = 'default' }: WaiterCallBellProp
       });
 
     return () => {
-      window.clearInterval(pollTimer);
+      stopPoll();
       document.removeEventListener('visibilitychange', onVisible);
       window.removeEventListener('online', onOnline);
       window.removeEventListener('focus', onFocus);

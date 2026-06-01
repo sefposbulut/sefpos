@@ -348,7 +348,11 @@ interface ActiveAlarm {
   orderId: string;
   platformLabel: string;
   running: boolean;
+  pauseTimerId?: ReturnType<typeof setTimeout>;
 }
+
+/** Aynı anda çok bekleyen online siparişte TTS/siren döngüsü PC'yi kilitlemesin */
+const MAX_CONCURRENT_ALARMS = 4;
 
 const activeAlarms = new Map<string, ActiveAlarm>();
 
@@ -386,19 +390,10 @@ export function startContinuousAlert(
       // 2) Kurumsal TTS anons
       await speakTr(announcement);
       if (!entry.running || !activeAlarms.has(orderId)) break;
-      // 3) Kisa sessizlik, sonra tekrar
+      // 3) Kisa sessizlik (tek timer — 200 ms döngüsü uzun vadede binlerce zamanlayıcı biriktiriyordu)
       await new Promise<void>((r) => {
         const id = window.setTimeout(() => r(), pauseBetweenMs);
-        // Eger alarm durdurulursa pause'u da kes
-        const check = () => {
-          if (!entry.running || !activeAlarms.has(orderId)) {
-            window.clearTimeout(id);
-            r();
-          } else {
-            window.setTimeout(check, 200);
-          }
-        };
-        check();
+        entry.pauseTimerId = id;
       });
     }
   };
@@ -415,6 +410,7 @@ export function stopContinuousAlert(orderId: string): void {
   const a = activeAlarms.get(orderId);
   if (!a) return;
   a.running = false;
+  if (a.pauseTimerId != null) window.clearTimeout(a.pauseTimerId);
   activeAlarms.delete(orderId);
   try {
     window.speechSynthesis?.cancel();
@@ -428,6 +424,7 @@ export function stopContinuousAlert(orderId: string): void {
 export function stopAllAlerts(): void {
   for (const a of activeAlarms.values()) {
     a.running = false;
+    if (a.pauseTimerId != null) window.clearTimeout(a.pauseTimerId);
   }
   activeAlarms.clear();
   try {

@@ -2,7 +2,7 @@
  * sefpos-dev-port.json içindeki portta Vite'ın ayağa kalkmasını bekler, sonra Electron başlatır.
  * package.json "electron:dev" ikinci parça olarak çalışır.
  */
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
@@ -28,22 +28,31 @@ await waitOn({
   timeout: 120_000,
 });
 
-const npxPath = process.platform === 'win32'
-  ? join(dirname(process.execPath), 'npx.cmd')
-  : 'npx';
-const child = process.platform === 'win32'
-  ? spawn(process.env.ComSpec || 'cmd.exe', ['/c', npxPath, '--yes', 'electron', '.'], {
-      cwd: root,
-      stdio: 'inherit',
-      shell: false,
-      env: { ...process.env, NODE_ENV: 'development' },
-    })
-  : spawn(npxPath, ['--yes', 'electron', '.'], {
-      cwd: root,
-      stdio: 'inherit',
-      shell: false,
-      env: { ...process.env, NODE_ENV: 'development' },
-    });
+function resolveElectronBin() {
+  const win = join(root, 'node_modules', '.bin', 'electron.cmd');
+  const unix = join(root, 'node_modules', '.bin', 'electron');
+  if (process.platform === 'win32' && existsSync(win)) return win;
+  if (existsSync(unix)) return unix;
+  return null;
+}
+
+const electronBin = resolveElectronBin();
+if (!electronBin) {
+  console.error('[electron:dev] electron bulunamadı. Önce npm install çalıştırın.');
+  process.exit(1);
+}
+
+// Vite HMR unsafe-eval gerektirir; üretim EXE'de electron/csp.cjs sıkı CSP uygular.
+const child = spawn(electronBin, ['.'], {
+  cwd: root,
+  stdio: 'inherit',
+  shell: process.platform === 'win32',
+  env: {
+    ...process.env,
+    NODE_ENV: 'development',
+    ELECTRON_DISABLE_SECURITY_WARNINGS: 'true',
+  },
+});
 
 child.on('exit', (code, signal) => {
   if (signal) process.exit(1);

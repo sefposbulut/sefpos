@@ -189,6 +189,7 @@ export function OnlineOrders({ isActive = true }: { isActive?: boolean }) {
   const previousOrderCount = useRef<number>(0);
   // Daha onceden goruldumu listesi — yeni gelenleri platforma gore uyarmak icin
   const seenOrderIds = useRef<Set<string>>(new Set());
+  const SEEN_ORDER_IDS_CAP = 800;
   const firstLoadDone = useRef<boolean>(false);
 
   const soundEnabledRef = useRef(soundEnabled);
@@ -273,6 +274,9 @@ export function OnlineOrders({ isActive = true }: { isActive?: boolean }) {
         console.warn('[OnlineOrders] Mutfak fişi yazdırılamadı:', e);
       } finally {
         kitchenPrintInFlight.current.delete(o.id);
+        if (kitchenPrintInFlight.current.size > 120) {
+          kitchenPrintInFlight.current.clear();
+        }
       }
     },
     [tenant?.id, tenant?.name],
@@ -314,7 +318,16 @@ export function OnlineOrders({ isActive = true }: { isActive?: boolean }) {
       for (const o of newOrders) {
         const prevStatus = lastStatusByOrderId.current.get(o.id);
         const isFirstSighting = !seenOrderIds.current.has(o.id);
-        if (isFirstSighting) seenOrderIds.current.add(o.id);
+        if (isFirstSighting) {
+          seenOrderIds.current.add(o.id);
+          if (seenOrderIds.current.size > SEEN_ORDER_IDS_CAP) {
+            let drop = seenOrderIds.current.size - SEEN_ORDER_IDS_CAP;
+            for (const id of seenOrderIds.current) {
+              seenOrderIds.current.delete(id);
+              if (--drop <= 0) break;
+            }
+          }
+        }
 
         // 1) Bekleyen onay → alarm. Ses açıksa sürekli, kapalıysa da DB'ye
         //    not düş (idempotent: aynı id iki kez başlatılmaz).
@@ -351,6 +364,13 @@ export function OnlineOrders({ isActive = true }: { isActive?: boolean }) {
         }
 
         lastStatusByOrderId.current.set(o.id, o.status);
+        if (lastStatusByOrderId.current.size > SEEN_ORDER_IDS_CAP) {
+          let drop = lastStatusByOrderId.current.size - SEEN_ORDER_IDS_CAP;
+          for (const id of lastStatusByOrderId.current.keys()) {
+            lastStatusByOrderId.current.delete(id);
+            if (--drop <= 0) break;
+          }
+        }
       }
 
       if (!firstLoadDone.current) firstLoadDone.current = true;
@@ -1222,9 +1242,9 @@ export function OnlineOrders({ isActive = true }: { isActive?: boolean }) {
       setAudioBlocked(s.state === 'suspended' || (!s.unlocked && s.state !== 'running'));
     };
     check();
-    const id = window.setInterval(check, isActive ? 2000 : 8000);
+    const id = window.setInterval(check, isActive ? 5000 : 15_000);
     return () => window.clearInterval(id);
-  }, []);
+  }, [isActive]);
 
   const testSound = async () => {
     unlockAudio();

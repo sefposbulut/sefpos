@@ -68,8 +68,24 @@ export interface HemenyoldaPushResult {
   errors?: Record<string, string[]>;
 }
 
-/** POS siparişini HemenYolda'ya gönder (fire-and-forget; hata konsola). */
-export function notifyHemenYolda(
+const hemenyoldaUpdateTimers = new Map<string, ReturnType<typeof setTimeout>>();
+/** Ardışık durum güncellemelerinde edge function fırtınasını keser (paket yoğun gün). */
+const HEMENYOLDA_UPDATE_DEBOUNCE_MS = 2_500;
+const HEMENYOLDA_TIMER_CAP = 80;
+
+function trimHemenyoldaTimers(): void {
+  if (hemenyoldaUpdateTimers.size <= HEMENYOLDA_TIMER_CAP) return;
+  const drop = hemenyoldaUpdateTimers.size - HEMENYOLDA_TIMER_CAP;
+  let n = 0;
+  for (const id of hemenyoldaUpdateTimers.keys()) {
+    const t = hemenyoldaUpdateTimers.get(id);
+    if (t) clearTimeout(t);
+    hemenyoldaUpdateTimers.delete(id);
+    if (++n >= drop) break;
+  }
+}
+
+function flushHemenYoldaPush(
   orderId: string,
   action: HemenyoldaWebhookAction,
   branchId?: string | null,
@@ -77,6 +93,28 @@ export function notifyHemenYolda(
   void pushHemenYoldaOrder(orderId, action, branchId).catch((e) => {
     console.warn('[HemenYolda]', action, orderId, e);
   });
+}
+
+/** POS siparişini HemenYolda'ya gönder (fire-and-forget; hata konsola). */
+export function notifyHemenYolda(
+  orderId: string,
+  action: HemenyoldaWebhookAction,
+  branchId?: string | null,
+): void {
+  if (action === 'update') {
+    trimHemenyoldaTimers();
+    const prev = hemenyoldaUpdateTimers.get(orderId);
+    if (prev) clearTimeout(prev);
+    hemenyoldaUpdateTimers.set(
+      orderId,
+      setTimeout(() => {
+        hemenyoldaUpdateTimers.delete(orderId);
+        flushHemenYoldaPush(orderId, 'update', branchId);
+      }, HEMENYOLDA_UPDATE_DEBOUNCE_MS),
+    );
+    return;
+  }
+  flushHemenYoldaPush(orderId, action, branchId);
 }
 
 function parseFunctionResult(

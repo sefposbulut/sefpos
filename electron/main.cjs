@@ -5,6 +5,7 @@ const {
   registerReleaseOnAppQuit,
   terminateOtherMainSefposProcesses,
 } = require('./singletonLock.cjs');
+const { installElectronContentSecurityPolicy } = require('./csp.cjs');
 const path = require('path');
 const { execSync } = require('child_process');
 
@@ -1696,6 +1697,9 @@ let currentBranchId = null;
 let currentUserJwt = null;
 let connectivityLastOnline = null;
 let pendingJobsPollTimer = null;
+let pendingJobsFetchInFlight = false;
+/** Önceki: 1 sn — üst üste binen HTTP/yazdırma tüm Windows'u kilitleyebiliyordu */
+const PENDING_JOBS_POLL_MS = 8000;
 // Son register-printers çağrısındaki kasa yazıcı listesi. processPrintJob
 // içinde printer_name boş geldiğinde (mobile/web fallback insertleri)
 // mutfak benzeri ilk yazıcıyı seçmek için kullanılır.
@@ -1783,21 +1787,24 @@ function pickDefaultKitchenPrinter() {
   return named[0] || '';
 }
 
-// Realtime mesajlarını kaçırma sigortası: kasa açık olduğu sürece her 1sn'de
-// bir Supabase'den `pending` joblara da bakar. Mobilden / webten gelen
-// siparişler Realtime düşse bile en geç ~1 sn içinde basılır. Realtime
-// çalışıyorsa zaten anlık basılır; polling sadece güvenlik ağı.
+// Realtime mesajlarını kaçırma sigortası: kasa açıkken ~8 sn'de bir pending
+// job kontrolü (üst üste istek yok). Realtime çalışıyorsa fiş anında basılır.
 function startPendingJobsPolling() {
   if (pendingJobsPollTimer) return;
   pendingJobsPollTimer = setInterval(() => {
     const sqlMode = isElectronSqlServerMode();
-    if (currentTenantId && (sqlMode || currentUserJwt)) {
-      fetchPendingJobs().catch(() => {});
-      if (!sqlMode && !realtimeConnected && currentTenantId && currentUserJwt) {
-        try { connectRealtimePrintAgent(); } catch {}
-      }
+    if (!currentTenantId || (!sqlMode && !currentUserJwt)) return;
+    if (pendingJobsFetchInFlight) return;
+    pendingJobsFetchInFlight = true;
+    fetchPendingJobs()
+      .catch(() => {})
+      .finally(() => {
+        pendingJobsFetchInFlight = false;
+      });
+    if (!sqlMode && !realtimeConnected && currentTenantId && currentUserJwt) {
+      try { connectRealtimePrintAgent(); } catch {}
     }
-  }, 1000);
+  }, PENDING_JOBS_POLL_MS);
 }
 function stopPendingJobsPolling() {
   if (pendingJobsPollTimer) {
@@ -3940,6 +3947,17 @@ ipcMain.handle('get-device-fingerprint', async () => {
 
 app.whenReady().then(() => {
   terminateOtherMainSefposProcesses();
+  try {
+    const { session } = require('electron');
+    const appDistDir = path.join(app.getAppPath(), 'dist');
+    installElectronContentSecurityPolicy(session.fromPartition('persist:shefpos'), {
+      isDev,
+      devPort: readSefposDevServerPort(),
+      appDistDir,
+    });
+  } catch (cspErr) {
+    console.warn('[csp] Content-Security-Policy kurulamadı:', cspErr?.message || cspErr);
+  }
   startPrintAgent();
   if (isElectronSqlServerMode()) {
     try {

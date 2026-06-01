@@ -162,10 +162,10 @@ export default function App() {
   // ve sonrasinda display:none ile saklanir. POS sicak yolu (tables) en bastan
   // mount edilir; nadir sayfalar (Products, OnlineOrders, vs.) baslangic
   // maliyetine eklenmez. Bu hook'lar Rules of Hooks geregi en uste konulmuştur.
-  // online-orders: sayfa görünür olmasa da mount kalsın — Getir poll + realtime
-  // ve mutfak fişi tetikleri masadayken de çalışsın.
+  // Web: masalar + online sipariş toast için online-orders baştan mount.
+  // Electron: ana sayfa + hub sayfaları kademeli mount (ilk tıklamada bekleme yok).
   const mountedPagesRef = useRef<Set<string>>(
-    new Set(isElectron ? ['online-orders'] : ['tables', 'online-orders']),
+    new Set(isElectron ? ['desktop-home', 'online-orders'] : ['tables', 'online-orders']),
   );
   const [, setMountedPagesVersion] = useState(0);
   if (currentPage && !mountedPagesRef.current.has(currentPage)) {
@@ -174,6 +174,22 @@ export default function App() {
   useEffect(() => {
     setMountedPagesVersion((v) => v + 1);
   }, [currentPage]);
+
+  /** Electron: yalnızca sık modüller geç yüklenir (tüm hub’u mount etmek RAM/CPU’yu şişirir). */
+  useEffect(() => {
+    if (!isElectron || !tenant?.id || !user) return;
+    let cancelled = false;
+    const t = window.setTimeout(() => {
+      if (cancelled) return;
+      mountedPagesRef.current.add('tables');
+      mountedPagesRef.current.add('takeaway');
+      setMountedPagesVersion((v) => v + 1);
+    }, 12_000);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(t);
+    };
+  }, [isElectron, tenant?.id, user?.id]);
   useEffect(() => {
     setActivePosPage(currentPage);
   }, [currentPage]);
@@ -777,49 +793,76 @@ export default function App() {
         </div>
       )}
 
-      {/* On-demand pages */}
-      {show('users') && (
-        <div className="fixed inset-0 top-14 md:top-20 bg-gradient-to-br from-slate-50 to-slate-100 overflow-auto">
+      {wasMounted('users') && (
+        <div
+          style={{ display: show('users') ? undefined : 'none' }}
+          className="fixed inset-0 top-14 md:top-20 bg-gradient-to-br from-slate-50 to-slate-100 overflow-auto"
+        >
           <div className="p-3 md:p-6 max-w-7xl mx-auto">
             <UserManagement />
           </div>
         </div>
       )}
 
-      {show('customers') && (
-        <div className="fixed inset-0 top-14 md:top-20 bg-gradient-to-br from-slate-50 to-slate-100 overflow-hidden">
+      {wasMounted('customers') && (
+        <div
+          style={{ display: show('customers') ? undefined : 'none' }}
+          className="fixed inset-0 top-14 md:top-20 bg-gradient-to-br from-slate-50 to-slate-100 overflow-hidden"
+        >
           <Customers />
         </div>
       )}
 
-      {show('loyalty') && (
-        <div className="fixed inset-0 top-14 md:top-20 bg-gradient-to-br from-slate-50 to-slate-100 overflow-hidden">
+      {wasMounted('loyalty') && (
+        <div
+          style={{ display: show('loyalty') ? undefined : 'none' }}
+          className="fixed inset-0 top-14 md:top-20 bg-gradient-to-br from-slate-50 to-slate-100 overflow-hidden"
+        >
           <LoyaltyPage onBack={() => setCurrentPage(isElectron ? 'desktop-home' : 'tables')} />
         </div>
       )}
 
-      {show('reports') && <Reports />}
-
-
-      {show('endofday') && <EndOfDay />}
-
-      {show('cancel-logs') && (
-        <CancelLogs onClose={() => setCurrentPage(isElectron ? 'desktop-home' : 'tables')} />
+      {wasMounted('reports') && (
+        <div style={{ display: show('reports') ? undefined : 'none' }}>
+          <Reports />
+        </div>
       )}
 
-      {show('inventory') && (
-        <div className="fixed inset-0 top-14 md:top-20 bg-gradient-to-br from-slate-50 to-slate-100 overflow-hidden">
+      {wasMounted('endofday') && (
+        <div style={{ display: show('endofday') ? undefined : 'none' }}>
+          <EndOfDay />
+        </div>
+      )}
+
+      {wasMounted('cancel-logs') && (
+        <div style={{ display: show('cancel-logs') ? undefined : 'none' }}>
+          <CancelLogs onClose={() => setCurrentPage(isElectron ? 'desktop-home' : 'tables')} />
+        </div>
+      )}
+
+      {wasMounted('inventory') && (
+        <div
+          style={{ display: show('inventory') ? undefined : 'none' }}
+          className="fixed inset-0 top-14 md:top-20 bg-gradient-to-br from-slate-50 to-slate-100 overflow-hidden"
+        >
           <Inventory />
         </div>
       )}
 
-      {show('quick-sale') && (
-        <div className="fixed inset-0 top-14 md:top-20 bg-gradient-to-br from-slate-50 to-slate-100 overflow-hidden">
+      {wasMounted('quick-sale') && (
+        <div
+          style={{ display: show('quick-sale') ? undefined : 'none' }}
+          className="fixed inset-0 top-14 md:top-20 bg-gradient-to-br from-slate-50 to-slate-100 overflow-hidden"
+        >
           <QuickSale />
         </div>
       )}
 
-      {show('shifts') && <ShiftManager />}
+      {wasMounted('shifts') && (
+        <div style={{ display: show('shifts') ? undefined : 'none' }}>
+          <ShiftManager />
+        </div>
+      )}
 
       {selectedTable && (
         <OrderPanel

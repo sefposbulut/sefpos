@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { defineConfig, loadEnv } from 'vite';
 import type { Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
+import { buildContentSecurityPolicyMetaContent } from './electron/csp.cjs';
 
 const __root = dirname(fileURLToPath(import.meta.url));
 
@@ -284,11 +285,24 @@ export default defineConfig(({ mode, command }) => {
     });
   }
 
+  if (command === 'build') {
+    const cspMeta = buildContentSecurityPolicyMetaContent();
+    plugins.push({
+      name: 'sefpos-electron-csp-meta',
+      transformIndexHtml(html: string) {
+        if (html.includes('http-equiv="Content-Security-Policy"')) return html;
+        const tag = `<meta http-equiv="Content-Security-Policy" content="${cspMeta.replace(/"/g, '&quot;')}" />`;
+        return html.replace('<meta charset="UTF-8" />', `<meta charset="UTF-8" />\n    ${tag}`);
+      },
+    });
+  }
+
   return {
     define,
     plugins,
     base: useRootAssetBase ? '/' : './',
     server: {
+      host: '127.0.0.1',
       port: SEFPOS_DEV_PORT,
       strictPort: true,
     },

@@ -215,60 +215,261 @@ export type PosMenuHubGroup = {
   tileIds: string[];
 };
 
-/** Electron ana sayfa — kategorili hub kutuları (yalnızca görünür tile'lar). */
+/** Electron ana sayfa — kategorili hub (referans düzen: 3 bölüm). */
 export const POS_MENU_HUB_GROUPS: PosMenuHubGroup[] = [
   {
     id: 'sales',
-    title: 'Satış & operasyon',
-    tileIds: ['tables', 'quick-sale', 'takeaway', 'online-orders'],
-  },
-  {
-    id: 'stock',
-    title: 'Stok & ürün',
-    tileIds: ['products', 'inventory', 'product-stock-count'],
+    title: 'Satış & stok',
+    tileIds: [
+      'tables',
+      'quick-sale',
+      'takeaway',
+      'online-orders',
+      'products',
+      'inventory',
+      'product-stock-count',
+    ],
   },
   {
     id: 'finance',
-    title: 'Finans & rapor',
-    tileIds: ['reports', 'cashier', 'shifts', 'endofday', 'loyalty'],
+    title: 'Ön muhasebe',
+    tileIds: ['customers', 'cashier', 'loyalty', 'reports', 'shifts', 'endofday'],
   },
   {
     id: 'admin',
     title: 'Yönetim',
-    tileIds: ['customers', 'users', 'cancel-logs'],
+    tileIds: ['users', 'cancel-logs', 'settings'],
   },
 ];
 
-/** Hub kutusu arka plan gradyanı (Tailwind sınıfları). */
-export const POS_HUB_TILE_GRADIENT: Record<string, string> = {
-  tables: 'from-blue-500 to-blue-700',
-  'quick-sale': 'from-amber-500 to-orange-600',
-  takeaway: 'from-emerald-500 to-teal-600',
-  'online-orders': 'from-violet-500 to-purple-700',
-  products: 'from-sky-500 to-blue-600',
-  inventory: 'from-cyan-600 to-blue-700',
-  'product-stock-count': 'from-teal-500 to-emerald-700',
-  customers: 'from-orange-500 to-amber-600',
-  loyalty: 'from-pink-500 to-rose-600',
-  reports: 'from-green-500 to-emerald-700',
-  cashier: 'from-indigo-500 to-indigo-700',
-  shifts: 'from-slate-600 to-slate-800',
-  endofday: 'from-amber-600 to-orange-700',
-  users: 'from-zinc-600 to-zinc-800',
-  'cancel-logs': 'from-red-500 to-red-700',
-  settings: 'from-slate-500 to-slate-700',
+export const POS_HUB_ADMIN_GROUP_ID = 'admin';
+
+/** Electron açılışında arka planda mount edilecek hub sayfaları (anında geçiş). */
+export const ELECTRON_HUB_PREMOUNT_PAGES = [
+  'tables',
+  'quick-sale',
+  'takeaway',
+  'online-orders',
+  'products',
+  'inventory',
+  'product-stock-count',
+  'customers',
+  'loyalty',
+  'reports',
+  'shifts',
+  'endofday',
+  'users',
+  'cancel-logs',
+] as const;
+
+/** Hub modül kartı — hafif yatay, orantılı genişlik. */
+export const POS_HUB_TILE_CARD_WIDTH = 'clamp(12.5rem, 28vw, 17.5rem)';
+export const POS_HUB_TILE_CARD_MIN_HEIGHT = '6.75rem';
+
+/** @deprecated Kare düzen; yatay kart için POS_HUB_TILE_CARD_WIDTH kullanın. */
+export const POS_HUB_TILE_SIZE_CLAMP = POS_HUB_TILE_CARD_WIDTH;
+
+/** Electron hub karesi — arka plan + ikon + metin uyumlu tema. */
+export type PosHubTileTheme = {
+  gradient: string;
+  iconWell: string;
+  icon: string;
+  label: string;
+  subtitle: string;
+  ring: string;
+  shadow: string;
+  hoverShadow: string;
 };
+
+export const POS_HUB_TILE_THEME_DEFAULT: PosHubTileTheme = {
+  gradient: 'from-orange-500 to-orange-600',
+  iconWell: 'bg-orange-950/25 ring-1 ring-inset ring-orange-100/35',
+  icon: 'text-white',
+  label: 'text-white',
+  subtitle: 'text-orange-100/95',
+  ring: 'ring-orange-200/30',
+  shadow: 'shadow-[0_2px_10px_rgba(234,88,12,0.22)]',
+  hoverShadow: 'hover:shadow-[0_4px_14px_rgba(234,88,12,0.28)]',
+};
+
+/** Modül başına farklı renk; kutu içi sınıflar aynı ton ailesinden. */
+export const POS_HUB_TILE_THEME: Record<string, PosHubTileTheme> = {
+  tables: {
+    gradient: 'from-orange-500 to-orange-600',
+    iconWell: 'bg-orange-950/25 ring-1 ring-inset ring-orange-100/35',
+    icon: 'text-white',
+    label: 'text-white',
+    subtitle: 'text-orange-100/95',
+    ring: 'ring-orange-200/30',
+    shadow: 'shadow-[0_2px_10px_rgba(234,88,12,0.22)]',
+    hoverShadow: 'hover:shadow-[0_4px_14px_rgba(234,88,12,0.28)]',
+  },
+  'quick-sale': {
+    gradient: 'from-amber-500 to-amber-600',
+    iconWell: 'bg-amber-950/25 ring-1 ring-inset ring-amber-100/35',
+    icon: 'text-white',
+    label: 'text-white',
+    subtitle: 'text-amber-100/95',
+    ring: 'ring-amber-200/30',
+    shadow: 'shadow-[0_2px_10px_rgba(245,158,11,0.22)]',
+    hoverShadow: 'hover:shadow-[0_4px_14px_rgba(245,158,11,0.28)]',
+  },
+  takeaway: {
+    gradient: 'from-orange-600 to-red-500',
+    iconWell: 'bg-red-950/25 ring-1 ring-inset ring-orange-100/30',
+    icon: 'text-white',
+    label: 'text-white',
+    subtitle: 'text-orange-100/95',
+    ring: 'ring-orange-200/25',
+    shadow: 'shadow-[0_2px_10px_rgba(234,88,12,0.2)]',
+    hoverShadow: 'hover:shadow-[0_4px_14px_rgba(239,68,68,0.22)]',
+  },
+  'online-orders': {
+    gradient: 'from-red-500 to-red-600',
+    iconWell: 'bg-red-950/25 ring-1 ring-inset ring-red-100/35',
+    icon: 'text-white',
+    label: 'text-white',
+    subtitle: 'text-red-100/95',
+    ring: 'ring-red-200/30',
+    shadow: 'shadow-[0_2px_10px_rgba(239,68,68,0.2)]',
+    hoverShadow: 'hover:shadow-[0_4px_14px_rgba(239,68,68,0.26)]',
+  },
+  products: {
+    gradient: 'from-yellow-600 to-amber-600',
+    iconWell: 'bg-amber-950/30 ring-1 ring-inset ring-yellow-100/35',
+    icon: 'text-white',
+    label: 'text-white',
+    subtitle: 'text-yellow-100/95',
+    ring: 'ring-yellow-200/25',
+    shadow: 'shadow-[0_2px_10px_rgba(217,119,6,0.2)]',
+    hoverShadow: 'hover:shadow-[0_4px_14px_rgba(217,119,6,0.26)]',
+  },
+  inventory: {
+    gradient: 'from-stone-600 to-stone-700',
+    iconWell: 'bg-stone-950/30 ring-1 ring-inset ring-stone-200/30',
+    icon: 'text-stone-50',
+    label: 'text-stone-50',
+    subtitle: 'text-stone-200/95',
+    ring: 'ring-stone-300/25',
+    shadow: 'shadow-[0_2px_10px_rgba(87,83,78,0.22)]',
+    hoverShadow: 'hover:shadow-[0_4px_14px_rgba(87,83,78,0.28)]',
+  },
+  'product-stock-count': {
+    gradient: 'from-amber-600 to-orange-600',
+    iconWell: 'bg-orange-950/25 ring-1 ring-inset ring-amber-100/30',
+    icon: 'text-white',
+    label: 'text-white',
+    subtitle: 'text-amber-100/95',
+    ring: 'ring-amber-200/25',
+    shadow: 'shadow-[0_2px_10px_rgba(217,119,6,0.2)]',
+    hoverShadow: 'hover:shadow-[0_4px_14px_rgba(234,88,12,0.24)]',
+  },
+  reports: {
+    gradient: 'from-red-600 to-red-700',
+    iconWell: 'bg-red-950/30 ring-1 ring-inset ring-red-100/35',
+    icon: 'text-white',
+    label: 'text-white',
+    subtitle: 'text-red-100/95',
+    ring: 'ring-red-200/30',
+    shadow: 'shadow-[0_2px_10px_rgba(220,38,38,0.22)]',
+    hoverShadow: 'hover:shadow-[0_4px_14px_rgba(220,38,38,0.28)]',
+  },
+  customers: {
+    gradient: 'from-sky-600 to-sky-700',
+    iconWell: 'bg-sky-950/30 ring-1 ring-inset ring-sky-100/35',
+    icon: 'text-white',
+    label: 'text-white',
+    subtitle: 'text-sky-100/95',
+    ring: 'ring-sky-200/30',
+    shadow: 'shadow-[0_2px_10px_rgba(2,132,199,0.2)]',
+    hoverShadow: 'hover:shadow-[0_4px_14px_rgba(2,132,199,0.26)]',
+  },
+  loyalty: {
+    gradient: 'from-rose-500 to-rose-600',
+    iconWell: 'bg-rose-950/25 ring-1 ring-inset ring-rose-100/35',
+    icon: 'text-white',
+    label: 'text-white',
+    subtitle: 'text-rose-100/95',
+    ring: 'ring-rose-200/30',
+    shadow: 'shadow-[0_2px_10px_rgba(244,63,94,0.2)]',
+    hoverShadow: 'hover:shadow-[0_4px_14px_rgba(244,63,94,0.26)]',
+  },
+  cashier: {
+    gradient: 'from-emerald-600 to-emerald-700',
+    iconWell: 'bg-emerald-950/30 ring-1 ring-inset ring-emerald-100/35',
+    icon: 'text-white',
+    label: 'text-white',
+    subtitle: 'text-emerald-100/95',
+    ring: 'ring-emerald-200/30',
+    shadow: 'shadow-[0_2px_10px_rgba(5,150,105,0.2)]',
+    hoverShadow: 'hover:shadow-[0_4px_14px_rgba(5,150,105,0.26)]',
+  },
+  shifts: {
+    gradient: 'from-indigo-600 to-indigo-700',
+    iconWell: 'bg-indigo-950/30 ring-1 ring-inset ring-indigo-100/35',
+    icon: 'text-white',
+    label: 'text-white',
+    subtitle: 'text-indigo-100/95',
+    ring: 'ring-indigo-200/30',
+    shadow: 'shadow-[0_2px_10px_rgba(79,70,229,0.2)]',
+    hoverShadow: 'hover:shadow-[0_4px_14px_rgba(79,70,229,0.26)]',
+  },
+  endofday: {
+    gradient: 'from-orange-600 to-red-600',
+    iconWell: 'bg-red-950/25 ring-1 ring-inset ring-orange-100/30',
+    icon: 'text-white',
+    label: 'text-white',
+    subtitle: 'text-orange-100/95',
+    ring: 'ring-orange-200/25',
+    shadow: 'shadow-[0_2px_10px_rgba(234,88,12,0.2)]',
+    hoverShadow: 'hover:shadow-[0_4px_14px_rgba(220,38,38,0.22)]',
+  },
+  users: {
+    gradient: 'from-slate-600 to-slate-700',
+    iconWell: 'bg-slate-950/30 ring-1 ring-inset ring-slate-200/35',
+    icon: 'text-slate-50',
+    label: 'text-slate-50',
+    subtitle: 'text-slate-200/95',
+    ring: 'ring-slate-300/25',
+    shadow: 'shadow-[0_2px_10px_rgba(71,85,105,0.22)]',
+    hoverShadow: 'hover:shadow-[0_4px_14px_rgba(71,85,105,0.28)]',
+  },
+  'cancel-logs': {
+    gradient: 'from-slate-600 to-red-600',
+    iconWell: 'bg-red-950/25 ring-1 ring-inset ring-slate-200/30',
+    icon: 'text-white',
+    label: 'text-white',
+    subtitle: 'text-slate-200/95',
+    ring: 'ring-slate-300/25',
+    shadow: 'shadow-[0_2px_10px_rgba(71,85,105,0.2)]',
+    hoverShadow: 'hover:shadow-[0_4px_14px_rgba(220,38,38,0.22)]',
+  },
+  settings: {
+    gradient: 'from-slate-700 to-slate-800',
+    iconWell: 'bg-slate-950/35 ring-1 ring-inset ring-slate-200/30',
+    icon: 'text-slate-50',
+    label: 'text-slate-50',
+    subtitle: 'text-slate-300/95',
+    ring: 'ring-slate-400/20',
+    shadow: 'shadow-[0_2px_10px_rgba(51,65,85,0.25)]',
+    hoverShadow: 'hover:shadow-[0_4px_14px_rgba(51,65,85,0.32)]',
+  },
+};
+
+export function getPosHubTileTheme(tileId: string): PosHubTileTheme {
+  return POS_HUB_TILE_THEME[tileId] ?? POS_HUB_TILE_THEME_DEFAULT;
+}
 
 export function groupPosMenuTilesForHub(
   tiles: PosMenuTile[],
   extraTiles: PosMenuTile[] = [],
-): { title: string; tiles: PosMenuTile[] }[] {
+): { id: string; title: string; tiles: PosMenuTile[] }[] {
   const byId = new Map<string, PosMenuTile>();
   for (const t of [...tiles, ...extraTiles]) {
     if (t.show) byId.set(t.id, t);
   }
   const used = new Set<string>();
-  const groups: { title: string; tiles: PosMenuTile[] }[] = [];
+  const groups: { id: string; title: string; tiles: PosMenuTile[] }[] = [];
 
   for (const g of POS_MENU_HUB_GROUPS) {
     const row: PosMenuTile[] = [];
@@ -279,12 +480,12 @@ export function groupPosMenuTilesForHub(
         used.add(id);
       }
     }
-    if (row.length > 0) groups.push({ title: g.title, tiles: row });
+    if (row.length > 0) groups.push({ id: g.id, title: g.title, tiles: row });
   }
 
   const rest = [...byId.values()].filter((t) => !used.has(t.id));
   if (rest.length > 0) {
-    groups.push({ title: 'Diğer', tiles: rest });
+    groups.push({ id: 'other', title: 'Diğer', tiles: rest });
   }
 
   return groups;
