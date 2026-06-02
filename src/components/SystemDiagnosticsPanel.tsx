@@ -6,8 +6,20 @@ import {
   Copy,
   Download,
   Info,
+  Play,
   RefreshCw,
+  Square,
 } from 'lucide-react';
+import {
+  exportStressTestJson,
+  getStressPlatformLabel,
+  getStressTestPages,
+  isPosLoadSimulationRunning,
+  loadLastStressTestReport,
+  runPosLoadSimulation,
+  stopPosLoadSimulation,
+  type StressTestReport,
+} from '../lib/posLoadSimulator';
 import {
   analyzeDiagnostics,
   exportDiagnosticsJson,
@@ -32,6 +44,9 @@ export function SystemDiagnosticsPanel() {
   const [insights, setInsights] = useState<DiagnosticInsight[]>([]);
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [stressRunning, setStressRunning] = useState(false);
+  const [stressProgress, setStressProgress] = useState<string | null>(null);
+  const [stressReport, setStressReport] = useState<StressTestReport | null>(null);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -53,6 +68,8 @@ export function SystemDiagnosticsPanel() {
 
   useEffect(() => {
     void refresh();
+    const prev = loadLastStressTestReport();
+    if (prev) setStressReport(prev);
     const id = window.setInterval(() => void refresh(), 4000);
     return () => window.clearInterval(id);
   }, [refresh]);
@@ -88,6 +105,50 @@ export function SystemDiagnosticsPanel() {
   };
 
   const pa = snapshot?.electron?.printAgent as ElectronDiag['printAgent'] | undefined;
+
+  const startStressTest = async () => {
+    if (
+      !window.confirm(
+        'Kasa yük simülasyonu: masa, paket, online, ürünler vb. sırayla açılır (~90 sn). ' +
+          'Canlı işlem yapmayın; test bitince başladığınız sayfaya döner. Devam?',
+      )
+    ) {
+      return;
+    }
+    setStressReport(null);
+    setStressRunning(true);
+    setStressProgress('Başlıyor…');
+    try {
+      const report = await runPosLoadSimulation({
+        durationMs: 90_000,
+        stepMs: 10_000,
+        premountAll: true,
+        onProgress: ({ page, elapsedMs, channels }) => {
+          setStressProgress(`${Math.round(elapsedMs / 1000)} sn · ${page} · ${channels} kanal`);
+        },
+      });
+      setStressReport(report);
+      void refresh();
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      window.alert(msg);
+    } finally {
+      setStressRunning(false);
+      setStressProgress(null);
+    }
+  };
+
+  const exportStress = () => {
+    if (!stressReport) return;
+    const json = exportStressTestJson(stressReport);
+    const blob = new Blob([json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `sefpos-yuk-testi-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   return (
     <div className="bg-white border-2 border-violet-200 rounded-xl p-5 space-y-4">
@@ -233,6 +294,79 @@ export function SystemDiagnosticsPanel() {
           </table>
         </details>
       )}
+
+      <div className="border-t border-violet-100 pt-4 space-y-3">
+        <div>
+          <h5 className="text-sm font-bold text-gray-800">
+            Kasa yük simülasyonu (bot)
+            <span className="ml-2 text-[10px] font-semibold uppercase tracking-wide text-violet-600 bg-violet-50 px-1.5 py-0.5 rounded">
+              {getStressPlatformLabel()}
+            </span>
+          </h5>
+          <p className="text-xs text-gray-500 mt-1 leading-relaxed">
+            Electron, web tarayıcı ve Cloudflare Pages’te aynı test. Gerçek ekran geçişleri:{' '}
+            {getStressTestPages().join(', ')}. Hub sayfaları bir kez belleğe alınır; sonra döngüyle açılır.
+            Veri yazmaz; kanal ve HTTP yükünü ölçer.
+          </p>
+        </div>
+        {stressProgress && (
+          <p className="text-xs font-mono text-violet-700 bg-violet-50 rounded-lg px-3 py-2">{stressProgress}</p>
+        )}
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            disabled={stressRunning || isPosLoadSimulationRunning()}
+            onClick={() => void startStressTest()}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-amber-500 text-white text-sm font-bold hover:bg-amber-600 disabled:opacity-50"
+          >
+            <Play className="w-4 h-4" />
+            90 sn test başlat
+          </button>
+          {stressRunning && (
+            <button
+              type="button"
+              onClick={() => {
+                stopPosLoadSimulation();
+                setStressRunning(false);
+                setStressProgress('Durduruldu');
+              }}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-rose-300 text-rose-700 text-sm font-semibold"
+            >
+              <Square className="w-3.5 h-3.5" />
+              Durdur
+            </button>
+          )}
+          {stressReport && (
+            <button
+              type="button"
+              onClick={exportStress}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-gray-200 text-sm hover:bg-gray-50"
+            >
+              <Download className="w-3.5 h-3.5" />
+              Test raporu indir
+            </button>
+          )}
+        </div>
+        {stressReport && (
+          <div className="text-xs bg-amber-50 border border-amber-200 rounded-lg p-3 space-y-1">
+            <div>
+              <span className="font-semibold">En fazla Realtime kanal:</span>{' '}
+              {stressReport.summary.maxRealtimeChannels}
+              {stressReport.summary.maxRealtimeChannels >= 8 ? ' — yüksek, optimizasyon gerekir' : ' — makul'}
+            </div>
+            <div>
+              <span className="font-semibold">Açılmış sayfa:</span> {stressReport.summary.maxMountedPages}
+            </div>
+            <div>
+              <span className="font-semibold">JS bellek (max):</span> {stressReport.summary.maxJsHeapMb} MB
+            </div>
+            <div>
+              <span className="font-semibold">Uyarı / kritik (adım toplamı):</span>{' '}
+              {stressReport.summary.warnCount} / {stressReport.summary.criticalCount}
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

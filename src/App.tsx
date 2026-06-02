@@ -10,6 +10,7 @@ import { ElectronDesktopHome } from './components/electron/ElectronDesktopHome';
 import { preloadElectronHomeData } from './lib/electronDashboardData';
 import { setActivePosPage } from './lib/pageActivity';
 import { setDiagnosticsMountedPages } from './lib/resourceDiagnostics';
+import { registerPosStressHooks } from './lib/posStressBridge';
 import { SqlServerSettings } from './components/SqlServerSettings';
 import { LandingPage } from './components/landing/LandingPage';
 import { isLandingPath } from './components/landing/landingRoutes';
@@ -407,6 +408,18 @@ export default function App() {
     };
     window.addEventListener('sefpos-navigate', onSefposNavigate as EventListener);
     return () => window.removeEventListener('sefpos-navigate', onSefposNavigate as EventListener);
+  }, [handleNavigate]);
+
+  useEffect(() => {
+    registerPosStressHooks({
+      navigate: (page) => handleNavigate(page),
+      premount: (pages) => {
+        for (const p of pages) mountedPagesRef.current.add(p);
+        setMountedPagesVersion((v) => v + 1);
+      },
+      getMountedPages: () => [...mountedPagesRef.current],
+    });
+    return () => registerPosStressHooks(null);
   }, [handleNavigate]);
 
   const handleDbModeSelect = async (mode: ElectronConnectMode) => {
