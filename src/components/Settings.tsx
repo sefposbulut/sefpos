@@ -30,6 +30,7 @@ import { isElectron } from '../lib/printService';
 import { isFeatureUnlocked, submitFeatureRequest, FEATURE_LABELS } from '../lib/featureGate';
 import { Branch } from '../contexts/AuthContext';
 import { PrinterSettings } from './PrinterSettings';
+import { SystemDiagnosticsPanel } from './SystemDiagnosticsPanel';
 import { SqlServerSettings } from './SqlServerSettings';
 import { isSqlServerMode } from '../lib/sqlDb';
 import { insertRestaurantTablesSkipDuplicates } from '../lib/restaurantTableBulk';
@@ -2856,6 +2857,8 @@ export function Settings({ onClose }: SettingsProps) {
                   <RefreshCw className="w-4 h-4" /> Önbelleği Temizle
                 </button>
               </div>
+
+              <SystemDiagnosticsPanel />
             </div>
           ) : activeTab === 'security' ? (
             <div className="space-y-5">

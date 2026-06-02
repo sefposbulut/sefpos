@@ -5,6 +5,7 @@ import {
   RefreshCw, AlertCircle, UserPlus, Check
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
+import { createCustomerQuick, invalidateCustomersListCache } from '../lib/customersApi';
 import { useAuth } from '../contexts/AuthContext';
 import { loadPrintSettings, PRINT_SETTINGS_REMOTE_UPDATED_EVENT, PRINT_SETTINGS_CONTEXT_EVENT } from '../lib/printService';
 import { HuginPaymentGate, type HuginPaymentGateProps } from './HuginPaymentGate';
@@ -57,7 +58,7 @@ const METHOD_ICONS: Record<PaymentSplit['method'], React.ReactNode> = {
 interface CustomerPickerProps {
   tenantId: string;
   selected: { id: string; name: string } | null;
-  onSelect: (c: { id: string; name: string } | null) => void;
+  onSelect: (c: { id: string; name: string; phone?: string | null } | null) => void;
   amount: number;
 }
 
@@ -106,25 +107,23 @@ function CustomerPicker({ tenantId, selected, onSelect, amount }: CustomerPicker
   );
 
   const quickAdd = async () => {
-    if (!addName.trim()) return;
+    const name = addName.trim();
+    const phone = addPhone.trim();
+    if (!name && !phone) return;
     setAddSaving(true);
-    const { data } = await (supabase.from('customers' as any) as any)
-      .insert({
-        tenant_id: tenantId,
-        name: addName.trim(),
-        phone: addPhone.trim() || null,
-        is_active: true,
-        current_balance: 0,
-        credit_limit: 0,
-      })
-      .select('id, name')
-      .single();
-    if (data) {
-      try { sessionStorage.removeItem(`customers_${tenantId}`); } catch { /* ignore */ }
-      onSelect({ id: data.id, name: data.name });
-      setExpanded(false);
+    const { data, error } = await createCustomerQuick(tenantId, {
+      name: name || `Müşteri ${phone}`,
+      phone: phone || null,
+    });
+    if (error || !data) {
+      setAddSaving(false);
+      alert(error?.message || 'Cari oluşturulamadı');
+      return;
     }
     setAddSaving(false);
+    invalidateCustomersListCache(tenantId);
+    onSelect({ id: data.id, name: data.name, phone: data.phone });
+    setExpanded(false);
     setShowAdd(false);
     setAddName('');
     setAddPhone('');
@@ -340,6 +339,22 @@ export function PaymentModal({
     setSplits([{ method: 'cash', amount: remainingAmount.toFixed(2) }]);
   }, [remainingAmount]);
 
+  // Sadakat müşterisi ile cari (açık hesap) müşterisi aynı kart olmalı — ayrı kayıt kopukluğu önlenir.
+  useEffect(() => {
+    if (!loyaltyPayment?.customerId) return;
+    setSplits((prev) =>
+      prev.map((s) =>
+        s.method === 'open_account'
+          ? {
+              ...s,
+              customerId: loyaltyPayment.customerId,
+              customerName: loyaltyPayment.customerName,
+            }
+          : s,
+      ),
+    );
+  }, [loyaltyPayment?.customerId, loyaltyPayment?.customerName]);
+
   // Mobilde modal açıldığında bazı tarayıcılar (özellikle Android Chrome)
   // ilk input'u otomatik focus ederek sanal klavyeyi açar. autoFocus zaten
   // mobilde `false` veriyoruz ama yine de bir tick gecikmeli olarak aktif
@@ -383,10 +398,23 @@ export function PaymentModal({
     }));
   };
 
-  const updateSplitCustomer = (idx: number, customer: { id: string; name: string } | null) => {
+  const updateSplitCustomer = (idx: number, customer: { id: string; name: string; phone?: string | null } | null) => {
     setSplits(prev => prev.map((s, i) =>
       i === idx ? { ...s, customerId: customer?.id, customerName: customer?.name } : s
     ));
+    if (
+      customer &&
+      loyaltyEnabled &&
+      onLoyaltyChange &&
+      !loyaltyPayment
+    ) {
+      onLoyaltyChange({
+        customerId: customer.id,
+        customerName: customer.name,
+        redeemPoints: 0,
+        discountTl: 0,
+      });
+    }
   };
 
   const fillRemaining = (idx: number) => {
@@ -569,7 +597,13 @@ export function PaymentModal({
                 {split.method === 'open_account' && tenant && (
                   <CustomerPicker
                     tenantId={tenant.id}
-                    selected={split.customerId ? { id: split.customerId, name: split.customerName || '' } : null}
+                    selected={
+                      split.customerId
+                        ? { id: split.customerId, name: split.customerName || loyaltyPayment?.customerName || '' }
+                        : loyaltyPayment
+                          ? { id: loyaltyPayment.customerId, name: loyaltyPayment.customerName }
+                          : null
+                    }
                     onSelect={c => updateSplitCustomer(idx, c)}
                     amount={parseFloat(split.amount) || 0}
                   />

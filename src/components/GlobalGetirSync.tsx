@@ -127,6 +127,7 @@ export function GlobalGetirSync() {
     const firstStore = window.setTimeout(() => void syncStore(), 1_000);
 
     const orderPollOpts = () => ({
+      diagLabel: 'getir-orders-poll',
       baseMs: wantsFrequentGetirSync() ? ORDER_BASE_FAST_MS : ORDER_BASE_SLOW_MS,
       idleMs: ORDER_IDLE_MS,
       hiddenMs: 0 as const,
@@ -134,6 +135,7 @@ export function GlobalGetirSync() {
       immediate: false as const,
     });
     const storePollOpts = () => ({
+      diagLabel: 'getir-store-poll',
       baseMs: wantsFrequentGetirSync() ? STORE_BASE_FAST_MS : STORE_BASE_SLOW_MS,
       idleMs: STORE_IDLE_MS,
       hiddenMs: 0 as const,

@@ -16,7 +16,11 @@ import {
   X,
 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
-import { fetchCustomersList, type CustomerListRow } from '../../lib/customersApi';
+import {
+  CUSTOMERS_CHANGED_EVENT,
+  fetchCustomersList,
+  type CustomerListRow,
+} from '../../lib/customersApi';
 import { useAuth } from '../../contexts/AuthContext';
 import { LoyaltySettingsPanel } from './LoyaltySettingsPanel';
 
@@ -34,6 +38,7 @@ type FilterTab = 'all' | 'with_points' | 'zero';
 
 type Props = {
   onBack?: () => void;
+  isActive?: boolean;
 };
 
 const fmtDate = (iso: string | null | undefined) => {
@@ -89,7 +94,15 @@ function StatCard({
   );
 }
 
-function TxList({ rows, emptyText }: { rows: TxRow[]; emptyText: string }) {
+function TxList({
+  rows,
+  emptyText,
+  customerNameById,
+}: {
+  rows: TxRow[];
+  emptyText: string;
+  customerNameById: Record<string, string>;
+}) {
   if (rows.length === 0) {
     return (
       <div className="p-8 text-center text-slate-400 text-sm">
@@ -103,7 +116,10 @@ function TxList({ rows, emptyText }: { rows: TxRow[]; emptyText: string }) {
     <ul className="divide-y divide-slate-100">
       {rows.map((t) => {
         const positive = t.points_delta >= 0;
-        const customerName = (t.customer as { name?: string } | null)?.name || 'Müşteri';
+        const customerName =
+          customerNameById[t.customer_id] ||
+          (t.customer as { name?: string } | null)?.name ||
+          'Müşteri';
         return (
           <li key={t.id} className="px-4 py-3 hover:bg-orange-50/40 transition">
             <div className="flex items-start justify-between gap-3">
@@ -151,7 +167,7 @@ function TxList({ rows, emptyText }: { rows: TxRow[]; emptyText: string }) {
   );
 }
 
-export function LoyaltyPage({ onBack }: Props) {
+export function LoyaltyPage({ onBack, isActive = true }: Props) {
   const { tenant } = useAuth();
   const [customers, setCustomers] = useState<CustomerListRow[]>([]);
   const [recentTxs, setRecentTxs] = useState<TxRow[]>([]);
@@ -198,8 +214,28 @@ export function LoyaltyPage({ onBack }: Props) {
   }, [tenant?.id]);
 
   useEffect(() => {
+    if (!isActive) return;
     void load();
-  }, [load]);
+  }, [load, isActive]);
+
+  useEffect(() => {
+    if (!tenant?.id || !isActive) return;
+    const onCustomersChanged = (ev: Event) => {
+      const tid = (ev as CustomEvent<{ tenantId?: string }>).detail?.tenantId;
+      if (tid && tid !== tenant.id) return;
+      void load();
+    };
+    window.addEventListener(CUSTOMERS_CHANGED_EVENT, onCustomersChanged);
+    return () => window.removeEventListener(CUSTOMERS_CHANGED_EVENT, onCustomersChanged);
+  }, [tenant?.id, isActive, load]);
+
+  const customerNameById = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const c of customers) {
+      if (c.id && c.name) map[c.id] = c.name;
+    }
+    return map;
+  }, [customers]);
 
   const loadCustomerTxs = useCallback(
     async (customerId: string) => {
@@ -219,7 +255,7 @@ export function LoyaltyPage({ onBack }: Props) {
   );
 
   useEffect(() => {
-    if (!tenant?.id) return;
+    if (!tenant?.id || !isActive) return;
     const ch = supabase
       .channel(`loyalty-page-${tenant.id}`)
       .on(
@@ -241,7 +277,7 @@ export function LoyaltyPage({ onBack }: Props) {
     return () => {
       supabase.removeChannel(ch);
     };
-  }, [tenant?.id, load, selectedId, loadCustomerTxs]);
+  }, [tenant?.id, isActive, load, selectedId, loadCustomerTxs]);
 
   useEffect(() => {
     if (!selectedId) {
@@ -559,7 +595,11 @@ export function LoyaltyPage({ onBack }: Props) {
                     Hareketler yükleniyor…
                   </div>
                 ) : (
-                  <TxList rows={customerTxs} emptyText="Bu müşteride henüz puan hareketi yok." />
+                  <TxList
+                    rows={customerTxs}
+                    emptyText="Bu müşteride henüz puan hareketi yok."
+                    customerNameById={customerNameById}
+                  />
                 )}
               </div>
             </>
@@ -572,7 +612,11 @@ export function LoyaltyPage({ onBack }: Props) {
                 </p>
               </div>
               <div className="flex-1 overflow-y-auto min-h-0">
-                <TxList rows={recentTxs} emptyText="Henüz sadakat işlemi yok." />
+                <TxList
+                  rows={recentTxs}
+                  emptyText="Henüz sadakat işlemi yok."
+                  customerNameById={customerNameById}
+                />
               </div>
             </>
           )}

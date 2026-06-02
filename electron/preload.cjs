@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getZoom: () => ipcRenderer.invoke('get-zoom'),
   setZoom: (factor) => ipcRenderer.invoke('set-zoom', factor),
   getPrinters: () => ipcRenderer.invoke('get-printers'),
+  getSystemDiagnostics: () => ipcRenderer.invoke('get-system-diagnostics'),
   printReceipt: (opts) => ipcRenderer.invoke('print-receipt', opts),
   registerPrinters: (opts) => ipcRenderer.invoke('register-printers', opts),
   getDbMode: () => ipcRenderer.invoke('get-db-mode'),

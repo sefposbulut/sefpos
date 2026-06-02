@@ -3,6 +3,8 @@
  * 10k+ restoran × çok kasa senaryosunda gereksiz API yükünü keser.
  */
 
+import { recordPollerTick, registerPoller, unregisterPoller } from './resourceDiagnostics';
+
 const DEFAULT_IDLE_AFTER_MS = 2 * 60 * 1000;
 
 let lastActivityAt = Date.now();
@@ -65,6 +67,8 @@ export type AdaptivePollerOpts = AdaptiveIntervalOpts & {
   run: () => void | Promise<void>;
   /** true: mount’ta hemen bir tick (görünürse) */
   immediate?: boolean;
+  /** Tanılama paneli için kaynak adı (ör. waiter-calls-poll) */
+  diagLabel?: string;
 };
 
 /**
@@ -72,6 +76,8 @@ export type AdaptivePollerOpts = AdaptiveIntervalOpts & {
  */
 export function startAdaptivePoller(opts: AdaptivePollerOpts): () => void {
   hookUserActivity();
+  const diagLabel = opts.diagLabel?.trim();
+  if (diagLabel) registerPoller(diagLabel, opts.baseMs);
   let stopped = false;
   let timer: ReturnType<typeof setTimeout> | null = null;
 
@@ -91,6 +97,7 @@ export function startAdaptivePoller(opts: AdaptivePollerOpts): () => void {
       return;
     }
     try {
+      if (diagLabel) recordPollerTick(diagLabel);
       await opts.run();
     } catch {
       /* tek tur hatası sonrakini bozmasın */
@@ -122,5 +129,6 @@ export function startAdaptivePoller(opts: AdaptivePollerOpts): () => void {
     stopped = true;
     if (timer) window.clearTimeout(timer);
     document.removeEventListener('visibilitychange', onVisible);
+    if (diagLabel) unregisterPoller(diagLabel);
   };
 }

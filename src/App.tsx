@@ -9,6 +9,7 @@ import { ElectronConnectionMenu, type ElectronConnectMode } from './components/e
 import { ElectronDesktopHome } from './components/electron/ElectronDesktopHome';
 import { preloadElectronHomeData } from './lib/electronDashboardData';
 import { setActivePosPage } from './lib/pageActivity';
+import { setDiagnosticsMountedPages } from './lib/resourceDiagnostics';
 import { SqlServerSettings } from './components/SqlServerSettings';
 import { LandingPage } from './components/landing/LandingPage';
 import { isLandingPath } from './components/landing/landingRoutes';
@@ -167,7 +168,7 @@ export default function App() {
   const mountedPagesRef = useRef<Set<string>>(
     new Set(isElectron ? ['desktop-home', 'online-orders'] : ['tables', 'online-orders']),
   );
-  const [, setMountedPagesVersion] = useState(0);
+  const [mountedPagesVersion, setMountedPagesVersion] = useState(0);
   if (currentPage && !mountedPagesRef.current.has(currentPage)) {
     mountedPagesRef.current.add(currentPage);
   }
@@ -175,14 +176,13 @@ export default function App() {
     setMountedPagesVersion((v) => v + 1);
   }, [currentPage]);
 
-  /** Electron: yalnızca sık modüller geç yüklenir (tüm hub’u mount etmek RAM/CPU’yu şişirir). */
+  /** Electron: yalnızca masalar geç yüklenir; paket ilk tıklamada mount (arka planda CID/realtime şişmesin). */
   useEffect(() => {
     if (!isElectron || !tenant?.id || !user) return;
     let cancelled = false;
     const t = window.setTimeout(() => {
       if (cancelled) return;
       mountedPagesRef.current.add('tables');
-      mountedPagesRef.current.add('takeaway');
       setMountedPagesVersion((v) => v + 1);
     }, 12_000);
     return () => {
@@ -193,6 +193,10 @@ export default function App() {
   useEffect(() => {
     setActivePosPage(currentPage);
   }, [currentPage]);
+
+  useEffect(() => {
+    setDiagnosticsMountedPages([...mountedPagesRef.current]);
+  }, [currentPage, mountedPagesVersion]);
   const [sqlServerConfigured, setSqlServerConfigured] = useState(false);
   const [showSqlServerSettings, setShowSqlServerSettings] = useState(false);
   // /login veya AYKA_ADMIN_PATH açıkken Auth tam sayfa (modal değil).
@@ -780,7 +784,7 @@ export default function App() {
 
       {wasMounted('products') && (
         <div style={{ display: show('products') ? undefined : 'none' }} className="fixed inset-0 top-14 md:top-20 overflow-hidden">
-          <Products />
+          <Products isActive={currentPage === 'products'} />
         </div>
       )}
 
@@ -809,7 +813,7 @@ export default function App() {
           style={{ display: show('customers') ? undefined : 'none' }}
           className="fixed inset-0 top-14 md:top-20 bg-gradient-to-br from-slate-50 to-slate-100 overflow-hidden"
         >
-          <Customers />
+          <Customers isActive={currentPage === 'customers'} />
         </div>
       )}
 
@@ -818,7 +822,10 @@ export default function App() {
           style={{ display: show('loyalty') ? undefined : 'none' }}
           className="fixed inset-0 top-14 md:top-20 bg-gradient-to-br from-slate-50 to-slate-100 overflow-hidden"
         >
-          <LoyaltyPage onBack={() => setCurrentPage(isElectron ? 'desktop-home' : 'tables')} />
+          <LoyaltyPage
+            isActive={currentPage === 'loyalty'}
+            onBack={() => setCurrentPage(isElectron ? 'desktop-home' : 'tables')}
+          />
         </div>
       )}
 

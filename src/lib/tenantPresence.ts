@@ -172,6 +172,7 @@ export function startTenantPresenceTracking(opts: {
     if (pingUserId === userId) void touchLastActive(userId);
   }, 8_000);
   stopPingPoller = startAdaptivePoller({
+    diagLabel: 'tenant-presence-ping',
     baseMs: LAST_ACTIVE_PING_MS,
     idleMs: LAST_ACTIVE_PING_IDLE_MS,
     hiddenMs: 0,

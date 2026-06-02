@@ -247,7 +247,10 @@ export function TableGrid({
     }
   });
   const [now, setNow] = useState<Date>(() => new Date());
-  useEffect(() => subscribeLiveTick(() => setNow(new Date())), []);
+  useEffect(() => {
+    if (!isActive) return;
+    return subscribeLiveTick(() => setNow(new Date()));
+  }, [isActive]);
   useEffect(() => {
     try {
       localStorage.setItem(FOOTER_AMOUNT_VISIBLE_KEY, footerAmountVisible ? '1' : '0');

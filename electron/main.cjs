@@ -22,8 +22,12 @@ if (
 }
 if (process.platform === 'win32') {
   app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
-  app.commandLine.appendSwitch('disable-background-timer-throttling');
-  app.commandLine.appendSwitch('disable-renderer-backgrounding');
+  // Varsayılan: arka planda Chromium zamanlayıcıları kısılır (Opera + ŞefPOS birlikteyken CPU şişmesini azaltır).
+  // Ekran titremesi devam ederse: SEFPOS_FULL_SPEED_BACKGROUND=1
+  if (process.env.SEFPOS_FULL_SPEED_BACKGROUND === '1') {
+    app.commandLine.appendSwitch('disable-background-timer-throttling');
+    app.commandLine.appendSwitch('disable-renderer-backgrounding');
+  }
 }
 
 // --------------------------------------------------------------------------
@@ -1699,7 +1703,7 @@ let connectivityLastOnline = null;
 let pendingJobsPollTimer = null;
 let pendingJobsFetchInFlight = false;
 /** Önceki: 1 sn — üst üste binen HTTP/yazdırma tüm Windows'u kilitleyebiliyordu */
-const PENDING_JOBS_POLL_MS = 8000;
+const PENDING_JOBS_POLL_MS = 15_000;
 // Son register-printers çağrısındaki kasa yazıcı listesi. processPrintJob
 // içinde printer_name boş geldiğinde (mobile/web fallback insertleri)
 // mutfak benzeri ilk yazıcıyı seçmek için kullanılır.
@@ -2167,7 +2171,7 @@ function createWindow() {
       sandbox: false,
       preload: path.join(__dirname, 'preload.cjs'),
       partition: 'persist:shefpos',
-      backgroundThrottling: false,
+      backgroundThrottling: process.env.SEFPOS_FULL_SPEED_BACKGROUND === '1' ? false : true,
       devTools: isDev,
       webSecurity: true,
     },
@@ -2634,6 +2638,23 @@ ipcMain.handle('import-sqlserver-schema', async (_, config) => {
 
 ipcMain.handle('get-printers', async () => {
   return await getSystemPrinters();
+});
+
+/** Ayarlar > Sistem — kasa yük tanılama (yazıcı agent + bellek). */
+ipcMain.handle('get-system-diagnostics', async () => {
+  const mem = process.memoryUsage();
+  return {
+    pollMs: PENDING_JOBS_POLL_MS,
+    realtimeConnected: !!realtimeConnected,
+    pendingPollActive: !!pendingJobsPollTimer,
+    hasTenant: !!currentTenantId,
+    hasJwt: !!currentUserJwt,
+    sqlServerMode: isElectronSqlServerMode(),
+    processMemoryMb: {
+      rss: Math.round(mem.rss / 1024 / 1024),
+      heapUsed: Math.round(mem.heapUsed / 1024 / 1024),
+    },
+  };
 });
 
 let printWindows = [];

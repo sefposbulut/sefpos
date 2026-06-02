@@ -5,7 +5,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
-import { isActivePosPage } from '../lib/pageActivity';
+import { isActivePosPage, PAGE_CHANGE_EVENT } from '../lib/pageActivity';
 import { startAdaptivePoller } from '../lib/pollSchedule';
 
 interface WaiterCall {
@@ -72,6 +72,13 @@ export function WaiterCallBell({ headerVariant = 'default' }: WaiterCallBellProp
   const initialPullDoneRef = useRef(false);
   const tenantIdRef = useRef<string | undefined>(undefined);
   tenantIdRef.current = tenant?.id;
+  const [pageRev, setPageRev] = useState(0);
+
+  useEffect(() => {
+    const bump = () => setPageRev((n) => n + 1);
+    window.addEventListener(PAGE_CHANGE_EVENT, bump);
+    return () => window.removeEventListener(PAGE_CHANGE_EVENT, bump);
+  }, []);
 
   useEffect(() => {
     mutedRef.current = muted;
@@ -142,11 +149,14 @@ export function WaiterCallBell({ headerVariant = 'default' }: WaiterCallBellProp
     };
   }, [tenant?.id, pullLatest]);
 
-  // Realtime + SUBSCRIBED sonrası tam senkron + periyodik yedek + sekme uyanınca yenile
+  // Realtime + yedek poll yalnızca masa / ana sayfa / garson — paket ekranında kanal açık kalmasın
+  const waiterChannelActive = isActivePosPage('tables', 'waiter-app', 'desktop-home');
+
   useEffect(() => {
-    if (!tenant?.id) return;
+    if (!tenant?.id || !waiterChannelActive) return;
 
     const stopPoll = startAdaptivePoller({
+      diagLabel: 'waiter-calls-poll',
       baseMs: 60_000,
       idleMs: 120_000,
       hiddenMs: 0,
@@ -222,7 +232,7 @@ export function WaiterCallBell({ headerVariant = 'default' }: WaiterCallBellProp
       supabase.removeChannel(channel);
       if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
     };
-  }, [tenant?.id, pullLatest]);
+  }, [tenant?.id, waiterChannelActive, pageRev, pullLatest]);
 
   const playBeep = () => {
     try {

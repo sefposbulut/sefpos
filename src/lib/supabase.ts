@@ -1,5 +1,6 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { sqlDb, localDb, isSqlServerMode, isLocalMode } from './sqlDb';
+import { installSupabaseDiagnostics, recordHttpRequest } from './resourceDiagnostics';
 
 const isElectronRuntime = !!(window as any).electronAPI;
 const runtimeDbUrl = localStorage.getItem('shefpos_db_url');
@@ -268,6 +269,7 @@ const realSupabase = createClient(supabaseUrl, supabaseAnonKey, {
       const isAuth = href.includes('/auth/v1/');
       const isAuthToken = href.includes('/auth/v1/token');
       const isRealtime = href.includes('/realtime/');
+      if (!isRealtime) recordHttpRequest(href, method);
       const fetchOptions: RequestInit = init ? { ...(init as RequestInit) } : {};
 
       // Auth: refresh_token (`/auth/v1/token`) yarım kesilirse istemci bazen oturumu
@@ -344,6 +346,10 @@ const realSupabase = createClient(supabaseUrl, supabaseAnonKey, {
 });
 
 sefposAuthClientBox.client = realSupabase;
+
+if (typeof window !== 'undefined') {
+  installSupabaseDiagnostics(realSupabase);
+}
 
 export const supabase: SupabaseClient<Database> = new Proxy({} as SupabaseClient<Database>, {
   get(_target, prop) {

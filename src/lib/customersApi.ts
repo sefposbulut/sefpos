@@ -1,5 +1,22 @@
 import { supabase } from './supabase';
 
+export const CUSTOMERS_CHANGED_EVENT = 'sefpos-customers-changed';
+
+export function invalidateCustomersListCache(tenantId: string): void {
+  try {
+    sessionStorage.removeItem(`customers_${tenantId}`);
+  } catch {
+    /* ignore */
+  }
+}
+
+export function emitCustomersChanged(tenantId: string): void {
+  invalidateCustomersListCache(tenantId);
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent(CUSTOMERS_CHANGED_EVENT, { detail: { tenantId } }));
+  }
+}
+
 const CUSTOMER_LIST_COLS =
   'id, tenant_id, name, phone, email, address, notes, credit_limit, current_balance, is_active, created_at';
 
@@ -145,6 +162,8 @@ export async function createCustomerQuick(
   if (error) {
     return { data: null, error: { message: error.message || 'Cari oluşturulamadı' } };
   }
+
+  emitCustomersChanged(tenantId);
 
   return {
     data: { ...(data as CustomerListRow), loyalty_points: 0 },

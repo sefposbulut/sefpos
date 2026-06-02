@@ -71,7 +71,7 @@ type TypeFilter = 'all' | 'takeaway' | 'delivery' | 'gel_al';
 /** Ekranda aynı anda çizilen kart üst sınırı — çok pakette donmayı önler */
 const MAX_VISIBLE_ORDER_CARDS = 80;
 const TAKEAWAY_FETCH_ACTIVE_LIMIT = 150;
-const REALTIME_UPDATE_BATCH_MS = 650;
+const REALTIME_UPDATE_BATCH_MS = 800;
 const REALTIME_INSERT_BATCH_MS = 500;
 
 export const DELIVERY_STATUSES: { key: string; label: string; color: string; bg: string; dotColor: string }[] = [
@@ -172,9 +172,9 @@ export function TakeawayOrders({ isActive = true }: TakeawayOrdersProps) {
     }
   }, []);
 
-  // Otomatik başlat (electron + ayar açık)
+  // Otomatik başlat (electron + ayar açık) — yalnızca paket ekranı aktifken
   useEffect(() => {
-    if (!cidAvailable) return;
+    if (!cidAvailable || !isActive) return;
     let cancelled = false;
     (async () => {
       const s = await callerIdStatus();
@@ -192,11 +192,11 @@ export function TakeawayOrders({ isActive = true }: TakeawayOrdersProps) {
     return () => {
       cancelled = true;
     };
-  }, [cidAvailable, cidSettings.autoStart, cidSettings.softTest]);
+  }, [cidAvailable, cidSettings.autoStart, cidSettings.softTest, isActive]);
 
-  // Olay dinleyiciler: çağrı, sinyal, hata
+  // Olay dinleyiciler: çağrı, sinyal, hata — paket ekranı dışında dinleme
   useEffect(() => {
-    if (!cidAvailable) return;
+    if (!cidAvailable || !isActive) return;
     const offRing = onCallerIdRing(async (ring) => {
       if (!tenant || !ring.phone) return;
       const snoozeUntil = dismissedPhonesUntilRef.current.get(ring.phone) ?? 0;
@@ -249,7 +249,7 @@ export function TakeawayOrders({ isActive = true }: TakeawayOrdersProps) {
       offSignal();
       offError();
     };
-  }, [cidAvailable, tenant]);
+  }, [cidAvailable, tenant, isActive]);
 
   const handleAcceptCall = (item: { ring: CallerIdRing; matched: DeliveryCustomer | null }) => {
     setCidPrefill({ phone: item.ring.phone, matched: item.matched });
@@ -489,8 +489,9 @@ export function TakeawayOrders({ isActive = true }: TakeawayOrdersProps) {
     if (!tenant || !isActive || formOpen) return;
     let lastSig = '';
     const stopPoll = startAdaptivePoller({
-      baseMs: 90_000,
-      idleMs: 120_000,
+      diagLabel: 'takeaway-backup-poll',
+      baseMs: 120_000,
+      idleMs: 180_000,
       hiddenMs: 0,
       run: async () => {
         if (formOpenRef.current) return;

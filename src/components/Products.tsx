@@ -172,7 +172,7 @@ interface StockMovementRow {
   created_at: string;
 }
 
-export function Products() {
+export function Products({ isActive = true }: { isActive?: boolean }) {
   const { tenant, activeBranch, branches } = useAuth();
   const [categories, setCategories] = useState<Category[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
@@ -332,10 +332,14 @@ export function Products() {
   }, []);
 
   useEffect(() => {
+    if (!tenant) return;
     loadCategories();
     loadProducts();
+  }, [tenant]);
 
-    if (!tenant) return;
+  // Realtime yalnızca ürünler ekranı açıkken — gün içinde biriken kanal yükünü keser
+  useEffect(() => {
+    if (!tenant || !isActive) return;
 
     const menuChannel = supabase
       .channel(`products-menu-${tenant.id}`)
@@ -350,7 +354,7 @@ export function Products() {
     return () => {
       supabase.removeChannel(menuChannel);
     };
-  }, [tenant]);
+  }, [tenant, isActive]);
 
   useEffect(() => {
     loadBranchStocks();

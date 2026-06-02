@@ -70,7 +70,7 @@ const buildWhatsAppMessage = (c: Customer) => {
 // =====================================================================
 // Ana bileşen
 // =====================================================================
-export function Customers() {
+export function Customers({ isActive = true }: { isActive?: boolean }) {
   const { tenant, user } = useAuth();
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [loading, setLoading] = useState(true);
@@ -103,9 +103,9 @@ export function Customers() {
 
   useEffect(() => { void loadCustomers(); }, [loadCustomers]);
 
-  // Realtime: müşteri değişiminde liste tazelenir
+  // Realtime yalnızca cari ekranı açıkken
   useEffect(() => {
-    if (!tenant?.id) return;
+    if (!tenant?.id || !isActive) return;
     const ch = supabase
       .channel(`cari-customers-${tenant.id}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'customers', filter: `tenant_id=eq.${tenant.id}` }, () => {
@@ -116,7 +116,7 @@ export function Customers() {
       })
       .subscribe();
     return () => { supabase.removeChannel(ch); };
-  }, [tenant?.id, loadCustomers]);
+  }, [tenant?.id, isActive, loadCustomers]);
 
   // İstatistikler — yalnızca aktif müşteriler dikkate alınır
   const stats = useMemo(() => {
