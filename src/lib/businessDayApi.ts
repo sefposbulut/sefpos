@@ -8,6 +8,8 @@ export type CurrentBusinessDateRow = {
   hours_open?: number | null;
 };
 
+const SKIP_RPC_KEY = 'sefpos_skip_business_date_rpc';
+
 /** İstemci tarafı cutoff iş günü (YYYY-MM-DD). */
 export function computeClientBusinessDate(startHour = 6, at = new Date()): string {
   const h = Math.min(23, Math.max(0, Number(startHour) || 6));
@@ -17,55 +19,98 @@ export function computeClientBusinessDate(startHour = 6, at = new Date()): strin
   return `${x.getFullYear()}-${pad(x.getMonth() + 1)}-${pad(x.getDate())}`;
 }
 
-let rpcPermanentFailure = false;
-let rpcWarnedOnce = false;
+function addCalendarDay(isoDate: string, days = 1): string {
+  const d = new Date(`${isoDate}T12:00:00`);
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 10);
+}
 
-function normalizeRpcRow(data: unknown): CurrentBusinessDateRow | null {
-  if (!data) return null;
-  const row = Array.isArray(data) ? data[0] : data;
-  if (!row || typeof row !== 'object') return null;
-  const bd = (row as { business_date?: unknown }).business_date;
-  if (!bd) return null;
-  return row as CurrentBusinessDateRow;
+function resolveMode(branchMode: unknown, tenantMode: unknown): 'cutoff' | 'manual' {
+  if (branchMode === 'manual' || branchMode === 'cutoff') return branchMode;
+  if (tenantMode === 'manual' || tenantMode === 'cutoff') return tenantMode;
+  return 'cutoff';
 }
 
 /**
- * Manuel iş günü modunda sunucudan tarih sorar.
- * RPC yok / 400 → sessizce null (çağıran cutoff fallback kullanır).
+ * İş günü bilgisi — PostgREST RPC yerine doğrudan tablolar (400 spam yok).
+ * Manuel modda daily_closures + shifts ile sunucu RPC ile aynı mantık.
  */
 export async function fetchCurrentBusinessDate(
   branchId: string,
 ): Promise<CurrentBusinessDateRow | null> {
-  if (!branchId || rpcPermanentFailure) return null;
+  if (!branchId) return null;
+
   try {
-    const { data, error } = await (supabase as any).rpc('get_current_business_date', {
-      p_branch_id: branchId,
-    });
-    if (error) {
-      const code = String((error as { code?: string }).code || '');
-      const msg = String(error.message || '').toLowerCase();
-      const missing =
-        code === 'PGRST202' ||
-        code === '42883' ||
-        msg.includes('does not exist') ||
-        msg.includes('could not find the function');
-      if (missing) rpcPermanentFailure = true;
-      if (!rpcWarnedOnce) {
-        rpcWarnedOnce = true;
-        console.warn(
-          '[ŞefPOS] get_current_business_date kullanılamıyor; yerel iş günü hesabı kullanılacak.',
-          error.message,
-        );
-      }
-      return null;
+    const { data: branch, error: branchErr } = await supabase
+      .from('branches')
+      .select('id, business_day_mode, business_day_start_hour, tenant_id, tenants ( business_day_mode, business_day_start_hour )')
+      .eq('id', branchId)
+      .maybeSingle();
+
+    if (branchErr || !branch) return null;
+
+    const tenant = (branch as { tenants?: { business_day_mode?: string; business_day_start_hour?: number } | null })
+      .tenants;
+    const mode = resolveMode(branch.business_day_mode, tenant?.business_day_mode);
+    const cutoffHour = Number(
+      branch.business_day_start_hour ?? tenant?.business_day_start_hour ?? 6,
+    );
+
+    let lastClosed: string | null = null;
+    const { data: lastRow } = await supabase
+      .from('daily_closures')
+      .select('business_date')
+      .eq('branch_id', branchId)
+      .eq('status', 'closed')
+      .order('business_date', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (lastRow?.business_date) lastClosed = String(lastRow.business_date);
+
+    let businessDate: string;
+    if (mode === 'manual') {
+      businessDate = lastClosed ? addCalendarDay(lastClosed, 1) : new Date().toISOString().slice(0, 10);
+    } else {
+      businessDate = computeClientBusinessDate(cutoffHour);
     }
-    return normalizeRpcRow(data);
+
+    let hoursOpen: number | null = null;
+    if (mode === 'manual') {
+      let shiftQuery = supabase
+        .from('shifts')
+        .select('opened_at, business_date')
+        .eq('branch_id', branchId)
+        .order('opened_at', { ascending: true })
+        .limit(1);
+      if (lastClosed) {
+        shiftQuery = shiftQuery.gt('business_date', lastClosed);
+      }
+      const { data: shiftRow } = await shiftQuery.maybeSingle();
+      if (shiftRow?.opened_at) {
+        const opened = new Date(String(shiftRow.opened_at)).getTime();
+        if (Number.isFinite(opened)) {
+          hoursOpen = Math.round(((Date.now() - opened) / 3_600_000) * 10) / 10;
+        }
+      }
+    }
+
+    return {
+      business_date: businessDate,
+      mode,
+      cutoff_hour: cutoffHour,
+      last_closed: lastClosed,
+      hours_open: hoursOpen,
+    };
   } catch {
     return null;
   }
 }
 
+/** Eski RPC yolu kapalı (session flag temizliği). */
 export function resetBusinessDateRpcProbe(): void {
-  rpcPermanentFailure = false;
-  rpcWarnedOnce = false;
+  try {
+    sessionStorage.removeItem(SKIP_RPC_KEY);
+  } catch {
+    /* ignore */
+  }
 }

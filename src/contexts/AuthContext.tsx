@@ -22,7 +22,7 @@ import {
 } from '../lib/printService';
 import { isAykaAdminPath } from '../lib/aykaRoute';
 import { startTenantPresenceTracking, stopTenantPresenceTracking } from '../lib/tenantPresence';
-import { fetchCurrentBusinessDate } from '../lib/businessDayApi';
+import { computeClientBusinessDate, fetchCurrentBusinessDate } from '../lib/businessDayApi';
 import { hideBootSplash } from '../lib/bootSplash';
 import {
   clearAuthSessionSnap,
@@ -1316,12 +1316,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const currentBusinessDate: string = (() => {
     if (businessDayMode === 'manual' && serverBusinessDate) return serverBusinessDate;
-    // cutoff client-side hesabi (geri uyum)
-    const now = new Date();
-    const x = new Date(now);
-    if (x.getHours() < businessDayStartHour) x.setDate(x.getDate() - 1);
-    const pad = (n: number) => String(n).padStart(2, '0');
-    return `${x.getFullYear()}-${pad(x.getMonth() + 1)}-${pad(x.getDate())}`;
+    return computeClientBusinessDate(businessDayStartHour);
   })();
   const businessDayHoursOpen = businessDayMode === 'manual' ? serverHoursOpen : null;
 
