@@ -356,6 +356,7 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
   const drawerRef = useRef<HTMLDivElement>(null);
   const saveOrderTotalTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const saveItemQuantityTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  const deletingOrderItemIdsRef = useRef<Set<string>>(new Set());
   const [scalePort, setScalePort] = useState<string>(() => {
     try {
       const raw = localStorage.getItem('scale_calibration');
@@ -1401,6 +1402,8 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
   };
 
   const deleteExistingItem = async (orderItemId: string, reason?: string) => {
+    // Aynı ürün için çift tıklama / gecikmeli UI kaynaklı mükerrer iptal logunu engelle.
+    if (deletingOrderItemIdsRef.current.has(orderItemId)) return;
     const deletedItem = existingOrderItems.find(i => i.id === orderItemId);
     if (!deletedItem || !tenant || !user) return;
 
@@ -1434,26 +1437,41 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
       recalculateAndSaveTotal(newItems, currentOrder);
     }
 
-    const { error } = await supabase.from('order_items').delete().eq('id', orderItemId);
-    if (error) {
-      setExistingOrderItems(prev => [...prev, deletedItem]);
-      alert('Ürün silinirken hata oluştu');
-      return;
-    }
+    deletingOrderItemIdsRef.current.add(orderItemId);
+    try {
+      const { data: deletedRows, error } = await supabase
+        .from('order_items')
+        .delete()
+        .eq('id', orderItemId)
+        .select('id');
+      if (error) {
+        setExistingOrderItems(prev => [...prev, deletedItem]);
+        alert('Ürün silinirken hata oluştu');
+        return;
+      }
 
-    await supabase.from('order_cancel_logs').insert({
-      tenant_id: tenant.id,
-      branch_id: (table as any).branch_id || null,
-      order_id: currentOrder?.id || null,
-      order_item_id: orderItemId,
-      order_number: currentOrder?.order_number || null,
-      product_name: (deletedItem as any).products?.name || 'Bilinmeyen',
-      quantity: deletedItem.quantity,
-      unit_price: deletedItem.unit_price,
-      cancel_reason: reason || null,
-      cancelled_by: user.id,
-      cancelled_by_name: profile?.full_name || profile?.email || user.email || '',
-    });
+      const wasActuallyDeleted = Array.isArray(deletedRows) && deletedRows.length > 0;
+      if (!wasActuallyDeleted) {
+        // Başka bir akışta zaten silindiyse ikinci kez iptal logu yazma.
+        return;
+      }
+
+      await supabase.from('order_cancel_logs').insert({
+        tenant_id: tenant.id,
+        branch_id: (table as any).branch_id || null,
+        order_id: currentOrder?.id || null,
+        order_item_id: orderItemId,
+        order_number: currentOrder?.order_number || null,
+        product_name: (deletedItem as any).products?.name || 'Bilinmeyen',
+        quantity: deletedItem.quantity,
+        unit_price: deletedItem.unit_price,
+        cancel_reason: reason || null,
+        cancelled_by: user.id,
+        cancelled_by_name: profile?.full_name || profile?.email || user.email || '',
+      });
+    } finally {
+      deletingOrderItemIdsRef.current.delete(orderItemId);
+    }
 
     if (newItems.length === 0 && currentOrder && table.table_number !== 0) {
       await supabase.from('restaurant_tables').update({

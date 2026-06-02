@@ -1311,7 +1311,7 @@ const OrderCard = memo(function OrderCard({
 
             <div className="flex gap-1.5">
               <button
-                onClick={onEdit}
+                onClick={() => onEdit(order.id)}
                 className="flex-1 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-lg text-xs font-bold transition active:scale-95"
               >
                 Düzenle
