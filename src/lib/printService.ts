@@ -118,6 +118,18 @@ const PRINT_SETTINGS_LASTMOD_PREFIX = 'shefpos_print_settings_lastmod';
 /** Buluta yazılamadıysa JSON; çevrimiçi olunca veya sonraki fetch’te tekrar deneriz. */
 const PRINT_SETTINGS_PENDING_PUSH_KEY = 'shefpos_print_settings_pending_push';
 const PRINT_AGENT_URL = 'http://127.0.0.1:7878';
+/** Web dev: 7878 yok → konsolda ERR_CONNECTION_REFUSED spam olmasın */
+let printAgentBackoffUntil = 0;
+const PRINT_AGENT_BACKOFF_MS = 120_000;
+
+function shouldTryExternalPrintAgent(): boolean {
+  if (isElectron()) return Date.now() >= printAgentBackoffUntil;
+  try {
+    return localStorage.getItem('shefpos_use_external_print_agent') === '1';
+  } catch {
+    return false;
+  }
+}
 
 /** `savePrintSettings` her çağrıda artar; uçuşta kalan eski `fetch` sonucu yoksayılır. */
 let __printSettingsSaveGen = 0;
@@ -1337,6 +1349,7 @@ async function tryLocalPrintAgent(
   html: string,
   printerName: string
 ): Promise<{ success: boolean; error?: string } | null> {
+  if (!shouldTryExternalPrintAgent()) return null;
   try {
     const res = await fetch(`${PRINT_AGENT_URL}/print`, {
       method: 'POST',
@@ -1348,6 +1361,7 @@ async function tryLocalPrintAgent(
     if (data?.success) return { success: true };
     return { success: false, error: data?.error || data?.errorType || 'Print Agent başarısız' };
   } catch {
+    printAgentBackoffUntil = Date.now() + PRINT_AGENT_BACKOFF_MS;
     return null;
   }
 }

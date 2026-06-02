@@ -1,4 +1,5 @@
 import { supabase } from './supabase';
+import { getPrintSettingsContext } from './printService';
 
 export type HemenyoldaWebhookAction = 'new' | 'update' | 'cancel';
 
@@ -69,6 +70,8 @@ export interface HemenyoldaPushResult {
 }
 
 const hemenyoldaUpdateTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const hemenyoldaEnabledCache = new Map<string, { until: number; enabled: boolean }>();
+const HEMENYOLDA_ENABLED_CACHE_MS = 5 * 60_000;
 /** Ardışık durum güncellemelerinde edge function fırtınasını keser (paket yoğun gün). */
 const HEMENYOLDA_UPDATE_DEBOUNCE_MS = 2_500;
 const HEMENYOLDA_TIMER_CAP = 80;
@@ -85,14 +88,48 @@ function trimHemenyoldaTimers(): void {
   }
 }
 
+async function isHemenYoldaPushEnabled(tenantId: string): Promise<boolean> {
+  const hit = hemenyoldaEnabledCache.get(tenantId);
+  if (hit && Date.now() < hit.until) return hit.enabled;
+  try {
+    const { data } = await supabase
+      .from('henemyolda_integrations')
+      .select('is_active, access_token')
+      .eq('tenant_id', tenantId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const enabled = !!data?.is_active && !!String(data?.access_token || '').trim();
+    hemenyoldaEnabledCache.set(tenantId, { until: Date.now() + HEMENYOLDA_ENABLED_CACHE_MS, enabled });
+    return enabled;
+  } catch {
+    hemenyoldaEnabledCache.set(tenantId, { until: Date.now() + 60_000, enabled: false });
+    return false;
+  }
+}
+
 function flushHemenYoldaPush(
   orderId: string,
   action: HemenyoldaWebhookAction,
   branchId?: string | null,
 ): void {
-  void pushHemenYoldaOrder(orderId, action, branchId).catch((e) => {
-    console.warn('[HemenYolda]', action, orderId, e);
-  });
+  void (async () => {
+    const { tenantId } = getPrintSettingsContext();
+    if (!tenantId) return;
+    if (!(await isHemenYoldaPushEnabled(tenantId))) return;
+    const res = await pushHemenYoldaOrder(orderId, action, branchId);
+    if (res.ok || res.skipped) return;
+    const err = `${res.error || ''} ${res.message || ''}`.toLowerCase();
+    if (
+      err.includes('integration_not_configured') ||
+      err.includes('integration_inactive') ||
+      err.includes('entegrasyon')
+    ) {
+      hemenyoldaEnabledCache.set(tenantId, { until: Date.now() + HEMENYOLDA_ENABLED_CACHE_MS, enabled: false });
+      return;
+    }
+    console.warn('[HemenYolda]', action, orderId, res.error || res.message);
+  })().catch(() => {});
 }
 
 /** POS siparişini HemenYolda'ya gönder (fire-and-forget; hata konsola). */

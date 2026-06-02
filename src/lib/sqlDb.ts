@@ -427,7 +427,11 @@ export const localDb = {
 
   async rpc(fn: string, _params?: Record<string, unknown>) {
     if (fn === 'get_current_business_date') {
-      return { data: new Date().toISOString().slice(0, 10), error: null };
+      const d = new Date().toISOString().slice(0, 10);
+      return {
+        data: [{ business_date: d, mode: 'cutoff', cutoff_hour: 6, last_closed: null, hours_open: null }],
+        error: null,
+      };
     }
     if (fn === 'unlock_stale_payment_locks') {
       return { data: null, error: null };

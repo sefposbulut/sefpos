@@ -22,6 +22,7 @@ import {
 } from '../lib/printService';
 import { isAykaAdminPath } from '../lib/aykaRoute';
 import { startTenantPresenceTracking, stopTenantPresenceTracking } from '../lib/tenantPresence';
+import { fetchCurrentBusinessDate } from '../lib/businessDayApi';
 import { hideBootSplash } from '../lib/bootSplash';
 import {
   clearAuthSessionSnap,
@@ -1296,25 +1297,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return;
     }
     const fetchIt = async () => {
-      try {
-        const { data, error } = await (supabase as any).rpc('get_current_business_date', {
-          p_branch_id: activeBranch.id,
-        });
-        if (cancelled || error || !data) return;
-        const row = Array.isArray(data) ? data[0] : data;
-        if (row?.business_date) {
-          setServerBusinessDate(String(row.business_date));
-        }
-        if (typeof row?.hours_open === 'number') {
-          setServerHoursOpen(Number(row.hours_open));
-        } else if (typeof row?.hours_open === 'string') {
-          const n = Number(row.hours_open);
-          setServerHoursOpen(Number.isFinite(n) ? n : null);
-        } else {
-          setServerHoursOpen(null);
-        }
-      } catch {
-        // sessizce
+      const row = await fetchCurrentBusinessDate(activeBranch.id);
+      if (cancelled || !row) return;
+      if (row.business_date) setServerBusinessDate(String(row.business_date));
+      if (typeof row.hours_open === 'number') {
+        setServerHoursOpen(Number(row.hours_open));
+      } else if (row.hours_open != null && row.hours_open !== '') {
+        const n = Number(row.hours_open);
+        setServerHoursOpen(Number.isFinite(n) ? n : null);
+      } else {
+        setServerHoursOpen(null);
       }
     };
     fetchIt();
