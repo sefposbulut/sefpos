@@ -7,9 +7,9 @@ import {
   stopContinuousAlert,
   stopAllAlerts,
   getActiveAlertOrderIds,
+  isAudioUnlocked,
   unlockAudio,
   playOnlineOrderAlert,
-  getAudioState,
 } from '../lib/notification';
 import {
   callGetir,
@@ -1234,22 +1234,18 @@ export function OnlineOrders({ isActive = true }: { isActive?: boolean }) {
     getir_pos_status: number | null;
   } | null>(null);
   const [getirStoreBusy, setGetirStoreBusy] = useState(false);
-  // Sayfa acildiginda audio context'i unlock dene; engellendiyse banner goster.
+  // Autoplay: mount'ta AudioContext acilmaz; kullanici bir kez tiklayinca App unlock eder.
   useEffect(() => {
-    unlockAudio();
-    const check = () => {
-      const s = getAudioState();
-      setAudioBlocked(s.state === 'suspended' || (!s.unlocked && s.state !== 'running'));
-    };
+    const check = () => setAudioBlocked(!isAudioUnlocked());
     check();
     const id = window.setInterval(check, isActive ? 5000 : 15_000);
     return () => window.clearInterval(id);
   }, [isActive]);
 
   const testSound = async () => {
-    unlockAudio();
+    await unlockAudio();
     await playOnlineOrderAlert('Test', 1);
-    setAudioBlocked(false);
+    setAudioBlocked(!isAudioUnlocked());
   };
 
   const setGetirRestaurantOpen = async (wantOpen: boolean) => {

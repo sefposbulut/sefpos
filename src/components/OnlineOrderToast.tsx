@@ -3,9 +3,10 @@ import { Bell, X, CheckCircle2, ChevronRight } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import {
+  isAudioUnlocked,
+  notificationSound,
   startContinuousAlert,
   stopContinuousAlert,
-  unlockAudio,
 } from '../lib/notification';
 import { PlatformLogo } from './PlatformLogo';
 import { callGetir } from '../lib/getirApi';
@@ -143,8 +144,11 @@ export function OnlineOrderToast({ onOpenOnlineOrders, currentPage }: Props) {
         fetchPlatform(row.platform_id ?? null),
         fetchItems(row.id),
       ]);
-      unlockAudio();
-      startContinuousAlert(row.id, plat.name);
+      if (isAudioUnlocked()) {
+        startContinuousAlert(row.id, plat.name);
+      } else {
+        void notificationSound.play();
+      }
 
       setToasts((prev) => {
         if (prev.some((t) => t.id === row.id)) return prev;

@@ -1,37 +1,16 @@
-// Web Audio API ile çok hafif "did" sesi — asset gerektirmez, anında çalar.
-// Tarayıcı autoplay politikasına uymak için ilk kullanıcı etkileşiminde
-// AudioContext'i resume etmek üzere lazy oluşturulur.
+// Web Audio API ile çok hafif "did" sesi — asset gerektirmez.
+// AudioContext yalnizca notification.unlockAudio() sonrasi kullanilir.
 
-let _ctx: AudioContext | null = null;
-
-function getCtx(): AudioContext | null {
-  try {
-    if (_ctx) {
-      // Bazı tarayıcılarda kullanıcı etkileşimi öncesi `suspended` kalır.
-      if (_ctx.state === 'suspended') {
-        _ctx.resume().catch(() => { /* noop */ });
-      }
-      return _ctx;
-    }
-    const Ctor =
-      (window as any).AudioContext || (window as any).webkitAudioContext;
-    if (!Ctor) return null;
-    _ctx = new Ctor() as AudioContext;
-    return _ctx;
-  } catch {
-    return null;
-  }
-}
+import { getSharedAudioContext, isAudioUnlocked, unlockAudio } from './notification';
 
 function tone(frequency: number, durationMs: number, gain = 0.18, type: OscillatorType = 'sine'): void {
-  const ctx = getCtx();
+  const ctx = getSharedAudioContext();
   if (!ctx) return;
   try {
     const osc = ctx.createOscillator();
     const g = ctx.createGain();
     osc.type = type;
     osc.frequency.setValueAtTime(frequency, ctx.currentTime);
-    // Yumuşak attack/release için hafif zarflama — "did" hissi
     g.gain.setValueAtTime(0.0001, ctx.currentTime);
     g.gain.exponentialRampToValueAtTime(gain, ctx.currentTime + 0.005);
     g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + durationMs / 1000);
@@ -43,24 +22,20 @@ function tone(frequency: number, durationMs: number, gain = 0.18, type: Oscillat
   }
 }
 
-/** Başarılı tarama: kısa ve net "did" sesi. */
 export function playScanSuccess(): void {
+  if (!isAudioUnlocked()) return;
   tone(2000, 70, 0.22, 'square');
-  // Kısa hafif titreşim (mobil)
   try { (navigator as any)?.vibrate?.(35); } catch { /* noop */ }
 }
 
-/** Başarısız / bilinmeyen barkod: alçak çift "buzz". */
 export function playScanError(): void {
+  if (!isAudioUnlocked()) return;
   tone(380, 90, 0.25, 'sawtooth');
   setTimeout(() => tone(280, 120, 0.22, 'sawtooth'), 90);
   try { (navigator as any)?.vibrate?.([50, 60, 50]); } catch { /* noop */ }
 }
 
-/** İlk kullanıcı etkileşiminde AudioContext'i resume etmek için. */
+/** İlk kullanıcı etkileşiminde — App unlock ile aynı yol. */
 export function primeAudio(): void {
-  const ctx = getCtx();
-  if (ctx && ctx.state === 'suspended') {
-    ctx.resume().catch(() => { /* noop */ });
-  }
+  void unlockAudio();
 }
