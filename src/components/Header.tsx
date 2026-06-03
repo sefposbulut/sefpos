@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
+import { usePersonalActiveShift } from '../contexts/ActiveShiftContext';
 import { LogOut, User, Settings, ChevronDown, MapPin, Check, Building2, Zap, ZoomIn, ZoomOut, Bell, Headphones as HeadphonesIcon, X, Send, Sparkles, Phone, Mail, ArrowLeft, LayoutGrid, PlayCircle, Lock, Minimize2, UserCheck, Trash2, Home, ChevronRight } from 'lucide-react';
 import { WaiterCallBell } from './WaiterCallBell';
 import { supabase } from '../lib/supabase';
 import { getTrialInfo, formatTrialRemaining } from '../lib/tenantTrial';
-import { useActiveShift } from '../lib/useActiveShift';
+import type { ActiveShift } from '../lib/useActiveShift';
 import { shiftDurationLabel, shiftIcon } from '../lib/businessDay';
 import { useUiPrefs, setHeaderHidden, setUiScale, bumpUiScale, resetUiScale, UI_SCALE_MIN, UI_SCALE_MAX, UI_SCALE_STEP } from '../lib/uiPrefs';
 import {
@@ -110,13 +111,7 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
     clearTenantImpersonation,
   } = useAuth();
   const canUseShifts = !!permissions?.can_use_shifts;
-  const { activeShift, todayClosure } = useActiveShift({
-    tenantId: tenant?.id || null,
-    branchId: activeBranch?.id || null,
-    userId: user?.id || null,
-    enabled: !!tenant && shiftsEnabled && canUseShifts,
-    cutoffHour: businessDayStartHour,
-  });
+  const { activeShift, todayClosure } = usePersonalActiveShift();
   const [showBranchMenu, setShowBranchMenu] = useState(false);
   const uiPrefs = useUiPrefs();
   const zoom = uiPrefs.uiScale;
@@ -1149,7 +1144,7 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
 }
 
 interface ShiftBadgeProps {
-  activeShift: ReturnType<typeof useActiveShift>['activeShift'];
+  activeShift: ActiveShift | null;
   dayLocked: boolean;
   onClick?: () => void;
 }

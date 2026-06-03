@@ -40,6 +40,7 @@ interface DayStats {
 
 interface EndOfDayProps {
   onClose?: () => void;
+  isActive?: boolean;
 }
 
 function pad(n: number) { return String(n).padStart(2, '0'); }
@@ -48,7 +49,7 @@ function toLocalDT(d: Date) {
 }
 
 
-export function EndOfDay({ onClose }: EndOfDayProps) {
+export function EndOfDay({ onClose, isActive = true }: EndOfDayProps) {
   const { tenant, activeBranch, branches, isOwnerOrAdmin, isManager, permissions, profile, user, businessDayStartHour, businessDayMode, currentBusinessDate, businessDayHoursOpen } = useAuth();
   const [stats, setStats] = useState<DayStats | null>(null);
   const [loading, setLoading] = useState(true);
@@ -150,7 +151,7 @@ export function EndOfDay({ onClose }: EndOfDayProps) {
   const { activeShift, todayClosure, refresh: refreshShift } = useActiveShift({
     tenantId: tenant?.id || null,
     branchId: effectiveBranchForShift,
-    enabled: !!tenant,
+    enabled: isActive && !!tenant,
     cutoffHour: businessDayStartHour,
   });
   // Manuel modda: AuthContext'ten gelen RPC sonucunu kullan; cutoff modunda lokal hesap.
@@ -206,8 +207,9 @@ export function EndOfDay({ onClose }: EndOfDayProps) {
   }, [activeBranch?.id]);
 
   useEffect(() => {
-    if (tenant) loadStats();
-  }, [tenant, startDT, endDT, selectedBranch]);
+    if (!isActive || !tenant) return;
+    loadStats();
+  }, [isActive, tenant, startDT, endDT, selectedBranch]);
 
   const loadStats = async () => {
     if (!tenant) return;

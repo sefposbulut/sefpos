@@ -9,7 +9,9 @@ import { ElectronConnectionMenu, type ElectronConnectMode } from './components/e
 import { ElectronDesktopHome } from './components/electron/ElectronDesktopHome';
 import { preloadElectronHomeData } from './lib/electronDashboardData';
 import { setActivePosPage } from './lib/pageActivity';
+import { purgeColdMountedPages, shouldRenderPosPage } from './lib/posPageMount';
 import { setDiagnosticsMountedPages } from './lib/resourceDiagnostics';
+import { ActiveShiftProvider } from './contexts/ActiveShiftContext';
 import { registerPosStressHooks } from './lib/posStressBridge';
 import { SqlServerSettings } from './components/SqlServerSettings';
 import { LandingPage } from './components/landing/LandingPage';
@@ -170,20 +172,16 @@ export default function App() {
   }, [tenant?.id]);
   const [showShiftQuickClose, setShowShiftQuickClose] = useState(false);
   const [dbMode, setDbMode] = useState<'cloud' | 'sqlserver' | null>(readInitialElectronDbMode);
-  // Always-mounted sayfalar yalnizca bir kez ziyaret edildiklerinde DOM'a girer
-  // ve sonrasinda display:none ile saklanir. POS sicak yolu (tables) en bastan
-  // mount edilir; nadir sayfalar (Products, OnlineOrders, vs.) baslangic
-  // maliyetine eklenmez. Bu hook'lar Rules of Hooks geregi en uste konulmuştur.
-  // Web: masalar + online sipariş toast için online-orders baştan mount.
-  // Electron: ana sayfa + hub sayfaları kademeli mount (ilk tıklamada bekleme yok).
+  // Sıcak yol (masa/paket/online): bir kez açılınca display:none ile saklanır.
+  // Soğuk sayfalar (stok, rapor, gün sonu…): çıkınca unmount — gizli poll/kanal birikmez.
   const mountedPagesRef = useRef<Set<string>>(
     new Set(isElectron ? ['desktop-home', 'online-orders'] : ['tables', 'online-orders']),
   );
   const [mountedPagesVersion, setMountedPagesVersion] = useState(0);
-  if (currentPage && !mountedPagesRef.current.has(currentPage)) {
-    mountedPagesRef.current.add(currentPage);
-  }
   useEffect(() => {
+    if (!currentPage) return;
+    mountedPagesRef.current.add(currentPage);
+    purgeColdMountedPages(mountedPagesRef.current, currentPage);
     setMountedPagesVersion((v) => v + 1);
   }, [currentPage]);
 
@@ -669,13 +667,15 @@ export default function App() {
   }
 
   const show = (page: string) => currentPage === page;
-  const wasMounted = (page: string) => mountedPagesRef.current.has(page);
+  const shouldRenderPage = (page: string) =>
+    shouldRenderPosPage(page, currentPage, mountedPagesRef.current);
   const onElectronHome = isElectron && currentPage === 'desktop-home';
 
   // Mobilde efektif olarak her zaman header acik.
   const headerHidden = (uiPrefs.headerHidden && isDesktopViewport) || onElectronHome;
 
   return (
+    <ActiveShiftProvider>
     <div
       className="min-h-screen bg-slate-50"
       data-header-hidden={headerHidden ? 'true' : 'false'}
@@ -762,10 +762,8 @@ export default function App() {
         onLockScreen={() => setIsLocked(true)}
       />
 
-      {/* Always-mounted pages - bir kez ziyaret edilince DOM'da kalir; bundan
-           sonraki gecisler display:none ile aninda olur. Ilk acilista sadece
-           'tables' mounted oldugu icin first paint maliyeti dusuktur. */}
-      {wasMounted('tables') && (
+      {/* Sıcak yol: display:none ile saklanır. Soğuk sayfalar: çıkınca unmount. */}
+      {shouldRenderPage('tables') && (
         <div
           style={{
             display: show('tables') ? undefined : 'none',
@@ -785,25 +783,25 @@ export default function App() {
         </div>
       )}
 
-      {wasMounted('takeaway') && (
+      {shouldRenderPage('takeaway') && (
         <div style={{ display: show('takeaway') ? undefined : 'none' }} className="fixed inset-0 top-14 md:top-20 overflow-auto">
           <TakeawayOrders isActive={currentPage === 'takeaway'} />
         </div>
       )}
 
-      {wasMounted('online-orders') && (
+      {shouldRenderPage('online-orders') && (
         <div style={{ display: show('online-orders') ? undefined : 'none' }} className="fixed inset-0 top-14 md:top-20 overflow-auto">
           <OnlineOrders isActive={currentPage === 'online-orders'} />
         </div>
       )}
 
-      {wasMounted('products') && (
-        <div style={{ display: show('products') ? undefined : 'none' }} className="fixed inset-0 top-14 md:top-20 overflow-hidden">
-          <Products isActive={currentPage === 'products'} />
+      {shouldRenderPage('products') && (
+        <div className="fixed inset-0 top-14 md:top-20 overflow-hidden">
+          <Products isActive />
         </div>
       )}
 
-      {wasMounted('product-stock-count') && (
+      {shouldRenderPage('product-stock-count') && (
         <div
           style={{ display: show('product-stock-count') ? undefined : 'none' }}
           className="fixed inset-0 top-14 md:top-20 bg-gradient-to-br from-slate-50 to-slate-100 overflow-y-auto min-h-0"
@@ -812,18 +810,15 @@ export default function App() {
         </div>
       )}
 
-      {wasMounted('users') && (
-        <div
-          style={{ display: show('users') ? undefined : 'none' }}
-          className="fixed inset-0 top-14 md:top-20 bg-gradient-to-br from-slate-50 to-slate-100 overflow-auto"
-        >
+      {shouldRenderPage('users') && (
+        <div className="fixed inset-0 top-14 md:top-20 bg-gradient-to-br from-slate-50 to-slate-100 overflow-auto">
           <div className="p-3 md:p-6 max-w-7xl mx-auto">
             <UserManagement />
           </div>
         </div>
       )}
 
-      {wasMounted('customers') && (
+      {shouldRenderPage('customers') && (
         <div
           style={{ display: show('customers') ? undefined : 'none' }}
           className="fixed inset-0 top-14 md:top-20 bg-gradient-to-br from-slate-50 to-slate-100 overflow-hidden"
@@ -832,7 +827,7 @@ export default function App() {
         </div>
       )}
 
-      {wasMounted('loyalty') && (
+      {shouldRenderPage('loyalty') && (
         <div
           style={{ display: show('loyalty') ? undefined : 'none' }}
           className="fixed inset-0 top-14 md:top-20 bg-gradient-to-br from-slate-50 to-slate-100 overflow-hidden"
@@ -844,25 +839,25 @@ export default function App() {
         </div>
       )}
 
-      {wasMounted('reports') && (
-        <div style={{ display: show('reports') ? undefined : 'none' }}>
-          <Reports />
+      {shouldRenderPage('reports') && (
+        <div>
+          <Reports isActive />
         </div>
       )}
 
-      {wasMounted('endofday') && (
-        <div style={{ display: show('endofday') ? undefined : 'none' }}>
-          <EndOfDay />
+      {shouldRenderPage('endofday') && (
+        <div>
+          <EndOfDay isActive />
         </div>
       )}
 
-      {wasMounted('cancel-logs') && (
+      {shouldRenderPage('cancel-logs') && (
         <div style={{ display: show('cancel-logs') ? undefined : 'none' }}>
           <CancelLogs onClose={() => setCurrentPage(isElectron ? 'desktop-home' : 'tables')} />
         </div>
       )}
 
-      {wasMounted('inventory') && (
+      {shouldRenderPage('inventory') && (
         <div
           style={{ display: show('inventory') ? undefined : 'none' }}
           className="fixed inset-0 top-14 md:top-20 bg-gradient-to-br from-slate-50 to-slate-100 overflow-hidden"
@@ -871,17 +866,14 @@ export default function App() {
         </div>
       )}
 
-      {wasMounted('quick-sale') && (
-        <div
-          style={{ display: show('quick-sale') ? undefined : 'none' }}
-          className="fixed inset-0 top-14 md:top-20 bg-gradient-to-br from-slate-50 to-slate-100 overflow-hidden"
-        >
-          <QuickSale />
+      {shouldRenderPage('quick-sale') && (
+        <div className="fixed inset-0 top-14 md:top-20 bg-gradient-to-br from-slate-50 to-slate-100 overflow-hidden">
+          <QuickSale isActive />
         </div>
       )}
 
-      {wasMounted('shifts') && (
-        <div style={{ display: show('shifts') ? undefined : 'none' }}>
+      {shouldRenderPage('shifts') && (
+        <div>
           <ShiftManager />
         </div>
       )}
@@ -917,5 +909,6 @@ export default function App() {
       />
       <PrintStatusToast />
     </div>
+    </ActiveShiftProvider>
   );
 }

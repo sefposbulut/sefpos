@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { useActiveShift } from '../lib/useActiveShift';
+import { usePersonalActiveShift } from '../contexts/ActiveShiftContext';
 import { supabase } from '../lib/supabase';
 import { PlayCircle, X, RefreshCw, AlertTriangle, ChevronDown, Layers, Lock } from 'lucide-react';
 import { shiftIcon } from '../lib/businessDay';
@@ -29,10 +29,7 @@ export function ShiftAutoStartPrompt() {
   const { tenant, user, profile, activeBranch, shiftsEnabled, permissions, businessDayStartHour } = useAuth();
   const tenantId = tenant?.id || null;
   const branchId = activeBranch?.id || null;
-  const { activeShift, todayClosure, loading } = useActiveShift({
-    tenantId, branchId, userId: user?.id || null, enabled: !!tenantId && shiftsEnabled,
-    cutoffHour: businessDayStartHour,
-  });
+  const { activeShift, todayClosure, loading } = usePersonalActiveShift();
 
   const sessionKey = tenant && user ? `sefpos_shift_prompt_dismissed_${tenant.id}_${user.id}` : '';
   const welcomeKey = tenant && user ? `sefpos_shift_welcome_shown_${tenant.id}_${user.id}_${activeShift?.id || ''}` : '';

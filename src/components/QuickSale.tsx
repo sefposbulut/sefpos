@@ -52,7 +52,7 @@ interface CartLine {
 
 type PaymentMethod = 'cash' | 'credit_card' | 'open_account';
 
-export function QuickSale() {
+export function QuickSale({ isActive = true }: { isActive?: boolean }) {
   const { tenant, user, activeBranch } = useAuth();
   const { format: fmtMoney, formatInt: fmtInt, formatPrice: fmtPrice, symbol: currencySymbol, code: currencyCode } = useCurrency();
   const [products, setProducts] = useState<Product[]>([]);
@@ -128,7 +128,10 @@ export function QuickSale() {
     setLoading(false);
   }, [tenant?.id]);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    if (!isActive) return;
+    void load();
+  }, [isActive, load]);
 
   // ─── Hesap ────────────────────────────────────────────────────────────────
   const filtered = useMemo(() => {

@@ -225,13 +225,18 @@ export function analyzeDiagnostics(snapshot: DiagnosticsSnapshot): DiagnosticIns
     });
   }
 
-  if (snapshot.mountedPages.length >= 8) {
-    out.push({
-      severity: 'warn',
-      title: 'Çok sayıda ekran bellekte tutuluyor',
-      detail: `${snapshot.mountedPages.length} sayfa daha önce açılmış (${snapshot.mountedPages.join(', ')}). Her biri kanal veya veri tutabilir — öğleden sonra yavaşlama bununla uyumlu.`,
-      source: 'mounted',
-    });
+  if (snapshot.mountedPages.length >= 6) {
+    const warmOnly = snapshot.mountedPages.filter((p) =>
+      ['tables', 'takeaway', 'online-orders', 'desktop-home'].includes(p),
+    );
+    if (warmOnly.length >= 4 || snapshot.mountedPages.length >= 8) {
+      out.push({
+        severity: 'warn',
+        title: 'Çok sayıda ekran bellekte tutuluyor',
+        detail: `${snapshot.mountedPages.length} sayfa kayıtlı (${snapshot.mountedPages.join(', ')}). Soğuk sayfalar (stok, rapor vb.) artık çıkınca unmount edilir; uyarı çoğunlukla masa/paket sıcak yolu içindir.`,
+        source: 'mounted',
+      });
+    }
   }
 
   const waiter = ch.find((n) => n.includes('waiter-calls'));

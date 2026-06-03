@@ -64,14 +64,14 @@ const VALID_TABS: ReportTab[] = [
   REPORTS_TAB_STOCK_COUNT,
 ];
 
-export function Reports() {
+export function Reports({ isActive = true }: { isActive?: boolean }) {
   const { tenant, isOwnerOrAdmin } = useAuth();
   const [activeTab, setActiveTab] = useState<ReportTab>('overview');
   const [branches, setBranches] = useState<Branch[]>([]);
   const [selectedBranch, setSelectedBranch] = useState<string>('all');
 
   useEffect(() => {
-    if (!tenant) return;
+    if (!isActive || !tenant) return;
     (async () => {
       const { data } = await supabase
         .from('branches')
@@ -82,7 +82,7 @@ export function Reports() {
         .order('name');
       if (data) setBranches(data as Branch[]);
     })();
-  }, [tenant]);
+  }, [isActive, tenant]);
 
   useEffect(() => {
     try {
