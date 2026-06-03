@@ -11,7 +11,7 @@ import {
 import { PlatformLogo } from './PlatformLogo';
 import { callGetir } from '../lib/getirApi';
 import { GETIR_ORDERS_POLLED_EVENT } from './GlobalGetirSync';
-import { wantsFrequentGetirSync } from '../lib/pageActivity';
+import { wantsOnlineOrderToastPoll } from '../lib/pageActivity';
 
 interface ToastOrderItem {
   name: string;
@@ -205,7 +205,7 @@ export function OnlineOrderToast({ onOpenOnlineOrders, currentPage }: Props) {
       .subscribe();
 
     const onPolled = async () => {
-      if (!wantsFrequentGetirSync()) return;
+      if (!wantsOnlineOrderToastPoll()) return;
       try {
         const since = new Date(Date.now() - 3 * 60 * 1000).toISOString();
         const { data: rows } = await supabase

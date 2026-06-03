@@ -23,16 +23,36 @@ export function isActivePosPage(...pages: string[]): boolean {
   return pages.includes(activePage);
 }
 
-/** Paket / masa / hızlı satış — yoğun UI; Getir ve yan poll'lar seyreltilir. */
+/** Paket / masa / hızlı satış — yoğun UI; gereksiz arka plan poll'ları kes. */
 export function isHeavyPosScreen(): boolean {
   return activePage === 'takeaway' || activePage === 'tables' || activePage === 'quick-sale';
 }
 
-/** Getir sipariş poll'unun sık olması mantıklı ekranlar */
+/**
+ * Getir API poll hızı — ana ekranda seyrek, online ekranda sık.
+ * `off`: poll yok (paket, stok, ayar vb. — Realtime toast yeter).
+ */
+export type GetirPollTier = 'off' | 'slow' | 'moderate' | 'fast';
+
+export function getGetirPollTier(): GetirPollTier {
+  switch (activePage) {
+    case 'online-orders':
+      return 'fast';
+    case 'tables':
+      return 'moderate';
+    case 'desktop-home':
+      return 'slow';
+    default:
+      return 'off';
+  }
+}
+
+/** @deprecated getGetirPollTier() kullanın — geriye dönük */
 export function wantsFrequentGetirSync(): boolean {
-  return (
-    activePage === 'online-orders' ||
-    activePage === 'tables' ||
-    activePage === 'desktop-home'
-  );
+  return getGetirPollTier() === 'fast';
+}
+
+/** Getir poll sonrası yedek DB taraması (toast) — yalnızca sipariş/masa ekranı */
+export function wantsOnlineOrderToastPoll(): boolean {
+  return activePage === 'online-orders' || activePage === 'tables';
 }

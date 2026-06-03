@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { supabase } from './supabase';
+import { startAdaptivePoller } from './pollSchedule';
 
 export interface ActiveShift {
   id: string;
@@ -117,7 +118,7 @@ export function useActiveShift({ branchId, tenantId, userId, enabled = true, cut
       refreshTimer = setTimeout(() => {
         refreshTimer = null;
         refresh();
-      }, 500);
+      }, 1500);
     };
 
     const channel = supabase
@@ -138,9 +139,15 @@ export function useActiveShift({ branchId, tenantId, userId, enabled = true, cut
       if (document.visibilityState === 'visible') refresh();
     };
     document.addEventListener('visibilitychange', onVis);
-    const id = window.setInterval(() => {
-      if (document.visibilityState === 'visible') refresh();
-    }, 120_000);
+    const stopPoll = startAdaptivePoller({
+      baseMs: 180_000,
+      idleMs: 300_000,
+      hiddenMs: 0,
+      run: () => {
+        if (document.visibilityState === 'visible') return refresh();
+      },
+      immediate: false,
+    });
 
     return () => {
       try {
@@ -149,7 +156,7 @@ export function useActiveShift({ branchId, tenantId, userId, enabled = true, cut
         // ignore
       }
       document.removeEventListener('visibilitychange', onVis);
-      window.clearInterval(id);
+      stopPoll();
       if (refreshTimer) clearTimeout(refreshTimer);
     };
   }, [enabled, tenantId, branchId, userId, refresh]);

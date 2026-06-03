@@ -209,7 +209,7 @@ export function analyzeDiagnostics(snapshot: DiagnosticsSnapshot): DiagnosticIns
     out.push({
       severity: 'warn',
       title: 'Online / Getir senkronu yoğun',
-      detail: `Platform siparişleri için sık istek görülüyor. Paket veya online ekranı açıkken normal; masa ekranındayken de yüksekse GlobalGetirSync gereksiz çalışıyor olabilir.`,
+      detail: `Platform siparişleri için sık istek görülüyor. Online/masa ekranında normal; ana ekranda seyrek, paket/stok/ayarlarda Getir poll kapalı olmalı.`,
       source: 'getir',
     });
   }

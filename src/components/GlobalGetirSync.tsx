@@ -8,34 +8,56 @@ import {
 } from '../lib/getirApi';
 import { isPageVisible, startAdaptivePoller } from '../lib/pollSchedule';
 import { isSqlServerMode } from '../lib/sqlDb';
-import { wantsFrequentGetirSync } from '../lib/pageActivity';
+import {
+  getGetirPollTier,
+  PAGE_CHANGE_EVENT,
+  type GetirPollTier,
+} from '../lib/pageActivity';
 
 export const GETIR_STORE_STATUS_EVENT = 'sefpos:getir-store-status';
 export const GETIR_ORDERS_POLLED_EVENT = 'sefpos:getir-orders-polled';
 
-/** Online / masa / ana sayfa: sık. Paket vb. yoğun ekran: seyrek (sayfa değişince run içinde okunur). */
-const ORDER_BASE_FAST_MS = 40_000;
-const ORDER_BASE_SLOW_MS = 120_000;
-const ORDER_IDLE_MS = 90_000;
-const STORE_BASE_FAST_MS = 90_000;
-const STORE_BASE_SLOW_MS = 240_000;
+const ORDER_MS: Record<GetirPollTier, number> = {
+  off: 0,
+  slow: 180_000,
+  moderate: 90_000,
+  fast: 40_000,
+};
+const STORE_MS: Record<GetirPollTier, number> = {
+  off: 0,
+  slow: 300_000,
+  moderate: 180_000,
+  fast: 90_000,
+};
+const ORDER_IDLE_MS = 120_000;
 const STORE_IDLE_MS = 300_000;
 
+function tierIntervals(tier: GetirPollTier) {
+  return {
+    orderBase: ORDER_MS[tier],
+    storeBase: STORE_MS[tier],
+  };
+}
+
 /**
- * Tüm POS ekranlarında arka planda Getir senkronu:
- * - Mağaza açık/kapalı
- * - Onay bekleyen / aktif siparişler sırayla
- * Gizli sekme: durur. 2 dk etkileşimsiz: aralık uzar (429 riski düşer, kasa hafifler).
+ * Getir senkronu — yalnızca aktif Getir entegrasyonu ve ilgili ekranda.
+ * Ana ekran: seyrek; online sipariş: sık; paket/stok/ayar: kapalı (kasma kesilir).
+ * Yeni sipariş bildirimi: Realtime + (gerekirse) toast yedek poll.
  */
 export function GlobalGetirSync() {
   const { tenant } = useAuth();
   const platformIdRef = useRef<string | null>(null);
   const orderTickRef = useRef(0);
+  const tierRef = useRef<GetirPollTier>(getGetirPollTier());
 
   useEffect(() => {
     if (!tenant?.id || isSqlServerMode()) return;
 
     let stopped = false;
+    let stopOrders: (() => void) | null = null;
+    let stopStore: (() => void) | null = null;
+    let firstOrder: ReturnType<typeof setTimeout> | null = null;
+    let firstStore: ReturnType<typeof setTimeout> | null = null;
 
     const resolvePlatformId = async (): Promise<string | null> => {
       if (platformIdRef.current) return platformIdRef.current;
@@ -52,12 +74,17 @@ export function GlobalGetirSync() {
       return id;
     };
 
+    const shouldRun = (): boolean => {
+      const tier = getGetirPollTier();
+      tierRef.current = tier;
+      return tier !== 'off' && isPageVisible();
+    };
+
     const syncStore = async () => {
-      if (stopped || !isPageVisible()) return;
-      if (!wantsFrequentGetirSync()) return;
+      if (stopped || !shouldRun()) return;
       if (isGetirRateLimited()) return;
       const platformId = await resolvePlatformId();
-      if (!platformId) return;
+      if (!platformId || stopped) return;
       try {
         const sync = await syncGetirStoreStatusFromApi(platformId);
         if (stopped || !sync.ok) return;
@@ -76,11 +103,10 @@ export function GlobalGetirSync() {
     };
 
     const pollOrders = async () => {
-      if (stopped || !isPageVisible()) return;
-      if (!wantsFrequentGetirSync()) return;
+      if (stopped || !shouldRun()) return;
       if (isGetirRateLimited()) return;
       const platformId = await resolvePlatformId();
-      if (!platformId) return;
+      if (!platformId || stopped) return;
 
       orderTickRef.current += 1;
       const action =
@@ -117,57 +143,84 @@ export function GlobalGetirSync() {
       }
     };
 
-    const kick = () => {
-      if (!isPageVisible()) return;
-      void syncStore();
-      void pollOrders();
+    const stopAllPollers = () => {
+      stopOrders?.();
+      stopStore?.();
+      stopOrders = null;
+      stopStore = null;
+      if (firstOrder) window.clearTimeout(firstOrder);
+      if (firstStore) window.clearTimeout(firstStore);
+      firstOrder = null;
+      firstStore = null;
     };
 
-    const firstOrder = window.setTimeout(() => void pollOrders(), 2_500);
-    const firstStore = window.setTimeout(() => void syncStore(), 1_000);
+    const startPollersForTier = (tier: GetirPollTier) => {
+      stopAllPollers();
+      if (tier === 'off' || stopped) return;
 
-    const orderPollOpts = () => ({
-      diagLabel: 'getir-orders-poll',
-      baseMs: wantsFrequentGetirSync() ? ORDER_BASE_FAST_MS : ORDER_BASE_SLOW_MS,
-      idleMs: ORDER_IDLE_MS,
-      hiddenMs: 0 as const,
-      run: pollOrders,
-      immediate: false as const,
-    });
-    const storePollOpts = () => ({
-      diagLabel: 'getir-store-poll',
-      baseMs: wantsFrequentGetirSync() ? STORE_BASE_FAST_MS : STORE_BASE_SLOW_MS,
-      idleMs: STORE_IDLE_MS,
-      hiddenMs: 0 as const,
-      run: syncStore,
-      immediate: false as const,
-    });
+      const { orderBase, storeBase } = tierIntervals(tier);
+      if (orderBase <= 0 && storeBase <= 0) return;
 
-    let stopOrders = startAdaptivePoller(orderPollOpts());
-    let stopStore = startAdaptivePoller(storePollOpts());
+      firstStore = window.setTimeout(() => void syncStore(), 1_500);
+      firstOrder = window.setTimeout(() => void pollOrders(), 3_000);
 
-    const restartPollersForPage = () => {
-      stopOrders();
-      stopStore();
-      stopOrders = startAdaptivePoller(orderPollOpts());
-      stopStore = startAdaptivePoller(storePollOpts());
+      if (orderBase > 0) {
+        stopOrders = startAdaptivePoller({
+          diagLabel: 'getir-orders-poll',
+          baseMs: orderBase,
+          idleMs: ORDER_IDLE_MS,
+          hiddenMs: 0,
+          run: pollOrders,
+          immediate: false,
+        });
+      }
+      if (storeBase > 0) {
+        stopStore = startAdaptivePoller({
+          diagLabel: 'getir-store-poll',
+          baseMs: storeBase,
+          idleMs: STORE_IDLE_MS,
+          hiddenMs: 0,
+          run: syncStore,
+          immediate: false,
+        });
+      }
     };
 
-    const onPageChange = () => restartPollersForPage();
-    window.addEventListener('sefpos:page-change', onPageChange);
+    const boot = async () => {
+      const platformId = await resolvePlatformId();
+      if (stopped || !platformId) return;
+      startPollersForTier(getGetirPollTier());
+    };
+
+    void boot();
+
+    const onPageChange = () => {
+      startPollersForTier(getGetirPollTier());
+    };
+    window.addEventListener(PAGE_CHANGE_EVENT, onPageChange);
 
     const onVisible = () => {
-      if (document.visibilityState === 'visible') kick();
+      if (document.visibilityState !== 'visible') return;
+      const tier = getGetirPollTier();
+      if (tier === 'off') {
+        stopAllPollers();
+        return;
+      }
+      if (!stopOrders && !stopStore) {
+        void resolvePlatformId().then((id) => {
+          if (id && !stopped) startPollersForTier(tier);
+        });
+        return;
+      }
+      void syncStore();
+      void pollOrders();
     };
     document.addEventListener('visibilitychange', onVisible);
 
     return () => {
       stopped = true;
-      window.clearTimeout(firstOrder);
-      window.clearTimeout(firstStore);
-      stopOrders();
-      stopStore();
-      window.removeEventListener('sefpos:page-change', onPageChange);
+      stopAllPollers();
+      window.removeEventListener(PAGE_CHANGE_EVENT, onPageChange);
       document.removeEventListener('visibilitychange', onVisible);
       platformIdRef.current = null;
       orderTickRef.current = 0;
