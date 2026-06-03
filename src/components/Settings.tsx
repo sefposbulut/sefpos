@@ -41,6 +41,7 @@ import { QrMenuManager } from './QrMenuManager';
 import { callGetir, generateGetirApiKey, syncGetirRestaurantOpen } from '../lib/getirApi';
 import { publicPartnerEdgeUrl } from '../lib/publicWebhookBaseUrl';
 import { clearTablePaymentLock } from '../lib/paymentLock';
+import { TENANT_CURRENCY_OPTIONS, normalizeCurrencyCode, type TenantCurrencyCode } from '../lib/currency';
 
 type TableGroup = Database['public']['Tables']['table_groups']['Row'];
 
@@ -174,6 +175,7 @@ export function Settings({ onClose }: SettingsProps) {
   const [restaurantName, setRestaurantName] = useState('');
   const [restaurantAddress, setRestaurantAddress] = useState('');
   const [restaurantPhone, setRestaurantPhone] = useState('');
+  const [restaurantCurrency, setRestaurantCurrency] = useState<TenantCurrencyCode>('TRY');
   const [profileFullName, setProfileFullName] = useState('');
   const [accountSaving, setAccountSaving] = useState(false);
   const [accountSaved, setAccountSaved] = useState(false);
@@ -281,6 +283,7 @@ export function Settings({ onClose }: SettingsProps) {
       setRestaurantName((tenant as any).name || '');
       setRestaurantAddress((tenant as any).address || '');
       setRestaurantPhone((tenant as any).phone || '');
+      setRestaurantCurrency(normalizeCurrencyCode((tenant as any).currency_code));
       setDeploymentMode((tenant as any).deployment_mode || 'online');
       supabase.from('tenants').select('lock_pin').eq('id', tenant.id).maybeSingle().then(({ data }) => {
         setCurrentPin((data as any)?.lock_pin || '');
@@ -420,6 +423,7 @@ export function Settings({ onClose }: SettingsProps) {
         name: restaurantName,
         address: restaurantAddress,
         phone: restaurantPhone,
+        currency_code: restaurantCurrency,
       } as any).eq('id', tenant.id),
       profile ? supabase.from('profiles').update({ full_name: profileFullName } as any).eq('id', profile.id) : Promise.resolve(),
     ]);
@@ -2630,6 +2634,21 @@ export function Settings({ onClose }: SettingsProps) {
                     className="w-full px-3 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent text-sm"
                     placeholder="Telefon numarası"
                   />
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-1">Satış Para Birimi</label>
+                  <select
+                    value={restaurantCurrency}
+                    onChange={e => setRestaurantCurrency(normalizeCurrencyCode(e.target.value))}
+                    className="w-full px-3 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent text-sm bg-white"
+                  >
+                    {TENANT_CURRENCY_OPTIONS.map((opt) => (
+                      <option key={opt.code} value={opt.code}>{opt.label}</option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-gray-500 mt-1">
+                    Masalar, ödeme ekranı ve fişlerde gösterilir. Ürün fiyatları aynı rakamla, seçilen birim sembolüyle satılır.
+                  </p>
                 </div>
                 <div className="pt-1 pb-1 border-t border-gray-100">
                   <p className="text-xs text-gray-400">E-posta adresi değiştirilemez</p>

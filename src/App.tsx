@@ -127,6 +127,16 @@ export default function App() {
     return () => mq.removeListener(handler);
   }, []);
 
+  // Web: arayuz olcegi rem ile (CSS zoom modal/vh bozar). Electron: preload setZoomFactor.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (isElectron) {
+      document.documentElement.style.removeProperty('--sefpos-ui-scale');
+      return;
+    }
+    document.documentElement.style.setProperty('--sefpos-ui-scale', String(uiPrefs.uiScale));
+  }, [isElectron, uiPrefs.uiScale]);
+
   // Browser autoplay policy: AudioContext yalnizca kullanici etkilesimi
   // sonrasi ses calabilir. Ilk tiklamasinda audio'yu unlock et ki online
   // sipariş alarmi sessiz kalmasin.
@@ -665,18 +675,10 @@ export default function App() {
   // Mobilde efektif olarak her zaman header acik.
   const headerHidden = (uiPrefs.headerHidden && isDesktopViewport) || onElectronHome;
 
-  // CSS `zoom` Chromium/Electron'da gercek anlamda layout boyutlandirir
-  // (tarayicinin Ctrl +/- kalitesinde, modal/positioning bozulmasiz).
-  // POS hedefi Chromium tabanli oldugu icin guvenli. 1 ise uygulanmaz.
-  const rootZoomStyle = uiPrefs.uiScale !== 1
-    ? ({ zoom: uiPrefs.uiScale } as React.CSSProperties & { zoom?: number | string })
-    : undefined;
-
   return (
     <div
       className="min-h-screen bg-slate-50"
       data-header-hidden={headerHidden ? 'true' : 'false'}
-      style={rootZoomStyle}
     >
       {isLocked && <PinLockScreen onUnlock={() => setIsLocked(false)} />}
 

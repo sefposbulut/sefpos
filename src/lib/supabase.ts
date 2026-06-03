@@ -388,6 +388,7 @@ export type Database = {
           ip_lock_enabled: boolean | null;
           deployment_mode: string | null;
           disabled_modules: string[] | null;
+          currency_code: string;
         };
         Insert: {
           id?: string;
@@ -424,6 +425,7 @@ export type Database = {
           printer_settings?: any;
           require_cancel_reason?: boolean | null;
           lock_pin?: string | null;
+          currency_code?: string;
         };
       };
       profiles: {

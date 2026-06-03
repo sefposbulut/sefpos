@@ -28,6 +28,7 @@ import {
 import { notifyHemenYolda } from '../lib/hemenyoldaApi';
 import { subscribeLiveTick } from '../lib/liveTick';
 import { startAdaptivePoller } from '../lib/pollSchedule';
+import { useCurrency } from '../lib/currency';
 import {
   fetchTakeawayOrderById,
   fetchTakeawayActiveOrders,
@@ -1142,6 +1143,7 @@ const OrderCard = memo(function OrderCard({
   isCompleted,
   onOpenLiveMap,
 }: OrderCardProps) {
+  const { format: fmtMoney } = useCurrency();
   const isDelivery = order.order_type === 'delivery';
   const isGelAl = order.order_subtype === 'gel_al';
   const statusInfo = DELIVERY_STATUSES.find(s => s.key === order.delivery_status) || DELIVERY_STATUSES[0];
@@ -1239,7 +1241,7 @@ const OrderCard = memo(function OrderCard({
               <PayIcon className="w-3.5 h-3.5" />
               <span>{payInfo.label}</span>
             </div>
-            <span className="font-black text-base text-slate-800">{total.toFixed(2)}₺</span>
+            <span className="font-black text-base text-slate-800">{fmtMoney(total)}</span>
           </div>
           {order.payment_collected ? (
             <div className="flex items-center gap-1 text-xs font-bold text-green-600 bg-green-50 px-2 py-1 rounded-lg">

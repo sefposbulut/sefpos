@@ -24,6 +24,7 @@ import {
   type TableGridOrderEmbed,
 } from '../lib/tableGridData';
 import { unlockStalePaymentLocksRpc } from '../lib/paymentLock';
+import { useCurrency } from '../lib/currency';
 import {
   isStaleTableSnapshotAfterClear,
 } from '../lib/tableOptimisticClear';
@@ -217,6 +218,7 @@ export function TableGrid({
 }: TableGridProps) {
   const { tenant, user, profile, activeBranch, permissions } = useAuth();
   const { headerHidden } = useUiPrefs();
+  const { formatInt: fmtInt, format: fmtMoney, symbol: currencySymbol } = useCurrency();
   const mobileColsStorageKey = MOBILE_COLS_KEY;
   const desktopColsStorageKey = DESKTOP_COLS_KEY;
 
@@ -305,11 +307,13 @@ export function TableGrid({
   }, []);
 
   const getAutoDesktopCols = useCallback((count: number) => {
-    if (count >= 60) return 10;
-    if (count >= 40) return 9;
-    if (count >= 25) return 8;
-    if (count >= 13) return 7;
-    return 6;
+    const w = typeof window !== 'undefined' ? window.innerWidth : 1280;
+    const byCount =
+      count >= 60 ? 10 : count >= 40 ? 9 : count >= 25 ? 8 : count >= 13 ? 7 : 6;
+    // Ayni ekranda localhost/canli tutarli kalsin: genislik basina ~120px hedef kare
+    const usable = Math.max(640, w - 64);
+    const byWidth = Math.max(4, Math.min(12, Math.floor(usable / 120)));
+    return Math.min(byCount, byWidth);
   }, []);
 
   const loadAll = useCallback(async (resetGroup = false, opts?: { silent?: boolean }) => {
@@ -676,6 +680,13 @@ export function TableGrid({
       setDesktopTableCols(getAutoDesktopCols(tables.length));
     }
   }, [tables.length, mobileColsTouched, desktopColsTouched, colsPrefsReady, getAutoMobileCols, getAutoDesktopCols]);
+
+  useEffect(() => {
+    if (!colsPrefsReady || desktopColsTouched) return;
+    const sync = () => setDesktopTableCols(getAutoDesktopCols(tables.length));
+    window.addEventListener('resize', sync);
+    return () => window.removeEventListener('resize', sync);
+  }, [colsPrefsReady, desktopColsTouched, tables.length, getAutoDesktopCols]);
 
   useEffect(() => {
     if (!tenant || !activeBranch || !isActive) {
@@ -1223,13 +1234,13 @@ export function TableGrid({
                 ) : isPartial ? (
                   <>
                     <div className="font-black opacity-95 tracking-tight" style={{ fontSize: subFontSize, marginTop: 3, fontFamily: corporateFontFamily }}>
-                      {(table.order!.remaining_amount ?? table.order!.total_amount).toFixed(0)}₺
+                      {fmtInt(table.order!.remaining_amount ?? table.order!.total_amount)}
                     </div>
                     <div className="font-black opacity-95 tracking-wide" style={{ fontSize: dkFontSize, marginTop: 1, fontFamily: corporateFontFamily }}>KISMİ ÖD.</div>
                   </>
                 ) : table.status === 'occupied' && table.order ? (
                   <div className="font-black opacity-95 tracking-tight" style={{ fontSize: subFontSize, marginTop: 3, fontFamily: corporateFontFamily }}>
-                    {table.order.total_amount.toFixed(0)}₺
+                    {fmtInt(table.order.total_amount)}
                   </div>
                 ) : (
                   <div className="font-bold opacity-90 tracking-tight" style={{ fontSize: subFontSize, marginTop: 3, fontFamily: corporateFontFamily }}>BOŞ</div>
@@ -1373,13 +1384,13 @@ export function TableGrid({
               ) : isPartial ? (
                 <>
                   <div className="font-black leading-tight tracking-tight" style={{ fontSize: subFontSize, fontFamily: corporateFontFamily }}>
-                    {(table.order!.remaining_amount ?? table.order!.total_amount).toFixed(0)} ₺
+                    {fmtInt(table.order!.remaining_amount ?? table.order!.total_amount)}
                   </div>
                   <div className="font-black tracking-wide mt-1" style={{ fontSize: dkFontSize, fontFamily: corporateFontFamily }}>KISMİ ÖDEME</div>
                 </>
               ) : table.status === 'occupied' && table.order ? (
                 <>
-                  <div className="font-black leading-tight tracking-tight" style={{ fontSize: subFontSize, fontFamily: corporateFontFamily }}>{table.order.total_amount.toFixed(0)} ₺</div>
+                  <div className="font-black leading-tight tracking-tight" style={{ fontSize: subFontSize, fontFamily: corporateFontFamily }}>{fmtInt(table.order.total_amount)}</div>
                   {table.session_start && (
                     <div className="font-bold opacity-90 flex items-center gap-0.5 mt-1.5 tracking-tight" style={{ fontSize: dkFontSize, fontFamily: corporateFontFamily }}>
                       <Clock style={{ width: dkFontSize, height: dkFontSize }} className="shrink-0" />
@@ -1404,10 +1415,7 @@ export function TableGrid({
           const total = t.order?.total_amount ?? 0;
           return sum + (typeof remaining === 'number' ? remaining : total);
         }, 0);
-        const tl = occupiedTotal.toLocaleString('tr-TR', {
-          minimumFractionDigits: 2,
-          maximumFractionDigits: 2,
-        });
+        const totalLabel = fmtMoney(occupiedTotal);
         const dateStr = now.toLocaleDateString('tr-TR', {
           day: '2-digit',
           month: '2-digit',
@@ -1465,7 +1473,7 @@ export function TableGrid({
                 >
                   Toplam:
                   <b className="font-black tabular-nums">
-                    {footerAmountVisible ? `${tl} ₺` : '••••• ₺'}
+                    {footerAmountVisible ? totalLabel : `••••• ${currencySymbol}`}
                   </b>
                   <span data-amount-toggle className="opacity-70 hover:opacity-100">
                     {footerAmountVisible ? (

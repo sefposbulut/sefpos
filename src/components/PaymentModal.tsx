@@ -10,6 +10,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { loadPrintSettings, PRINT_SETTINGS_REMOTE_UPDATED_EVENT, PRINT_SETTINGS_CONTEXT_EVENT } from '../lib/printService';
 import { HuginPaymentGate, type HuginPaymentGateProps } from './HuginPaymentGate';
 import { LoyaltyPaymentSection, type LoyaltyPaymentSelection } from './loyalty/LoyaltyPaymentSection';
+import { useCurrency } from '../lib/currency';
 
 interface PickerCustomer {
   id: string;
@@ -63,6 +64,7 @@ interface CustomerPickerProps {
 }
 
 function CustomerPicker({ tenantId, selected, onSelect, amount }: CustomerPickerProps) {
+  const { format: fmtMoney, formatInt: fmtInt } = useCurrency();
   const [search, setSearch] = useState('');
   const [customers, setCustomers] = useState<PickerCustomer[]>([]);
   const [loading, setLoading] = useState(false);
@@ -137,7 +139,7 @@ function CustomerPicker({ tenantId, selected, onSelect, amount }: CustomerPicker
           <div>
             <div className="text-sm font-black text-slate-800">{selected.name}</div>
             <div className="text-xs text-orange-600">
-              Cari hesaba: {amount.toFixed(2)} ₺ borç yazılacak
+              Cari hesaba: {fmtMoney(amount)} borç yazılacak
             </div>
           </div>
         </div>
@@ -249,7 +251,7 @@ function CustomerPicker({ tenantId, selected, onSelect, amount }: CustomerPicker
               </div>
               <div className="flex items-center gap-1 ml-2">
                 {c.current_balance > 0 && (
-                  <span className="text-xs text-red-500 font-bold">{Number(c.current_balance).toFixed(0)}₺</span>
+                  <span className="text-xs text-red-500 font-bold">{fmtInt(Number(c.current_balance))}</span>
                 )}
                 <ChevronRight className="w-3.5 h-3.5 text-slate-300" />
               </div>
@@ -287,6 +289,7 @@ export function PaymentModal({
   onLoyaltyChange,
 }: PaymentModalProps) {
   const { tenant } = useAuth();
+  const { format: fmtMoney, formatInt: fmtInt, symbol: currencySymbol } = useCurrency();
   const [splits, setSplits] = useState<PaymentSplit[]>([
     { method: 'cash', amount: remainingAmount.toFixed(2) }
   ]);
@@ -501,14 +504,14 @@ export function PaymentModal({
           <div className="grid grid-cols-2 gap-2">
             <div className="bg-orange-50 border-2 border-orange-200 rounded-xl p-3 text-center">
               <div className="text-xs text-slate-500 font-medium mb-0.5">Kalan Tutar</div>
-              <div className="text-2xl font-black text-orange-600">{remainingAmount.toFixed(0)} ₺</div>
+              <div className="text-2xl font-black text-orange-600">{fmtInt(remainingAmount)}</div>
             </div>
             <div className={`border-2 rounded-xl p-3 text-center transition-all ${isFullPayment ? 'bg-green-50 border-green-400' : 'bg-amber-50 border-amber-300'}`}>
               <div className="text-xs text-slate-500 font-medium mb-0.5">
                 {isFullPayment ? 'Tam Ödeme' : 'Ödemeden Sonra Kalan'}
               </div>
               <div className={`text-2xl font-black ${isFullPayment ? 'text-green-600' : 'text-amber-600'}`}>
-                {isFullPayment ? '0 ₺' : `${afterPayment.toFixed(0)} ₺`}
+                {isFullPayment ? fmtInt(0) : fmtInt(afterPayment)}
               </div>
             </div>
           </div>
@@ -584,7 +587,7 @@ export function PaymentModal({
                     placeholder="0.00"
                     autoFocus={idx === 0 && !isMobile}
                   />
-                  <span className="text-slate-500 font-bold text-sm">₺</span>
+                  <span className="text-slate-500 font-bold text-sm">{currencySymbol}</span>
                   <button
                     onClick={() => fillRemaining(idx)}
                     className="px-2.5 py-2 bg-green-100 hover:bg-green-200 text-green-700 rounded-lg font-bold text-xs transition-all active:scale-95 whitespace-nowrap flex-shrink-0"
@@ -616,7 +619,7 @@ export function PaymentModal({
                 splitDiff > 0 ? 'bg-amber-50 text-amber-700 border border-amber-200' : 'bg-red-50 text-red-700 border border-red-200'
               }`}>
                 <span>{splitDiff > 0 ? 'Eksik tutar:' : 'Fazla tutar:'}</span>
-                <span>{Math.abs(splitDiff).toFixed(2)} ₺</span>
+                <span>{fmtMoney(Math.abs(splitDiff))}</span>
               </div>
             )}
           </div>
@@ -669,7 +672,7 @@ export function PaymentModal({
                 : 'bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white'
             }`}
           >
-            {(loading || submitting) ? 'İşleniyor...' : isFullPayment ? 'Ödemeyi Tamamla' : `${totalSplit.toFixed(0)}₺ Al`}
+            {(loading || submitting) ? 'İşleniyor...' : isFullPayment ? 'Ödemeyi Tamamla' : `${fmtInt(totalSplit)} Al`}
           </button>
         </div>
       </div>

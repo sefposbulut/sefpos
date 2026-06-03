@@ -10,6 +10,38 @@ const PRIMARY_SUPABASE_URL = (
 ).replace(/\/$/, '');
 const PRIMARY_SUPABASE_WS = PRIMARY_SUPABASE_URL.replace(/^https:/, 'wss:');
 
+/**
+ * @param {{ forMeta?: boolean; includeCloudflareInsights?: boolean }} [opts]
+ * frame-ancestors yalnızca HTTP header ile geçerlidir; meta CSP'de tarayıcı yok sayar.
+ */
+function buildProductionContentSecurityPolicy(opts = {}) {
+  const { forMeta = false, includeCloudflareInsights = false } = opts;
+  const scriptSrc = ["'self'", 'https://unpkg.com'];
+  if (includeCloudflareInsights) {
+    scriptSrc.push('https://static.cloudflareinsights.com');
+  }
+
+  const directives = [
+    "default-src 'self'",
+    `script-src ${scriptSrc.join(' ')}`,
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+    "font-src 'self' https://fonts.gstatic.com data:",
+    "img-src 'self' data: blob: file: https:",
+    `connect-src 'self' ${PRIMARY_SUPABASE_URL} ${PRIMARY_SUPABASE_WS} https: wss:`,
+    "media-src 'self' blob:",
+    "worker-src 'self' blob:",
+    "object-src 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+  ];
+
+  if (!forMeta) {
+    directives.push("frame-ancestors 'none'");
+  }
+
+  return directives.join('; ');
+}
+
 /** @param {boolean} isDev */
 /** @param {number} devPort */
 function buildContentSecurityPolicy(isDev, devPort) {
@@ -33,20 +65,10 @@ function buildContentSecurityPolicy(isDev, devPort) {
     ].join('; ');
   }
 
-  return [
-    "default-src 'self'",
-    "script-src 'self' https://unpkg.com",
-    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-    "font-src 'self' https://fonts.gstatic.com data:",
-    "img-src 'self' data: blob: file: https:",
-    `connect-src 'self' ${PRIMARY_SUPABASE_URL} ${PRIMARY_SUPABASE_WS} https: wss:`,
-    "media-src 'self' blob:",
-    "worker-src 'self' blob:",
-    "object-src 'none'",
-    "base-uri 'self'",
-    "frame-ancestors 'none'",
-    "form-action 'self'",
-  ].join('; ');
+  return buildProductionContentSecurityPolicy({
+    forMeta: false,
+    includeCloudflareInsights: false,
+  });
 }
 
 /**
@@ -83,13 +105,25 @@ function installElectronContentSecurityPolicy(session, opts) {
   });
 }
 
-/** Vite build çıktısı index.html için meta etiketi */
+/** Vite build çıktısı index.html için meta etiketi (www — Cloudflare Web Analytics dahil) */
 function buildContentSecurityPolicyMetaContent() {
-  return buildContentSecurityPolicy(false, 0);
+  return buildProductionContentSecurityPolicy({
+    forMeta: true,
+    includeCloudflareInsights: true,
+  });
+}
+
+/** Cloudflare Pages _headers — frame-ancestors HTTP header ile */
+function buildWebContentSecurityPolicyHeader() {
+  return buildProductionContentSecurityPolicy({
+    forMeta: false,
+    includeCloudflareInsights: true,
+  });
 }
 
 module.exports = {
   buildContentSecurityPolicy,
   buildContentSecurityPolicyMetaContent,
+  buildWebContentSecurityPolicyHeader,
   installElectronContentSecurityPolicy,
 };

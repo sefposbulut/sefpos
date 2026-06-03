@@ -69,6 +69,7 @@ import {
 import { markTableOptimisticallyCleared } from '../lib/tableOptimisticClear';
 import { isModuleEnabled } from '../lib/modules';
 import { loyaltyApplyForOrder, type LoyaltyPaymentSelection } from '../lib/loyalty';
+import { useCurrency } from '../lib/currency';
 
 /** 767px eşiğinde scrollbar/DPI kayması mobil↔masaüstü düzeni gidip getiriyordu (özellikle Electron). Ölü bant ile sabitlenir. */
 const ORDER_PANEL_MOBILE_MAX_PX = 767;
@@ -241,6 +242,7 @@ function TableGroupPickerChips({
 
 export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelProps) {
   const { tenant, user, profile, permissions, activeBranch } = useAuth();
+  const { formatInt: fmtInt, format: fmtMoney } = useCurrency();
   const detectMobileViewport = useCallback(() => {
     if (typeof window === 'undefined') return false;
     return window.innerWidth <= ORDER_PANEL_MOBILE_MAX_PX;
@@ -1902,7 +1904,7 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
       const limit = Number(cust.credit_limit) || 0;
       if (limit > 0 && bal + amount > limit) {
         const ok = window.confirm(
-          `Kredi limiti (${limit.toFixed(2)} ₺) aşılacak. Yine de cari hesaba yazılsın mı?`,
+          `Kredi limiti (${fmtMoney(limit)}) aşılacak. Yine de cari hesaba yazılsın mı?`,
         );
         if (!ok) return;
       }
@@ -2664,11 +2666,11 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
               )}
               <div className="flex justify-between text-sm">
                 <span className="text-gray-500 font-medium">Birim Fiyat</span>
-                <span className="text-gray-600">{scaleBarcodeModal.product.price.toFixed(2)} ₺/kg</span>
+                <span className="text-gray-600">{fmtMoney(scaleBarcodeModal.product.price)}/kg</span>
               </div>
               <div className="flex justify-between text-sm border-t border-slate-200 pt-2 mt-2">
                 <span className="text-gray-700 font-bold">Toplam Tutar</span>
-                <span className="font-black text-green-600 text-lg">{scaleBarcodeModal.calculatedPrice.toFixed(2)} ₺</span>
+                <span className="font-black text-green-600 text-lg">{fmtMoney(scaleBarcodeModal.calculatedPrice)}</span>
               </div>
             </div>
 
@@ -2784,7 +2786,7 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
                       className="w-full bg-gradient-to-r from-orange-500 to-red-600 hover:from-orange-600 hover:to-red-700 text-white p-4 rounded-xl font-bold text-lg transition-all active:scale-95 flex justify-between items-center"
                     >
                       <span>{variant.name}</span>
-                      <span>{finalPrice.toFixed(0)} ₺</span>
+                      <span>{fmtInt(finalPrice)}</span>
                     </button>
                   );
                 })}
@@ -3097,8 +3099,8 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
         />
       )}
 
-      <div className="fixed inset-0 bg-white md:bg-black/75 flex items-center justify-center z-50 overflow-hidden">
-        <div className="bg-white w-full h-full md:rounded-2xl md:shadow-2xl md:max-w-[98vw] md:h-[97vh] lg:max-w-7xl lg:h-[95vh] flex flex-col overflow-hidden">
+      <div className="fixed inset-0 bg-white md:bg-black/75 z-50 overflow-hidden flex flex-col md:p-2">
+        <div className="bg-white w-full flex-1 min-h-0 md:max-w-[98vw] lg:max-w-7xl md:mx-auto md:rounded-2xl md:shadow-2xl flex flex-col overflow-hidden">
           {/* Mobile Header - Compact */}
           <div className="md:hidden bg-gradient-to-r from-orange-500 to-red-600 px-3 py-3 flex items-center justify-between shrink-0 shadow-md">
             <div className="text-white">
@@ -3350,7 +3352,7 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
                             color: category?.color || '#F97316',
                           }}
                         >
-                          {product.price.toFixed(0)}₺
+                          {fmtInt(product.price)}
                         </p>
                       </div>
                     </button>
@@ -3405,7 +3407,7 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
                                   </button>
                                 </div>
                                 <div className="w-16 text-right font-black text-orange-600 text-sm shrink-0">
-                                  {(finalPrice * item.quantity).toFixed(0)}₺
+                                  {fmtInt(finalPrice * item.quantity)}
                                 </div>
                                 <button
                                   onClick={() => { setNoteModal({ productId: item.product.id, variantId: item.variant?.id, currentNote: item.notes || '' }); setNoteInput(item.notes || ''); }}
@@ -3482,7 +3484,7 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
                                 </button>
                               </div>
                               <div className={`font-black text-sm shrink-0 ${paid ? 'text-emerald-700' : 'text-green-700'}`}>
-                                {(item.unit_price * item.quantity).toFixed(0)}₺
+                                {fmtInt(item.unit_price * item.quantity)}
                               </div>
                               <button
                                 onClick={() => { setExistingItemNoteModal({ itemId: item.id, currentNote: (item as any).notes || '' }); setExistingNoteInput((item as any).notes || ''); }}
@@ -3554,7 +3556,7 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
                     )}
                   </div>
                   <div className="flex items-center gap-2">
-                    <span className="text-white font-black text-lg">{total.toFixed(0)} ₺</span>
+                    <span className="text-white font-black text-lg">{fmtInt(total)}</span>
                     {drawerOpen ? <ChevronDown className="w-5 h-5 text-white" /> : <ChevronUp className="w-5 h-5 text-white" />}
                   </div>
                 </button>
@@ -3602,9 +3604,9 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
                       }`}
                     >
                       {partialPayActive
-                        ? `SEÇİLİ ÖDE ${selectedItemsTotal.toFixed(0)}₺`
+                        ? `SEÇİLİ ÖDE ${fmtInt(selectedItemsTotal)}`
                         : remainingAmount > 0
-                          ? `ÖDE ${remainingAmount.toFixed(0)}₺`
+                          ? `ÖDE ${fmtInt(remainingAmount)}`
                           : 'ÖDE'}
                     </button>
                   )}
@@ -3644,7 +3646,7 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
 
           {/* Desktop Layout */}
           {!isMobileViewport && (
-          <div className="flex flex-1 overflow-hidden">
+          <div className="flex flex-1 min-h-0 overflow-hidden">
             <div className="flex-1 flex flex-col overflow-hidden min-h-0">
               <div className="bg-slate-50 border-b shrink-0">
                 <div className="flex gap-1.5 p-2 border-b bg-gradient-to-r from-orange-500 to-red-600 overflow-x-auto">
@@ -3767,7 +3769,7 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
                               color: category?.color || '#F97316',
                             }}
                           >
-                            {product.price.toFixed(0)}₺
+                            {fmtInt(product.price)}
                           </p>
                         </div>
                       </button>
@@ -3787,7 +3789,7 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
               />
             )}
 
-            <div className="w-64 md:w-72 lg:w-96 xl:w-[420px] bg-slate-50 border-l flex flex-col shrink-0">
+            <div className="w-64 md:w-72 lg:w-96 xl:w-[420px] bg-slate-50 border-l flex flex-col shrink-0 min-h-0 overflow-hidden">
               <div className="p-4 bg-white border-b shrink-0">
                 <h3 className="text-lg font-bold text-slate-800 flex items-center">
                   <ShoppingCart className="w-5 h-5 mr-2" />
@@ -3889,7 +3891,7 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
                             </button>
                           </div>
                           <span className={`font-bold text-sm ${paid ? 'text-emerald-700' : 'text-orange-600'}`}>
-                            {(item.unit_price * item.quantity).toFixed(0)} ₺
+                            {fmtInt(item.unit_price * item.quantity)}
                           </span>
                         </div>
                       </div>
@@ -3955,7 +3957,7 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
                               </button>
                             </div>
                             <span className="font-bold text-orange-600 text-sm">
-                              {(finalPrice * item.quantity).toFixed(0)} ₺
+                              {fmtInt(finalPrice * item.quantity)}
                             </span>
                           </div>
                         </div>
@@ -3973,17 +3975,17 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
                 )}
               </div>
 
-              <div className="p-4 bg-white border-t space-y-3 shrink-0">
+              <div className="p-4 bg-white border-t space-y-3 shrink-0 shadow-[0_-4px_12px_rgba(15,23,42,0.08)]">
                 <div className="space-y-1">
                   {discount > 0 && (
                     <div className="flex justify-between text-sm text-green-600">
                       <span className="font-medium">İskonto ({discount}%):</span>
-                      <span className="font-bold">-{discountAmount.toFixed(0)} ₺</span>
+                      <span className="font-bold">-{fmtInt(discountAmount)}</span>
                     </div>
                   )}
                   <div className="flex justify-between text-xl pt-1.5 border-t-2">
                     <span className="font-bold">TOPLAM:</span>
-                    <span className="font-bold text-orange-600">{total.toFixed(0)} ₺</span>
+                    <span className="font-bold text-orange-600">{fmtInt(total)}</span>
                   </div>
                 </div>
 
@@ -4004,7 +4006,7 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
                                 {payment.payment_method === 'open_account' && 'Cari hesap'}
                               </span>
                             </div>
-                            <span className="font-bold text-green-700 text-xs">{Number(payment.amount).toFixed(0)} ₺</span>
+                            <span className="font-bold text-green-700 text-xs">{fmtInt(Number(payment.amount))}</span>
                           </div>
                         </div>
                       ))}
@@ -4012,11 +4014,11 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
                     <div className="mt-1 pt-1 border-t border-slate-200">
                       <div className="flex justify-between text-xs font-bold">
                         <span>Ödenen:</span>
-                        <span className="text-green-600">{totalPaid.toFixed(0)} ₺</span>
+                        <span className="text-green-600">{fmtInt(totalPaid)}</span>
                       </div>
                       <div className="flex justify-between text-xs font-bold text-orange-600 mt-0.5">
                         <span>Kalan:</span>
-                        <span>{remainingAmount.toFixed(0)} ₺</span>
+                        <span>{fmtInt(remainingAmount)}</span>
                       </div>
                     </div>
                   </div>
@@ -4094,9 +4096,9 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
                           }`}
                         >
                           {partialPayActive
-                            ? `SEÇİLİ ÖDE ${selectedItemsTotal.toFixed(0)}₺`
+                            ? `SEÇİLİ ÖDE ${fmtInt(selectedItemsTotal)}`
                             : remainingAmount > 0
-                              ? `ÖDE ${remainingAmount.toFixed(0)}₺`
+                              ? `ÖDE ${fmtInt(remainingAmount)}`
                               : 'ÖDE'}
                         </button>
                       )}

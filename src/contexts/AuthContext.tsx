@@ -20,6 +20,7 @@ import {
   loadPrintSettings,
   savePrintSettings,
 } from '../lib/printService';
+import { syncTenantCurrencyCode } from '../lib/currency';
 import { isAykaAdminPath } from '../lib/aykaRoute';
 import { startTenantPresenceTracking, stopTenantPresenceTracking } from '../lib/tenantPresence';
 import { computeClientBusinessDate, fetchCurrentBusinessDate } from '../lib/businessDayApi';
@@ -928,6 +929,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     setPrintAgentTenantId(tenant?.id ?? null);
+    syncTenantCurrencyCode((tenant as any)?.currency_code);
   }, [tenant]);
 
   // Restoran adı / ünvan: kullanıcı Ayarlar → Yazıcılar → "Restoran Bilgileri"

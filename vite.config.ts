@@ -1,11 +1,14 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { IncomingMessage } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { defineConfig, loadEnv } from 'vite';
 import type { Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
-import { buildContentSecurityPolicyMetaContent } from './electron/csp.cjs';
+import {
+  buildContentSecurityPolicyMetaContent,
+  buildWebContentSecurityPolicyHeader,
+} from './electron/csp.cjs';
 
 const __root = dirname(fileURLToPath(import.meta.url));
 
@@ -290,9 +293,22 @@ export default defineConfig(({ mode, command }) => {
     plugins.push({
       name: 'sefpos-electron-csp-meta',
       transformIndexHtml(html: string) {
-        if (html.includes('http-equiv="Content-Security-Policy"')) return html;
         const tag = `<meta http-equiv="Content-Security-Policy" content="${cspMeta.replace(/"/g, '&quot;')}" />`;
+        if (html.includes('http-equiv="Content-Security-Policy"')) {
+          return html.replace(/<meta http-equiv="Content-Security-Policy"[^>]*\/?>/, tag);
+        }
         return html.replace('<meta charset="UTF-8" />', `<meta charset="UTF-8" />\n    ${tag}`);
+      },
+    });
+    plugins.push({
+      name: 'sefpos-web-csp-headers',
+      closeBundle() {
+        const policy = buildWebContentSecurityPolicyHeader();
+        writeFileSync(
+          join(__root, 'dist', '_headers'),
+          `/*\n  Content-Security-Policy: ${policy}\n  X-Frame-Options: DENY\n`,
+          'utf8',
+        );
       },
     });
   }

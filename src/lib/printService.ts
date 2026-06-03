@@ -96,6 +96,7 @@ export interface PrintSettings {
 
 import { supabase } from './supabase';
 import { dispatchPrintToast } from './printToasts';
+import { formatMoneyReceipt, getActiveCurrencyCode } from './currency';
 
 /**
  * Yazıcı ayarları artık tenant + branch başına ayrı tutulur. Aynı tarayıcı
@@ -910,6 +911,10 @@ function fmt(n: number) {
   return n.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+function moneyFmt(n: number) {
+  return formatMoneyReceipt(n, getActiveCurrencyCode());
+}
+
 function pad(str: string, len: number, right = false): string {
   const s = String(str);
   if (s.length >= len) return s.substring(0, len);
@@ -1138,9 +1143,9 @@ export function buildReceiptHtml(opts: {
 
   opts.items.forEach(item => {
     const label = item.variantName ? `${item.productName} (${item.variantName})` : item.productName;
-    html += row(label, `${item.quantity}x`, `${fmt(item.unitPrice)}₺`);
+    html += row(label, `${item.quantity}x`, moneyFmt(item.unitPrice));
     if (item.quantity > 1) {
-      html += `<div class="row"><span class="name"></span><span class="qty"></span><span class="price bold">${fmt(item.totalAmount)}₺</span></div>`;
+      html += `<div class="row"><span class="name"></span><span class="qty"></span><span class="price bold">${moneyFmt(item.totalAmount)}</span></div>`;
     }
     if (item.notes) {
       html += `<div class="note">Not: ${item.notes}</div>`;
@@ -1148,15 +1153,15 @@ export function buildReceiptHtml(opts: {
   });
 
   html += `<div class="line"></div>`;
-  html += `<div class="row"><span>Ara Toplam</span><span>${fmt(opts.subtotal)}₺</span></div>`;
+  html += `<div class="row"><span>Ara Toplam</span><span>${moneyFmt(opts.subtotal)}</span></div>`;
   if (opts.taxAmount > 0) {
-    html += `<div class="row"><span>KDV</span><span>${fmt(opts.taxAmount)}₺</span></div>`;
+    html += `<div class="row"><span>KDV</span><span>${moneyFmt(opts.taxAmount)}</span></div>`;
   }
   if (opts.discountAmount > 0) {
-    html += `<div class="row"><span>İndirim</span><span>-${fmt(opts.discountAmount)}₺</span></div>`;
+    html += `<div class="row"><span>İndirim</span><span>-${moneyFmt(opts.discountAmount)}</span></div>`;
   }
   html += `<div class="line"></div>`;
-  html += `<div class="total-row" style="font-size:${Math.max(st.receiptBodyPx + 2, 14)}px"><span>TOPLAM</span><span>${fmt(opts.total)}₺</span></div>`;
+  html += `<div class="total-row" style="font-size:${Math.max(st.receiptBodyPx + 2, 14)}px"><span>TOPLAM</span><span>${moneyFmt(opts.total)}</span></div>`;
   if (opts.paymentMethod) {
     html += `<div class="row"><span>Ödeme</span><span>${paymentLabels[opts.paymentMethod] || opts.paymentMethod}</span></div>`;
   }
@@ -1750,9 +1755,9 @@ export function buildTakeawayHtml(opts: {
 
   opts.items.forEach((item, idx) => {
     const label = item.variantName ? `${item.productName} (${item.variantName})` : item.productName;
-    html += row(escHtml(label), `${item.quantity}x`, `${fmt(item.unitPrice)}TL`);
+    html += row(escHtml(label), `${item.quantity}x`, moneyFmt(item.unitPrice));
     if (item.quantity > 1) {
-      html += `<div class="row"><span class="name"></span><span class="qty"></span><span class="price bold">${fmt(item.totalAmount)}TL</span></div>`;
+      html += `<div class="row"><span class="name"></span><span class="qty"></span><span class="price bold">${moneyFmt(item.totalAmount)}</span></div>`;
     }
     if (item.notes) {
       html += `<div class="note">Not: ${escHtml(item.notes)}</div>`;
@@ -1764,7 +1769,7 @@ export function buildTakeawayHtml(opts: {
   });
 
   html += `<div class="line"></div>`;
-  html += `<div class="total-row" style="font-size:${Math.max(st.receiptBodyPx + 2, 14)}px"><span>TOPLAM</span><span>${fmt(opts.total)}TL</span></div>`;
+  html += `<div class="total-row" style="font-size:${Math.max(st.receiptBodyPx + 2, 14)}px"><span>TOPLAM</span><span>${moneyFmt(opts.total)}</span></div>`;
   html += `<div class="line"></div>`;
   if (st.receiptFooterExtra) {
     html += `<div class="extra-line">${escHtml(st.receiptFooterExtra)}</div>`;

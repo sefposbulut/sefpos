@@ -18,6 +18,8 @@ import { playScanSuccess, playScanError, primeAudio } from '../lib/beep';
 import { ensureCashRegisterRowForPayment } from '../lib/cashRegisterFallback';
 import { isModuleEnabled } from '../lib/modules';
 import { loyaltyApplyForOrder, type LoyaltyPaymentSelection } from '../lib/loyalty';
+import { useCurrency } from '../lib/currency';
+import { queryCache } from '../lib/queryCache';
 import { WhatsAppReceiptModal } from './WhatsAppReceiptModal';
 import type { WhatsAppReceiptInput } from '../lib/whatsappReceipt';
 
@@ -52,6 +54,7 @@ type PaymentMethod = 'cash' | 'credit_card' | 'open_account';
 
 export function QuickSale() {
   const { tenant, user, activeBranch } = useAuth();
+  const { format: fmtMoney, formatInt: fmtInt, formatPrice: fmtPrice, symbol: currencySymbol } = useCurrency();
   const [products, setProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
@@ -247,6 +250,16 @@ export function QuickSale() {
   }, [findByBarcode, addToCart, flashScan]);
 
   // Hızlı ürün ekleme — modaldaki kaydet butonu
+  const openQuickProductModal = useCallback((barcode = '') => {
+    setQuickProduct({
+      barcode: barcode.trim(),
+      name: '',
+      price: '',
+      categoryId: '',
+      taxRate: '',
+    });
+  }, []);
+
   const saveQuickProduct = useCallback(async () => {
     if (!quickProduct) return;
     if (!tenant?.id) return;
@@ -265,7 +278,7 @@ export function QuickSale() {
         tenant_id: tenant.id,
         name,
         price: priceNum,
-        barcode: quickProduct.barcode,
+        barcode: quickProduct.barcode.trim() || null,
         category_id: cat?.id || null,
         is_active: true,
         is_available: true,
@@ -286,6 +299,8 @@ export function QuickSale() {
         return;
       }
       const newProduct = data as any as Product;
+      queryCache.invalidate('products', tenant.id);
+      queryCache.invalidate('categories', tenant.id);
       // Yerel listeye ekle — bir sonraki taramada cache'den bulunsun
       setProducts((prev) => [...prev, newProduct].sort((a, b) => a.name.localeCompare(b.name, 'tr')));
       addToCart(newProduct);
@@ -366,7 +381,7 @@ export function QuickSale() {
         const bal = Number(cust.current_balance) || 0;
         const limit = Number(cust.credit_limit) || 0;
         if (limit > 0 && bal + amount > limit) {
-          if (!window.confirm(`Kredi limiti (${limit.toFixed(2)} ₺) aşılacak. Yine de işlensin mi?`)) return;
+          if (!window.confirm(`Kredi limiti (${fmtMoney(limit)}) aşılacak. Yine de işlensin mi?`)) return;
         }
         openAccountCustomer = { name: (cust as any).name || '', phone: (cust as any).phone || null };
         openAccountPrevBalance = bal;
@@ -671,10 +686,19 @@ export function QuickSale() {
             <div className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 border border-emerald-200 rounded-xl">
               <Check className="w-4 h-4 text-emerald-600" />
               <span className="text-xs font-black text-emerald-700">
-                #{lastReceiptInfo.orderNumber} · {lastReceiptInfo.total.toFixed(0)}₺ ✓
+                #{lastReceiptInfo.orderNumber} · {fmtInt(lastReceiptInfo.total)} ✓
               </span>
             </div>
           )}
+          <button
+            type="button"
+            onClick={() => openQuickProductModal()}
+            title="Kategori seçmeden yeni ürün ekle"
+            className="flex items-center gap-1.5 px-3 py-2 bg-white border-2 border-orange-300 hover:border-orange-500 text-orange-700 rounded-xl text-sm font-bold active:scale-95"
+          >
+            <PackagePlus className="w-4 h-4" />
+            <span className="hidden sm:inline">Ürün ekle</span>
+          </button>
           <button
             onClick={() => void load()}
             className="px-3 py-2 bg-white border-2 border-slate-200 hover:border-orange-400 rounded-xl text-sm font-bold text-slate-700 active:scale-95 flex items-center gap-1.5"
@@ -787,7 +811,7 @@ export function QuickSale() {
                     )}
                     <div className="font-bold text-slate-800 text-xs md:text-sm leading-tight line-clamp-2">{p.name}</div>
                     <div className="text-orange-600 font-black text-sm md:text-base mt-auto">
-                      {Number(p.price).toFixed(0)} ₺
+                      {fmtPrice(Number(p.price))}
                     </div>
                   </button>
                 ))}
@@ -832,7 +856,7 @@ export function QuickSale() {
                   <div className="flex-1 min-w-0">
                     <div className="font-bold text-slate-800 text-sm leading-tight">{l.product.name}</div>
                     <div className="text-xs text-slate-500">
-                      {Number(l.product.price).toFixed(0)} ₺ × {l.quantity}
+                      {fmtPrice(Number(l.product.price))} × {l.quantity}
                     </div>
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
@@ -851,7 +875,7 @@ export function QuickSale() {
                     </button>
                   </div>
                   <div className="font-black text-orange-600 text-sm w-16 text-right shrink-0">
-                    {(Number(l.product.price) * l.quantity).toFixed(0)}₺
+                    {fmtMoney(Number(l.product.price) * l.quantity)}
                   </div>
                   <button
                     onClick={() => removeLine(l.product.id)}
@@ -868,23 +892,23 @@ export function QuickSale() {
             <div className="space-y-1">
               <div className="flex justify-between text-sm text-slate-600">
                 <span>Ara Toplam</span>
-                <span className="font-bold">{subtotal.toFixed(2)} ₺</span>
+                <span className="font-bold">{fmtMoney(subtotal)}</span>
               </div>
               {discount > 0 && (
                 <div className="flex justify-between text-sm text-green-600">
                   <span className="font-medium">İskonto ({discount}%)</span>
-                  <span className="font-bold">-{percentDiscountAmount.toFixed(2)} ₺</span>
+                  <span className="font-bold">-{fmtMoney(percentDiscountAmount)}</span>
                 </div>
               )}
               {loyaltyDiscount > 0 && (
                 <div className="flex justify-between text-sm text-violet-600">
                   <span className="font-medium">Sadakat puanı</span>
-                  <span className="font-bold">-{loyaltyDiscount.toFixed(2)} ₺</span>
+                  <span className="font-bold">-{fmtMoney(loyaltyDiscount)}</span>
                 </div>
               )}
               <div className="flex justify-between text-xl pt-1 border-t border-slate-200">
                 <span className="font-black">TOPLAM</span>
-                <span className="font-black text-orange-600">{total.toFixed(0)} ₺</span>
+                <span className="font-black text-orange-600">{fmtInt(total)}</span>
               </div>
             </div>
             <button
@@ -897,7 +921,7 @@ export function QuickSale() {
               className="w-full bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-600 hover:to-green-700 text-white font-black py-3.5 rounded-xl text-base shadow-lg active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
             >
               <Receipt className="w-5 h-5" />
-              {busy ? 'İşleniyor…' : `ÖDEMEYE GEÇ · ${total.toFixed(0)}₺`}
+              {busy ? 'İşleniyor…' : `ÖDEMEYE GEÇ · ${fmtInt(total)}`}
             </button>
             <div className="flex gap-2">
               <button
@@ -952,7 +976,7 @@ export function QuickSale() {
                   </span>
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
-                  <span className="text-base font-black text-orange-600">{total.toFixed(0)} ₺</span>
+                  <span className="text-base font-black text-orange-600">{fmtInt(total)}</span>
                   <ChevronUp
                     className={`w-5 h-5 text-slate-500 transition-transform ${mobileCartOpen ? 'rotate-180' : ''}`}
                   />
@@ -1000,7 +1024,7 @@ export function QuickSale() {
                       <div className="flex-1 min-w-0">
                         <div className="font-bold text-slate-800 text-sm leading-tight">{l.product.name}</div>
                         <div className="text-xs text-slate-500">
-                          {Number(l.product.price).toFixed(0)} ₺ × {l.quantity}
+                          {fmtPrice(Number(l.product.price))} × {l.quantity}
                         </div>
                       </div>
                       <div className="flex items-center gap-1 shrink-0">
@@ -1021,7 +1045,7 @@ export function QuickSale() {
                         </button>
                       </div>
                       <div className="font-black text-orange-600 text-sm w-16 text-right shrink-0">
-                        {(Number(l.product.price) * l.quantity).toFixed(0)}₺
+                        {fmtMoney(Number(l.product.price) * l.quantity)}
                       </div>
                       <button
                         onClick={() => removeLine(l.product.id)}
@@ -1038,23 +1062,23 @@ export function QuickSale() {
               <div className="border-t border-slate-100 px-3 py-2 bg-white space-y-1">
                 <div className="flex justify-between text-sm text-slate-600">
                   <span>Ara Toplam</span>
-                  <span className="font-bold">{subtotal.toFixed(2)} ₺</span>
+                  <span className="font-bold">{fmtMoney(subtotal)}</span>
                 </div>
                 {discount > 0 && (
                   <div className="flex justify-between text-sm text-green-600">
                     <span className="font-medium">İskonto ({discount}%)</span>
-                    <span className="font-bold">-{percentDiscountAmount.toFixed(2)} ₺</span>
+                    <span className="font-bold">-{fmtMoney(percentDiscountAmount)}</span>
                   </div>
                 )}
                 {loyaltyDiscount > 0 && (
                   <div className="flex justify-between text-sm text-violet-600">
                     <span className="font-medium">Sadakat puanı</span>
-                    <span className="font-bold">-{loyaltyDiscount.toFixed(2)} ₺</span>
+                    <span className="font-bold">-{fmtMoney(loyaltyDiscount)}</span>
                   </div>
                 )}
                 <div className="flex justify-between text-lg pt-1 border-t border-slate-200">
                   <span className="font-black">TOPLAM</span>
-                  <span className="font-black text-orange-600">{total.toFixed(0)} ₺</span>
+                  <span className="font-black text-orange-600">{fmtInt(total)}</span>
                 </div>
               </div>
             </div>
@@ -1072,7 +1096,7 @@ export function QuickSale() {
                 className="w-full bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-600 hover:to-green-700 text-white font-black py-3.5 rounded-xl text-base shadow-lg active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
               >
                 <Receipt className="w-5 h-5" />
-                {busy ? 'İşleniyor…' : `ÖDE · ${total.toFixed(0)}₺`}
+                {busy ? 'İşleniyor…' : `ÖDE · ${fmtInt(total)}`}
               </button>
             </div>
           </div>
@@ -1129,10 +1153,16 @@ export function QuickSale() {
               </button>
             </div>
             <div className="p-4 overflow-y-auto space-y-3">
-              <div className="bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 text-sm">
-                <div className="text-amber-700 font-bold mb-0.5">Yeni barkod</div>
-                <div className="font-mono font-black text-slate-800 break-all">{quickProduct.barcode}</div>
-              </div>
+              {quickProduct.barcode ? (
+                <div className="bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 text-sm">
+                  <div className="text-amber-700 font-bold mb-0.5">Yeni barkod</div>
+                  <div className="font-mono font-black text-slate-800 break-all">{quickProduct.barcode}</div>
+                </div>
+              ) : (
+                <div className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm text-slate-600">
+                  Kategori seçmeniz gerekmez — ad ve fiyat yeterli. Barkod sonra Ürünler ekranından eklenebilir.
+                </div>
+              )}
               <div>
                 <label className="block text-xs font-bold text-slate-600 mb-1">Ürün Adı *</label>
                 <input
@@ -1145,7 +1175,7 @@ export function QuickSale() {
                 />
               </div>
               <div>
-                <label className="block text-xs font-bold text-slate-600 mb-1">Satış Fiyatı (₺) *</label>
+                <label className="block text-xs font-bold text-slate-600 mb-1">Satış Fiyatı ({currencySymbol}) *</label>
                 <input
                   type="number"
                   inputMode="decimal"
@@ -1157,45 +1187,49 @@ export function QuickSale() {
                   placeholder="0,00"
                 />
               </div>
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="block text-xs font-bold text-slate-600 mb-1">Kategori</label>
-                  <select
-                    value={quickProduct.categoryId}
-                    onChange={(e) => {
-                      const cat = categories.find((c) => c.id === e.target.value);
-                      setQuickProduct({
-                        ...quickProduct,
-                        categoryId: e.target.value,
-                        // Kategori seçildiğinde KDV otomatik gelsin (kullanıcı henüz elle girmemişse)
-                        taxRate: quickProduct.taxRate || (cat?.vat_rate != null ? String(cat.vat_rate) : ''),
-                      });
-                    }}
-                    className="w-full px-2 py-2.5 border-2 border-slate-200 rounded-xl text-sm font-medium focus:border-orange-400 focus:outline-none bg-white"
-                  >
-                    <option value="">Kategorisiz</option>
-                    {categories.map((c) => (
-                      <option key={c.id} value={c.id}>{c.name}</option>
-                    ))}
-                  </select>
+              <details className="rounded-xl border-2 border-slate-100 bg-slate-50/80 open:bg-white open:border-slate-200">
+                <summary className="cursor-pointer select-none px-3 py-2.5 text-xs font-bold text-slate-600">
+                  Kategori / KDV (isteğe bağlı)
+                </summary>
+                <div className="px-3 pb-3 grid grid-cols-2 gap-2 border-t border-slate-100 pt-2">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-600 mb-1">Kategori</label>
+                    <select
+                      value={quickProduct.categoryId}
+                      onChange={(e) => {
+                        const cat = categories.find((c) => c.id === e.target.value);
+                        setQuickProduct({
+                          ...quickProduct,
+                          categoryId: e.target.value,
+                          taxRate: quickProduct.taxRate || (cat?.vat_rate != null ? String(cat.vat_rate) : ''),
+                        });
+                      }}
+                      className="w-full px-2 py-2.5 border-2 border-slate-200 rounded-xl text-sm font-medium focus:border-orange-400 focus:outline-none bg-white"
+                    >
+                      <option value="">Kategorisiz</option>
+                      {categories.map((c) => (
+                        <option key={c.id} value={c.id}>{c.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-600 mb-1">KDV (%)</label>
+                    <input
+                      type="number"
+                      inputMode="decimal"
+                      step="0.01"
+                      min="0"
+                      max="100"
+                      value={quickProduct.taxRate}
+                      onChange={(e) => setQuickProduct({ ...quickProduct, taxRate: e.target.value })}
+                      className="w-full px-2 py-2.5 border-2 border-slate-200 rounded-xl text-sm font-medium focus:border-orange-400 focus:outline-none bg-white"
+                      placeholder="örn. 10"
+                    />
+                  </div>
                 </div>
-                <div>
-                  <label className="block text-xs font-bold text-slate-600 mb-1">KDV (%)</label>
-                  <input
-                    type="number"
-                    inputMode="decimal"
-                    step="0.01"
-                    min="0"
-                    max="100"
-                    value={quickProduct.taxRate}
-                    onChange={(e) => setQuickProduct({ ...quickProduct, taxRate: e.target.value })}
-                    className="w-full px-3 py-2.5 border-2 border-slate-200 rounded-xl text-sm font-medium focus:border-orange-400 focus:outline-none"
-                    placeholder="örn. 10"
-                  />
-                </div>
-              </div>
+              </details>
               <div className="text-[11px] text-slate-500 leading-relaxed">
-                Ürün anında ürün listenize eklenir, kaydedilen barkod bir sonraki taramada doğrudan sepete iner. Detayları sonra "Stok yönetimi" veya "Ürünler" ekranından düzenleyebilirsiniz.
+                Ürün anında listeye eklenir ve sepete konur. Kategori şart değil; detayları sonra Ürünler ekranından düzenleyebilirsiniz.
               </div>
             </div>
             <div className="border-t border-slate-100 p-3 flex gap-2 bg-slate-50">

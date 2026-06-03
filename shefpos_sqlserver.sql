@@ -55,6 +55,8 @@ CREATE TABLE tenants (
     require_cancel_reason BIT DEFAULT 0,
     lock_pin NVARCHAR(10),
     ip_lock_enabled BIT DEFAULT 0,
+    currency_code NVARCHAR(3) NOT NULL DEFAULT 'TRY'
+        CHECK (currency_code IN ('TRY', 'USD', 'EUR')),
     created_at DATETIME2 DEFAULT GETDATE()
 );
 GO
