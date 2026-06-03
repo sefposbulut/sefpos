@@ -321,6 +321,22 @@ export default defineConfig(({ mode, command }) => {
       host: '127.0.0.1',
       port: SEFPOS_DEV_PORT,
       strictPort: true,
+      watch: {
+        // dist/build, release paketleri ve büyük ikili dosyalar watcher'ı tetikleyip
+        // sonsuz HMR döngüsü + kasma yapabiliyor (özellikle Windows).
+        ignored: [
+          '**/dist/**',
+          '**/release*/**',
+          '**/.git/**',
+          '**/node_modules/**',
+          '**/.cursor/**',
+          '**/terminals/**',
+          '**/win-unpacked/**',
+          '**/*.exe',
+          '**/*.blockmap',
+          '**/temp-*/**',
+        ],
+      },
     },
     optimizeDeps: {
       exclude: ['lucide-react'],

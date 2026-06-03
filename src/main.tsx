@@ -151,28 +151,49 @@ const menuBranchId = params.get('menu');
 /** QR'da sabit masa / bölüm etiketi (?masa= veya ?table=) */
 const qrTableHint = (params.get('masa') || params.get('table') || '').trim();
 
-const root = createRoot(document.getElementById('root')!);
+const ROOT_CACHE_KEY = '__sefpos_react_root__';
+
+/** Vite HMR main.tsx'i yeniden çalıştırınca aynı #root için ikinci createRoot uyarısını önler. */
+function getOrCreateRoot(container: HTMLElement) {
+  type CachedRoot = ReturnType<typeof createRoot>;
+  const cached = container as HTMLElement & { [ROOT_CACHE_KEY]?: CachedRoot };
+  if (!cached[ROOT_CACHE_KEY]) {
+    cached[ROOT_CACHE_KEY] = createRoot(container);
+  }
+  return cached[ROOT_CACHE_KEY]!;
+}
+
+function renderApp() {
+  const container = document.getElementById('root');
+  if (!container) return;
+  const root = getOrCreateRoot(container);
+
+  if (menuBranchId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(menuBranchId)) {
+    root.render(
+      <StrictMode>
+        <AppErrorBoundary>
+          <PublicMenu branchId={menuBranchId} qrTableHint={qrTableHint} />
+        </AppErrorBoundary>
+      </StrictMode>,
+    );
+  } else {
+    root.render(
+      <StrictMode>
+        <AppErrorBoundary>
+          <AuthProvider>
+            <App />
+            <ElectronDesktopShell />
+          </AuthProvider>
+        </AppErrorBoundary>
+      </StrictMode>,
+    );
+  }
+}
 
 // Boot splash sonsuz kalmasin (ag hatasi / yavas chunk yuklemesi)
 window.setTimeout(() => hideBootSplash(), 10_000);
 
-if (menuBranchId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(menuBranchId)) {
-  root.render(
-    <StrictMode>
-      <AppErrorBoundary>
-        <PublicMenu branchId={menuBranchId} qrTableHint={qrTableHint} />
-      </AppErrorBoundary>
-    </StrictMode>
-  );
-} else {
-  root.render(
-    <StrictMode>
-      <AppErrorBoundary>
-        <AuthProvider>
-          <App />
-          <ElectronDesktopShell />
-        </AuthProvider>
-      </AppErrorBoundary>
-    </StrictMode>
-  );
-}
+renderApp();
+
+// Self-accept + renderApp() tüm import grafiğini sürekli yenileyip binlerce
+// "[vite] hot updated" loguna yol açabiliyor. createRoot önbelleği yeterli.

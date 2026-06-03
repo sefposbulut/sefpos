@@ -54,7 +54,7 @@ type PaymentMethod = 'cash' | 'credit_card' | 'open_account';
 
 export function QuickSale() {
   const { tenant, user, activeBranch } = useAuth();
-  const { format: fmtMoney, formatInt: fmtInt, formatPrice: fmtPrice, symbol: currencySymbol } = useCurrency();
+  const { format: fmtMoney, formatInt: fmtInt, formatPrice: fmtPrice, symbol: currencySymbol, code: currencyCode } = useCurrency();
   const [products, setProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
@@ -626,6 +626,7 @@ export function QuickSale() {
         previousBalance: isOpenAcc ? openAccountPrevBalance : null,
         newBalance,
         footer: printSettings.receiptFooter,
+        currencyCode,
       });
       setLastReceiptDefaultPhone(openAccountCustomer?.phone || null);
       if (lastReceiptTimerRef.current) window.clearTimeout(lastReceiptTimerRef.current);

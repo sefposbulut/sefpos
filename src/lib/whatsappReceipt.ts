@@ -9,6 +9,13 @@
  *   tek tıkla gönderir.
  */
 
+import {
+  formatMoney,
+  getActiveCurrencyCode,
+  normalizeCurrencyCode,
+  type TenantCurrencyCode,
+} from './currency';
+
 export interface WhatsAppReceiptInput {
   restaurantName: string;
   restaurantPhone?: string | null;
@@ -41,6 +48,8 @@ export interface WhatsAppReceiptInput {
   previousBalance?: number | null;
   newBalance?: number | null;
   footer?: string | null;
+  /** İşletme para birimi — verilmezse aktif tenant ayarı kullanılır. */
+  currencyCode?: TenantCurrencyCode;
 }
 
 /** "0532 517 80 50" / "+90 532 ..." → "905325178050" */
@@ -54,8 +63,14 @@ export function formatPhoneForWhatsApp(raw: string): string | null {
   return digits;
 }
 
-const fmtTry = (n: number) =>
-  new Intl.NumberFormat('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Number(n || 0));
+const resolveCurrency = (input: WhatsAppReceiptInput): TenantCurrencyCode =>
+  normalizeCurrencyCode(input.currencyCode ?? getActiveCurrencyCode());
+
+function fmtPercent(pct: number): string {
+  return Number.isInteger(pct)
+    ? String(pct)
+    : new Intl.NumberFormat('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(pct);
+}
 
 function methodLabel(m: string): string {
   if (m === 'cash')         return 'Nakit';
@@ -65,6 +80,8 @@ function methodLabel(m: string): string {
 }
 
 export function buildWhatsAppReceiptText(input: WhatsAppReceiptInput): string {
+  const currency = resolveCurrency(input);
+  const fmt = (n: number) => formatMoney(Number(n || 0), currency);
   const lines: string[] = [];
   lines.push(`*${input.restaurantName}*`);
   if (input.restaurantPhone)   lines.push(`Tel: ${input.restaurantPhone}`);
@@ -80,26 +97,22 @@ export function buildWhatsAppReceiptText(input: WhatsAppReceiptInput): string {
   for (const it of input.items) {
     const name = it.variantName ? `${it.productName} (${it.variantName})` : it.productName;
     lines.push(`${it.quantity} x ${name}`);
-    lines.push(`   ${fmtTry(it.unitPrice)} → ${fmtTry(it.totalAmount)} ₺`);
+    lines.push(`   ${fmt(it.unitPrice)} → ${fmt(it.totalAmount)}`);
     if (it.notes) lines.push(`   Not: ${it.notes}`);
   }
 
   lines.push('--------------------------------');
-  lines.push(`Ara toplam: ${fmtTry(input.subtotal)} ₺`);
+  lines.push(`Ara toplam: ${fmt(input.subtotal)}`);
   if (input.discountAmount && input.discountAmount > 0) {
     const pct = Number(input.discountPercent || 0);
-    const pctStr = pct > 0
-      ? (Number.isInteger(pct)
-          ? String(pct)
-          : new Intl.NumberFormat('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(pct))
-      : '';
+    const pctStr = pct > 0 ? fmtPercent(pct) : '';
     const pctLabel = pctStr ? ` (%${pctStr})` : '';
-    lines.push(`İskonto${pctLabel}: -${fmtTry(input.discountAmount)} ₺`);
+    lines.push(`İskonto${pctLabel}: -${fmt(input.discountAmount)}`);
   }
   if (input.taxAmount && input.taxAmount > 0) {
-    lines.push(`KDV: ${fmtTry(input.taxAmount)} ₺`);
+    lines.push(`KDV: ${fmt(input.taxAmount)}`);
   }
-  lines.push(`*Toplam: ${fmtTry(input.total)} ₺*`);
+  lines.push(`*Toplam: ${fmt(input.total)}*`);
   lines.push(`Ödeme: ${methodLabel(input.paymentMethod)}`);
 
   // Cari (açık hesap) bilgisi — önceki ve yeni bakiye
@@ -109,10 +122,10 @@ export function buildWhatsAppReceiptText(input: WhatsAppReceiptInput): string {
     lines.push('--------------------------------');
     lines.push('CARİ HESAP');
     if (typeof input.previousBalance === 'number') {
-      lines.push(`Önceki bakiye: ${fmtTry(input.previousBalance)} ₺`);
+      lines.push(`Önceki bakiye: ${fmt(input.previousBalance)}`);
     }
     if (typeof input.newBalance === 'number') {
-      lines.push(`*Yeni bakiye:  ${fmtTry(input.newBalance)} ₺*`);
+      lines.push(`*Yeni bakiye:  ${fmt(input.newBalance)}*`);
     }
   }
 
@@ -147,6 +160,8 @@ export function openWhatsAppWithReceipt(phone: string | null, text: string): voi
  * style + class), izole render hedefine basılabilir.
  */
 export function buildWhatsAppReceiptHtml(input: WhatsAppReceiptInput): string {
+  const currency = resolveCurrency(input);
+  const fmt = (n: number) => formatMoney(Number(n || 0), currency);
   const esc = (s: string) =>
     String(s ?? '')
       .replace(/&/g, '&amp;')
@@ -201,8 +216,6 @@ export function buildWhatsAppReceiptHtml(input: WhatsAppReceiptInput): string {
     .wfis .balance-new > span:last-child { color: #b91c1c; }
   `;
 
-  const fmt = (n: number) => fmtTry(n);
-
   let html = `<style>${css}</style><div class="wfis">`;
 
   html += `<div class="center">
@@ -231,8 +244,8 @@ export function buildWhatsAppReceiptHtml(input: WhatsAppReceiptInput): string {
     html += `<div class="item">
       <div class="item-name">${esc(name)}</div>
       <div class="item-line">
-        <span>${it.quantity} × ${fmt(it.unitPrice)} ₺</span>
-        <span>${fmt(it.totalAmount)} ₺</span>
+        <span>${it.quantity} × ${fmt(it.unitPrice)}</span>
+        <span>${fmt(it.totalAmount)}</span>
       </div>
       ${it.notes ? `<div class="item-note">Not: ${esc(it.notes)}</div>` : ''}
     </div>`;
@@ -242,22 +255,17 @@ export function buildWhatsAppReceiptHtml(input: WhatsAppReceiptInput): string {
   });
 
   html += `<div class="hr-dash"></div>`;
-  html += `<div class="row"><span>Ara Toplam</span><span>${fmt(input.subtotal)} ₺</span></div>`;
+  html += `<div class="row"><span>Ara Toplam</span><span>${fmt(input.subtotal)}</span></div>`;
   if (input.discountAmount && input.discountAmount > 0) {
-    // Yüzdeyi tam sayıysa "5", ondalıklıysa "3,38" gibi TR formatta göster.
     const pct = Number(input.discountPercent || 0);
-    const pctStr = pct > 0
-      ? (Number.isInteger(pct)
-          ? String(pct)
-          : new Intl.NumberFormat('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(pct))
-      : '';
+    const pctStr = pct > 0 ? fmtPercent(pct) : '';
     const pctLabel = pctStr ? ` <span class="muted">(%${pctStr})</span>` : '';
-    html += `<div class="row discount"><span>İskonto${pctLabel}</span><span>-${fmt(input.discountAmount)} ₺</span></div>`;
+    html += `<div class="row discount"><span>İskonto${pctLabel}</span><span>-${fmt(input.discountAmount)}</span></div>`;
   }
   if (input.taxAmount && input.taxAmount > 0) {
-    html += `<div class="row"><span>KDV</span><span>${fmt(input.taxAmount)} ₺</span></div>`;
+    html += `<div class="row"><span>KDV</span><span>${fmt(input.taxAmount)}</span></div>`;
   }
-  html += `<div class="total-row"><span>TOPLAM</span><span>${fmt(input.total)} ₺</span></div>`;
+  html += `<div class="total-row"><span>TOPLAM</span><span>${fmt(input.total)}</span></div>`;
   html += `<div class="row"><span>Ödeme</span><span class="pay-method">${esc(methodLabel(input.paymentMethod))}</span></div>`;
 
   // Cari (açık hesap) bakiye kutusu — sadece open_account ödemelerinde gösterilir.
@@ -269,10 +277,10 @@ export function buildWhatsAppReceiptHtml(input: WhatsAppReceiptInput): string {
     html += `<div class="balance-box">`;
     html += `<div class="balance-title">CARİ HESAP</div>`;
     if (typeof input.previousBalance === 'number') {
-      html += `<div class="row"><span>Önceki Bakiye</span><span>${fmt(input.previousBalance)} ₺</span></div>`;
+      html += `<div class="row"><span>Önceki Bakiye</span><span>${fmt(input.previousBalance)}</span></div>`;
     }
     if (typeof input.newBalance === 'number') {
-      html += `<div class="row balance-new"><span>Yeni Bakiye</span><span>${fmt(input.newBalance)} ₺</span></div>`;
+      html += `<div class="row balance-new"><span>Yeni Bakiye</span><span>${fmt(input.newBalance)}</span></div>`;
     }
     html += `</div>`;
   }

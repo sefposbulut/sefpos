@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { X, Send, MessageCircle, Phone, Copy, Check, ImageIcon, Loader2, Download } from 'lucide-react';
+import { useCurrency } from '../lib/currency';
 import {
   type WhatsAppReceiptInput,
   buildWhatsAppReceiptText,
@@ -27,8 +28,13 @@ interface Props {
  *  3) **Kopyala** — fiş metnini panoya kopyalar.
  */
 export function WhatsAppReceiptModal({ receipt, defaultPhone, onClose }: Props) {
+  const { code: currencyCode } = useCurrency();
   const [phone, setPhone] = useState<string>(defaultPhone || '');
-  const [text, setText]   = useState<string>(() => buildWhatsAppReceiptText(receipt));
+  const receiptWithCurrency = useMemo(
+    () => ({ ...receipt, currencyCode: receipt.currencyCode ?? currencyCode }),
+    [receipt, currencyCode],
+  );
+  const [text, setText] = useState<string>(() => buildWhatsAppReceiptText(receiptWithCurrency));
   const [copied, setCopied] = useState(false);
   const [busy, setBusy] = useState<'image' | 'download' | null>(null);
   const [warn, setWarn] = useState<string | null>(null);
@@ -61,9 +67,13 @@ export function WhatsAppReceiptModal({ receipt, defaultPhone, onClose }: Props) 
     if (previewRef.current) ro.observe(previewRef.current);
     window.addEventListener('resize', update);
     return () => { ro.disconnect(); window.removeEventListener('resize', update); };
-  }, [receipt]);
+  }, [receiptWithCurrency]);
 
-  const receiptHtml = useMemo(() => buildWhatsAppReceiptHtml(receipt), [receipt]);
+  const receiptHtml = useMemo(() => buildWhatsAppReceiptHtml(receiptWithCurrency), [receiptWithCurrency]);
+
+  useEffect(() => {
+    setText(buildWhatsAppReceiptText(receiptWithCurrency));
+  }, [receiptWithCurrency]);
 
   // Önizleme ve offscreen render hedefine HTML'i bas
   useEffect(() => {
