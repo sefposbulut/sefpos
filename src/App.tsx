@@ -37,7 +37,6 @@ import { LoyaltyPage } from './components/loyalty/LoyaltyPage';
 import { EndOfDay } from './components/EndOfDay';
 import { Reports } from './components/reports/Reports';
 import { primeReportsStockCountTab } from './lib/reportsNav';
-import { hasLikelyStoredAuthSession } from './lib/authSessionSnap';
 import { CancelLogs } from './components/CancelLogs';
 import { PinLockScreen } from './components/PinLockScreen';
 import { Inventory } from './components/inventory/Inventory';
@@ -174,8 +173,9 @@ export default function App() {
   const [dbMode, setDbMode] = useState<'cloud' | 'sqlserver' | null>(readInitialElectronDbMode);
   // Sıcak yol (masa/paket/online): bir kez açılınca display:none ile saklanır.
   // Soğuk sayfalar (stok, rapor, gün sonu…): çıkınca unmount — gizli poll/kanal birikmez.
+  // Web: yalnızca masalar önceden mount — online/paket ilk tıklamada açılır (gizli yük azalır).
   const mountedPagesRef = useRef<Set<string>>(
-    new Set(isElectron ? ['desktop-home', 'online-orders'] : ['tables', 'online-orders']),
+    new Set(isElectron ? ['desktop-home'] : ['tables']),
   );
   const [mountedPagesVersion, setMountedPagesVersion] = useState(0);
   useEffect(() => {
@@ -193,7 +193,7 @@ export default function App() {
       if (cancelled) return;
       mountedPagesRef.current.add('tables');
       setMountedPagesVersion((v) => v + 1);
-    }, 12_000);
+    }, 4_000);
     return () => {
       cancelled = true;
       window.clearTimeout(t);
@@ -520,9 +520,9 @@ export default function App() {
     );
   }
 
-  const sessionRestoring = loading || (!user && hasLikelyStoredAuthSession());
+  const sessionRestoring = loading && !profile;
   if (sessionRestoring) {
-    return <BrandSplash hint="Oturum açılıyor…" />;
+    return <BrandSplash hint="Oturum açılıyor…" compact />;
   }
 
   if (
@@ -573,7 +573,7 @@ export default function App() {
     );
   }
 
-  if (!user) {
+  if (!user && !profile) {
     if (isElectron) {
       return (
         <ElectronAuth

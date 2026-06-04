@@ -313,6 +313,25 @@ export default defineConfig(({ mode, command }) => {
     });
   }
 
+  /** index.css HMR: yalnızca stil modülü + kısa debounce (Windows'ta art arda 10+ güncelleme kasması). */
+  let cssHmrDebounce: ReturnType<typeof setTimeout> | null = null;
+  plugins.push({
+    name: 'sefpos-css-hmr-scope',
+    apply: 'serve',
+    handleHotUpdate(ctx) {
+      const file = ctx.file.replace(/\\/g, '/');
+      if (!file.endsWith('/src/index.css')) return;
+      const scoped = ctx.modules.filter((m) => m.url?.includes('index.css'));
+      return new Promise((resolve) => {
+        if (cssHmrDebounce) clearTimeout(cssHmrDebounce);
+        cssHmrDebounce = setTimeout(() => {
+          cssHmrDebounce = null;
+          resolve(scoped);
+        }, 280);
+      });
+    },
+  });
+
   return {
     define,
     plugins,
@@ -321,12 +340,16 @@ export default defineConfig(({ mode, command }) => {
       host: '127.0.0.1',
       port: SEFPOS_DEV_PORT,
       strictPort: true,
+      hmr: {
+        overlay: true,
+      },
       watch: {
         // dist/build, release paketleri ve büyük ikili dosyalar watcher'ı tetikleyip
         // sonsuz HMR döngüsü + kasma yapabiliyor (özellikle Windows).
         ignored: [
           '**/dist/**',
           '**/release*/**',
+          '**/release - Kopya/**',
           '**/.git/**',
           '**/node_modules/**',
           '**/.cursor/**',
@@ -335,6 +358,8 @@ export default defineConfig(({ mode, command }) => {
           '**/*.exe',
           '**/*.blockmap',
           '**/temp-*/**',
+          '**/agent-transcripts/**',
+          '**/*.cjs',
         ],
       },
     },

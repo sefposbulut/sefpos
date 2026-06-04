@@ -22,6 +22,11 @@ import {
 } from '../lib/getirApi';
 import { GETIR_STORE_STATUS_EVENT, GETIR_ORDERS_POLLED_EVENT } from './GlobalGetirSync';
 import { startAdaptivePoller } from '../lib/pollSchedule';
+import {
+  readOnlineOrdersCache,
+  writeOnlineOrdersCache,
+  type OnlineOrderWarmRow,
+} from '../lib/onlineOrdersWarm';
 import { internalStatusLabelTr } from '../../supabase/functions/_shared/getirOrderStatus';
 import { PlatformLogo } from './PlatformLogo';
 import {
@@ -169,7 +174,10 @@ export function OnlineOrders({ isActive = true }: { isActive?: boolean }) {
   useEffect(() => {
     isActiveRef.current = isActive;
   }, [isActive]);
-  const [orders, setOrders] = useState<OrderWithDetails[]>([]);
+  const initialOnlineCached = tenant?.id ? readOnlineOrdersCache(tenant.id) : null;
+  const [orders, setOrders] = useState<OrderWithDetails[]>(
+    () => (initialOnlineCached as OrderWithDetails[] | null) ?? [],
+  );
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [expandedOrder, setExpandedOrder] = useState<string | null>(null);
@@ -186,6 +194,10 @@ export function OnlineOrders({ isActive = true }: { isActive?: boolean }) {
     const saved = localStorage.getItem('notification_sound_enabled');
     return saved === null ? true : saved === 'true';
   });
+  const ordersRef = useRef(orders);
+  useEffect(() => {
+    ordersRef.current = orders;
+  }, [orders]);
   const previousOrderCount = useRef<number>(0);
   // Daha onceden goruldumu listesi — yeni gelenleri platforma gore uyarmak icin
   const seenOrderIds = useRef<Set<string>>(new Set());
@@ -229,8 +241,8 @@ export function OnlineOrders({ isActive = true }: { isActive?: boolean }) {
   const scheduleKitchenPrint = useCallback(
     async (o: OrderWithDetails) => {
       if (!tenant?.id) return;
-      if (kitchenPrintInFlight.current.has(o.id)) return;
       if (wasKitchenPrinted(tenant.id, o.id)) return;
+      if (kitchenPrintInFlight.current.has(o.id)) return;
       kitchenPrintInFlight.current.add(o.id);
       try {
         const settings = loadPrintSettings();
@@ -285,7 +297,7 @@ export function OnlineOrders({ isActive = true }: { isActive?: boolean }) {
   const loadOrders = useCallback(async (showLoading = false) => {
     if (!tenant) return;
 
-    if (showLoading) setLoading(true);
+    if (showLoading && ordersRef.current.length === 0) setLoading(true);
     try {
       let query = supabase
         .from('online_orders')
@@ -300,6 +312,7 @@ export function OnlineOrders({ isActive = true }: { isActive?: boolean }) {
       if (error) throw error;
 
       const newOrders = (data as any[]) || [];
+      writeOnlineOrdersCache(tenant.id, newOrders as OnlineOrderWarmRow[]);
 
       // ────────────────────────────────────────────────────────────────
       // ALARM + MUTFAK FİŞİ politikası
@@ -344,20 +357,13 @@ export function OnlineOrders({ isActive = true }: { isActive?: boolean }) {
           void autoApproveOrderRef.current(o as OrderWithDetails);
         }
 
-        // 2) Onaylanmış statü → fiş. Geçiş veya ilk görüşte (eski kayıt)
-        //    olduğu farketmez; localStorage mükerrer engelliyor.
-        if (KITCHEN_READY_STATUSES.has(o.status)) {
+        // 2) Onaylanmış statü → fiş (canlı onay geçişi). Eski kayıtlar bootstrap catch-up ile.
+        if (KITCHEN_READY_STATUSES.has(o.status) && tenant?.id && !wasKitchenPrinted(tenant.id, o.id)) {
           const isGetir = o.online_order_platforms?.platform_code === 'getir';
           const justApproved =
             prevStatus !== undefined && PENDING_APPROVAL_STATUSES.has(prevStatus);
           const hasLocalAck = !!o.accepted_at;
-          // Getir için: kasa onayı (accepted_at) zorunlu — getir paneli auto-verify
-          // etse bile fiş YALNIZCA kullanıcı ŞefPOS’ta «Onayla» dedikten sonra basılır.
-          // Diğer platformlar (Yemeksepeti vb.) için eski davranış: durum geçişi veya
-          // ilk görüş yeterli.
-          const triggerPrint = isGetir
-            ? hasLocalAck && (justApproved || isFirstSighting)
-            : justApproved || isFirstSighting;
+          const triggerPrint = isGetir ? hasLocalAck && justApproved : justApproved;
           if (triggerPrint) {
             void scheduleKitchenPrint(o as OrderWithDetails);
           }
@@ -373,7 +379,25 @@ export function OnlineOrders({ isActive = true }: { isActive?: boolean }) {
         }
       }
 
-      if (!firstLoadDone.current) firstLoadDone.current = true;
+      if (!firstLoadDone.current) {
+        firstLoadDone.current = true;
+        if (tenant?.id) {
+          const catchUp = newOrders.filter(
+            (o) =>
+              KITCHEN_READY_STATUSES.has(o.status) && !wasKitchenPrinted(tenant.id, o.id),
+          );
+          if (catchUp.length) {
+            const run = () => {
+              for (const o of catchUp) void scheduleKitchenPrint(o as OrderWithDetails);
+            };
+            if (typeof requestIdleCallback !== 'undefined') {
+              requestIdleCallback(run, { timeout: 5000 });
+            } else {
+              setTimeout(run, 800);
+            }
+          }
+        }
+      }
 
       // Onaylanmış / iptal edilmiş ya da artık listede olmayan siparişlerin
       // alarmlarını durdur.
@@ -400,7 +424,13 @@ export function OnlineOrders({ isActive = true }: { isActive?: boolean }) {
   useEffect(() => {
     if (!tenant || !isActive) return;
 
-    loadOrders(true);
+    const cached = readOnlineOrdersCache(tenant.id);
+    if (cached?.length) {
+      setOrders(cached as OrderWithDetails[]);
+      void loadOrders(false);
+    } else {
+      void loadOrders(true);
+    }
 
     let reloadTimer: ReturnType<typeof setTimeout> | null = null;
     const scheduleReload = () => {

@@ -1957,6 +1957,33 @@ input[type="range"]::-moz-range-thumb {
   animation: sefpos-splash-spin 0.75s linear infinite;
 }
 
+.sefpos-splash-logo--fast {
+  animation-duration: 1.6s;
+}
+
+.sefpos-splash-glow--fast {
+  animation-duration: 1.6s;
+}
+
+.sefpos-splash-spinner--fast {
+  width: 22px;
+  height: 22px;
+  animation-duration: 0.55s;
+}
+
+@keyframes sefpos-splash-bar-slide {
+  0% {
+    transform: translateX(-120%);
+  }
+  100% {
+    transform: translateX(350%);
+  }
+}
+
+.sefpos-splash-bar {
+  animation: sefpos-splash-bar-slide 0.9s ease-in-out infinite;
+}
+
 #boot-splash .sefpos-splash-logo-stage {
   width: 120px;
   height: 120px;

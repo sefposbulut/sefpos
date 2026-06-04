@@ -123,6 +123,40 @@ export async function fetchTakeawayOrders(
   return (data || []) as TakeawayOrderListRow[];
 }
 
+const takeawayListCache = new Map<string, TakeawayOrderListRow[]>();
+
+export function takeawayListCacheKey(
+  tenantId: string,
+  branchId: string | null | undefined,
+  completed: boolean,
+): string {
+  return `${tenantId}:${branchId ?? ''}:${completed ? 'done' : 'active'}`;
+}
+
+export function readTakeawayListCache(key: string): TakeawayOrderListRow[] | null {
+  const rows = takeawayListCache.get(key);
+  return rows?.length ? rows : null;
+}
+
+export function writeTakeawayListCache(key: string, rows: TakeawayOrderListRow[]): void {
+  takeawayListCache.set(key, rows);
+}
+
+/** Giriş / şube seçimi — paket ekranı açılmadan liste hazır olsun */
+export function prefetchTakeawayActiveOrders(
+  tenantId: string,
+  branchId: string | null | undefined,
+  limit = 150,
+): void {
+  const key = takeawayListCacheKey(tenantId, branchId, false);
+  if (takeawayListCache.has(key)) return;
+  void fetchTakeawayActiveOrders(tenantId, branchId, limit)
+    .then((rows) => {
+      if (rows.length) writeTakeawayListCache(key, rows);
+    })
+    .catch(() => {});
+}
+
 export async function fetchTakeawayOrderById(
   orderId: string,
 ): Promise<TakeawayOrderListRow | null> {

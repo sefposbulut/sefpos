@@ -3,7 +3,7 @@ import { supabase } from '../lib/supabase';
 import { createClient } from '@supabase/supabase-js';
 import { useAuth } from '../contexts/AuthContext';
 import { Database } from '../lib/supabase';
-import { X, Plus, Trash2, Settings as SettingsIcon, Building2, ToggleLeft, ToggleRight, Printer, AlertCircle, MapPin, Phone, Save, CreditCard as Edit2, User, Store, CheckCircle, Wifi, WifiOff, Globe, RefreshCw, Lock, ShieldCheck, Eye, EyeOff, Package, CheckSquare, Square, Database as DatabaseIcon, Receipt, Pencil, Scale, Loader, QrCode, PhoneIncoming, FlaskConical, Clock, Download, Sparkles, ChevronDown, ChevronUp, HelpCircle, Info, Percent, Puzzle, Gift } from 'lucide-react';
+import { X, Plus, Trash2, Settings as SettingsIcon, Building2, ToggleLeft, ToggleRight, Printer, AlertCircle, MapPin, Phone, Save, CreditCard as Edit2, User, Store, CheckCircle, Wifi, WifiOff, Globe, RefreshCw, Lock, ShieldCheck, Eye, EyeOff, Package, CheckSquare, Square, Database as DatabaseIcon, Receipt, Pencil, Scale, Loader, QrCode, PhoneIncoming, FlaskConical, Clock, Download, Sparkles, ChevronDown, ChevronUp, HelpCircle, Info, Percent, Puzzle, Gift, Menu } from 'lucide-react';
 import { isModuleEnabled } from '../lib/modules';
 import { LoyaltySettingsPanel } from './loyalty/LoyaltySettingsPanel';
 import IntegrationsSettings from './IntegrationsSettings';
@@ -52,6 +52,7 @@ interface SettingsProps {
 export function Settings({ onClose }: SettingsProps) {
   const { tenant, profile, activeBranch, refreshProfile, refreshBranches } = useAuth();
   const [activeTab, setActiveTab] = useState<'tables' | 'products' | 'manage' | 'platforms' | 'integrations' | 'partner-api' | 'branches' | 'printers' | 'account' | 'system' | 'security' | 'branch-products' | 'database' | 'hugin' | 'devices' | 'waiters' | 'scale' | 'qr-menu' | 'caller-id' | 'loyalty'>('branches');
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [groups, setGroups] = useState<TableGroup[]>([]);
   const [showGroupForm, setShowGroupForm] = useState(false);
   const [groupName, setGroupName] = useState('');
@@ -1128,23 +1129,65 @@ export function Settings({ onClose }: SettingsProps) {
   ] as const;
 
   const navGroups = ['Yönetim', 'Masalar', 'Siparişler', 'Sistem', 'Hesap'];
+  const activeNavItem = navItems.find((i) => i.id === activeTab);
+
+  const selectSettingsTab = (id: typeof activeTab) => {
+    setActiveTab(id);
+    setMobileNavOpen(false);
+  };
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-100 flex flex-col">
-      <div className="bg-gradient-to-r from-slate-900 to-slate-800 text-white px-4 md:px-6 py-3 flex items-center justify-between flex-shrink-0">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 bg-gradient-to-br from-orange-400 to-red-500 rounded-lg flex items-center justify-center">
+    <div className="fixed inset-0 z-50 bg-slate-100 flex flex-col overflow-hidden">
+      <div className="bg-gradient-to-r from-slate-900 to-slate-800 text-white px-3 sm:px-4 md:px-6 py-3 flex items-center justify-between flex-shrink-0 gap-2">
+        <div className="flex items-center gap-2 min-w-0 flex-1">
+          <button
+            type="button"
+            onClick={() => setMobileNavOpen(true)}
+            className="md:hidden p-2 -ml-1 hover:bg-white/10 rounded-lg transition shrink-0"
+            aria-label="Ayarlar menüsünü aç"
+          >
+            <Menu className="w-5 h-5" />
+          </button>
+          <div className="w-8 h-8 bg-gradient-to-br from-orange-400 to-red-500 rounded-lg flex items-center justify-center shrink-0">
             <SettingsIcon className="w-4 h-4" />
           </div>
-          <h2 className="text-lg font-black">Ayarlar</h2>
+          <div className="min-w-0">
+            <h2 className="text-base sm:text-lg font-black truncate">Ayarlar</h2>
+            {activeNavItem && (
+              <p className="md:hidden text-[11px] text-white/75 truncate">{activeNavItem.label}</p>
+            )}
+          </div>
         </div>
-        <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-lg transition active:scale-95">
+        <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-lg transition active:scale-95 shrink-0" aria-label="Ayarları kapat">
           <X className="w-5 h-5" />
         </button>
       </div>
 
-      <div className="flex flex-1 min-h-0">
-        <aside className="w-52 md:w-64 bg-white border-r border-slate-200 flex-shrink-0 overflow-y-auto flex flex-col">
+      <div className="flex flex-1 min-h-0 min-w-0 relative">
+        {mobileNavOpen && (
+          <button
+            type="button"
+            className="fixed inset-0 z-[55] bg-black/50 md:hidden"
+            aria-label="Menüyü kapat"
+            onClick={() => setMobileNavOpen(false)}
+          />
+        )}
+        <aside
+          className={`fixed md:relative inset-y-0 left-0 z-[60] md:z-auto flex flex-col bg-white border-r border-slate-200 flex-shrink-0 overflow-y-auto w-[min(18rem,88vw)] md:w-64 transition-transform duration-300 ease-out ${
+            mobileNavOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'
+          }`}
+        >
+          <div className="md:hidden flex items-center justify-between px-4 py-3 border-b border-slate-100">
+            <span className="text-sm font-bold text-slate-800">Menü</span>
+            <button
+              type="button"
+              onClick={() => setMobileNavOpen(false)}
+              className="p-2 text-slate-500 hover:bg-slate-100 rounded-lg"
+              aria-label="Menüyü kapat"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
           <nav className="flex-1 py-3 px-2 space-y-4">
             {navGroups.map(group => {
               const items = navItems.filter(i => i.group === group);
@@ -1157,7 +1200,7 @@ export function Settings({ onClose }: SettingsProps) {
                     return (
                       <button
                         key={item.id}
-                        onClick={() => setActiveTab(item.id as any)}
+                        onClick={() => selectSettingsTab(item.id as typeof activeTab)}
                         className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold transition-all active:scale-95 mt-0.5 ${
                           active
                             ? 'bg-orange-50 text-orange-700 shadow-sm border border-orange-100'
@@ -1175,8 +1218,8 @@ export function Settings({ onClose }: SettingsProps) {
           </nav>
         </aside>
 
-        <main className="flex-1 overflow-y-auto">
-          <div className="max-w-3xl mx-auto p-4 md:p-6">
+        <main className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden">
+          <div className="max-w-3xl mx-auto p-3 sm:p-4 md:p-6 w-full box-border">
 
           {activeTab === 'branches' ? (
             <div className="space-y-4">
@@ -1189,11 +1232,11 @@ export function Settings({ onClose }: SettingsProps) {
               </div>
 
               <div className="bg-gray-50 rounded-xl p-4 md:p-6">
-                <div className="flex items-center justify-between mb-4">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-4">
                   <h3 className="text-base md:text-lg font-bold text-gray-800">Şubeler ({branches.length})</h3>
                   <button
                     onClick={() => setShowBranchForm(!showBranchForm)}
-                    className="flex items-center gap-2 bg-orange-600 hover:bg-orange-700 text-white px-3 py-2 rounded-lg transition active:scale-95 text-sm"
+                    className="flex items-center justify-center gap-2 bg-orange-600 hover:bg-orange-700 text-white px-3 py-2.5 rounded-lg transition active:scale-95 text-sm w-full sm:w-auto"
                   >
                     <Plus className="w-4 h-4" />
                     <span>Yeni Şube</span>
@@ -1280,14 +1323,14 @@ export function Settings({ onClose }: SettingsProps) {
                           </div>
                         </div>
                       ) : (
-                        <div className="flex items-start justify-between gap-3">
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                           <div className="flex items-start gap-3 flex-1 min-w-0">
                             <div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${branch.is_main ? 'bg-orange-100' : 'bg-gray-100'}`}>
                               <MapPin className={`w-5 h-5 ${branch.is_main ? 'text-orange-600' : 'text-gray-500'}`} />
                             </div>
                             <div className="flex-1 min-w-0">
                               <div className="flex items-center gap-2 flex-wrap">
-                                <h4 className="font-bold text-gray-800">{branch.name}</h4>
+                                <h4 className="font-bold text-gray-800 break-words">{branch.name}</h4>
                                 {branch.is_main && (
                                   <span className="text-xs bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full font-medium">Ana Şube</span>
                                 )}
@@ -1296,18 +1339,18 @@ export function Settings({ onClose }: SettingsProps) {
                                 </span>
                               </div>
                               {branch.address && (
-                                <p className="text-sm text-gray-500 mt-0.5 flex items-center gap-1">
-                                  <MapPin className="w-3 h-3" /> {branch.address}
+                                <p className="text-sm text-gray-500 mt-0.5 flex items-start gap-1 break-words">
+                                  <MapPin className="w-3 h-3 shrink-0 mt-0.5" /> <span>{branch.address}</span>
                                 </p>
                               )}
                               {branch.phone && (
-                                <p className="text-sm text-gray-500 flex items-center gap-1">
-                                  <Phone className="w-3 h-3" /> {branch.phone}
+                                <p className="text-sm text-gray-500 flex items-center gap-1 break-all">
+                                  <Phone className="w-3 h-3 shrink-0" /> {branch.phone}
                                 </p>
                               )}
                             </div>
                           </div>
-                          <div className="flex items-center gap-1.5 flex-shrink-0">
+                          <div className="flex items-center gap-1.5 flex-shrink-0 self-end sm:self-start">
                             <button
                               onClick={() => {
                                 setEditingBranch(branch.id);
@@ -1368,12 +1411,12 @@ export function Settings({ onClose }: SettingsProps) {
                     <p className="text-xs text-gray-500">Sipariş ve operasyon ayarları</p>
                   </div>
                 </div>
-                <div className="flex items-center justify-between py-3 border-t border-gray-100">
-                  <div className="flex-1">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between py-3 border-t border-gray-100">
+                  <div className="flex-1 min-w-0">
                     <div className="font-semibold text-gray-800 text-sm">İptal Açıklaması Zorunlu</div>
                     <div className="text-xs text-gray-500 mt-0.5">Ürün iptal edilirken garsondan açıklama istenir</div>
                   </div>
-                  <button onClick={toggleRequireCancelReason} className="ml-4 shrink-0 transition-all active:scale-95">
+                  <button onClick={toggleRequireCancelReason} className="shrink-0 self-start sm:self-center transition-all active:scale-95">
                     {requireCancelReason
                       ? <ToggleRight className="w-10 h-10 text-orange-500" />
                       : <ToggleLeft className="w-10 h-10 text-gray-400" />
@@ -1385,14 +1428,14 @@ export function Settings({ onClose }: SettingsProps) {
           ) : activeTab === 'tables' ? (
             <div className="space-y-6">
               <div className="bg-gray-50 rounded-xl p-6">
-                <div className="flex items-center justify-between mb-4">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-4">
                   <h3 className="text-lg font-bold text-gray-800">Masa Grupları</h3>
                   <button
                     onClick={() => {
                       setGroupBranchId(activeBranch?.id || '');
                       setShowGroupForm(!showGroupForm);
                     }}
-                    className="flex items-center space-x-2 bg-orange-600 hover:bg-orange-700 text-white px-4 py-2 rounded-lg transition"
+                    className="flex items-center justify-center gap-2 bg-orange-600 hover:bg-orange-700 text-white px-4 py-2.5 rounded-lg transition w-full sm:w-auto"
                   >
                     <Plus className="w-4 h-4" />
                     <span>Yeni Grup</span>

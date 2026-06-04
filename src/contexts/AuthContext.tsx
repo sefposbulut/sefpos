@@ -4,6 +4,8 @@ import { supabase } from '../lib/supabase';
 import { Database } from '../lib/supabase';
 import { isSqlServerMode, isLocalMode } from '../lib/sqlDb';
 import { prefetchCloudTableGrid } from '../lib/tableGridData';
+import { prefetchTakeawayActiveOrders } from '../lib/takeawayOrdersApi';
+import { prefetchOnlineOrders } from '../lib/onlineOrdersWarm';
 import {
   verifyWaiterAccessByAuthUser,
   persistWaiterLogoutReason,
@@ -25,10 +27,12 @@ import { isAykaAdminPath } from '../lib/aykaRoute';
 import { startTenantPresenceTracking, stopTenantPresenceTracking } from '../lib/tenantPresence';
 import { computeClientBusinessDate, fetchCurrentBusinessDate } from '../lib/businessDayApi';
 import { hideBootSplash } from '../lib/bootSplash';
+import { posDebugLog } from '../lib/posDebugLog';
 import {
   clearAuthSessionSnap,
   persistAuthSessionSnap,
   readAuthSessionSnap,
+  resolveBootAuthState,
 } from '../lib/authSessionSnap';
 
 type Profile = Database['public']['Tables']['profiles']['Row'];
@@ -225,15 +229,20 @@ function buildPermissionsFromRole(profile: Profile | null, roleData?: Role | nul
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
-  const [profile, setProfile] = useState<Profile | null>(null);
-  const [tenant, setTenant] = useState<Tenant | null>(null);
-  const [activeBranch, setActiveBranchState] = useState<Branch | null>(null);
-  const [branches, setBranches] = useState<Branch[]>([]);
-  const [permissions, setPermissions] = useState<UserPermissions>(DEFAULT_WAITER_PERMISSIONS);
-  const [loading, setLoading] = useState(true);
+  const boot = resolveBootAuthState();
+  const [user, setUser] = useState<User | null>(boot.user);
+  const [profile, setProfile] = useState<Profile | null>(boot.snap?.profile ?? null);
+  const [tenant, setTenant] = useState<Tenant | null>(boot.snap?.tenant ?? null);
+  const [activeBranch, setActiveBranchState] = useState<Branch | null>(boot.activeBranch);
+  const [branches, setBranches] = useState<Branch[]>(boot.snap?.branches ?? []);
+  const [permissions, setPermissions] = useState<UserPermissions>(
+    boot.snap?.permissions ?? DEFAULT_WAITER_PERMISSIONS,
+  );
+  const [loading, setLoading] = useState(boot.loading);
   const [profileLoadFailed, setProfileLoadFailed] = useState(false);
-  const [impersonationTenantId, setImpersonationTenantId] = useState<string | null>(null);
+  const [impersonationTenantId, setImpersonationTenantId] = useState<string | null>(
+    boot.snap?.impersonationTenantId ?? null,
+  );
 
   const isProfileBlocked = (p: any) => p?.is_active === false;
 
@@ -291,6 +300,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // arka plan istegi tamamlandiginda da otomatik olarak guncellenir.
       if (nextBranch && !isLocalMode() && !isSqlServerMode()) {
         prefetchCloudTableGrid(tenantId, nextBranch.id);
+        prefetchTakeawayActiveOrders(tenantId, nextBranch.id);
+        prefetchOnlineOrders(tenantId);
       }
       setActiveBranchState(nextBranch);
       return { active: nextBranch, list: branchList };
@@ -592,20 +603,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       setProfile(effectiveProfile as unknown as Profile);
 
-      const { data: tenantData } = await supabase
-        .from('tenants')
-        .select('*')
-        .eq('id', effectiveTenantId)
-        .maybeSingle();
+      const perms = buildPermissionsFromRole(effectiveProfile as unknown as Profile, prof.roles ?? null);
+      setPermissions(perms);
+
+      const [{ data: tenantData }, { active: activeBranch, list: branchList }] = await Promise.all([
+        supabase.from('tenants').select('*').eq('id', effectiveTenantId).maybeSingle(),
+        loadBranches(effectiveTenantId, effectiveProfile as unknown as Profile),
+      ]);
 
       const tenantRow = tenantData as unknown as Tenant;
-      const perms = buildPermissionsFromRole(effectiveProfile as unknown as Profile, prof.roles ?? null);
       setTenant(tenantRow);
-      setPermissions(perms);
-      const { active: activeBranch, list: branchList } = await loadBranches(
-        effectiveTenantId,
-        effectiveProfile as unknown as Profile,
-      );
       persistAuthSessionSnap({
         userId,
         profile: effectiveProfile as unknown as Profile,
@@ -621,11 +628,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   useEffect(() => {
+    if (!boot.snap) return;
+    hideBootSplash();
+    const tid = boot.snap.tenant.id;
+    const bid = boot.activeBranch?.id;
+    if (bid && !isLocalMode() && !isSqlServerMode()) {
+      prefetchCloudTableGrid(tid, bid);
+      prefetchTakeawayActiveOrders(tid, bid);
+      prefetchOnlineOrders(tid);
+    }
+    if (boot.user?.id) {
+      void loadProfile(boot.user.id);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
     let cancelled = false;
     // En son baglanmis user.id — ayni user icin profile/tenant/branches yeniden
     // yuklemeyi engellemek icin ref. Token refresh sirasinda app'in "yenileniyor"
     // hissi vermesini onler (UX kritik).
-    let lastLoadedUserId: string | null = null;
+    let lastLoadedUserId: string | null = boot.snap?.userId ?? boot.user?.id ?? null;
 
     const applySession = async (session: Session | null, opts?: { force?: boolean }) => {
       if (cancelled) return;
@@ -691,19 +714,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (!cancelled) {
         setLoading((prev) => (prev ? false : prev));
       }
-    }, 5000);
+    }, 2000);
 
     void (async () => {
       try {
-        for (let attempt = 0; attempt < 3 && !cancelled; attempt++) {
-          try {
-            const { data: { session } } = await supabase.auth.getSession();
-            await applySession(session);
-            break;
-          } catch {
-            if (cancelled) return;
-            await new Promise((r) => setTimeout(r, 180 * (attempt + 1)));
-          }
+        try {
+          const { data: { session } } = await supabase.auth.getSession();
+          await applySession(session);
+        } catch {
+          if (cancelled) return;
+          await new Promise((r) => setTimeout(r, 60));
+          if (cancelled) return;
+          const { data: { session } } = await supabase.auth.getSession();
+          await applySession(session);
         }
       } finally {
         window.clearTimeout(safetyTimer);
@@ -1048,7 +1071,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       .then((res) => {
         if (cancelled) return;
         if (res) {
-          console.info('[ŞefPOS] yazıcı ayarları buluttan yüklendi', {
+          posDebugLog('[ŞefPOS] yazıcı ayarları buluttan yüklendi', {
             tenant: tenant.id,
             branch: activeBranch?.id ?? null,
           });
@@ -1263,6 +1286,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const setActiveBranch = (branch: Branch) => {
     setActiveBranchState(branch);
     localStorage.setItem('shefpos_active_branch', branch.id);
+    const tid = tenant?.id;
+    if (tid && !isLocalMode() && !isSqlServerMode()) {
+      prefetchCloudTableGrid(tid, branch.id);
+      prefetchTakeawayActiveOrders(tid, branch.id);
+      prefetchOnlineOrders(tid);
+    }
   };
 
   const isOwnerOrAdmin = profile?.role === 'owner' || profile?.role === 'admin' || !!profile?.is_super_admin;

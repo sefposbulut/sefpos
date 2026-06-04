@@ -94,12 +94,11 @@ function clearSessionTableGridSnapshots(): void {
   }
 }
 
-/** Sert yenilemede bir kez session önbelleğini temizle. */
+/** Sert yenilemede yalnızca session önbelleğini temizle (localStorage + RAM kalır). */
 export function prepareTableGridCacheForPageLoad(): void {
   if (!isHardPageReload() || reloadSnapCleared) return;
   reloadSnapCleared = true;
   clearSessionTableGridSnapshots();
-  tableGridRuntimeCache.clear();
 }
 /** localStorage TTL: 7 gün. Bu sürede internet kesintisinde / app restart sonrasi
  *  masalar ve gruplar son bilinen halleriyle anında ekrana gelir. Sonrasinda
@@ -138,19 +137,21 @@ function readFromStore(
 
 /** F5 / sekme yenilemede ve **offline / app restart sonrasinda** izgara aninda
  *  cizilir. Once sessionStorage (en taze), sonra localStorage (TTL'li) kontrol
- *  edilir. Sert yenilemede (F5) bayat dolu masa renkleri gösterilmez. */
+ *  edilir. Sert yenilemede (F5) session atlanir; localStorage ile anlik cizim,
+ *  arka planda taze veri cekilir. */
 export function readPersistedTableGridSnapshot(
   cacheKey: string
 ): SnapshotPayload | null {
   prepareTableGridCacheForPageLoad();
-  if (isHardPageReload()) return null;
 
-  const fromSession = readFromStore(
-    typeof sessionStorage !== 'undefined' ? sessionStorage : null,
-    GRID_SNAP_PREFIX + cacheKey,
-    false
-  );
-  if (fromSession) return fromSession;
+  if (!isHardPageReload()) {
+    const fromSession = readFromStore(
+      typeof sessionStorage !== 'undefined' ? sessionStorage : null,
+      GRID_SNAP_PREFIX + cacheKey,
+      false
+    );
+    if (fromSession) return fromSession;
+  }
   return readFromStore(
     typeof localStorage !== 'undefined' ? localStorage : null,
     GRID_SNAP_PREFIX + cacheKey,
@@ -235,6 +236,7 @@ export async function fetchRestaurantTablesForBranch(
       .order('table_number');
     const { data, error } = await joinQ;
     if (!error && data) {
+      // Join zaten payment_transactions içerir — ekstra order_items/payments turu gerekmez.
       return (data as Record<string, unknown>[]).map((t) => mapRestaurantTableJoinRow(t));
     }
   }
@@ -265,7 +267,7 @@ export async function fetchRestaurantTablesForBranch(
         payment_status: (row.payment_status as string | null) ?? null,
       });
     }
-    await enrichTableGridOrders(orderMap);
+    await enrichTableGridOrders(orderMap, { lite: true });
   }
   return rows.map((t) => {
     const oid = t.current_order_id ? String(t.current_order_id) : '';
@@ -331,27 +333,64 @@ export async function fetchRestaurantTableWithOrder(
   } as TableGridCachedRow;
 }
 
-export async function enrichTableGridOrders(orderMap: Map<string, TableGridOrderEmbed>): Promise<void> {
-  const ids = [...orderMap.keys()];
+export async function enrichTableGridOrders(
+  orderMap: Map<string, TableGridOrderEmbed>,
+  opts?: { lite?: boolean },
+): Promise<void> {
+  const ids = [...orderMap.keys()].filter((oid) => {
+    if (!opts?.lite) return true;
+    const embed = orderMap.get(oid);
+    if (!embed) return false;
+    const ps = embed.payment_status;
+    if (ps === 'paid') return false;
+    if (ps === 'partial') return true;
+    return !Number(embed.total_amount);
+  });
   if (!ids.length) return;
 
   const paidByOrder = new Map<string, number>();
-  const { data: payments } = await supabase
-    .from('payment_transactions')
-    .select('order_id, amount')
-    .in('order_id', ids);
-  for (const p of payments || []) {
-    const row = p as { order_id?: string; amount?: number };
-    const oid = String(row.order_id || '');
-    if (!oid) continue;
-    paidByOrder.set(oid, (paidByOrder.get(oid) || 0) + Number(row.amount || 0));
+  const needPayments = opts?.lite
+    ? ids.filter((oid) => orderMap.get(oid)?.payment_status === 'partial')
+    : ids;
+  if (needPayments.length > 0) {
+    const { data: payments } = await supabase
+      .from('payment_transactions')
+      .select('order_id, amount')
+      .in('order_id', needPayments);
+    for (const p of payments || []) {
+      const row = p as { order_id?: string; amount?: number };
+      const oid = String(row.order_id || '');
+      if (!oid) continue;
+      paidByOrder.set(oid, (paidByOrder.get(oid) || 0) + Number(row.amount || 0));
+    }
   }
 
+  const needItems = opts?.lite
+    ? ids.filter((oid) => !Number(orderMap.get(oid)?.total_amount))
+    : ids;
   const sumByOrder = new Map<string, number>();
+  if (needItems.length === 0) {
+    for (const [oid, embed] of orderMap) {
+      if (!ids.includes(oid)) continue;
+      const paid = paidByOrder.get(oid) || 0;
+      const total = Number(embed.total_amount || 0);
+      embed.amount_paid = paid;
+      if (paid > 0.01 && paid < total - 0.01) {
+        embed.payment_status = 'partial';
+        embed.remaining_amount = Math.max(0, Math.round((total - paid) * 100) / 100);
+      } else if (paid >= total - 0.01 && total > 0) {
+        embed.payment_status = 'paid';
+        embed.remaining_amount = 0;
+      } else {
+        embed.remaining_amount = total;
+      }
+    }
+    return;
+  }
   const { data: items, error: itemsErr } = await supabase
     .from('order_items')
     .select('order_id, total_amount, unit_price, quantity')
-    .in('order_id', ids);
+    .in('order_id', needItems);
   if (!itemsErr) {
     for (const it of items || []) {
       const row = it as {
@@ -370,7 +409,9 @@ export async function enrichTableGridOrders(orderMap: Map<string, TableGridOrder
     }
   }
 
-  for (const [oid, embed] of orderMap) {
+  for (const oid of ids) {
+    const embed = orderMap.get(oid);
+    if (!embed) continue;
     if (sumByOrder.has(oid)) {
       const itemSum = sumByOrder.get(oid) || 0;
       if (itemSum > 0) embed.total_amount = itemSum;

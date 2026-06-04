@@ -1,3 +1,5 @@
+import { posDebugLog } from './posDebugLog';
+
 export interface PrinterDevice {
   name: string;
   description: string;
@@ -1531,7 +1533,7 @@ export async function printHtml(
         // Teşhis: kasadaki Print Agent bu ID'yi Realtime ile alıp basmalı.
         // Konsolda göz at → eğer yazıcı çıkmadıysa kasanın Sefpos.exe'sini
         // kontrol et (açık mı, login mi, agent_status connected mi).
-        console.info('[ŞefPOS] print job kuyruğa eklendi:', {
+        posDebugLog('[ŞefPOS] print job kuyruğa eklendi:', {
           id: data?.id,
           printer: printerName || '(boş — varsayılan)',
           tenant: _currentTenantId,
@@ -1614,7 +1616,7 @@ export async function printToAdisyonPrinter(
   // yazıcısına basar (printer_name boş → pickDefaultKitchenPrinter fallback).
   if (!isElectron()) {
     const title = toastOpts?.title || 'Adisyon kasaya gönderildi';
-    console.info('[ŞefPOS] Adisyon: mobil/web tarafından kuyruğa eklendi.');
+    posDebugLog('[ŞefPOS] Adisyon: mobil/web tarafından kuyruğa eklendi.');
     return printHtml(html, '', { title, silent: toastOpts?.silent });
   }
 
@@ -1817,7 +1819,7 @@ export async function printTakeawayReceipt(opts: {
 
   // Mobil / web fast path — yazıcı çözümlemesi yok, kuyruğa.
   if (!isElectron()) {
-    console.info('[ŞefPOS] Paket fişi: mobil/web tarafından kuyruğa eklendi.');
+    posDebugLog('[ŞefPOS] Paket fişi: mobil/web tarafından kuyruğa eklendi.');
     await printHtml(html, '', { title: 'Paket fişi gönderildi' });
     return;
   }
@@ -1874,7 +1876,7 @@ export async function printKitchenReceipts(opts: {
       printStyle: st,
     });
     const label = printerName ? `printer="${printerName}"` : 'printer=(varsayılan)';
-    console.info(`[ŞefPOS] Mutfak fişi: ${batchItems.length} ürün → ${label}`);
+    posDebugLog(`[ŞefPOS] Mutfak fişi: ${batchItems.length} ürün → ${label}`);
     await printHtml(html, printerName, {
       title: 'Mutfak fişi gönderildi',
       allowBrowserFallback: opts.allowWebBrowserPrint === true,

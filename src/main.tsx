@@ -1,7 +1,7 @@
 import { StrictMode, Component, type ErrorInfo, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App';
-import './index.css';
+/* index.css → index.html <link> (dev HMR tüm App ağacını yenilemesin) */
 import { AuthProvider } from './contexts/AuthContext';
 import { ElectronDesktopShell } from './components/ElectronDesktopShell';
 import { PublicMenu } from './components/PublicMenu';
@@ -190,10 +190,11 @@ function renderApp() {
   }
 }
 
-// Boot splash sonsuz kalmasin (ag hatasi / yavas chunk yuklemesi)
-window.setTimeout(() => hideBootSplash(), 10_000);
-
 renderApp();
+
+// React mount sonrasi HTML splash hemen kalksin (cift splash suresi kisalir)
+requestAnimationFrame(() => hideBootSplash());
+window.setTimeout(() => hideBootSplash(), 8000);
 
 // Self-accept + renderApp() tüm import grafiğini sürekli yenileyip binlerce
 // "[vite] hot updated" loguna yol açabiliyor. createRoot önbelleği yeterli.

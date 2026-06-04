@@ -34,6 +34,9 @@ import {
   fetchTakeawayActiveOrders,
   fetchTakeawayCompletedOrders,
   takeawayItemCount,
+  takeawayListCacheKey,
+  readTakeawayListCache,
+  writeTakeawayListCache,
   type TakeawayOrderListRow,
 } from '../lib/takeawayOrdersApi';
 
@@ -110,9 +113,14 @@ interface TakeawayOrdersProps {
 
 export function TakeawayOrders({ isActive = true }: TakeawayOrdersProps) {
   const { tenant, activeBranch, user } = useAuth();
-  const [orders, setOrders] = useState<TakeawayOrder[]>([]);
+  const initialListKey =
+    tenant?.id != null
+      ? takeawayListCacheKey(tenant.id, activeBranch?.id, false)
+      : null;
+  const initialCached = initialListKey ? readTakeawayListCache(initialListKey) : null;
+  const [orders, setOrders] = useState<TakeawayOrder[]>(() => initialCached ?? []);
   const [couriers, setCouriers] = useState<Courier[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => !initialCached);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [typeFilter, setTypeFilter] = useState<TypeFilter>('all');
   const [showCompleted, setShowCompleted] = useState(false);
@@ -304,11 +312,18 @@ export function TakeawayOrders({ isActive = true }: TakeawayOrdersProps) {
     return () => window.removeEventListener('sefpos:takeaway-search', handler as EventListener);
   }, []);
 
-  const loadOrders = useCallback(async () => {
+  const loadOrders = useCallback(async (opts?: { silent?: boolean }) => {
     if (!tenant) return;
+    const key = takeawayListCacheKey(
+      tenant.id,
+      activeBranch?.id,
+      showCompletedRef.current,
+    );
+    if (!opts?.silent && !readTakeawayListCache(key)?.length) setLoading(true);
     const data = showCompletedRef.current
       ? await fetchTakeawayCompletedOrders(tenant.id, activeBranch?.id, 200)
       : await fetchTakeawayActiveOrders(tenant.id, activeBranch?.id, TAKEAWAY_FETCH_ACTIVE_LIMIT);
+    writeTakeawayListCache(key, data);
     setOrders(data);
     setLoading(false);
   }, [tenant, activeBranch]);
@@ -454,8 +469,16 @@ export function TakeawayOrders({ isActive = true }: TakeawayOrdersProps) {
 
   useEffect(() => {
     if (!tenant || !isActive) return;
-    setLoading(true);
-    void loadOrders();
+    const key = takeawayListCacheKey(tenant.id, activeBranch?.id, showCompleted);
+    const cached = readTakeawayListCache(key);
+    if (cached) {
+      setOrders(cached);
+      setLoading(false);
+      void loadOrders({ silent: true });
+    } else {
+      setLoading(true);
+      void loadOrders();
+    }
     void loadCouriers();
     lastCourierLoadRef.current = Date.now();
   }, [tenant, activeBranch, isActive, showCompleted, loadOrders, loadCouriers]);
@@ -979,7 +1002,7 @@ export function TakeawayOrders({ isActive = true }: TakeawayOrdersProps) {
       </div>
 
       <div className="flex-1 overflow-y-auto p-3 md:p-4">
-        {loading ? (
+        {loading && orders.length === 0 ? (
           <div className="flex items-center justify-center h-40">
             <div className="w-10 h-10 border-4 border-orange-500 border-t-transparent rounded-full animate-spin" />
           </div>

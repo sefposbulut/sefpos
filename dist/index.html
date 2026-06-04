@@ -27,11 +27,12 @@
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:image" content="https://www.sefpos.com.tr/logo256.png" />
     <link rel="sitemap" type="application/xml" title="Sitemap" href="https://www.sefpos.com.tr/sitemap.xml" />
-    <script type="module" crossorigin src="./assets/index-BMKk4gkH.js"></script>
+    <!-- CSS main.tsx'ten değil: Vite HMR'da index.css değişince tüm bileşen grafiği yenilenmesin -->
+    <script type="module" crossorigin src="./assets/index-BQImu9Xy.js"></script>
     <link rel="modulepreload" crossorigin href="./assets/supabase-B4umY9KP.js">
     <link rel="modulepreload" crossorigin href="./assets/lucide-B3VI4C90.js">
     <link rel="modulepreload" crossorigin href="./assets/react-vendor-Bzx9bXiO.js">
-    <link rel="stylesheet" crossorigin href="./assets/index-BG4v0Hl5.css">
+    <link rel="stylesheet" crossorigin href="./assets/index-D3bhrLcA.css">
   </head>
   <body style="margin:0;background-color:#ffffff;">
     <!-- Inline boot splash: React/Tailwind yuklenene kadar bos beyaz ekran yerine
@@ -48,7 +49,7 @@
         background: #ffffff;
         color: #0f172a;
         font-family: 'Inter', 'Segoe UI', Arial, sans-serif;
-        transition: opacity .35s ease;
+        transition: opacity .12s ease;
       }
       #root:not(:empty) ~ #boot-splash {
         opacity: 0;
@@ -166,7 +167,7 @@
           <img src="./logo.png?v=2" alt="ŞefPOS" class="logo" onerror="this.style.display='none'" />
         </div>
         <div class="name">ŞefPOS</div>
-        <div class="tag">Ortam yükleniyor…</div>
+        <div class="tag">Yükleniyor…</div>
         <div class="ring"></div>
       </div>
     </div>

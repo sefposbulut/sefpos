@@ -19,6 +19,7 @@ import {
   TABLE_GRID_TABLE_COLS,
   enrichTableGridOrders,
   fetchRestaurantTablesForBranch,
+  fetchCloudTableGridSnapshot,
   type TableGridCachedRow,
   type TableGroupCached,
   type TableGridOrderEmbed,
@@ -139,6 +140,18 @@ function cachedRowToTableWithOrder(row: TableGridCachedRow): TableWithOrder {
   return row as unknown as TableWithOrder;
 }
 
+/** Grup sekmesi: bu grupta en az bir masa varsa onu sec, yoksa tum masalar (null). */
+function resolveTableGroupSelection(
+  groups: { id: string }[],
+  tableList: { group_id?: string | null }[],
+  prefer: string | null,
+): string | null {
+  if (!groups.length) return null;
+  if (prefer && tableList.some((t) => t.group_id === prefer)) return prefer;
+  const withTables = groups.find((g) => tableList.some((t) => t.group_id === g.id));
+  return withTables?.id ?? null;
+}
+
 /** Cache snapshot'tan istemci icin gosterilebilir state cikartir */
 function readSnapshotForKey(
   cacheKey: string | null,
@@ -147,7 +160,6 @@ function readSnapshotForKey(
   | { tables: TableWithOrder[]; groups: TableGroup[] }
   | null {
   if (!cacheKey) return null;
-  if (!opts?.allowOnReload && isHardPageReload()) return null;
   const ram = tableGridRuntimeCache.get(cacheKey);
   if (ram) {
     return {
@@ -230,12 +242,35 @@ export function TableGrid({
   const [tableGroups, setTableGroups] = useState<TableGroup[]>(() => initialSnapshot?.groups ?? []);
   const [selectedGroup, setSelectedGroup] = useState<string | null>(() => {
     const groups = initialSnapshot?.groups ?? [];
-    return groups.length > 0 ? groups[0].id : null;
+    const tbls = initialSnapshot?.tables ?? [];
+    return resolveTableGroupSelection(groups, tbls, null);
   });
   // Snapshot varsa loading'i baslangictan false yap; aksi halde skeleton gosterelim.
   const [loading, setLoading] = useState<boolean>(() => !initialSnapshot);
-  /** İlk fetch bitmeden "12 Masa Oluştur" gösterme (F5'te kısa flaş) */
   const [gridFetchDone, setGridFetchDone] = useState(() => !!initialSnapshot);
+  /** Sunucu bu şubede gerçekten 0 masa döndü — fetch bitmeden "12 Masa Oluştur" gösterme */
+  const [serverEmptyConfirmed, setServerEmptyConfirmed] = useState(false);
+  const emptyConfirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const applyServerEmptyConfirmed = useCallback((empty: boolean) => {
+    if (emptyConfirmTimerRef.current) {
+      clearTimeout(emptyConfirmTimerRef.current);
+      emptyConfirmTimerRef.current = null;
+    }
+    if (!empty) {
+      setServerEmptyConfirmed(false);
+      return;
+    }
+    emptyConfirmTimerRef.current = setTimeout(() => {
+      emptyConfirmTimerRef.current = null;
+      setServerEmptyConfirmed(true);
+    }, 450);
+  }, []);
+  useEffect(
+    () => () => {
+      if (emptyConfirmTimerRef.current) clearTimeout(emptyConfirmTimerRef.current);
+    },
+    [],
+  );
 
   // Footer kuşağı state'i: kullanıcı sağ tıklayınca açık masa toplam tutarını
   // gizleyebilsin (kişisel tercih, cihaza yazılır). Saat/tarih için 30 sn'lik
@@ -319,6 +354,7 @@ export function TableGrid({
   const loadAll = useCallback(async (resetGroup = false, opts?: { silent?: boolean }) => {
     if (!tenant || !activeBranch) {
       setGridFetchDone(false);
+      applyServerEmptyConfirmed(false);
       return;
     }
     const cacheKey = `${tenant.id}:${activeBranch.id}`;
@@ -328,18 +364,42 @@ export function TableGrid({
     const snap = isSqlServerMode() || isHardPageReload() ? null : readSnapshotForKey(cacheKey);
     const skipSnapPaint = opts?.silent && hasLiveGrid;
 
+    const paintRuntimeCache = (): boolean => {
+      const ram = tableGridRuntimeCache.get(cacheKey);
+      if (!ram) return false;
+      setTableGroups(ram.groups as unknown as TableGroup[]);
+      setTables(ram.tables.map(cachedRowToTableWithOrder));
+      setLoading(false);
+      setGridFetchDone(true);
+      if (resetGroup) {
+        setSelectedGroup((prev) =>
+          resolveTableGroupSelection(ram.groups, ram.tables, prev),
+        );
+      }
+      return true;
+    };
+
+    if (hasLiveGrid) {
+      paintRuntimeCache();
+    }
+
     if (snap && !skipSnapPaint) {
       setTableGroups(snap.groups);
       setTables(snap.tables);
       setLoading(false);
+      setGridFetchDone(true);
       if (resetGroup) {
-        setSelectedGroup(snap.groups.length > 0 ? snap.groups[0].id : null);
+        setSelectedGroup((prev) =>
+          resolveTableGroupSelection(snap.groups, snap.tables, prev),
+        );
       }
     } else if (!opts?.silent && !hasLiveGrid && !snap && tablesRef.current.length === 0) {
       setLoading(true);
+      applyServerEmptyConfirmed(false);
       if (resetGroup) setSelectedGroup(null);
     } else if (opts?.silent || hasLiveGrid || snap) {
       setLoading(false);
+      if (hasLiveGrid || snap) setGridFetchDone(true);
     }
 
     if (isLocalMode()) {
@@ -355,12 +415,6 @@ export function TableGrid({
           g.tenant_id === tenant.id && (!g.branch_id || g.branch_id === activeBranch.id)
         );
         setTableGroups(groups);
-        if (groups.length > 0) {
-          setSelectedGroup(prev => {
-            if (prev && groups.find((g: any) => g.id === prev)) return prev;
-            return groups[0].id;
-          });
-        }
 
         const activeOrders = (ordersResult.data || []).filter((o: any) =>
           o.status === 'active' && o.tenant_id === tenant.id
@@ -378,11 +432,18 @@ export function TableGrid({
         }));
         mapped.sort(naturalSort);
         setTables(mapped);
+        applyServerEmptyConfirmed(mapped.length === 0);
+        if (groups.length > 0) {
+          setSelectedGroup((prev) =>
+            resolveTableGroupSelection(groups, mapped, prev),
+          );
+        }
         tableGridRuntimeCache.set(cacheKey, {
           tables: mapped as unknown as TableGridCachedRow[],
           groups: groups as unknown as TableGroupCached[],
         });
-        bulkWarmOrderItemsForOrders(mapped.map((t) => t.current_order_id));
+        const warmIds = mapped.map((t) => t.current_order_id);
+        setTimeout(() => bulkWarmOrderItemsForOrders(warmIds), 0);
       } catch (e) {
         console.error('TableGrid local load error:', e);
         setTables([]);
@@ -392,75 +453,74 @@ export function TableGrid({
       return;
     }
 
-    await maybeUnlockStalePaymentLocks();
+    void maybeUnlockStalePaymentLocks();
 
-    const groupQ = supabase
-      .from('table_groups')
-      .select('id, name, color, branch_id, prefix')
-      .eq('tenant_id', tenant.id)
-      .or(`branch_id.eq.${activeBranch.id},branch_id.is.null`)
-      .order('name');
+    let fetchedCount: number | null = null;
+    try {
+      const { tables: tableRows, groups: groupRows } = await fetchCloudTableGridSnapshot(
+        tenant.id,
+        activeBranch.id,
+      );
 
-    const [groupsRes, tableRows] = await Promise.all([
-      groupQ,
-      fetchRestaurantTablesForBranch(tenant.id, activeBranch.id),
-    ]);
+      const mapped: TableWithOrder[] =
+        tableRows.length > 0
+          ? tableRows
+              .map((t: any) => ({
+                ...t,
+                order: t.order ? t.order : undefined,
+              }))
+              .sort(naturalSort)
+          : [];
 
-    if (groupsRes.data) {
-      setTableGroups(groupsRes.data as TableGroup[]);
-      if (groupsRes.data.length > 0) {
-        setSelectedGroup(prev => {
-          if (prev && groupsRes.data!.find(g => g.id === prev)) return prev;
-          return groupsRes.data![0].id;
-        });
+      fetchedCount = mapped.length;
+
+      if (groupRows.length > 0) {
+        setTableGroups(groupRows as unknown as TableGroup[]);
+      } else {
+        setTableGroups([]);
       }
-    }
 
-    if (tableRows.length > 0) {
-      const mapped: TableWithOrder[] = tableRows.map((t: any) => ({
-        ...t,
-        order: t.order ? t.order : undefined,
-      }));
-      // Sadece kısmi ödemeli siparişler için payment_transactions çek;
-      // tam ödenmiş veya boş masalar gereksiz round-trip yapmasın.
-      const partialOrderIds = mapped
-        .map((t) => (t.order?.payment_status === 'partial' ? t.order.id : null))
-        .filter((id): id is string => !!id);
-      if (partialOrderIds.length > 0) {
-        const { data: payments } = await supabase
-          .from('payment_transactions')
-          .select('order_id, amount')
-          .in('order_id', partialOrderIds);
-        if (payments) {
-          const paidByOrder = new Map<string, number>();
-          for (const p of payments as any[]) {
-            const oid = String(p.order_id || '');
-            if (!oid) continue;
-            paidByOrder.set(oid, (paidByOrder.get(oid) || 0) + Number(p.amount || 0));
-          }
-          for (const tableRow of mapped) {
-            const ord = tableRow.order;
-            if (!ord || ord.payment_status !== 'partial') continue;
-            const paid = paidByOrder.get(ord.id) || 0;
-            ord.remaining_amount = Math.max(0, Number(ord.total_amount || 0) - paid);
-          }
+      if (mapped.length > 0) {
+        setTables(mapped);
+        applyServerEmptyConfirmed(false);
+        setSelectedGroup((prev) =>
+          resolveTableGroupSelection(
+            groupRows as unknown as TableGroup[],
+            mapped,
+            resetGroup ? null : prev,
+          ),
+        );
+        const warmIds = mapped.map((t) => t.current_order_id);
+        if (typeof requestIdleCallback !== 'undefined') {
+          requestIdleCallback(() => bulkWarmOrderItemsForOrders(warmIds), { timeout: 2500 });
+        } else {
+          setTimeout(() => bulkWarmOrderItemsForOrders(warmIds), 0);
+        }
+      } else {
+        const ramAfter = tableGridRuntimeCache.get(cacheKey);
+        if (ramAfter?.tables?.length) {
+          paintRuntimeCache();
+          applyServerEmptyConfirmed(false);
+        } else if (!tablesRef.current.length) {
+          setTables([]);
+          setSelectedGroup(null);
+          applyServerEmptyConfirmed(true);
         }
       }
-      mapped.sort(naturalSort);
-      setTables(mapped);
-      tableGridRuntimeCache.set(cacheKey, {
-        tables: mapped as unknown as TableGridCachedRow[],
-        groups: (groupsRes.data || []) as unknown as TableGroupCached[],
-      });
-      // Aktif siparişleri TEK sorguda warm cache'e al; masaya tıklandığında sepet anında boyanır.
-      bulkWarmOrderItemsForOrders(mapped.map((t) => t.current_order_id));
-    } else if (!groupsRes.error) {
-      setTables([]);
+    } catch (e) {
+      console.error('[ŞefPOS] Masa listesi yüklenemedi:', e);
+      if (!paintRuntimeCache() && !snap && !tablesRef.current.length) {
+        setTables([]);
+        applyServerEmptyConfirmed(false);
+      }
+    } finally {
+      if (fetchedCount !== null && fetchedCount === 0 && tableGridRuntimeCache.get(cacheKey)?.tables?.length) {
+        applyServerEmptyConfirmed(false);
+      }
+      setLoading(false);
+      setGridFetchDone(true);
     }
-
-    setLoading(false);
-    setGridFetchDone(true);
-  }, [tenant, activeBranch]);
+  }, [tenant, activeBranch, applyServerEmptyConfirmed]);
 
   const tablesReloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
@@ -970,16 +1030,24 @@ export function TableGrid({
     return stats;
   }, [tables]);
 
-  const filteredTables = useMemo(() =>
-    selectedGroup
-      ? tables.filter(t => t.group_id === selectedGroup)
-      : tables.filter(t => t.status === 'occupied'),
-    [tables, selectedGroup]
-  );
+  const filteredTables = useMemo(() => {
+    if (!tableGroups.length) return tables;
+    if (!selectedGroup) {
+      const occupied = tables.filter((t) => t.status === 'occupied');
+      return occupied.length > 0 ? occupied : tables;
+    }
+    const inGroup = tables.filter((t) => t.group_id === selectedGroup);
+    return inGroup.length > 0 ? inGroup : tables;
+  }, [tables, selectedGroup, tableGroups.length]);
 
-  if (loading || !gridFetchDone) {
-    // Spinner yerine skeleton: kullanici bos ekran/spinner yerine ileride
-    // gelecek kutularin iskeletini gorur, algilanan yuklenme cok daha hizli olur.
+  useEffect(() => {
+    if (!tableGroups.length || !tables.length) return;
+    if (selectedGroup && tables.some((t) => t.group_id === selectedGroup)) return;
+    setSelectedGroup(resolveTableGroupSelection(tableGroups, tables, null));
+  }, [tables, tableGroups, selectedGroup]);
+
+  const showGridSkeleton = (loading || !gridFetchDone) && tables.length === 0;
+  if (showGridSkeleton) {
     const skeletonCount = Math.min(12, Math.max(6, desktopTableCols * 2));
     return (
       <div className="h-full flex flex-col">
@@ -1001,9 +1069,6 @@ export function TableGrid({
               />
             ))}
           </div>
-          <p className="text-center text-slate-400 text-xs md:text-sm mt-4">
-            Masalar yukleniyor...
-          </p>
         </div>
       </div>
     );
@@ -1018,7 +1083,7 @@ export function TableGrid({
     );
   }
 
-  if (gridFetchDone && tables.length === 0) {
+  if (gridFetchDone && serverEmptyConfirmed && tables.length === 0) {
     return (
       <div className="text-center py-16">
         <p className="text-gray-500 text-lg mb-4">Henüz masa bulunmamaktadır.</p>

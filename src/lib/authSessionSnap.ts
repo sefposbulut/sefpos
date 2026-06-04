@@ -1,3 +1,4 @@
+import type { User } from '@supabase/supabase-js';
 import type { Branch, UserPermissions } from '../contexts/AuthContext';
 import type { Database } from './supabase';
 
@@ -43,6 +44,103 @@ export function clearAuthSessionSnap(): void {
   } catch {
     /* ignore */
   }
+}
+
+function resolveActiveBranch(snap: AuthSessionSnap): Branch | null {
+  if (snap.activeBranchId) {
+    const saved = snap.branches.find((b) => b.id === snap.activeBranchId);
+    if (saved) return saved;
+  }
+  return snap.branches.find((b) => b.is_main) || snap.branches[0] || null;
+}
+
+function parseStoredAuthJson(raw: string): {
+  currentSession?: { user?: User };
+  user?: User;
+} | null {
+  try {
+    return JSON.parse(raw) as {
+      currentSession?: { user?: User };
+      user?: User;
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** localStorage Supabase oturum anahtarından user id (senkron, getSession öncesi) */
+export function readStoredSupabaseUserId(): string | null {
+  const u = readStoredSupabaseUser();
+  return u?.id ?? null;
+}
+
+/** getSession beklemeden User (Bağlanıyor splash'ini kaldırır) */
+export function readStoredSupabaseUser(): User | null {
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (!k || (!k.endsWith('-auth-token') && !k.includes('supabase.auth'))) continue;
+      const raw = localStorage.getItem(k);
+      if (!raw) continue;
+      const parsed = parseStoredAuthJson(raw);
+      const u = parsed?.currentSession?.user ?? parsed?.user;
+      if (u?.id) return u;
+    }
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
+/** İlk paint: F5 / yeniden açılışta ağ beklemeden profil + tenant göster */
+export function readBootstrapAuthSnap(): {
+  snap: AuthSessionSnap;
+  activeBranch: Branch | null;
+} | null {
+  try {
+    const raw = sessionStorage.getItem(AUTH_SNAP_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as AuthSessionSnap;
+    if (!parsed?.userId || !parsed.profile?.id || !parsed.tenant?.id) return null;
+    const storedUid = readStoredSupabaseUserId();
+    if (storedUid && storedUid !== parsed.userId) return null;
+    return { snap: parsed, activeBranch: resolveActiveBranch(parsed) };
+  } catch {
+    return null;
+  }
+}
+
+export type ResolvedBootAuth = {
+  snap: AuthSessionSnap | null;
+  activeBranch: Branch | null;
+  user: User | null;
+  /** true → tam ekran splash; false → doğrudan uygulama iskeleti */
+  loading: boolean;
+};
+
+/** Tek seferde: snap + localStorage user + loading bayrağı */
+export function resolveBootAuthState(): ResolvedBootAuth {
+  const storedUser = readStoredSupabaseUser();
+  const bootstrap = readBootstrapAuthSnap();
+
+  if (bootstrap) {
+    const uid = storedUser?.id ?? readStoredSupabaseUserId();
+    if (uid && uid !== bootstrap.snap.userId) {
+      return { snap: null, activeBranch: null, user: storedUser, loading: true };
+    }
+    return {
+      snap: bootstrap.snap,
+      activeBranch: bootstrap.activeBranch,
+      user: storedUser,
+      loading: false,
+    };
+  }
+
+  if (storedUser) {
+    return { snap: null, activeBranch: null, user: storedUser, loading: true };
+  }
+
+  return { snap: null, activeBranch: null, user: null, loading: true };
 }
 
 /** F5 sonrası kısa süre user=null iken pazarlama sayfası göstermemek için */
