@@ -328,7 +328,11 @@ export default function App() {
 
   useEffect(() => {
     if (!tenant?.id) return;
-    void queryCache.hydrateForTenant(tenant.id);
+    void (async () => {
+      const { APP_VERSION } = await import('./lib/appVersion');
+      queryCache.bustMenuCacheIfAppVersionChanged(APP_VERSION, tenant.id);
+      await queryCache.hydrateForTenant(tenant.id);
+    })();
   }, [tenant?.id]);
 
   /** Electron ana sayfa verisi masalar ekranina gecmeden once yuklensin (cache). */

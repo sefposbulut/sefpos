@@ -41,6 +41,8 @@ import { QrMenuManager } from './QrMenuManager';
 import { callGetir, generateGetirApiKey, syncGetirRestaurantOpen } from '../lib/getirApi';
 import { publicPartnerEdgeUrl } from '../lib/publicWebhookBaseUrl';
 import { clearTablePaymentLock } from '../lib/paymentLock';
+import { queryCache } from '../lib/queryCache';
+import { clearAllTableGridSnapshots } from '../lib/tableGridData';
 import { TENANT_CURRENCY_OPTIONS, normalizeCurrencyCode, type TenantCurrencyCode } from '../lib/currency';
 
 type TableGroup = Database['public']['Tables']['table_groups']['Row'];
@@ -2908,9 +2910,11 @@ export function Settings({ onClose }: SettingsProps) {
                 <button
                   onClick={() => {
                     if ('caches' in window) {
-                      caches.keys().then(names => names.forEach(name => caches.delete(name)));
+                      void caches.keys().then((names) => names.forEach((name) => caches.delete(name)));
                     }
                     localStorage.removeItem('productGridSize');
+                    if (tenant?.id) queryCache.invalidateMenuForTenant(tenant.id);
+                    clearAllTableGridSnapshots();
                     alert('Önbellek temizlendi. Sayfa yenilenecek.');
                     window.location.reload();
                   }}

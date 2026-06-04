@@ -65,6 +65,16 @@ export const tableGridRuntimeCache = new Map<
   { tables: TableGridCachedRow[]; groups: TableGroupCached[] }
 >();
 
+export function clearTableGridRuntimeCache(): void {
+  tableGridRuntimeCache.clear();
+}
+
+/** Ayarlar → önbellek temizle: RAM + sessionStorage masa önbelleği. */
+export function clearAllTableGridSnapshots(): void {
+  clearTableGridRuntimeCache();
+  clearSessionTableGridSnapshots();
+}
+
 const inflight = new Map<string, Promise<{ tables: TableGridCachedRow[]; groups: TableGroupCached[] }>>();
 
 const GRID_SNAP_PREFIX = 'sefpos:table_grid_snap:v1:';

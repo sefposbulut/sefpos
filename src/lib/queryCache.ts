@@ -23,7 +23,13 @@ const CACHE_TTL = {
 const STALE_MULTIPLIER = 6;
 
 /** Şema/kolon değişince artırın; eski boş menü önbelleğini düşürür */
-const MENU_CACHE_SCHEMA_VER = 'v3';
+const MENU_CACHE_SCHEMA_VER = 'v4';
+
+const MENU_CACHE_APP_VER_KEY = 'sefpos:menu_cache_app_ver';
+
+function isUsableMenuData(products: any[] | undefined, categories: any[] | undefined): boolean {
+  return (products?.length ?? 0) > 0 || (categories?.length ?? 0) > 0;
+}
 
 /** IndexedDB store ismi → CacheEntry. Tarayıcı yenilemesinden sonra cache yaşamaya devam eder. */
 const IDB_STORE = 'queryCache';
@@ -153,7 +159,10 @@ class QueryCache {
       catCache && !this.isExpired(catCache, CACHE_TTL.CATEGORIES) &&
       varCache && !this.isExpired(varCache, CACHE_TTL.PRODUCT_VARIANTS);
 
-    if (allFresh) {
+    if (
+      allFresh &&
+      isUsableMenuData(prodCache?.data, catCache?.data)
+    ) {
       return {
         products: prodCache!.data,
         categories: catCache!.data,
@@ -165,7 +174,8 @@ class QueryCache {
       !forceRefresh &&
       this.isFreshLike(prodCache, CACHE_TTL.PRODUCTS, STALE_MULTIPLIER) &&
       this.isFreshLike(catCache, CACHE_TTL.CATEGORIES, STALE_MULTIPLIER) &&
-      this.isFreshLike(varCache, CACHE_TTL.PRODUCT_VARIANTS, STALE_MULTIPLIER);
+      this.isFreshLike(varCache, CACHE_TTL.PRODUCT_VARIANTS, STALE_MULTIPLIER) &&
+      isUsableMenuData(prodCache?.data, catCache?.data);
 
     if (allStaleUsable) {
       void this.fetchAndStoreMenu(tenantId).catch(() => { /* arka plan */ });
@@ -254,7 +264,8 @@ class QueryCache {
     if (
       this.isFreshLike(prodCache, CACHE_TTL.PRODUCTS, STALE_MULTIPLIER) &&
       this.isFreshLike(catCache, CACHE_TTL.CATEGORIES, STALE_MULTIPLIER) &&
-      this.isFreshLike(varCache, CACHE_TTL.PRODUCT_VARIANTS, STALE_MULTIPLIER)
+      this.isFreshLike(varCache, CACHE_TTL.PRODUCT_VARIANTS, STALE_MULTIPLIER) &&
+      isUsableMenuData(prodCache?.data, catCache?.data)
     ) {
       return {
         products: prodCache!.data,
@@ -263,6 +274,27 @@ class QueryCache {
       };
     }
     return null;
+  }
+
+  /** Uygulama sürümü değişince (Electron güncelleme) eski menü IDB kayıtlarını düşürür. */
+  bustMenuCacheIfAppVersionChanged(appVersion: string, tenantId: string): boolean {
+    if (!tenantId || !appVersion) return false;
+    try {
+      const prev = localStorage.getItem(MENU_CACHE_APP_VER_KEY);
+      if (prev === appVersion) return false;
+      localStorage.setItem(MENU_CACHE_APP_VER_KEY, appVersion);
+    } catch {
+      return false;
+    }
+    this.invalidateMenuForTenant(tenantId);
+    this.hydrated = false;
+    return true;
+  }
+
+  invalidateMenuForTenant(tenantId: string) {
+    for (const type of ['products', 'categories', 'product_variants'] as const) {
+      this.invalidate(type, tenantId);
+    }
   }
 
   async getTableGroups(tenantId: string, branchId: string, forceRefresh = false) {
