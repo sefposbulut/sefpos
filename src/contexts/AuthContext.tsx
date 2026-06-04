@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState } from 'react';
+import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { User, Session } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
 import { Database } from '../lib/supabase';
@@ -243,6 +243,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [impersonationTenantId, setImpersonationTenantId] = useState<string | null>(
     boot.snap?.impersonationTenantId ?? null,
   );
+  const activeBranchRef = useRef<Branch | null>(boot.activeBranch);
+  activeBranchRef.current = activeBranch;
 
   const isProfileBlocked = (p: any) => p?.is_active === false;
 
@@ -613,6 +615,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       const tenantRow = tenantData as unknown as Tenant;
       setTenant(tenantRow);
+      setBranches(branchList);
+      setActiveBranchState(activeBranch);
+      if (activeBranch?.id) {
+        try {
+          localStorage.setItem('shefpos_active_branch', activeBranch.id);
+        } catch {
+          /* ignore */
+        }
+      }
       persistAuthSessionSnap({
         userId,
         profile: effectiveProfile as unknown as Profile,
@@ -659,6 +670,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           setUser((prev) => (prev?.id === session.user.id ? prev : session.user));
           if (loading && !cancelled) setLoading(false);
           hideBootSplash();
+          // Electron güncelleme: oturum aynı ama şube snap'i boş — profil/şubeleri yeniden yükle.
+          if (!activeBranchRef.current?.id) {
+            void loadProfile(session.user.id);
+          }
           return;
         }
         const cached = !opts?.force ? readAuthSessionSnap(session.user.id) : null;

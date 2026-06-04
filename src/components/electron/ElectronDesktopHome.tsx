@@ -60,7 +60,8 @@ export function ElectronDesktopHome({
   onNavigate,
   onOpenSettings,
 }: ElectronDesktopHomeProps) {
-  const { tenant, profile, user, activeBranch, signOut, permissions, shiftsEnabled } = useAuth();
+  const { tenant, profile, user, activeBranch, branches, setActiveBranch, signOut, permissions, shiftsEnabled } =
+    useAuth();
   const tenantId = tenant?.id || '';
   const branchId = activeBranch?.id || '';
 
@@ -131,6 +132,22 @@ export function ElectronDesktopHome({
     if (!tenantId || menuGroupsLive.length === 0) return;
     writeElectronHubMenuCache(tenantId, menuGroupsLive);
   }, [tenantId, menuGroupsLive]);
+
+  /** Electron ana sayfada üst Header yok — şube burada veya localStorage'dan otomatik seçilir. */
+  useEffect(() => {
+    if (activeBranch?.id || branches.length === 0) return;
+    try {
+      const saved = localStorage.getItem('shefpos_active_branch');
+      const pick =
+        (saved ? branches.find((b) => b.id === saved) : null) ||
+        branches.find((b) => b.is_main) ||
+        branches[0];
+      if (pick) setActiveBranch(pick);
+    } catch {
+      const fallback = branches.find((b) => b.is_main) || branches[0];
+      if (fallback) setActiveBranch(fallback);
+    }
+  }, [activeBranch?.id, branches, setActiveBranch]);
 
   const unreadBell =
     countUnreadNotifications(systemNotifs, tenant?.id || '') + (stats?.pendingOnlineCount ?? 0);
@@ -273,8 +290,39 @@ export function ElectronDesktopHome({
               />
             </div>
           </div>
-          {!branchId ? (
-            <p className="px-5 pb-3 -mt-1 text-xs text-amber-100">Özet için üst menüden şube seçin</p>
+          {!branchId && branches.length > 0 ? (
+            <div className="px-5 pb-3 -mt-1 flex flex-wrap items-center gap-2">
+              <span className="text-xs text-amber-100 font-semibold">Şube seçin:</span>
+              {branches.length === 1 ? (
+                <button
+                  type="button"
+                  onClick={() => setActiveBranch(branches[0]!)}
+                  className="text-xs font-bold bg-white/20 hover:bg-white/30 px-3 py-1 rounded-lg border border-white/30"
+                >
+                  {branches[0]!.name}
+                </button>
+              ) : (
+                <select
+                  className="text-xs font-semibold text-slate-800 rounded-lg px-2 py-1 max-w-[220px]"
+                  defaultValue=""
+                  onChange={(e) => {
+                    const b = branches.find((x) => x.id === e.target.value);
+                    if (b) setActiveBranch(b);
+                  }}
+                >
+                  <option value="" disabled>
+                    Şube…
+                  </option>
+                  {branches.map((b) => (
+                    <option key={b.id} value={b.id}>
+                      {b.name}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
+          ) : !branchId ? (
+            <p className="px-5 pb-3 -mt-1 text-xs text-amber-100">Şube listesi yükleniyor…</p>
           ) : null}
         </header>
 

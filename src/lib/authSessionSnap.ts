@@ -6,6 +6,7 @@ type Profile = Database['public']['Tables']['profiles']['Row'];
 type Tenant = Database['public']['Tables']['tenants']['Row'];
 
 const AUTH_SNAP_KEY = 'sefpos.auth.sessionSnap';
+const ACTIVE_BRANCH_LS_KEY = 'shefpos_active_branch';
 
 export type AuthSessionSnap = {
   userId: string;
@@ -47,6 +48,15 @@ export function clearAuthSessionSnap(): void {
 }
 
 function resolveActiveBranch(snap: AuthSessionSnap): Branch | null {
+  try {
+    const lsId = localStorage.getItem(ACTIVE_BRANCH_LS_KEY);
+    if (lsId) {
+      const fromLs = snap.branches.find((b) => b.id === lsId);
+      if (fromLs) return fromLs;
+    }
+  } catch {
+    /* ignore */
+  }
   if (snap.activeBranchId) {
     const saved = snap.branches.find((b) => b.id === snap.activeBranchId);
     if (saved) return saved;
