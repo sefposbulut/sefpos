@@ -549,13 +549,26 @@ async function pushPrintSettingsToCloud(settings: PrintSettings): Promise<void> 
       // Tablo yok / schema cache eski → migration uygulanmamış veya PostgREST
       // henüz cache'i yenilememiş. Sessizce geç; lokal cache yeter.
       if (
+        status === 403 ||
         status === 404 ||
+        code === '42501' ||
         code === '42P01' ||
         code === 'PGRST205' ||
+        code === 'PGRST301' ||
         msg.includes('schema cache') ||
         msg.includes('could not find the table') ||
+        msg.includes('permission denied') ||
+        msg.includes('row-level security') ||
         (msg.includes('relation') && msg.includes('print_settings'))
-      ) return;
+      ) {
+        if (import.meta.env.DEV) {
+          console.debug(
+            '[ŞefPOS] print_settings buluta yazılamadı (RLS/oturum); yerel ayarlar kullanılıyor:',
+            (error as any).message,
+          );
+        }
+        return;
+      }
       // Unique conflict NULL branch_id'de PostgREST upsert fail edebilir; bu
       // durumda manuel update + insert dener — snapshot kullan ki context
       // değişikliği başka tenant'ı etkilemesin.

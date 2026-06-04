@@ -520,20 +520,40 @@ export function TakeawayOrders({ isActive = true }: TakeawayOrdersProps) {
       run: async () => {
         if (formOpenRef.current) return;
         try {
-          let q = supabase
-            .from('orders')
-            .select('id, status, delivery_status, updated_at')
-            .eq('tenant_id', tenant.id)
-            .in('order_type', ['takeaway', 'delivery'])
-            .is('table_id', null)
-            .not('status', 'in', '(completed,cancelled)')
-            .order('updated_at', { ascending: false })
-            .limit(40);
-          if (activeBranchRef.current) q = q.eq('branch_id', activeBranchRef.current);
-          const { data } = await q;
-          const sig = (data || [])
-            .map((r: { id: string; status?: string; delivery_status?: string; updated_at?: string }) =>
-              `${r.id}:${r.status}:${r.delivery_status}:${r.updated_at || ''}`,
+          const runSigPoll = async (selectCols: string) => {
+            let q = supabase
+              .from('orders')
+              .select(selectCols)
+              .eq('tenant_id', tenant.id)
+              .in('order_type', ['takeaway', 'delivery'])
+              .is('table_id', null)
+              .not('status', 'in', '(completed,cancelled)')
+              .order('created_at', { ascending: false })
+              .limit(40);
+            if (activeBranchRef.current) q = q.eq('branch_id', activeBranchRef.current);
+            const { data, error } = await q;
+            if (error) return { error, data: null as null };
+            return { error: null, data: data || [] };
+          };
+
+          let res = await runSigPoll('id, status, delivery_status, created_at');
+          if (res.error) {
+            res = await runSigPoll('id, status, created_at');
+          }
+          if (res.error) {
+            if (import.meta.env.DEV) {
+              console.debug('[TakeawayOrders] yedek poll atlandı:', res.error.message);
+            }
+            return;
+          }
+          const sig = res.data
+            .map(
+              (r: {
+                id: string;
+                status?: string;
+                delivery_status?: string;
+                created_at?: string;
+              }) => `${r.id}:${r.status}:${r.delivery_status ?? ''}:${r.created_at || ''}`,
             )
             .join('|');
           if (sig && sig !== lastSig) {
