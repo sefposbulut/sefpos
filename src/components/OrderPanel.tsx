@@ -8,7 +8,7 @@ import { X, Plus, Minus, ShoppingCart, Trash2, Search, ChevronUp, ChevronDown, A
 import { PaymentModal } from './PaymentModal';
 import { TableToPackageTransferModal } from './TableToPackageTransferModal';
 import { ScaleWeighingModal } from './ScaleWeighingModal';
-import { loadPrintSettings, printKitchenReceipts, printToAdisyonPrinter, buildReceiptHtml, printTakeawayReceipt } from '../lib/printService';
+import { loadPrintSettings, printKitchenReceipts, printToAdisyonPrinter, buildReceiptHtml, printTakeawayReceipt, resolveReceiptBusinessHeader } from '../lib/printService';
 import {
   buildHuginItemsFromOrderLines,
   cancelPcLinkDocument,
@@ -1656,7 +1656,7 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
       const isTakeaway = table.table_number === 0;
       const tableLabel = isTakeaway ? 'Paket' : `Masa ${table.table_number}`;
       const orderNum = activeOrder.order_number;
-      const restaurantName = printSettings.restaurantName || tenant.name || 'ŞefPOS';
+      const receiptHeader = resolveReceiptBusinessHeader(printSettings, tenant);
 
       queueMicrotask(() => {
         if (printSettings.autoPrintKitchen) {
@@ -1670,7 +1670,7 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
           }));
           printKitchenReceipts({
             settings: printSettings,
-            restaurantName,
+            restaurantName: receiptHeader.restaurantName,
             tableLabel,
             orderNumber: orderNum,
             items: kitchenItems,
@@ -1694,6 +1694,7 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
           const newTotal = receiptItems.reduce((s, i) => s + i.totalAmount, 0);
           printTakeawayReceipt({
             settings: printSettings,
+            tenant,
             orderType: (activeOrder as any).order_type === 'delivery' ? 'delivery' : 'takeaway',
             orderNumber: orderNum || '',
             customerName: (activeOrder as any).customer_name || undefined,
@@ -2216,12 +2217,13 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
 
     if (shouldPrintReceipt) {
       const printSettings = loadPrintSettings();
+      const receiptHeader = resolveReceiptBusinessHeader(printSettings, tenant);
       const tableLabel = table.table_number === 0 ? 'Paket' : `Masa ${table.table_number}`;
       const payMethod = payments.length === 1 ? (payments[0] as any).payment_method : 'mixed';
       const html = buildReceiptHtml({
-        restaurantName: printSettings.restaurantName || tenant?.name || 'ŞefPOS',
-        restaurantPhone: printSettings.restaurantPhone,
-        restaurantAddress: printSettings.restaurantAddress,
+        restaurantName: receiptHeader.restaurantName,
+        restaurantPhone: receiptHeader.restaurantPhone,
+        restaurantAddress: receiptHeader.restaurantAddress,
         tableLabel,
         orderNumber: currentOrder.order_number,
         items: orderItemsSnapshot.map((item) => ({
@@ -4045,12 +4047,13 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
                           onClick={async () => {
                             if (!currentOrder) return;
                             const printSettings = loadPrintSettings();
+                            const receiptHeader = resolveReceiptBusinessHeader(printSettings, tenant);
                             const tableLabel = table.table_number === 0 ? 'Paket' : `Masa ${table.table_number}`;
                             const { discountAmount, total } = calculateTotal();
                             const html = buildReceiptHtml({
-                              restaurantName: printSettings.restaurantName || tenant?.name || 'ŞefPOS',
-                              restaurantPhone: printSettings.restaurantPhone,
-                              restaurantAddress: printSettings.restaurantAddress,
+                              restaurantName: receiptHeader.restaurantName,
+                              restaurantPhone: receiptHeader.restaurantPhone,
+                              restaurantAddress: receiptHeader.restaurantAddress,
                               tableLabel,
                               orderNumber: currentOrder.order_number,
                               items: existingOrderItems.map(item => ({

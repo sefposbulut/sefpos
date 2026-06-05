@@ -7,6 +7,7 @@ import {
   loadPrintSettings,
   printOnlineOrderReceiptFromEdge,
   printToAdisyonPrinter,
+  resolveReceiptBusinessHeader,
 } from '../../lib/printService';
 import { fetchOrderPanelItems } from '../../lib/sqlOrderItems';
 import { dispatchPrintToast } from '../../lib/printToasts';
@@ -279,9 +280,7 @@ export function RecentActivityDetailModal({ row, onClose, onNavigate }: Props) {
       const total = detail.total ?? subtotal + tax - discount;
 
       const html = buildReceiptHtml({
-        restaurantName: printSettings.restaurantName || tenant.name || 'ŞefPOS',
-        restaurantPhone: printSettings.restaurantPhone,
-        restaurantAddress: printSettings.restaurantAddress,
+        ...resolveReceiptBusinessHeader(printSettings, tenant),
         tableLabel: detail.tableLabel || row.title,
         orderNumber: detail.orderNumber || row.orderNumber || orderId.slice(0, 8),
         items: detail.items.map((r) => ({

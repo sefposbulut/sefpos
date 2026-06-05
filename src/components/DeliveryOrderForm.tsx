@@ -588,6 +588,7 @@ function DeliveryOrderFormInner({ couriers, editOrder, prefillCustomer, onClose 
       if ((printSettings as any).autoPrintTakeaway !== false) {
         void printTakeawayReceipt({
           settings: printSettings,
+          tenant,
           orderType: isDelivery ? 'delivery' : 'takeaway',
           orderNumber: receiptOrderNumber,
           customerName: printSnapshot.name,

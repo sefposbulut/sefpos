@@ -6,6 +6,7 @@ import {
   buildReceiptHtml,
   loadPrintSettings,
   printToAdisyonPrinter,
+  resolveReceiptBusinessHeader,
 } from '../lib/printService';
 import { dispatchPrintToast } from '../lib/printToasts';
 
@@ -322,9 +323,7 @@ export function ReprintReceiptModal({
       const total = order.total_amount ?? subtotal + tax - discount;
 
       const html = buildReceiptHtml({
-        restaurantName: printSettings.restaurantName || tenant.name || 'ŞefPOS',
-        restaurantPhone: printSettings.restaurantPhone,
-        restaurantAddress: printSettings.restaurantAddress,
+        ...resolveReceiptBusinessHeader(printSettings, tenant),
         tableLabel: order.table_label || '—',
         orderNumber: order.order_number || order.id.slice(0, 8),
         items: rows.map((r) => ({

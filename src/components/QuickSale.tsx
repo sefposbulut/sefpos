@@ -10,6 +10,7 @@ import {
   buildReceiptHtml,
   loadPrintSettings,
   printToAdisyonPrinter,
+  resolveReceiptBusinessHeader,
 } from '../lib/printService';
 import { buildHuginItemsFromOrderLines, loadHuginSettings, paymentsForHugin, sendSaleToHugin } from '../lib/huginTps';
 import { dispatchPrintToast } from '../lib/printToasts';
@@ -565,10 +566,11 @@ export function QuickSale({ isActive = true }: { isActive?: boolean }) {
       }
 
       if (printReceipt) {
+        const receiptHeader = resolveReceiptBusinessHeader(printSettings, tenant);
         const html = buildReceiptHtml({
-          restaurantName: printSettings.restaurantName || (tenant as any)?.name || 'ŞefPOS',
-          restaurantPhone: printSettings.restaurantPhone,
-          restaurantAddress: printSettings.restaurantAddress,
+          restaurantName: receiptHeader.restaurantName,
+          restaurantPhone: receiptHeader.restaurantPhone,
+          restaurantAddress: receiptHeader.restaurantAddress,
           tableLabel: 'Hızlı Satış',
           orderNumber: order.order_number,
           items: cart.map((l) => ({

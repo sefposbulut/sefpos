@@ -26,7 +26,7 @@ import {
   fetchHuginHardwareId,
   huginRequiresDesktop,
 } from '../lib/huginTps';
-import { isElectron } from '../lib/printService';
+import { isElectron, loadPrintSettings, savePrintSettings } from '../lib/printService';
 import { isFeatureUnlocked, submitFeatureRequest, FEATURE_LABELS } from '../lib/featureGate';
 import { Branch } from '../contexts/AuthContext';
 import { PrinterSettings } from './PrinterSettings';
@@ -430,6 +430,17 @@ export function Settings({ onClose }: SettingsProps) {
       } as any).eq('id', tenant.id),
       profile ? supabase.from('profiles').update({ full_name: profileFullName } as any).eq('id', profile.id) : Promise.resolve(),
     ]);
+    try {
+      const ps = loadPrintSettings();
+      savePrintSettings({
+        ...ps,
+        restaurantName: restaurantName.trim(),
+        restaurantPhone: restaurantPhone.trim(),
+        restaurantAddress: restaurantAddress.trim(),
+      });
+    } catch {
+      /* localStorage */
+    }
     await refreshProfile?.();
     setAccountSaving(false);
     setAccountSaved(true);

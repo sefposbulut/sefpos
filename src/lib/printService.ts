@@ -400,6 +400,27 @@ export function savePrintSettings(settings: PrintSettings) {
   }
 }
 
+export type TenantReceiptInfo = {
+  name?: string | null;
+  phone?: string | null;
+  address?: string | null;
+};
+
+/** Ayarlar → Hesap Bilgileri fiş başlığında önceliklidir; yazıcı ayarları yedek kalır. */
+export function resolveReceiptBusinessHeader(
+  settings: PrintSettings,
+  tenant?: TenantReceiptInfo | null,
+) {
+  const tenantName = (tenant?.name || '').trim();
+  const tenantPhone = (tenant?.phone || '').trim();
+  const tenantAddress = (tenant?.address || '').trim();
+  return {
+    restaurantName: (tenantName || settings.restaurantName || 'ŞefPOS').trim(),
+    restaurantPhone: tenantPhone || (settings.restaurantPhone || '').trim(),
+    restaurantAddress: tenantAddress || (settings.restaurantAddress || '').trim(),
+  };
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // Cloud sync (public.print_settings)
 //
@@ -1797,6 +1818,7 @@ export function buildTakeawayHtml(opts: {
 
 export async function printTakeawayReceipt(opts: {
   settings: PrintSettings;
+  tenant?: TenantReceiptInfo | null;
   orderType: 'takeaway' | 'delivery';
   orderNumber: string;
   customerName?: string;
@@ -1810,11 +1832,12 @@ export async function printTakeawayReceipt(opts: {
   total: number;
 }): Promise<void> {
   const { settings } = opts;
+  const header = resolveReceiptBusinessHeader(settings, opts.tenant);
 
   const html = buildTakeawayHtml({
-    restaurantName: settings.restaurantName,
-    restaurantPhone: settings.restaurantPhone,
-    restaurantAddress: settings.restaurantAddress,
+    restaurantName: header.restaurantName,
+    restaurantPhone: header.restaurantPhone,
+    restaurantAddress: header.restaurantAddress,
     orderNumber: opts.orderNumber,
     orderType: opts.orderType,
     customerName: opts.customerName,

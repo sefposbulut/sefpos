@@ -1033,16 +1033,16 @@ export function TableGrid({
   const filteredTables = useMemo(() => {
     if (!tableGroups.length) return tables;
     if (!selectedGroup) {
-      const occupied = tables.filter((t) => t.status === 'occupied');
-      return occupied.length > 0 ? occupied : tables;
+      return tables.filter((t) => t.status === 'occupied');
     }
-    const inGroup = tables.filter((t) => t.group_id === selectedGroup);
-    return inGroup.length > 0 ? inGroup : tables;
+    return tables.filter((t) => t.group_id === selectedGroup);
   }, [tables, selectedGroup, tableGroups.length]);
 
+  /** Yalnızca geçersiz grup id — AÇIK MASALAR (null) kullanıcı seçimini ezme. */
   useEffect(() => {
     if (!tableGroups.length || !tables.length) return;
-    if (selectedGroup && tables.some((t) => t.group_id === selectedGroup)) return;
+    if (selectedGroup === null) return;
+    if (tables.some((t) => t.group_id === selectedGroup)) return;
     setSelectedGroup(resolveTableGroupSelection(tableGroups, tables, null));
   }, [tables, tableGroups, selectedGroup]);
 

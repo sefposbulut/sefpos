@@ -970,29 +970,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     syncTenantCurrencyCode((tenant as any)?.currency_code);
   }, [tenant]);
 
-  // Restoran adı / ünvan: kullanıcı Ayarlar → Yazıcılar → "Restoran Bilgileri"
-  // bölümünden henüz değer girmediyse paket / adisyon / kasa fişlerinde
-  // başlığa hardcoded "ŞefPOS" yazılıyordu. Müşteri kendi işletme adıyla bassın
-  // diye tenant adı geldiği anda boş alanları tek seferlik tenant.name ile
-  // doldurup kalıcı kaydederiz. Kullanıcı sonra istediğinde Ayarlar'dan
-  // ünvan / adres / telefon'u istediği gibi değiştirebilir.
+  // Ayarlar → Hesap Bilgileri (tenant name/phone/address) paket ve adisyon fişlerinde
+  // görünsün diye yazıcı ayarlarındaki restoran bilgileri tenant ile senkron tutulur.
   useEffect(() => {
     if (!tenant?.id) return;
     try {
       const current = loadPrintSettings();
       const patch: Partial<typeof current> = {};
-      if (!current.restaurantName && tenant.name) {
-        (patch as any).restaurantName = tenant.name;
+      const tenantName = (tenant.name || '').trim();
+      const tenantPhone = ((tenant as any).phone || '').trim();
+      const tenantAddress = ((tenant as any).address || '').trim();
+      if (tenantName && current.restaurantName !== tenantName) {
+        patch.restaurantName = tenantName;
+      } else if (!current.restaurantName && tenantName) {
+        patch.restaurantName = tenantName;
       }
-      // Phone/address sadece henüz hiç değer yoksa otomatik doldurulur — kullanıcı
-      // ayarlardan sildiyse tekrar yazmayız (boş bırakmak istemiş olabilir).
-      const tenantPhone = (tenant as any).phone || '';
-      const tenantAddress = (tenant as any).address || '';
-      if (!current.restaurantPhone && tenantPhone) {
-        (patch as any).restaurantPhone = tenantPhone;
+      if (current.restaurantPhone !== tenantPhone) {
+        patch.restaurantPhone = tenantPhone;
       }
-      if (!current.restaurantAddress && tenantAddress) {
-        (patch as any).restaurantAddress = tenantAddress;
+      if (current.restaurantAddress !== tenantAddress) {
+        patch.restaurantAddress = tenantAddress;
       }
       if (Object.keys(patch).length > 0) {
         savePrintSettings({ ...current, ...patch });
@@ -1000,7 +997,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch {
       /* localStorage erişim hatasında sessiz */
     }
-  }, [tenant?.id, tenant?.name]);
+  }, [tenant?.id, tenant?.name, (tenant as any)?.phone, (tenant as any)?.address]);
 
   // Electron Print Agent: main süreç `currentUserJwt` olmadan print_jobs
   // çekemez (RLS). İlk frame'de session henüz yoksa + token yenilenince
