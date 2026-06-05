@@ -146,11 +146,22 @@ function resolveTableGroupSelection(
   groups: { id: string }[],
   tableList: { group_id?: string | null }[],
   prefer: string | null,
+  opts?: { keepOpenTab?: boolean },
 ): string | null {
   if (!groups.length) return null;
+  /** Kullanıcı AÇIK MASALAR sekmesindeyken veri yenilemesi ilk gruba zıplamasın. */
+  if (prefer === null && opts?.keepOpenTab) return null;
   if (prefer && tableList.some((t) => t.group_id === prefer)) return prefer;
   const withTables = groups.find((g) => tableList.some((t) => t.group_id === g.id));
   return withTables?.id ?? null;
+}
+
+/** AÇIK MASALAR sekmesinde gösterilecek masa (occupied + aktif sipariş). */
+function isOpenTableRow(t: TableWithOrder): boolean {
+  if (t.status !== 'occupied' || !t.current_order_id) return false;
+  if (t.order?.payment_status === 'partial') return true;
+  if (!t.order) return true;
+  return Number(t.order.total_amount ?? 0) > 0.009;
 }
 
 /** Cache snapshot'tan istemci icin gosterilebilir state cikartir */
@@ -374,7 +385,7 @@ export function TableGrid({
       setGridFetchDone(true);
       if (resetGroup) {
         setSelectedGroup((prev) =>
-          resolveTableGroupSelection(ram.groups, ram.tables, prev),
+          resolveTableGroupSelection(ram.groups, ram.tables, prev, { keepOpenTab: prev === null }),
         );
       }
       return true;
@@ -391,7 +402,7 @@ export function TableGrid({
       setGridFetchDone(true);
       if (resetGroup) {
         setSelectedGroup((prev) =>
-          resolveTableGroupSelection(snap.groups, snap.tables, prev),
+          resolveTableGroupSelection(snap.groups, snap.tables, prev, { keepOpenTab: prev === null }),
         );
       }
     } else if (!opts?.silent && !hasLiveGrid && !snap && tablesRef.current.length === 0) {
@@ -436,7 +447,7 @@ export function TableGrid({
         applyServerEmptyConfirmed(mapped.length === 0);
         if (groups.length > 0) {
           setSelectedGroup((prev) =>
-            resolveTableGroupSelection(groups, mapped, prev),
+            resolveTableGroupSelection(groups, mapped, prev, { keepOpenTab: prev === null }),
           );
         }
         tableGridRuntimeCache.set(cacheKey, {
@@ -489,6 +500,7 @@ export function TableGrid({
             groupRows as unknown as TableGroup[],
             mapped,
             resetGroup ? null : prev,
+            { keepOpenTab: !resetGroup && prev === null },
           ),
         );
         const warmIds = mapped.map((t) => t.current_order_id);
@@ -1033,7 +1045,7 @@ export function TableGrid({
     const all = { available: 0, occupied: 0, total: tables.length };
     for (const t of tables) {
       if (t.status === 'available') all.available++;
-      else if (t.status === 'occupied') all.occupied++;
+      else if (isOpenTableRow(t)) all.occupied++;
       if (t.group_id) {
         const g = stats.get(t.group_id) || { available: 0, occupied: 0, total: 0 };
         g.total++;
@@ -1049,12 +1061,7 @@ export function TableGrid({
   const filteredTables = useMemo(() => {
     if (!tableGroups.length) return tables;
     if (!selectedGroup) {
-      return tables.filter((t) => {
-        if (t.status !== 'occupied') return false;
-        if (!t.current_order_id) return false;
-        const total = Number(t.order?.total_amount ?? 0);
-        return total > 0.009;
-      });
+      return tables.filter(isOpenTableRow);
     }
     return tables.filter((t) => t.group_id === selectedGroup);
   }, [tables, selectedGroup, tableGroups.length]);
