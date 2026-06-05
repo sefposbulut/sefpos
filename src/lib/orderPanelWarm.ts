@@ -38,15 +38,33 @@ export function readPersistedOrderItemsSnapshot(orderId: string): any[] | null {
 
 export function persistOrderItemsSnapshot(orderId: string, rows: any[]): void {
   try {
+    if (!rows.length) {
+      sessionStorage.removeItem(SNAPSHOT_PREFIX + orderId);
+      return;
+    }
     sessionStorage.setItem(SNAPSHOT_PREFIX + orderId, JSON.stringify(rows));
   } catch {
     /* quota / private mode */
   }
 }
 
+/** Sipariş iptal / masa boşaltma sonrası RAM + session önbelleğini temizle */
+export function clearWarmOrderPanelCache(orderId: string): void {
+  if (!orderId) return;
+  warmPanel.delete(orderId);
+  warmRows.delete(orderId);
+  try {
+    sessionStorage.removeItem(SNAPSHOT_PREFIX + orderId);
+  } catch {
+    /* ignore */
+  }
+}
+
 /** Masa tıklanınca sepet + sipariş + ödemeleri tek seferde önbelleğe al */
 export function warmOrderPanelBundle(orderId: string | null | undefined) {
-  if (!orderId || inflightPanel.has(orderId)) return;
+  if (!orderId) return;
+  if (warmPanel.get(orderId)?.rows?.length) return;
+  if (inflightPanel.has(orderId)) return;
 
   const p = (async () => {
     try {
@@ -88,6 +106,62 @@ export function warmOrderItemsForPanel(orderId: string | null | undefined) {
   warmOrderPanelBundle(orderId);
 }
 
+/** Hover / pointerdown — tıklamadan hemen önce yalnızca sepet satırlarını çek (hafif). */
+const prefetchTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+async function prefetchItemsOnly(orderId: string): Promise<void> {
+  if (warmPanel.get(orderId)?.rows?.length || warmRows.get(orderId)?.rows?.length) return;
+  if (inflightItems.has(orderId)) return;
+  const p = (async () => {
+    try {
+      const rows = await fetchPanelItems(orderId);
+      warmRows.set(orderId, { rows });
+      const existing = warmPanel.get(orderId);
+      warmPanel.set(orderId, {
+        rows,
+        order: existing?.order ?? null,
+        payments: existing?.payments ?? [],
+      });
+    } finally {
+      inflightItems.delete(orderId);
+    }
+  })();
+  inflightItems.set(orderId, p);
+}
+
+export function prefetchWarmOrderPanel(orderId: string | null | undefined) {
+  if (!orderId) return;
+  if (warmPanel.get(orderId)?.rows?.length) return;
+  const pending = prefetchTimers.get(orderId);
+  if (pending) clearTimeout(pending);
+  prefetchTimers.set(
+    orderId,
+    setTimeout(() => {
+      prefetchTimers.delete(orderId);
+      void prefetchItemsOnly(orderId);
+    }, 150),
+  );
+}
+
+/** Önbellek veya devam eden warm bitince panel satırlarını uygula */
+export function whenWarmOrderPanelReady(orderId: string): Promise<PanelWarmBundle | null> {
+  if (!orderId) return Promise.resolve(null);
+  const panel = warmPanel.get(orderId);
+  if (panel?.rows?.length) return Promise.resolve(panel);
+  const rowsEntry = warmRows.get(orderId);
+  if (rowsEntry?.rows?.length) {
+    return Promise.resolve({
+      rows: rowsEntry.rows,
+      order: panel?.order ?? null,
+      payments: panel?.payments ?? [],
+    });
+  }
+  warmOrderPanelBundle(orderId);
+  const inflight = inflightPanel.get(orderId);
+  if (!inflight) return Promise.resolve(null);
+  return inflight.then(() => warmPanel.get(orderId) ?? null);
+}
+
 /** Önbellekte hazırsa satırları okur (silmez) — useLayoutEffect ile ilk karede sepet boyanır */
 export function peekWarmOrderItems(orderId: string): any[] | null {
   const panel = warmPanel.get(orderId);
@@ -116,15 +190,31 @@ export function takeWarmOrderItems(orderId: string): { rows: any[] } | undefined
  * karede boyanır (network round-trip beklenmez).
  */
 const inflightBulk = new Map<string, Promise<void>>();
+const BULK_WARM_MAX = 12;
+const BULK_WARM_DEBOUNCE_MS = 500;
+let bulkWarmTimer: ReturnType<typeof setTimeout> | null = null;
+const pendingBulkIds = new Set<string>();
 
-export function bulkWarmOrderItemsForOrders(orderIds: (string | null | undefined)[]) {
-  const unique = Array.from(new Set(orderIds.filter((x): x is string => !!x)));
-  if (unique.length === 0) return;
-  const todo = unique.filter((id) => !warmRows.has(id) && !inflightItems.has(id));
-  if (todo.length === 0) return;
+function runBulkWarmBatch(): void {
+  const todo = [...pendingBulkIds]
+    .filter((id) => {
+      if (inflightItems.has(id) || inflightPanel.has(id)) return false;
+      if (warmPanel.get(id)?.rows?.length) return false;
+      if (warmRows.get(id)?.rows?.length) return false;
+      return true;
+    })
+    .slice(0, BULK_WARM_MAX);
+  for (const id of todo) pendingBulkIds.delete(id);
+  if (todo.length === 0) {
+    if (pendingBulkIds.size > 0) scheduleBulkWarmBatch();
+    return;
+  }
 
   const key = todo.slice().sort().join(',');
-  if (inflightBulk.has(key)) return;
+  if (inflightBulk.has(key)) {
+    if (pendingBulkIds.size > 0) scheduleBulkWarmBatch();
+    return;
+  }
 
   const p = (async () => {
     try {
@@ -132,13 +222,39 @@ export function bulkWarmOrderItemsForOrders(orderIds: (string | null | undefined
       for (const oid of todo) {
         const rows = grouped.get(oid) || [];
         warmRows.set(oid, { rows });
-        warmPanel.set(oid, { rows, order: warmPanel.get(oid)?.order ?? null, payments: warmPanel.get(oid)?.payments ?? [] });
+        warmPanel.set(oid, {
+          rows,
+          order: warmPanel.get(oid)?.order ?? null,
+          payments: warmPanel.get(oid)?.payments ?? [],
+        });
         persistOrderItemsSnapshot(oid, rows);
       }
     } finally {
       inflightBulk.delete(key);
+      if (pendingBulkIds.size > 0) scheduleBulkWarmBatch();
     }
   })();
 
   inflightBulk.set(key, p);
+}
+
+function scheduleBulkWarmBatch(): void {
+  const run = () => runBulkWarmBatch();
+  if (typeof requestIdleCallback !== 'undefined') {
+    requestIdleCallback(run, { timeout: 900 });
+  } else {
+    setTimeout(run, 0);
+  }
+}
+
+export function bulkWarmOrderItemsForOrders(orderIds: (string | null | undefined)[]) {
+  for (const id of orderIds) {
+    if (id) pendingBulkIds.add(id);
+  }
+  if (pendingBulkIds.size === 0) return;
+  if (bulkWarmTimer) clearTimeout(bulkWarmTimer);
+  bulkWarmTimer = setTimeout(() => {
+    bulkWarmTimer = null;
+    scheduleBulkWarmBatch();
+  }, BULK_WARM_DEBOUNCE_MS);
 }

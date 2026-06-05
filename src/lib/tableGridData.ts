@@ -92,6 +92,7 @@ export function isHardPageReload(): boolean {
   }
 }
 
+
 function clearSessionTableGridSnapshots(): void {
   if (typeof sessionStorage === 'undefined') return;
   try {
@@ -109,6 +110,7 @@ export function prepareTableGridCacheForPageLoad(): void {
   if (!isHardPageReload() || reloadSnapCleared) return;
   reloadSnapCleared = true;
   clearSessionTableGridSnapshots();
+  clearTableGridRuntimeCache();
 }
 /** localStorage TTL: 7 gün. Bu sürede internet kesintisinde / app restart sonrasi
  *  masalar ve gruplar son bilinen halleriyle anında ekrana gelir. Sonrasinda
@@ -146,22 +148,20 @@ function readFromStore(
 }
 
 /** F5 / sekme yenilemede ve **offline / app restart sonrasinda** izgara aninda
- *  cizilir. Once sessionStorage (en taze), sonra localStorage (TTL'li) kontrol
- *  edilir. Sert yenilemede (F5) session atlanir; localStorage ile anlik cizim,
- *  arka planda taze veri cekilir. */
+ *  cizilir. Sert yenilemede (F5) onbellek kullanilmaz — dogrudan sunucudan cekilir. */
 export function readPersistedTableGridSnapshot(
   cacheKey: string
 ): SnapshotPayload | null {
   prepareTableGridCacheForPageLoad();
 
-  if (!isHardPageReload()) {
-    const fromSession = readFromStore(
-      typeof sessionStorage !== 'undefined' ? sessionStorage : null,
-      GRID_SNAP_PREFIX + cacheKey,
-      false
-    );
-    if (fromSession) return fromSession;
-  }
+  if (isHardPageReload()) return null;
+
+  const fromSession = readFromStore(
+    typeof sessionStorage !== 'undefined' ? sessionStorage : null,
+    GRID_SNAP_PREFIX + cacheKey,
+    false
+  );
+  if (fromSession) return fromSession;
   return readFromStore(
     typeof localStorage !== 'undefined' ? localStorage : null,
     GRID_SNAP_PREFIX + cacheKey,
@@ -246,7 +246,6 @@ export async function fetchRestaurantTablesForBranch(
       .order('table_number');
     const { data, error } = await joinQ;
     if (!error && data) {
-      // Join zaten payment_transactions içerir — ekstra order_items/payments turu gerekmez.
       return (data as Record<string, unknown>[]).map((t) => mapRestaurantTableJoinRow(t));
     }
   }
@@ -334,7 +333,7 @@ export async function fetchRestaurantTableWithOrder(
       order_number: String(o.order_number ?? ''),
       payment_status: (o.payment_status as string | null) ?? null,
     });
-    await enrichTableGridOrders(orderMap);
+    await enrichTableGridOrders(orderMap, { lite: true, alwaysItemSum: true });
   }
   return {
     ...row,
@@ -345,7 +344,13 @@ export async function fetchRestaurantTableWithOrder(
 
 export async function enrichTableGridOrders(
   orderMap: Map<string, TableGridOrderEmbed>,
-  opts?: { lite?: boolean },
+  opts?: {
+    lite?: boolean;
+    /** order_items değişince DB total_amount gecikmeli kalabilir */
+    alwaysItemSum?: boolean;
+    /** Kalemler toplamı orders.total_amount ile uyumsuzsa DB'yi arka planda düzelt */
+    syncOrderTotals?: boolean;
+  },
 ): Promise<void> {
   const ids = [...orderMap.keys()].filter((oid) => {
     if (!opts?.lite) return true;
@@ -354,6 +359,7 @@ export async function enrichTableGridOrders(
     const ps = embed.payment_status;
     if (ps === 'paid') return false;
     if (ps === 'partial') return true;
+    if (opts.alwaysItemSum) return true;
     return !Number(embed.total_amount);
   });
   if (!ids.length) return;
@@ -376,7 +382,9 @@ export async function enrichTableGridOrders(
   }
 
   const needItems = opts?.lite
-    ? ids.filter((oid) => !Number(orderMap.get(oid)?.total_amount))
+    ? (opts.alwaysItemSum
+      ? ids
+      : ids.filter((oid) => !Number(orderMap.get(oid)?.total_amount)))
     : ids;
   const sumByOrder = new Map<string, number>();
   if (needItems.length === 0) {
@@ -422,7 +430,21 @@ export async function enrichTableGridOrders(
   for (const oid of ids) {
     const embed = orderMap.get(oid);
     if (!embed) continue;
-    if (sumByOrder.has(oid)) {
+    const prevTotal = Number(embed.total_amount || 0);
+    if (needItems.includes(oid)) {
+      const itemSum = sumByOrder.get(oid) || 0;
+      embed.total_amount = itemSum;
+      if (
+        opts?.syncOrderTotals &&
+        Math.abs(itemSum - prevTotal) > 0.009 &&
+        embed.payment_status !== 'paid'
+      ) {
+        void supabase
+          .from('orders')
+          .update({ subtotal: itemSum, tax_amount: 0, total_amount: itemSum })
+          .eq('id', oid);
+      }
+    } else if (sumByOrder.has(oid)) {
       const itemSum = sumByOrder.get(oid) || 0;
       if (itemSum > 0) embed.total_amount = itemSum;
     } else if (!Number(embed.total_amount)) {

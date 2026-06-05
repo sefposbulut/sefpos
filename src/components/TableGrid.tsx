@@ -7,7 +7,7 @@ import { Plus, Minus, Clock, Lock, ZoomIn, ZoomOut, ScanBarcode, Truck, Eye, Eye
 import { useUiPrefs, setHeaderHidden } from '../lib/uiPrefs';
 import { ReprintReceiptModal } from './ReprintReceiptModal';
 import { isLocalMode, isOfflineMode, isSqlServerMode } from '../lib/sqlDb';
-import { warmOrderPanelBundle, bulkWarmOrderItemsForOrders } from '../lib/orderPanelWarm';
+import { warmOrderPanelBundle, bulkWarmOrderItemsForOrders, prefetchWarmOrderPanel } from '../lib/orderPanelWarm';
 import { LiveDuration } from './LiveDuration';
 import { getTrialInfo, formatTrialRemaining, type TenantTrialFields } from '../lib/tenantTrial';
 import { APP_DISPLAY_VERSION } from '../lib/appVersion';
@@ -18,6 +18,7 @@ import {
   prepareTableGridCacheForPageLoad,
   TABLE_GRID_TABLE_COLS,
   enrichTableGridOrders,
+  buildOrderEmbedFromJoin,
   fetchRestaurantTablesForBranch,
   fetchCloudTableGridSnapshot,
   type TableGridCachedRow,
@@ -379,7 +380,7 @@ export function TableGrid({
       return true;
     };
 
-    if (hasLiveGrid) {
+    if (hasLiveGrid && !isHardPageReload()) {
       paintRuntimeCache();
     }
 
@@ -491,11 +492,7 @@ export function TableGrid({
           ),
         );
         const warmIds = mapped.map((t) => t.current_order_id);
-        if (typeof requestIdleCallback !== 'undefined') {
-          requestIdleCallback(() => bulkWarmOrderItemsForOrders(warmIds), { timeout: 2500 });
-        } else {
-          setTimeout(() => bulkWarmOrderItemsForOrders(warmIds), 0);
-        }
+        queueMicrotask(() => bulkWarmOrderItemsForOrders(warmIds));
       } else {
         const ramAfter = tableGridRuntimeCache.get(cacheKey);
         if (ramAfter?.tables?.length) {
@@ -610,7 +607,7 @@ export function TableGrid({
             payment_status: (row.payment_status as string | null) ?? null,
           });
         }
-        await enrichTableGridOrders(orderMap);
+        await enrichTableGridOrders(orderMap, { lite: true, alwaysItemSum: true, syncOrderTotals: true });
       }
 
       const updatedRows: TableWithOrder[] = (tableRows as any[]).map((t) => {
@@ -647,6 +644,21 @@ export function TableGrid({
 
     if (data) {
       const updatedRows = data.map((t: any) => ({ ...t, order: t.orders || undefined })) as TableWithOrder[];
+      const orderMap = new Map<string, TableGridOrderEmbed>();
+      for (const row of updatedRows) {
+        const embed = buildOrderEmbedFromJoin((row as any).orders ?? row.order);
+        if (!embed?.id) continue;
+        orderMap.set(embed.id, embed);
+      }
+      if (orderMap.size > 0) {
+        await enrichTableGridOrders(orderMap, { lite: true, alwaysItemSum: true, syncOrderTotals: true });
+        for (const row of updatedRows) {
+          const oid = row.order?.id;
+          if (!oid) continue;
+          const enriched = orderMap.get(oid);
+          if (enriched) row.order = { ...row.order!, ...enriched };
+        }
+      }
       const partialIds = updatedRows
         .map((t) => (t.order?.payment_status === 'partial' ? t.order.id : null))
         .filter((id): id is string => !!id);
@@ -685,7 +697,7 @@ export function TableGrid({
   const scheduleUpdate = useCallback((tableId: string) => {
     pendingUpdatesRef.current.add(tableId);
     if (updateTimerRef.current) clearTimeout(updateTimerRef.current);
-    updateTimerRef.current = setTimeout(flushPendingUpdates, 80);
+    updateTimerRef.current = setTimeout(flushPendingUpdates, 200);
   }, [flushPendingUpdates]);
 
   const findTableIdByOrderId = useCallback((orderId: string | null | undefined) => {
@@ -698,6 +710,10 @@ export function TableGrid({
     if (groupsReloadTimerRef.current) clearTimeout(groupsReloadTimerRef.current);
     groupsReloadTimerRef.current = setTimeout(() => { void loadAll(); }, 200);
   }, [loadAll]);
+
+  const prefetchTableOrder = useCallback((table: TableWithOrder) => {
+    if (table.current_order_id) prefetchWarmOrderPanel(table.current_order_id);
+  }, []);
 
   const handleSelectTableInstant = useCallback((table: TableWithOrder) => {
     if (table.current_order_id) {
@@ -1033,7 +1049,12 @@ export function TableGrid({
   const filteredTables = useMemo(() => {
     if (!tableGroups.length) return tables;
     if (!selectedGroup) {
-      return tables.filter((t) => t.status === 'occupied');
+      return tables.filter((t) => {
+        if (t.status !== 'occupied') return false;
+        if (!t.current_order_id) return false;
+        const total = Number(t.order?.total_amount ?? 0);
+        return total > 0.009;
+      });
     }
     return tables.filter((t) => t.group_id === selectedGroup);
   }, [tables, selectedGroup, tableGroups.length]);
@@ -1279,6 +1300,7 @@ export function TableGrid({
                 key={table.id}
                 onPointerDown={(e) => {
                   e.currentTarget.style.transform = 'scale(0.93)';
+                  if (!isLocked && table.current_order_id) prefetchTableOrder(table);
                 }}
                 onPointerUp={(e) => {
                   e.currentTarget.style.transform = '';
@@ -1431,7 +1453,12 @@ export function TableGrid({
           return (
             <button
               key={table.id}
-              onPointerDown={(e) => { if (!isLocked) e.currentTarget.style.transform = 'scale(0.93)'; }}
+              onPointerDown={(e) => {
+                if (!isLocked) {
+                  e.currentTarget.style.transform = 'scale(0.93)';
+                  if (table.current_order_id) prefetchTableOrder(table);
+                }
+              }}
               onPointerUp={(e) => { e.currentTarget.style.transform = ''; if (!isLocked) handleSelectTableInstant(table); }}
               onPointerLeave={(e) => { e.currentTarget.style.transform = ''; }}
               className={`${statusColor} rounded-2xl flex flex-col items-center justify-center text-white aspect-square shadow-lg hover:shadow-xl relative select-none overflow-hidden`}

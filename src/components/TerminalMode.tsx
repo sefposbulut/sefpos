@@ -8,18 +8,9 @@ import { warmOrderItemsForPanel } from '../lib/orderPanelWarm';
 import { Database } from '../lib/supabase';
 type Table = Database['public']['Tables']['restaurant_tables']['Row'];
 
-const TERMINAL_STORAGE = 'shefpos_terminal_mode';
+import { enterTerminalMode, exitTerminalMode, TERMINAL_SESSION_KEY } from '../lib/terminalMode';
+
 const TERMINAL_SQL_CONFIG = 'shefpos_terminal_sql_config';
-const TERMINAL_SESSION = 'shefpos_terminal_session';
-
-export function isTerminalMode(): boolean {
-  return localStorage.getItem(TERMINAL_STORAGE) === 'true';
-}
-
-export function exitTerminalMode() {
-  localStorage.removeItem(TERMINAL_STORAGE);
-  localStorage.removeItem(TERMINAL_SESSION);
-}
 
 interface TerminalConfig {
   host: string;
@@ -191,8 +182,8 @@ export function TerminalLogin({ onBack, onConnected }: TerminalLoginProps) {
           setLoading(false);
           return;
         }
-        localStorage.setItem(TERMINAL_SESSION, JSON.stringify(result.data));
-        localStorage.setItem(TERMINAL_STORAGE, 'true');
+        localStorage.setItem(TERMINAL_SESSION_KEY, JSON.stringify(result.data));
+        enterTerminalMode();
         const sqlSession = {
           access_token: `sqlserver-${result.data.user_id}`,
           refresh_token: null,
@@ -218,7 +209,7 @@ export function TerminalLogin({ onBack, onConnected }: TerminalLoginProps) {
           setLoading(false);
           return;
         }
-        localStorage.setItem(TERMINAL_STORAGE, 'true');
+        enterTerminalMode();
         onConnected();
       }
     } catch (err: any) {
@@ -245,8 +236,8 @@ export function TerminalLogin({ onBack, onConnected }: TerminalLoginProps) {
           setLoading(false);
           return;
         }
-        localStorage.setItem(TERMINAL_SESSION, JSON.stringify(result.data));
-        localStorage.setItem(TERMINAL_STORAGE, 'true');
+        localStorage.setItem(TERMINAL_SESSION_KEY, JSON.stringify(result.data));
+        enterTerminalMode();
         const sqlSession = {
           access_token: `sqlserver-${result.data.user_id}`,
           refresh_token: null,
@@ -271,7 +262,7 @@ export function TerminalLogin({ onBack, onConnected }: TerminalLoginProps) {
           setLoading(false);
           return;
         }
-        localStorage.setItem(TERMINAL_STORAGE, 'true');
+        enterTerminalMode();
         onConnected();
       }
     } catch (err: any) {
@@ -604,7 +595,7 @@ export function TerminalApp({ onExit }: TerminalAppProps) {
   }, []);
 
   const terminalSession = (() => {
-    try { return JSON.parse(localStorage.getItem(TERMINAL_SESSION) || 'null'); } catch { return null; }
+    try { return JSON.parse(localStorage.getItem(TERMINAL_SESSION_KEY) || 'null'); } catch { return null; }
   })();
 
   const displayName = profile?.full_name || terminalSession?.full_name || user?.email || 'Terminal';

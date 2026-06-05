@@ -61,7 +61,8 @@ import { processWipeLocalNotification, shouldAutoProcessWipeLocal } from './lib/
 import { OnlineOrderToast } from './components/OnlineOrderToast';
 import { GlobalGetirSync } from './components/GlobalGetirSync';
 import { PrintStatusToast } from './components/PrintStatusToast';
-import { TerminalLogin, TerminalApp, isTerminalMode, exitTerminalMode } from './components/TerminalMode';
+import { TerminalLogin, TerminalApp } from './components/TerminalMode';
+import { isTerminalMode, exitTerminalMode } from './lib/terminalMode';
 import { isCapacitorNative } from './lib/capacitorPlatform';
 import { BrandSplash } from './components/BrandSplash';
 

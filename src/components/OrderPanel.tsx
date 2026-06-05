@@ -1,4 +1,4 @@
-import { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback, startTransition } from 'react';
 import { flushSync } from 'react-dom';
 import { useShallow } from 'zustand/react/shallow';
 import { supabase } from '../lib/supabase';
@@ -56,6 +56,9 @@ import {
   persistOrderItemsSnapshot,
   warmOrderPanelBundle,
   warmOrderItemsForPanel,
+  takeWarmOrderItems,
+  clearWarmOrderPanelCache,
+  whenWarmOrderPanelReady,
 } from '../lib/orderPanelWarm';
 import {
   PAYMENT_LOCK_TTL_MS,
@@ -359,6 +362,10 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
   const saveOrderTotalTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const saveItemQuantityTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const deletingOrderItemIdsRef = useRef<Set<string>>(new Set());
+  const releasingOrderIdsRef = useRef<Set<string>>(new Set());
+  const releaseEmptyOrderRef = useRef<
+    (orderId: string, opts?: { closePanel?: boolean }) => Promise<void>
+  >(() => Promise.resolve());
   const [scalePort, setScalePort] = useState<string>(() => {
     try {
       const raw = localStorage.getItem('scale_calibration');
@@ -436,6 +443,17 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
     }
     if (hasLocalLines) {
       setExistingOrderItems(earlyLines ?? persisted ?? bundle!.rows);
+    } else if (oid) {
+      void whenWarmOrderPanelReady(oid).then((warmBundle) => {
+        if (!warmBundle?.rows?.length) return;
+        setExistingOrderItems(warmBundle.rows);
+        persistOrderItemsSnapshot(oid, warmBundle.rows);
+        if (warmBundle.order) setCurrentOrder(warmBundle.order as Order);
+        if (warmBundle.payments?.length) {
+          setPaymentTransactions(warmBundle.payments as PaymentTransaction[]);
+        }
+        setOrderHydrating(false);
+      });
     }
   }, [
     resetOrderSession,
@@ -536,6 +554,17 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
   const handleClose = useCallback(() => {
     if (table.table_number !== 0 && table.id) {
       const orderId = currentOrder?.id || table.current_order_id;
+      if (
+        orderId &&
+        existingOrderItems.length === 0 &&
+        cart.length === 0 &&
+        !isTempOrderId(orderId)
+      ) {
+        void releaseEmptyOrderRef.current(orderId, { closePanel: false });
+        void unlockTable();
+        onClose();
+        return;
+      }
       const existingTotal = existingOrderItems.reduce(
         (s, i) => s + Number((i as any).total_amount || 0),
         0
@@ -940,10 +969,13 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
     };
   }, [scaleListening, scalePort, scaleBaudRate]);
 
+  useLayoutEffect(() => {
+    if (!tenant || !table) return;
+    void loadExistingOrder();
+  }, [tenant?.id, table.id, table.current_order_id]);
+
   useEffect(() => {
     if (!tenant || !table) return;
-
-    void loadExistingOrder();
 
     void loadMenuData();
 
@@ -1040,6 +1072,9 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
     if (submittingRef.current || saveItemQuantityTimersRef.current.size > 0) {
       return;
     }
+    if (deletingOrderItemIdsRef.current.size > 0) {
+      return;
+    }
 
     const currentOrderId = table.current_order_id;
     if (!currentOrderId) {
@@ -1053,7 +1088,10 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
     const bundle = peekWarmPanelBundle(currentOrderId);
     const cachedLines = peekWarmOrderItems(currentOrderId);
     const persisted = readPersistedOrderItemsSnapshot(currentOrderId);
-    const localLines = cachedLines ?? persisted ?? (bundle?.rows?.length ? bundle.rows : null);
+    const localLines =
+      (cachedLines?.length ? cachedLines : null) ??
+      (persisted?.length ? persisted : null) ??
+      (bundle?.rows?.length ? bundle.rows : null);
 
     if (localLines) {
       setExistingOrderItems(localLines);
@@ -1064,8 +1102,19 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
     if (bundle?.payments?.length) setPaymentTransactions(bundle.payments as PaymentTransaction[]);
 
     try {
-      const [itemsRows, orderRes, paymentsRes] = await Promise.all([
-        localLines ? Promise.resolve(localLines) : fetchOrderPanelItems(currentOrderId),
+      const itemsRows = await fetchOrderPanelItems(currentOrderId);
+      const rows = (itemsRows || []) as any[];
+      const persistedSnap = readPersistedOrderItemsSnapshot(currentOrderId);
+      if (rows.length === 0 && persistedSnap && persistedSnap.length > 0) {
+        setExistingOrderItems(persistedSnap);
+        setOrderHydrating(false);
+      } else if (rows.length > 0) {
+        setExistingOrderItems(rows);
+        persistOrderItemsSnapshot(currentOrderId, rows);
+        setOrderHydrating(false);
+      }
+
+      const [orderRes, paymentsRes] = await Promise.all([
         supabase.from('orders').select('*').eq('id', currentOrderId).maybeSingle(),
         supabase
           .from('payment_transactions')
@@ -1074,8 +1123,12 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
           .order('created_at', { ascending: false }),
       ]);
 
-      const rows = (itemsRows || []) as any[];
-      if (rows.length > 0 || !localLines) {
+      if (rows.length === 0 && persistedSnap && persistedSnap.length > 0) {
+        if (orderRes.data) setCurrentOrder(orderRes.data as Order);
+        if (paymentsRes.data) setPaymentTransactions(paymentsRes.data as any);
+        return;
+      }
+      if (rows.length > 0) {
         setExistingOrderItems(rows);
         persistOrderItemsSnapshot(currentOrderId, rows);
       }
@@ -1097,9 +1150,11 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
                 .eq('id', ord.id);
             }
           }
+        } else {
+          ord = { ...ord, subtotal: 0, tax_amount: 0, total_amount: 0 };
         }
         setCurrentOrder(ord);
-      } else if (!localLines) {
+      } else if (rows.length === 0) {
         setCurrentOrder(null);
         setExistingOrderItems([]);
         setPaymentTransactions([]);
@@ -1362,6 +1417,7 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
     );
 
     setExistingOrderItems(newItems);
+    if (currentOrder?.id) persistOrderItemsSnapshot(currentOrder.id, newItems);
 
     if (isTempLineId(orderItemId)) {
       if (currentOrder) {
@@ -1403,6 +1459,58 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
     saveItemQuantityTimersRef.current.set(orderItemId, timer);
   };
 
+  const releaseTableAfterEmptyOrder = useCallback(async (
+    orderId: string,
+    opts?: { closePanel?: boolean },
+  ) => {
+    if (table.table_number === 0 || !table.id || isTempOrderId(orderId)) return;
+    if (releasingOrderIdsRef.current.has(orderId)) return;
+    releasingOrderIdsRef.current.add(orderId);
+
+    if (saveOrderTotalTimerRef.current) {
+      clearTimeout(saveOrderTotalTimerRef.current);
+      saveOrderTotalTimerRef.current = null;
+    }
+
+    markTableOptimisticallyCleared(table.id);
+    emitTableStateChanged({
+      id: table.id,
+      status: 'available' as any,
+      current_order_id: null,
+      session_start: null,
+      payment_locked: false,
+      order: null,
+    });
+
+    takeWarmOrderItems(orderId);
+    clearWarmOrderPanelCache(orderId);
+    try {
+      await Promise.all([
+        supabase.from('restaurant_tables').update({
+          status: 'available',
+          current_order_id: null,
+          session_start: null,
+          payment_locked: false,
+        }).eq('id', table.id),
+        supabase.from('orders').update({
+          status: 'cancelled',
+          subtotal: 0,
+          tax_amount: 0,
+          total_amount: 0,
+          completed_at: new Date().toISOString(),
+        }).eq('id', orderId),
+      ]);
+      dispatchTablesGridReload();
+    } finally {
+      releasingOrderIdsRef.current.delete(orderId);
+    }
+    if (opts?.closePanel !== false) onClose();
+  }, [table.id, table.table_number, emitTableStateChanged, onClose]);
+
+  useEffect(() => {
+    releaseEmptyOrderRef.current = releaseTableAfterEmptyOrder;
+  }, [releaseTableAfterEmptyOrder]);
+
   const deleteExistingItem = async (orderItemId: string, reason?: string) => {
     // Aynı ürün için çift tıklama / gecikmeli UI kaynaklı mükerrer iptal logunu engelle.
     if (deletingOrderItemIdsRef.current.has(orderItemId)) return;
@@ -1419,14 +1527,19 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
       }
       if (newItems.length === 0 && currentOrder && isTempOrderId(currentOrder.id)) {
         setCurrentOrder(null);
+      } else if (newItems.length === 0 && currentOrder && !isTempOrderId(currentOrder.id)) {
+        void releaseTableAfterEmptyOrder(currentOrder.id);
       }
       return;
     }
 
     const newItems = existingOrderItems.filter(i => i.id !== orderItemId);
     setExistingOrderItems(newItems);
+    if (currentOrder?.id) persistOrderItemsSnapshot(currentOrder.id, newItems);
 
-    if (currentOrder) {
+    const orderEmpty = newItems.length === 0;
+
+    if (currentOrder && !orderEmpty) {
       const newSubtotal = newItems.reduce((sum, i) => sum + i.total_amount, 0);
 
       setCurrentOrder({
@@ -1437,6 +1550,13 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
       });
 
       recalculateAndSaveTotal(newItems, currentOrder);
+    } else if (currentOrder && orderEmpty) {
+      setCurrentOrder({
+        ...currentOrder,
+        subtotal: 0,
+        tax_amount: 0,
+        total_amount: 0,
+      });
     }
 
     deletingOrderItemIdsRef.current.add(orderItemId);
@@ -1454,7 +1574,9 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
 
       const wasActuallyDeleted = Array.isArray(deletedRows) && deletedRows.length > 0;
       if (!wasActuallyDeleted) {
-        // Başka bir akışta zaten silindiyse ikinci kez iptal logu yazma.
+        if (orderEmpty && currentOrder) {
+          await releaseTableAfterEmptyOrder(currentOrder.id);
+        }
         return;
       }
 
@@ -1475,23 +1597,8 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
       deletingOrderItemIdsRef.current.delete(orderItemId);
     }
 
-    if (newItems.length === 0 && currentOrder && table.table_number !== 0) {
-      await supabase.from('restaurant_tables').update({
-        status: 'available',
-        current_order_id: null,
-        session_start: null,
-        payment_locked: false,
-      }).eq('id', table.id);
-      emitTableStateChanged({
-        id: table.id,
-        status: 'available' as any,
-        current_order_id: null,
-        session_start: null,
-        payment_locked: false,
-        order: null,
-      });
-      await supabase.from('orders').update({ status: 'cancelled' }).eq('id', currentOrder.id);
-      onClose();
+    if (orderEmpty && currentOrder) {
+      await releaseTableAfterEmptyOrder(currentOrder.id);
     }
   };
 
@@ -1540,6 +1647,8 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
 
     setCurrentOrder({ ...order, subtotal, tax_amount: 0, total_amount: total });
 
+    if (items.length === 0) return;
+
     if (table.table_number !== 0 && table.id && !isTempOrderId(order.id)) {
       emitTableStateChanged({
         id: table.id,
@@ -1557,13 +1666,10 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
 
     if (isTempOrderId(order.id)) return;
 
-    if (saveOrderTotalTimerRef.current) clearTimeout(saveOrderTotalTimerRef.current);
-    saveOrderTotalTimerRef.current = setTimeout(() => {
-      void supabase
-        .from('orders')
-        .update({ subtotal, tax_amount: 0, total_amount: total })
-        .eq('id', order.id);
-    }, 400);
+    void supabase
+      .from('orders')
+      .update({ subtotal, tax_amount: 0, total_amount: total })
+      .eq('id', order.id);
   };
 
   const cartSubtotal = useMemo(() =>
@@ -1580,10 +1686,7 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
   );
 
   const calculateTotal = useCallback(() => {
-    const existingSubtotal =
-      existingOrderItems.length > 0
-        ? sumOrderItemsSubtotal(existingOrderItems)
-        : Number(currentOrder?.subtotal) || 0;
+    const existingSubtotal = sumOrderItemsSubtotal(existingOrderItems);
     const subtotal = cartSubtotal + existingSubtotal;
     const taxAmount = 0;
     const percentDiscount = subtotal * (discount / 100);
@@ -1591,7 +1694,7 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
     const discountAmount = percentDiscount + loyaltyDiscount;
     const total = Math.max(0, subtotal - discountAmount);
     return { subtotal, taxAmount, discountAmount, total, percentDiscount, loyaltyDiscount };
-  }, [cartSubtotal, existingOrderItems, currentOrder?.subtotal, discount, loyaltyPayment]);
+  }, [cartSubtotal, existingOrderItems, discount, loyaltyPayment]);
 
   const handleSubmitOrder = async (opts?: { closeWithoutUi?: boolean }) => {
     if (cart.length === 0 || !tenant || !user || submittingRef.current) return;
@@ -2596,7 +2699,9 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
   }, []);
 
   const payButtonBlocked =
-    orderHydrating && existingOrderItems.length === 0 && cart.length === 0;
+    !partialPayActive &&
+    ((orderHydrating && existingOrderItems.length === 0 && cart.length === 0) ||
+      (existingOrderItems.length === 0 && cart.length === 0 && remainingAmount <= 0.009));
 
   const orderLinesSkeleton = (
     <div className="space-y-2 px-3 py-2 min-h-[7.5rem]" aria-hidden>

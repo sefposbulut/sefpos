@@ -332,6 +332,30 @@ export default defineConfig(({ mode, command }) => {
     },
   });
 
+  /** Büyük POS bileşenlerinde HMR fırtınasını debounce et (OrderPanel / TableGrid kasması). */
+  const HEAVY_HMR_SUFFIXES = [
+    '/src/components/OrderPanel.tsx',
+    '/src/components/TableGrid.tsx',
+    '/src/App.tsx',
+    '/src/components/TerminalMode.tsx',
+  ];
+  let heavyHmrDebounce: ReturnType<typeof setTimeout> | null = null;
+  plugins.push({
+    name: 'sefpos-heavy-tsx-hmr-debounce',
+    apply: 'serve',
+    handleHotUpdate(ctx) {
+      const file = ctx.file.replace(/\\/g, '/');
+      if (!HEAVY_HMR_SUFFIXES.some((s) => file.endsWith(s))) return;
+      return new Promise((resolve) => {
+        if (heavyHmrDebounce) clearTimeout(heavyHmrDebounce);
+        heavyHmrDebounce = setTimeout(() => {
+          heavyHmrDebounce = null;
+          resolve(ctx.modules);
+        }, 380);
+      });
+    },
+  });
+
   return {
     define,
     plugins,
