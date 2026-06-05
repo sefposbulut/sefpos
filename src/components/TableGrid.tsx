@@ -136,6 +136,12 @@ interface TableGridProps {
 const naturalSort = (a: TableWithOrder, b: TableWithOrder) =>
   String(a.table_number).localeCompare(String(b.table_number), undefined, { numeric: true, sensitivity: 'base' });
 
+/** Grup sekmeleri + mobil hızlı satış / paket — aynı yükseklik ve padding */
+const TABLE_GROUP_TAB_CLASS =
+  'px-2.5 py-2 md:px-4 md:py-2.5 rounded-lg font-bold whitespace-nowrap transition-all text-[10px] md:text-sm active:scale-[0.98] shrink-0 inline-flex items-center justify-center min-h-[2.25rem] md:min-h-[2.75rem]';
+
+const TABLE_GROUP_TAB_ICON_CLASS = 'w-4 h-4 md:w-[1.125rem] md:h-[1.125rem]';
+
 /** Cache satirini TableGrid icin tipli hale getirir (sadece referans cast) */
 function cachedRowToTableWithOrder(row: TableGridCachedRow): TableWithOrder {
   return row as unknown as TableWithOrder;
@@ -1144,37 +1150,36 @@ export function TableGrid({
       {tableGroups.length > 0 && (
         <div className="bg-white/90 backdrop-blur-sm rounded-xl md:rounded-2xl border border-slate-200/80 shadow-sm p-2 md:p-3 mb-3 md:mb-5">
           <div className="flex items-center gap-2 md:gap-3">
-            <div className="flex items-center gap-1.5 shrink-0">
-              {permissions.can_take_orders && permissions.can_process_payments && onNavigate && isModuleEnabled('quick-sale', tenant as any) && (
-                <button
-                  onClick={() => onNavigate('quick-sale')}
-                  title="Hızlı Satış / Barkod Oku"
-                  aria-label="Hızlı Satış"
-                  className="p-2.5 md:p-2.5 rounded-xl flex items-center justify-center transition-all active:scale-95 bg-orange-600 hover:bg-orange-700 text-white shadow-sm shrink-0"
-                >
-                  <ScanBarcode className="w-5 h-5 md:w-5 md:h-5" strokeWidth={2.25} />
-                </button>
-              )}
-              {showTakeawayButton && isModuleEnabled('takeaway', tenant as any) && (
-                <button
-                  onClick={() => onNavigate ? onNavigate('takeaway') : createTakeawayOrder()}
-                  className="p-2.5 md:p-2.5 rounded-xl flex items-center justify-center transition-all active:scale-95 bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white border-2 border-green-700 shadow-sm shrink-0"
-                  aria-label="Paket Servis"
-                  title="Paket Servis"
-                >
-                  <Truck className="w-5 h-5 md:w-5 md:h-5" strokeWidth={2.2} />
-                </button>
-              )}
-            </div>
-
             <div
               className="flex gap-1 md:gap-1.5 p-1 md:p-1.5 flex-1 min-w-0 rounded-xl bg-slate-100/90 border border-slate-200/70"
               style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch' as any, scrollbarWidth: 'none' }}
             >
+              {permissions.can_take_orders && permissions.can_process_payments && onNavigate && isModuleEnabled('quick-sale', tenant as any) && (
+                <button
+                  type="button"
+                  onClick={() => onNavigate('quick-sale')}
+                  title="Hızlı Satış / Barkod Oku"
+                  aria-label="Hızlı Satış"
+                  className={`${TABLE_GROUP_TAB_CLASS} bg-orange-600 hover:bg-orange-700 text-white shadow-sm border-2 border-orange-700`}
+                >
+                  <ScanBarcode className={TABLE_GROUP_TAB_ICON_CLASS} strokeWidth={2.25} />
+                </button>
+              )}
+              {showTakeawayButton && isModuleEnabled('takeaway', tenant as any) && (
+                <button
+                  type="button"
+                  onClick={() => onNavigate ? onNavigate('takeaway') : createTakeawayOrder()}
+                  className={`${TABLE_GROUP_TAB_CLASS} bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white border-2 border-green-700 shadow-sm`}
+                  aria-label="Paket Servis"
+                  title="Paket Servis"
+                >
+                  <Truck className={TABLE_GROUP_TAB_ICON_CLASS} strokeWidth={2.2} />
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => setSelectedGroup(null)}
-                className={`px-2 py-1.5 md:px-4 md:py-2.5 rounded-lg font-bold whitespace-nowrap transition-all text-[10px] md:text-sm active:scale-[0.98] shrink-0 border-2 ${
+                className={`${TABLE_GROUP_TAB_CLASS} border-2 ${
                   selectedGroup === null
                     ? 'bg-gradient-to-r from-green-500 to-green-600 text-white border-green-700 shadow-md ring-1 ring-green-400/50'
                     : 'bg-gradient-to-r from-green-500 to-green-600 text-white border-green-700 opacity-90 hover:opacity-100'
@@ -1192,8 +1197,9 @@ export function TableGrid({
                 return (
                   <button
                     key={group.id}
+                    type="button"
                     onClick={() => setSelectedGroup(group.id)}
-                    className={`px-3 py-2 md:px-4 md:py-2.5 rounded-lg font-bold whitespace-nowrap transition-all text-xs md:text-sm active:scale-[0.98] shrink-0 ${
+                    className={`${TABLE_GROUP_TAB_CLASS} ${
                       active
                         ? 'text-white shadow-sm'
                         : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
