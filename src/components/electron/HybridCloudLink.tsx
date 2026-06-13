@@ -22,30 +22,58 @@ export function HybridCloudLink({ onLinked, onSkip }: Props) {
     setStatus('Bulut hesabı doğrulanıyor…');
     try {
       const api = (window as any).electronAPI;
-      const resolved = await resolveLoginIdentifier(phone);
-      if (!resolved.ok || !resolved.email) {
-        setError(resolved.message || 'Telefon veya e-posta bulunamadı');
-        setLoading(false);
-        return;
+      const trimmed = phone.trim();
+      let loginEmail: string;
+
+      if (trimmed.includes('@')) {
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
+          setError('Geçersiz e-posta adresi');
+          setLoading(false);
+          return;
+        }
+        loginEmail = trimmed.toLowerCase();
+      } else {
+        const resolved = await resolveLoginIdentifier(phone);
+        if (!resolved.ok || !resolved.email) {
+          setError(resolved.message || 'Telefon veya e-posta bulunamadı');
+          setLoading(false);
+          return;
+        }
+        loginEmail = resolved.email;
       }
 
       const cloud = getCloudSupabaseClient();
       const { data: authData, error: authErr } = await cloud.auth.signInWithPassword({
-        email: resolved.email,
+        email: loginEmail,
         password,
       });
-      if (authErr || !authData.session) {
-        setError(authErr?.message || 'Bulut girişi başarısız');
+      if (authErr) {
+        setError(authErr.message || 'Bulut girişi başarısız');
+        setLoading(false);
+        return;
+      }
+      if (!authData.session?.access_token || !authData.user?.id) {
+        setError('Bulut oturumu oluşturulamadı. İnternet bağlantınızı kontrol edip tekrar deneyin.');
         setLoading(false);
         return;
       }
 
-      const { data: profile } = await cloud
+      await cloud.auth.setSession({
+        access_token: authData.session.access_token,
+        refresh_token: authData.session.refresh_token,
+      });
+
+      const { data: profile, error: profileErr } = await cloud
         .from('profiles')
         .select('id, tenant_id, branch_id, full_name')
         .eq('id', authData.user.id)
         .maybeSingle();
 
+      if (profileErr) {
+        setError('Profil okunamadı: ' + profileErr.message);
+        setLoading(false);
+        return;
+      }
       if (!profile?.tenant_id) {
         setError('Bulut profili veya işletme bulunamadı');
         setLoading(false);

@@ -1,5 +1,6 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { sqlDb, localDb, isSqlServerMode, isLocalMode } from './sqlDb';
+import { isHybridMode } from './hybridMode';
 import { installSupabaseDiagnostics, recordHttpRequest } from './resourceDiagnostics';
 
 const isElectronRuntime = !!(window as any).electronAPI;
@@ -237,7 +238,8 @@ const realSupabase = createClient(supabaseUrl, supabaseAnonKey, {
   },
   global: {
     fetch: (input, init) => {
-      if (isSqlServerMode() || isLocalMode()) {
+      // SQL/yerel modda POS proxy; hibrit modda bulut auth/sync icin ag acik kalir.
+      if (isLocalMode() || (isSqlServerMode() && !isHybridMode())) {
         return Promise.resolve(new Response(JSON.stringify([]), { status: 200, headers: { 'Content-Type': 'application/json' } }));
       }
       const href = sefposRequestHref(input);
@@ -347,9 +349,22 @@ const realSupabase = createClient(supabaseUrl, supabaseAnonKey, {
 
 sefposAuthClientBox.client = realSupabase;
 
-/** Hibrit kurulum: bulut oturumu (SQL proxy dışında). */
-export function getCloudSupabaseClient() {
-  return realSupabase;
+/** Hibrit kurulum / bulut baglantisi — SQL proxy fetch'inden bagimsiz, her zaman gercek ag. */
+let cloudOnlySupabase: SupabaseClient<Database> | null = null;
+export function getCloudSupabaseClient(): SupabaseClient<Database> {
+  if (!cloudOnlySupabase) {
+    cloudOnlySupabase = createClient<Database>(supabaseUrl, supabaseAnonKey, {
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false,
+        detectSessionInUrl: false,
+      },
+      global: {
+        fetch: (input, init) => nativeFetch(input as RequestInfo, init as RequestInit | undefined),
+      },
+    });
+  }
+  return cloudOnlySupabase;
 }
 
 if (typeof window !== 'undefined') {
