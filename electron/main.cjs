@@ -603,6 +603,50 @@ async function syncHybridKasaUserToSql(cfg, dbName, { email, password, sqlTenant
   return { email: loginEmail, userId: admin.user_id };
 }
 
+/** Hibrit baglanti: SQL tenant/branch — admin@shefpos.local girisi gerektirmez. */
+async function resolveSqlTenantForHybrid(cfg, dbName) {
+  const norm = normalizeSqlServerConfig(cfg || loadSettings().sqlServerConfig);
+  if (!norm) throw new Error('SQL Server yapilandirmasi yok');
+  const targetDb = (dbName || norm.database || 'sefpos45').replace(/[^a-zA-Z0-9_]/g, '') || 'sefpos45';
+  await ensureDefaultAdminUser(norm, targetDb, { resetPassword: false });
+  const TYPES = getSqlParamTypes();
+
+  const rows = await runSql(
+    `SELECT TOP 1
+        t.id AS tenant_id,
+        COALESCE(b_main.id, b_any.id) AS branch_id,
+        u.email AS admin_email
+     FROM tenants t
+     INNER JOIN profiles p ON p.tenant_id = t.id
+     INNER JOIN app_users u ON u.id = p.id
+     OUTER APPLY (
+       SELECT TOP 1 id FROM branches bx
+       WHERE bx.tenant_id = t.id AND bx.is_main = 1
+       ORDER BY bx.created_at
+     ) b_main
+     OUTER APPLY (
+       SELECT TOP 1 id FROM branches bx
+       WHERE bx.tenant_id = t.id
+       ORDER BY bx.is_main DESC, bx.created_at
+     ) b_any
+     ORDER BY
+       CASE WHEN u.email = @defaultAdmin THEN 0 WHEN p.role IN (N'owner', N'admin') THEN 1 ELSE 2 END,
+       t.created_at`,
+    { defaultAdmin: { type: TYPES.NVarChar, value: DEFAULT_SQL_ADMIN_EMAIL } },
+    norm,
+    targetDb,
+  );
+  const row = rows?.[0];
+  if (!row?.tenant_id) {
+    throw new Error('SQL isletmesi bulunamadi — once «Test Et + Kur ve Basla» adimini tamamlayin');
+  }
+  return {
+    sqlTenantId: row.tenant_id,
+    sqlBranchId: row.branch_id || null,
+    adminEmail: row.admin_email || DEFAULT_SQL_ADMIN_EMAIL,
+  };
+}
+
 async function performSqlLoginByEmail(email, password) {
   const bcrypt = getBcrypt();
   if (!bcrypt) return { success: false, error: 'bcryptjs paketi yuklenemedi' };
@@ -3283,6 +3327,22 @@ ipcMain.handle('sql-login', async (_, { email, password }) => {
     return await performSqlLoginByEmail(email, password);
   } catch (err) {
     return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('resolve-sql-tenant-for-hybrid', async () => {
+  try {
+    const settings = loadSettings();
+    const cfg = settings.sqlServerConfig;
+    if (!cfg?.host) {
+      return { success: false, error: 'SQL kurulumu tamamlanmamis — once «Test Et + Kur ve Basla» adimini yapin' };
+    }
+    const norm = normalizeSqlServerConfig(cfg);
+    const dbName = norm.database || 'sefpos45';
+    const resolved = await resolveSqlTenantForHybrid(norm, dbName);
+    return { success: true, ...resolved };
+  } catch (err) {
+    return { success: false, error: err.message || 'SQL tenant cozulemedi' };
   }
 });
 

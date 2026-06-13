@@ -89,12 +89,15 @@ export function HybridCloudLink({ onLinked, onSkip }: Props) {
       setStatus('SQL kasa hesabı eşleştiriliyor…');
       let sqlTenantId = '';
       let sqlBranchId = profile.branch_id || '';
-      const sqlLogin = await api?.sqlLogin?.({ email: 'admin@shefpos.local', password: '1234' });
-      if (sqlLogin?.success && sqlLogin.data) {
-        sqlTenantId = sqlLogin.data.tenant_id;
-        sqlBranchId = sqlLogin.data.branch_id || sqlBranchId;
+      const sqlResolved = await api?.resolveSqlTenantForHybrid?.();
+      if (sqlResolved?.success && sqlResolved.sqlTenantId) {
+        sqlTenantId = sqlResolved.sqlTenantId;
+        sqlBranchId = sqlResolved.sqlBranchId || sqlBranchId;
       } else {
-        setError('Önce SQL kurulumu (ADMIN/1234) tamamlanmalı');
+        setError(
+          sqlResolved?.error ||
+            'SQL kurulumu tamamlanmamış. «Veritabanı kurulumu» adımında «Test Et + Kur ve Başla»yı çalıştırın.',
+        );
         setLoading(false);
         return;
       }
