@@ -102,3 +102,75 @@ export async function fetchHybridLinkInfo(): Promise<HybridLinkInfo | null> {
   if (!res?.success || !res.link) return null;
   return res.link as HybridLinkInfo;
 }
+
+function clearAllTableGridSnapshots(): void {
+  try {
+    void import('./tableGridData').then((m) => m.clearAllTableGridSnapshots());
+  } catch {
+    /* ignore */
+  }
+}
+
+let syncTimer: ReturnType<typeof setTimeout> | null = null;
+let syncInFlight = false;
+let syncQueued = false;
+let offlinePending = false;
+
+/** Senkron tamamlandiginda masa izgarasini tazele. */
+export function notifyHybridSyncSuccess(): void {
+  clearAllTableGridSnapshots();
+  window.dispatchEvent(new CustomEvent('sefpos:tables-changed'));
+}
+
+async function executeHybridSync(): Promise<void> {
+  if (!isHybridMode() || !isHybridCloudLinked()) return;
+  if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    offlinePending = true;
+    return;
+  }
+  if (syncInFlight) {
+    syncQueued = true;
+    return;
+  }
+  const api = eApi();
+  if (!api?.hybridSyncNow) return;
+
+  syncInFlight = true;
+  try {
+    const res = await api.hybridSyncNow();
+    if (res?.success) notifyHybridSyncSuccess();
+  } catch {
+    /* ignore */
+  } finally {
+    syncInFlight = false;
+    if (syncQueued) {
+      syncQueued = false;
+      void executeHybridSync();
+    }
+  }
+}
+
+/**
+ * Hibrit: siparis/masa degisince bulut↔SQL aninda esitle.
+ * @param delayMs Birlestirme suresi (varsayilan ~1 kare, ~16ms).
+ */
+export function requestHybridSync(delayMs = 16): void {
+  if (!isHybridMode() || !isHybridCloudLinked()) return;
+  if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    offlinePending = true;
+    return;
+  }
+  if (syncTimer) clearTimeout(syncTimer);
+  syncTimer = setTimeout(() => {
+    syncTimer = null;
+    void executeHybridSync();
+  }, delayMs);
+}
+
+/** Internet geri gelince bekleyen degisiklikleri hemen esitle. */
+export function flushHybridSyncOnReconnect(): void {
+  if (!isHybridMode() || !isHybridCloudLinked()) return;
+  if (typeof navigator !== 'undefined' && !navigator.onLine) return;
+  if (offlinePending) offlinePending = false;
+  requestHybridSync(0);
+}

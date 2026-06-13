@@ -21,6 +21,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   clearHybridLink: () => ipcRenderer.invoke('clear-hybrid-link'),
   hybridImportFromCloud: () => ipcRenderer.invoke('hybrid-import-from-cloud'),
   hybridSyncNow: () => ipcRenderer.invoke('hybrid-sync-now'),
+  getHybridCloudSession: () => ipcRenderer.invoke('get-hybrid-cloud-session'),
   syncHybridKasaUser: (payload) => ipcRenderer.invoke('sync-hybrid-kasa-user', payload),
   hybridKasaLogin: (opts) => ipcRenderer.invoke('hybrid-kasa-login', opts),
   resolveSqlTenantForHybrid: () => ipcRenderer.invoke('resolve-sql-tenant-for-hybrid'),

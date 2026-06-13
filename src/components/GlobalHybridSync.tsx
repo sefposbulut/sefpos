@@ -1,39 +1,79 @@
 import { useEffect, useRef } from 'react';
-import { isHybridCloudLinked, isHybridMode } from '../lib/hybridMode';
-import { clearAllTableGridSnapshots } from '../lib/tableGridData';
+import type { RealtimeChannel } from '@supabase/supabase-js';
+import {
+  flushHybridSyncOnReconnect,
+  isHybridCloudLinked,
+  isHybridMode,
+  requestHybridSync,
+} from '../lib/hybridMode';
+import { getCloudSupabaseClient } from '../lib/supabase';
 
-const SYNC_MS = 60_000;
+/** Yedek periyodik senkron (realtime kacirirsa). */
+const BACKUP_SYNC_MS = 2_000;
 
-/** Hibrit mod: bulut ↔ SQL sipariş senkronu (online iken). */
+/** Hibrit mod: bulut ↔ SQL anlik senkron (online iken). */
 export function GlobalHybridSync() {
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const channelRef = useRef<RealtimeChannel | null>(null);
 
   useEffect(() => {
     if (!isHybridMode() || !isHybridCloudLinked()) return;
     const api = (window as any).electronAPI;
     if (!api?.hybridSyncNow) return;
 
-    const tick = () => {
-      if (!navigator.onLine) return;
-      void api
-        .hybridSyncNow()
-        .then((res: { success?: boolean }) => {
-          if (res?.success) {
-            clearAllTableGridSnapshots();
-            window.dispatchEvent(new CustomEvent('sefpos:tables-changed'));
-          }
-        })
-        .catch(() => {});
+    let cancelled = false;
+
+    const startCloudRealtime = async () => {
+      if (!api.getHybridCloudSession) return;
+      const sess = await api.getHybridCloudSession();
+      if (cancelled || !sess?.success || !sess.accessToken || !sess.cloudTenantId) return;
+
+      const cloud = getCloudSupabaseClient();
+      await cloud.auth.setSession({
+        access_token: sess.accessToken,
+        refresh_token: sess.refreshToken || '',
+      });
+
+      const tenantId = sess.cloudTenantId;
+
+      const ch = cloud
+        .channel(`hybrid-live-${tenantId}`)
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'orders', filter: `tenant_id=eq.${tenantId}` },
+          () => requestHybridSync(0),
+        )
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'order_items', filter: `tenant_id=eq.${tenantId}` },
+          () => requestHybridSync(0),
+        )
+        .on(
+          'postgres_changes',
+          { event: 'UPDATE', schema: 'public', table: 'restaurant_tables', filter: `tenant_id=eq.${tenantId}` },
+          () => requestHybridSync(0),
+        )
+        .subscribe();
+
+      channelRef.current = ch;
     };
 
-    tick();
-    timerRef.current = setInterval(tick, SYNC_MS);
-    const onOnline = () => tick();
+    void startCloudRealtime();
+
+    requestHybridSync(0);
+    timerRef.current = setInterval(() => {
+      if (navigator.onLine) requestHybridSync(0);
+    }, BACKUP_SYNC_MS);
+
+    const onOnline = () => flushHybridSyncOnReconnect();
     window.addEventListener('online', onOnline);
 
     return () => {
+      cancelled = true;
       if (timerRef.current) clearInterval(timerRef.current);
       window.removeEventListener('online', onOnline);
+      void channelRef.current?.unsubscribe();
+      channelRef.current = null;
     };
   }, []);
 

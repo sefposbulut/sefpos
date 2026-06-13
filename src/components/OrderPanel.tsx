@@ -71,6 +71,7 @@ import {
 } from '../lib/paymentLock';
 import { markTableOptimisticallyCleared } from '../lib/tableOptimisticClear';
 import { isModuleEnabled } from '../lib/modules';
+import { requestHybridSync } from '../lib/hybridMode';
 import { loyaltyApplyForOrder, type LoyaltyPaymentSelection } from '../lib/loyalty';
 import { useCurrency } from '../lib/currency';
 
@@ -1283,6 +1284,7 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
       });
 
       dispatchTablesGridReload();
+      requestHybridSync(0);
 
       const branchId = (table as any).branch_id || activeBranch?.id;
       const destFresh = await fetchRestaurantTableWithOrder(
@@ -1958,6 +1960,7 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
         });
         runPrints(orderForTotals);
       }
+      requestHybridSync();
     } catch (error: any) {
       if (!closeWithoutUi) {
         startTransition(() => {
@@ -2313,6 +2316,8 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
     ]).catch((e) => {
       console.error('Sipariş tamamlama (background):', e);
     });
+
+    requestHybridSync(0);
 
     void applyOrderStockMovements(stockOrderId, stockItemsSnapshot).catch((e) => {
       console.warn('Stok hareketi tamamlanamadı:', e);

@@ -5,6 +5,7 @@ import type { CartItem } from '../types/posOrder';
 import type { OrderItemWithProduct } from '../lib/orderOptimistic';
 import { isTempLineId, isTempOrderId } from '../lib/orderOptimistic';
 import { takeWarmOrderItems } from '../lib/orderPanelWarm';
+import { requestHybridSync } from '../lib/hybridMode';
 import type { Database } from '../lib/supabase';
 import { X, Package, ShoppingBag, Home, Bike, User, Phone, MapPin, Clock, Loader2 } from 'lucide-react';
 
@@ -273,6 +274,7 @@ export function TableToPackageTransferModal({
         order: null,
       });
       takeWarmOrderItems(sourceId);
+      requestHybridSync(0);
       onTransferred();
     } catch (e: any) {
       setErr(e?.message || 'Aktarım başarısız.');

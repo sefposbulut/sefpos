@@ -16,11 +16,17 @@ function supabaseAnonKey() {
 
 async function supabaseRest(path, accessToken, { method = 'GET', body } = {}) {
   const url = `${supabaseBaseUrl()}/rest/v1/${path}`;
+  const prefer =
+    method === 'POST'
+      ? 'return=minimal,resolution=merge-duplicates'
+      : method === 'PATCH'
+        ? 'return=minimal'
+        : 'return=representation';
   const headers = {
     apikey: supabaseAnonKey(),
     Authorization: `Bearer ${accessToken}`,
     Accept: 'application/json',
-    Prefer: method === 'POST' ? 'return=minimal,resolution=merge-duplicates' : 'return=representation',
+    Prefer: prefer,
   };
   if (body) headers['Content-Type'] = 'application/json';
   const res = await fetch(url, {
@@ -36,6 +42,38 @@ async function supabaseRest(path, accessToken, { method = 'GET', body } = {}) {
   const ct = res.headers.get('content-type') || '';
   if (!ct.includes('json')) return [];
   return res.json();
+}
+
+async function ensureHybridAccessToken(link, saveSettings) {
+  if (!link?.accessToken) throw new Error('Bulut accessToken yok');
+  const exp = Number(link.expiresAt || 0);
+  if (exp && exp > Math.floor(Date.now() / 1000) + 90) {
+    return link.accessToken;
+  }
+  if (!link.refreshToken) {
+    return link.accessToken;
+  }
+  const url = `${supabaseBaseUrl()}/auth/v1/token?grant_type=refresh_token`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      apikey: supabaseAnonKey(),
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ refresh_token: link.refreshToken }),
+  });
+  if (!res.ok) {
+    throw new Error('Bulut oturumu suresi doldu — Ayarlar → Hibrit → bulutu yeniden baglayin');
+  }
+  const auth = await res.json();
+  const nextLink = {
+    ...link,
+    accessToken: auth.access_token,
+    refreshToken: auth.refresh_token || link.refreshToken,
+    expiresAt: auth.expires_at || null,
+  };
+  saveSettings({ hybridLink: nextLink });
+  return auth.access_token;
 }
 
 async function cloudPasswordSignIn(email, password) {
@@ -319,6 +357,226 @@ async function resolveSqlTableIdForCloudOrder(runSql, TYPES, cfg, dbName, link, 
   return localId || cloudTableId;
 }
 
+async function resolveCloudBranchId(link, sqlBranchId, runSql, TYPES, cfg, dbName, accessToken, cache) {
+  if (!sqlBranchId || sqlBranchId === link.sqlBranchId) return link.cloudBranchId;
+  const key = String(sqlBranchId);
+  if (cache.has(key)) return cache.get(key);
+  const rows = await runSql(
+    `SELECT TOP 1 name FROM branches WHERE id = @id`,
+    { id: { type: TYPES.UniqueIdentifier, value: sqlBranchId } },
+    cfg,
+    dbName,
+  ).catch(() => []);
+  const name = rows?.[0]?.name;
+  if (!name) {
+    cache.set(key, link.cloudBranchId);
+    return link.cloudBranchId;
+  }
+  const encoded = encodeURIComponent(String(name));
+  const cloudRows = await supabaseRest(
+    `branches?tenant_id=eq.${link.cloudTenantId}&name=eq.${encoded}&select=id`,
+    accessToken,
+  ).catch(() => []);
+  const cloudId = cloudRows?.[0]?.id || link.cloudBranchId;
+  cache.set(key, cloudId);
+  return cloudId;
+}
+
+async function resolveCloudTableIdFromSql(runSql, TYPES, cfg, dbName, link, sqlTableId, cloudBranchId, accessToken) {
+  if (!sqlTableId) return null;
+  try {
+    const byId = await supabaseRest(
+      `restaurant_tables?id=eq.${sqlTableId}&select=id`,
+      accessToken,
+    );
+    if (byId?.[0]?.id) return sqlTableId;
+  } catch {
+    /* ignore */
+  }
+  const sqlRows = await runSql(
+    `SELECT TOP 1 table_number FROM restaurant_tables WHERE id = @id`,
+    { id: { type: TYPES.UniqueIdentifier, value: sqlTableId } },
+    cfg,
+    dbName,
+  ).catch(() => []);
+  const num = sqlRows?.[0]?.table_number;
+  if (num == null) return sqlTableId;
+  const numEnc = encodeURIComponent(String(num));
+  const cloudRows = await supabaseRest(
+    `restaurant_tables?tenant_id=eq.${link.cloudTenantId}&branch_id=eq.${cloudBranchId}&table_number=eq.${numEnc}&select=id`,
+    accessToken,
+  ).catch(() => []);
+  return cloudRows?.[0]?.id || sqlTableId;
+}
+
+function sanitizeOrderForCloudPush(order, cloudTenantId, cloudBranchId, cloudTableId) {
+  const payload = { ...order };
+  payload.tenant_id = cloudTenantId;
+  payload.branch_id = cloudBranchId;
+  if (cloudTableId) payload.table_id = cloudTableId;
+  else if (!payload.table_id) payload.table_id = null;
+  if (String(payload.status || '').toLowerCase() === 'open') payload.status = 'active';
+  payload.updated_at = order.updated_at || new Date().toISOString();
+  delete payload.row_version;
+  return payload;
+}
+
+function tsMs(val) {
+  if (!val) return 0;
+  const t = Date.parse(val);
+  return Number.isFinite(t) ? t : 0;
+}
+
+function isNewer(a, b) {
+  return tsMs(a) > tsMs(b);
+}
+
+async function fetchCloudOrderMeta(orderId, accessToken) {
+  if (!orderId) return null;
+  const rows = await supabaseRest(
+    `orders?id=eq.${orderId}&select=id,updated_at,status`,
+    accessToken,
+  ).catch(() => []);
+  return rows?.[0] || null;
+}
+
+async function fetchLocalOrderMeta(runSql, TYPES, cfg, dbName, orderId) {
+  if (!orderId) return null;
+  const rows = await runSql(
+    `SELECT TOP 1 id, updated_at, status FROM orders WHERE id = @id`,
+    { id: { type: TYPES.UniqueIdentifier, value: orderId } },
+    cfg,
+    dbName,
+  ).catch(() => []);
+  return rows?.[0] || null;
+}
+
+function tableActivityMs(status, sessionStart, orderUpdatedAt) {
+  const base = Math.max(tsMs(sessionStart), tsMs(orderUpdatedAt));
+  if (base > 0) return base;
+  return String(status || '').toLowerCase() === 'occupied' ? 1 : 0;
+}
+
+async function pushSingleOrder(order, ctx) {
+  const { link, accessToken, runSql, TYPES, cfg, dbName, branchCache } = ctx;
+  const { cloudTenantId } = link;
+  const cloudBranchId = await resolveCloudBranchId(
+    link,
+    order.branch_id,
+    runSql,
+    TYPES,
+    cfg,
+    dbName,
+    accessToken,
+    branchCache,
+  );
+  const cloudTableId = order.table_id
+    ? await resolveCloudTableIdFromSql(
+        runSql,
+        TYPES,
+        cfg,
+        dbName,
+        link,
+        order.table_id,
+        cloudBranchId,
+        accessToken,
+      )
+    : null;
+  const payload = sanitizeOrderForCloudPush(order, cloudTenantId, cloudBranchId, cloudTableId);
+  await supabaseRest('orders?on_conflict=id', accessToken, { method: 'POST', body: payload });
+  const items = await runSql(
+    `SELECT * FROM order_items WHERE order_id = @oid`,
+    { oid: { type: TYPES.UniqueIdentifier, value: order.id } },
+    cfg,
+    dbName,
+  );
+  for (const item of items || []) {
+    const itemPayload = { ...item, tenant_id: cloudTenantId };
+    delete itemPayload.row_version;
+    await supabaseRest('order_items?on_conflict=id', accessToken, { method: 'POST', body: itemPayload });
+  }
+}
+
+async function pullSingleOrder(order, ctx) {
+  const { link, accessToken, runSql, TYPES, cfg, dbName, pickSqlRow } = ctx;
+  const { sqlTenantId, sqlBranchId } = link;
+  const items = await supabaseRest(
+    `order_items?order_id=eq.${order.id}&select=*`,
+    accessToken,
+  );
+  const sqlTableId = order.table_id
+    ? await resolveSqlTableIdForCloudOrder(runSql, TYPES, cfg, dbName, link, order.table_id, accessToken)
+    : null;
+  await upsertSqlRow(runSql, TYPES, cfg, dbName, 'orders', {
+    ...order,
+    tenant_id: sqlTenantId,
+    branch_id: sqlBranchId,
+    table_id: sqlTableId || order.table_id,
+  }, pickSqlRow);
+  for (const item of items || []) {
+    await upsertSqlRow(runSql, TYPES, cfg, dbName, 'order_items', {
+      ...item,
+      tenant_id: sqlTenantId,
+    }, pickSqlRow);
+  }
+}
+
+async function applyLocalTableFromCloud(localTableId, cloudRow, ctx) {
+  const { link, runSql, TYPES, cfg, dbName } = ctx;
+  const { sqlTenantId } = link;
+  const status = String(cloudRow.status || 'available').toLowerCase();
+  const occupied = status === 'occupied' || status === 'busy';
+  let orderId = cloudRow.current_order_id || null;
+  if (orderId) {
+    const localOrder = await fetchLocalOrderMeta(runSql, TYPES, cfg, dbName, orderId);
+    if (!localOrder) orderId = null;
+  }
+  await runSql(
+    `UPDATE restaurant_tables SET
+       status = @status,
+       current_order_id = @oid,
+       session_start = @sess,
+       payment_locked = @plock
+     WHERE id = @tid AND tenant_id = @tenant`,
+    {
+      status: { type: TYPES.NVarChar, value: occupied && orderId ? 'occupied' : 'available' },
+      oid: { type: TYPES.UniqueIdentifier, value: occupied && orderId ? orderId : null },
+      sess: { type: TYPES.DateTime2, value: occupied ? (cloudRow.session_start || new Date().toISOString()) : null },
+      plock: { type: TYPES.Bit, value: occupied ? !!cloudRow.payment_locked : false },
+      tid: { type: TYPES.UniqueIdentifier, value: localTableId },
+      tenant: { type: TYPES.UniqueIdentifier, value: sqlTenantId },
+    },
+    cfg,
+    dbName,
+  );
+}
+
+async function applyCloudTableFromLocal(cloudTableId, localRow, ctx) {
+  const { accessToken } = ctx;
+  const occupied = String(localRow.status || '').toLowerCase() === 'occupied' && localRow.current_order_id;
+  if (occupied) {
+    await supabaseRest(`restaurant_tables?id=eq.${cloudTableId}`, accessToken, {
+      method: 'PATCH',
+      body: {
+        status: 'occupied',
+        current_order_id: localRow.current_order_id,
+        session_start: localRow.session_start || new Date().toISOString(),
+        payment_locked: !!localRow.payment_locked,
+      },
+    });
+  } else {
+    await supabaseRest(`restaurant_tables?id=eq.${cloudTableId}`, accessToken, {
+      method: 'PATCH',
+      body: {
+        status: 'available',
+        current_order_id: null,
+        session_start: null,
+        payment_locked: false,
+      },
+    });
+  }
+}
+
 async function importCatalogFromCloud({ link, accessToken, runSql, getSqlParamTypes, cfg, dbName, pickSqlRow }) {
   const TYPES = getSqlParamTypes();
   const { cloudTenantId, cloudBranchId, sqlTenantId, sqlBranchId } = link;
@@ -421,104 +679,138 @@ async function importCatalogFromCloud({ link, accessToken, runSql, getSqlParamTy
   return { imported, categories: (categories || []).length, products: (products || []).length, tables: (tables || []).length };
 }
 
-async function pullCloudOrders({ link, accessToken, runSql, getSqlParamTypes, cfg, dbName, sinceIso, pickSqlRow }) {
-  const TYPES = getSqlParamTypes();
-  const { cloudTenantId, cloudBranchId, sqlTenantId, sqlBranchId } = link;
-  let pulled = 0;
-  const since = sinceIso || new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-  const orders = await supabaseRest(
-    `orders?tenant_id=eq.${cloudTenantId}&branch_id=eq.${cloudBranchId}&updated_at=gte.${since}&select=*&order=updated_at.asc`,
-    accessToken,
-  );
-
-  for (const order of orders || []) {
-    const items = await supabaseRest(
-      `order_items?order_id=eq.${order.id}&select=*`,
-      accessToken,
-    );
-    const sqlTableId = order.table_id
-      ? await resolveSqlTableIdForCloudOrder(runSql, TYPES, cfg, dbName, link, order.table_id, accessToken)
-      : null;
-    await upsertSqlRow(runSql, TYPES, cfg, dbName, 'orders', {
-      ...order,
-      tenant_id: sqlTenantId,
-      branch_id: sqlBranchId,
-      table_id: sqlTableId || order.table_id,
-    }, pickSqlRow);
-    for (const item of items || []) {
-      await upsertSqlRow(runSql, TYPES, cfg, dbName, 'order_items', {
-        ...item,
-        tenant_id: sqlTenantId,
-      }, pickSqlRow);
-    }
-    if (order.table_id) {
-      const sqlTableId = await resolveSqlTableIdForCloudOrder(
-        runSql,
-        TYPES,
-        cfg,
-        dbName,
-        link,
-        order.table_id,
-        accessToken,
-      );
-      if (sqlTableId) {
-        await runSql(
-          `UPDATE restaurant_tables SET status = N'occupied', current_order_id = @oid WHERE id = @tid AND tenant_id = @tenant`,
-          {
-            oid: { type: TYPES.UniqueIdentifier, value: order.id },
-            tid: { type: TYPES.UniqueIdentifier, value: sqlTableId },
-            tenant: { type: TYPES.UniqueIdentifier, value: sqlTenantId },
-          },
-          cfg,
-          dbName,
-        ).catch(() => {});
-      }
-    }
-    pulled++;
-  }
-  return { pulled };
-}
-
-async function pushLocalOrders({ link, accessToken, runSql, getSqlParamTypes, cfg, dbName }) {
+async function syncOrdersBidirectional(ctx) {
+  const { link, accessToken, runSql, getSqlParamTypes, cfg, dbName, sinceIso } = ctx;
   const TYPES = getSqlParamTypes();
   const { cloudTenantId, cloudBranchId, sqlTenantId } = link;
   let pushed = 0;
-  const rows = await runSql(
-    `SELECT TOP 40 o.* FROM orders o
+  let pulled = 0;
+  const errors = [];
+  const since = sinceIso || new Date(Date.now() - 72 * 60 * 60 * 1000).toISOString();
+
+  const localRows = await runSql(
+    `SELECT o.* FROM orders o
      WHERE o.tenant_id = @tenant
-       AND o.updated_at >= DATEADD(hour, -48, GETUTCDATE())
+       AND o.updated_at >= DATEADD(hour, -72, GETUTCDATE())
      ORDER BY o.updated_at DESC`,
     { tenant: { type: TYPES.UniqueIdentifier, value: sqlTenantId } },
     cfg,
     dbName,
   ).catch(() => []);
 
-  for (const order of rows || []) {
-    const payload = {
-      ...order,
-      tenant_id: cloudTenantId,
-      branch_id: cloudBranchId,
-    };
-    delete payload.row_version;
+  const cloudRows = await supabaseRest(
+    `orders?tenant_id=eq.${cloudTenantId}&branch_id=eq.${cloudBranchId}&updated_at=gte.${since}&select=*&order=updated_at.asc`,
+    accessToken,
+  ).catch(() => []);
+
+  const byId = new Map();
+  for (const row of localRows || []) byId.set(String(row.id), { local: row });
+  for (const row of cloudRows || []) {
+    const key = String(row.id);
+    const entry = byId.get(key) || {};
+    entry.cloud = row;
+    byId.set(key, entry);
+  }
+
+  for (const { local, cloud } of byId.values()) {
     try {
-      await supabaseRest('orders?on_conflict=id', accessToken, { method: 'POST', body: payload });
-      const items = await runSql(
-        `SELECT * FROM order_items WHERE order_id = @oid`,
-        { oid: { type: TYPES.UniqueIdentifier, value: order.id } },
-        cfg,
-        dbName,
-      );
-      for (const item of items || []) {
-        const itemPayload = { ...item, tenant_id: cloudTenantId };
-        delete itemPayload.row_version;
-        await supabaseRest('order_items?on_conflict=id', accessToken, { method: 'POST', body: itemPayload });
+      if (local && cloud) {
+        if (isNewer(local.updated_at, cloud.updated_at)) {
+          await pushSingleOrder(local, ctx);
+          pushed++;
+        } else if (isNewer(cloud.updated_at, local.updated_at)) {
+          await pullSingleOrder(cloud, ctx);
+          pulled++;
+        }
+      } else if (local) {
+        await pushSingleOrder(local, ctx);
+        pushed++;
+      } else if (cloud) {
+        await pullSingleOrder(cloud, ctx);
+        pulled++;
       }
-      pushed++;
-    } catch {
-      /* RLS veya çakışma — sonraki turda tekrar dene */
+    } catch (err) {
+      errors.push((err.message || String(err)).slice(0, 120));
     }
   }
-  return { pushed };
+  return { pushed, pulled, errors };
+}
+
+async function syncTableStatesBidirectional(ctx) {
+  const { link, accessToken, runSql, getSqlParamTypes, cfg, dbName, branchCache } = ctx;
+  const TYPES = getSqlParamTypes();
+  const { sqlTenantId, sqlBranchId, cloudTenantId, cloudBranchId } = link;
+  let synced = 0;
+  const errors = [];
+
+  const localRows = await runSql(
+    `SELECT rt.id, rt.branch_id, rt.status, rt.current_order_id, rt.session_start, rt.payment_locked, rt.table_number
+     FROM restaurant_tables rt
+     WHERE rt.tenant_id = @tenant AND rt.branch_id = @branch`,
+    {
+      tenant: { type: TYPES.UniqueIdentifier, value: sqlTenantId },
+      branch: { type: TYPES.UniqueIdentifier, value: sqlBranchId },
+    },
+    cfg,
+    dbName,
+  ).catch(() => []);
+
+  const cloudRows = await supabaseRest(
+    `restaurant_tables?tenant_id=eq.${cloudTenantId}&branch_id=eq.${cloudBranchId}&select=id,status,current_order_id,session_start,payment_locked,table_number`,
+    accessToken,
+  ).catch(() => []);
+
+  const cloudByNum = new Map();
+  for (const row of cloudRows || []) cloudByNum.set(String(row.table_number), row);
+
+  for (const local of localRows || []) {
+    try {
+      const cloudRow = cloudByNum.get(String(local.table_number));
+      const cloudTableId = cloudRow?.id || (await resolveCloudTableIdFromSql(
+        runSql,
+        TYPES,
+        cfg,
+        dbName,
+        link,
+        local.id,
+        cloudBranchId,
+        accessToken,
+      ));
+      if (!cloudTableId) continue;
+
+      const localOrderTs = local.current_order_id
+        ? (await fetchLocalOrderMeta(runSql, TYPES, cfg, dbName, local.current_order_id))?.updated_at
+        : null;
+      const cloudOrderTs = cloudRow?.current_order_id
+        ? (await fetchCloudOrderMeta(cloudRow.current_order_id, accessToken))?.updated_at
+        : null;
+      const localVer = tableActivityMs(local.status, local.session_start, localOrderTs);
+      const cloudVer = tableActivityMs(cloudRow?.status, cloudRow?.session_start, cloudOrderTs);
+
+      if (localVer > cloudVer) {
+        await applyCloudTableFromLocal(cloudTableId, local, ctx);
+        synced++;
+      } else if (cloudVer > localVer && cloudRow) {
+        await applyLocalTableFromCloud(local.id, cloudRow, ctx);
+        synced++;
+      }
+    } catch (err) {
+      errors.push((err.message || String(err)).slice(0, 120));
+    }
+  }
+  return { synced, errors };
+}
+
+/** @deprecated use syncOrdersBidirectional */
+async function pullCloudOrders(ctx) {
+  const r = await syncOrdersBidirectional(ctx);
+  return { pulled: r.pulled };
+}
+
+/** @deprecated use syncOrdersBidirectional */
+async function pushLocalOrders(ctx) {
+  const r = await syncOrdersBidirectional(ctx);
+  return { pushed: r.pushed, errors: r.errors };
 }
 
 async function pullWaiterCalls({ link, accessToken, runSql, getSqlParamTypes, cfg, dbName, sinceIso, pickSqlRow }) {
@@ -545,7 +837,7 @@ async function pullWaiterCalls({ link, accessToken, runSql, getSqlParamTypes, cf
   return { pulled };
 }
 
-async function runHybridSyncNow(deps) {
+async function doHybridSyncCycle(deps) {
   const { loadSettings, saveSettings, runSql, getSqlParamTypes, pickSqlRow } = deps;
   const settings = loadSettings();
   const link = settings.hybridLink;
@@ -558,44 +850,98 @@ async function runHybridSyncNow(deps) {
   const dbName = cfg.database || 'sefpos45';
   const sinceIso = link.lastSyncAt || null;
 
-  try {
-    await dedupeRestaurantTablesByNumber(
-      runSql,
-      getSqlParamTypes(),
-      cfg,
-      dbName,
-      link.sqlTenantId,
-      link.sqlBranchId,
-      pickSqlRow,
-    );
-    await dedupeTableGroupsByName(
-      runSql,
-      getSqlParamTypes(),
-      cfg,
-      dbName,
-      link.sqlTenantId,
-      link.sqlBranchId,
-    );
-    const pull = await pullCloudOrders({ link, accessToken, runSql, getSqlParamTypes, cfg, dbName, sinceIso, pickSqlRow });
-    const push = await pushLocalOrders({ link, accessToken, runSql, getSqlParamTypes, cfg, dbName });
-    const calls = await pullWaiterCalls({ link, accessToken, runSql, getSqlParamTypes, cfg, dbName, sinceIso, pickSqlRow });
-    const now = new Date().toISOString();
-    saveSettings({
-      hybridLink: { ...link, lastSyncAt: now, lastSyncError: null },
-    });
-    return {
-      success: true,
-      pulledOrders: pull.pulled,
-      pushedOrders: push.pushed,
-      pulledCalls: calls.pulled,
-      lastSyncAt: now,
-    };
-  } catch (err) {
-    saveSettings({
-      hybridLink: { ...link, lastSyncError: (err.message || '').slice(0, 300) },
-    });
-    return { success: false, error: err.message || 'Senkron hatası' };
+  const freshToken = await ensureHybridAccessToken(link, saveSettings);
+  const branchCache = new Map();
+  const TYPES = getSqlParamTypes();
+  await dedupeRestaurantTablesByNumber(
+    runSql,
+    TYPES,
+    cfg,
+    dbName,
+    link.sqlTenantId,
+    link.sqlBranchId,
+    pickSqlRow,
+  );
+  await dedupeTableGroupsByName(
+    runSql,
+    TYPES,
+    cfg,
+    dbName,
+    link.sqlTenantId,
+    link.sqlBranchId,
+  );
+
+  const ctx = {
+    link,
+    accessToken: freshToken,
+    runSql,
+    getSqlParamTypes,
+    TYPES,
+    cfg,
+    dbName,
+    branchCache,
+    sinceIso,
+    pickSqlRow,
+  };
+
+  const orders = await syncOrdersBidirectional(ctx);
+  const tables = await syncTableStatesBidirectional(ctx);
+  const calls = await pullWaiterCalls({
+    link,
+    accessToken: freshToken,
+    runSql,
+    getSqlParamTypes,
+    cfg,
+    dbName,
+    sinceIso,
+    pickSqlRow,
+  });
+  const now = new Date().toISOString();
+  const syncError = [...orders.errors, ...tables.errors][0] || null;
+  saveSettings({
+    hybridLink: { ...link, lastSyncAt: now, lastSyncError: syncError },
+  });
+  return {
+    success: true,
+    pushedOrders: orders.pushed,
+    pulledOrders: orders.pulled,
+    pushedTables: tables.synced,
+    pulledCalls: calls.pulled,
+    pushedOrdersErrors: orders.errors.length,
+    lastSyncAt: now,
+    warning: syncError,
+  };
+}
+
+let hybridSyncInFlight = null;
+let hybridSyncQueued = false;
+
+async function runHybridSyncNow(deps) {
+  if (hybridSyncInFlight) {
+    hybridSyncQueued = true;
+    return hybridSyncInFlight;
   }
+  const run = async () => {
+    const { loadSettings, saveSettings } = deps;
+    const link = loadSettings().hybridLink;
+    try {
+      return await doHybridSyncCycle(deps);
+    } catch (err) {
+      saveSettings({
+        hybridLink: { ...link, lastSyncError: (err.message || '').slice(0, 300) },
+      });
+      return { success: false, error: err.message || 'Senkron hatası' };
+    } finally {
+      if (hybridSyncQueued) {
+        hybridSyncQueued = false;
+        return run();
+      }
+    }
+  };
+  hybridSyncInFlight = run().finally(() => {
+    hybridSyncInFlight = null;
+  });
+  return hybridSyncInFlight;
 }
 
 function registerHybridSyncIpc(deps) {
@@ -629,6 +975,21 @@ function registerHybridSyncIpc(deps) {
         lastSyncAt: link.lastSyncAt,
         lastSyncError: link.lastSyncError,
       },
+    };
+  });
+
+  ipcMain.handle('get-hybrid-cloud-session', () => {
+    const link = loadSettings().hybridLink || null;
+    if (!link?.accessToken || !link.cloudTenantId) {
+      return { success: false, error: 'Hibrit bulut oturumu yok' };
+    }
+    return {
+      success: true,
+      accessToken: link.accessToken,
+      refreshToken: link.refreshToken || null,
+      expiresAt: link.expiresAt || null,
+      cloudTenantId: link.cloudTenantId,
+      cloudBranchId: link.cloudBranchId || null,
     };
   });
 
