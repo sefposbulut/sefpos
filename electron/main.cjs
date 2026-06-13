@@ -470,9 +470,32 @@ async function ensureDefaultAdminUser(cfg, dbName, { resetPassword = true } = {}
     norm,
     targetDb,
   );
-  const row = existing && existing[0];
+  let row = existing && existing[0];
 
   if (!row?.user_id) {
+    const fallback = await runSql(
+      `SELECT TOP 1 u.id AS user_id, u.email, u.password_hash, p.id AS profile_id, p.tenant_id
+       FROM app_users u
+       INNER JOIN profiles p ON p.id = u.id
+       WHERE p.role IN (N'owner', N'admin')
+       ORDER BY u.created_at`,
+      {},
+      norm,
+      targetDb,
+    );
+    row = fallback?.[0] || row;
+  }
+
+  if (!row?.user_id) {
+    const tenantExists = await runSql(
+      `SELECT TOP 1 id FROM tenants WHERE slug = @slug`,
+      { slug: { type: TYPES.NVarChar, value: 'varsayilan-isletme' } },
+      norm,
+      targetDb,
+    );
+    if (tenantExists?.[0]?.id) {
+      throw new Error('SQL isletmesi mevcut ancak yonetici kullanicisi bulunamadi. Veritabani kurulumunu tekrarlayin.');
+    }
     await runSql(
       `EXEC sp_create_tenant_and_user
          @email=@email,
@@ -512,7 +535,16 @@ async function ensureDefaultAdminUser(cfg, dbName, { resetPassword = true } = {}
       norm,
       targetDb,
     ).catch(() => {});
-  } else if (!row.profile_id) {
+  } else if (!row.profile_id && !row.tenant_id) {
+    const tenantExists = await runSql(
+      `SELECT TOP 1 id FROM tenants WHERE slug = @slug`,
+      { slug: { type: TYPES.NVarChar, value: 'varsayilan-isletme' } },
+      norm,
+      targetDb,
+    );
+    if (tenantExists?.[0]?.id) {
+      throw new Error('SQL isletmesi mevcut ancak kullanici profili eksik. Veritabani kurulumunu tekrarlayin.');
+    }
     await runSql(
       `EXEC sp_create_tenant_and_user
          @email=@email,
@@ -608,10 +640,9 @@ async function resolveSqlTenantForHybrid(cfg, dbName) {
   const norm = normalizeSqlServerConfig(cfg || loadSettings().sqlServerConfig);
   if (!norm) throw new Error('SQL Server yapilandirmasi yok');
   const targetDb = (dbName || norm.database || 'sefpos45').replace(/[^a-zA-Z0-9_]/g, '') || 'sefpos45';
-  await ensureDefaultAdminUser(norm, targetDb, { resetPassword: false });
   const TYPES = getSqlParamTypes();
 
-  const rows = await runSql(
+  const findTenant = async () => runSql(
     `SELECT TOP 1
         t.id AS tenant_id,
         COALESCE(b_main.id, b_any.id) AS branch_id,
@@ -636,7 +667,14 @@ async function resolveSqlTenantForHybrid(cfg, dbName) {
     norm,
     targetDb,
   );
-  const row = rows?.[0];
+
+  let rows = await findTenant();
+  let row = rows?.[0];
+  if (!row?.tenant_id) {
+    await ensureDefaultAdminUser(norm, targetDb, { resetPassword: false });
+    rows = await findTenant();
+    row = rows?.[0];
+  }
   if (!row?.tenant_id) {
     throw new Error('SQL isletmesi bulunamadi — once «Test Et + Kur ve Basla» adimini tamamlayin');
   }
