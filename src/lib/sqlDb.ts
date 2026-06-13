@@ -1,3 +1,5 @@
+import { isHybridMode, isHybridCloudLinked } from './hybridMode';
+
 const eApi = () => (window as any).electronAPI;
 
 export function isSqlServerMode(): boolean {
@@ -590,6 +592,20 @@ export const sqlDb = {
       if (isLocalMode()) {
         const result = await api.localDbLogin({ email, password });
         if (!result.success) return { data: null, error: new Error(result.error || 'Giris basarisiz') };
+        const session = buildSessionFromRecord(result.data);
+        setSqlSession(session);
+        return { data: { session, user: session.user }, error: null };
+      }
+
+      const em = String(email || '').trim().toLowerCase();
+      if (isHybridMode() && isHybridCloudLinked() && !em.endsWith('@shefpos.local')) {
+        let result = await api.sqlLogin({ email: em, password });
+        if (!result.success && typeof navigator !== 'undefined' && navigator.onLine) {
+          result = await api.hybridKasaLogin({ email: em, password });
+        }
+        if (!result.success) {
+          return { data: null, error: new Error(result.error || 'Giris basarisiz') };
+        }
         const session = buildSessionFromRecord(result.data);
         setSqlSession(session);
         return { data: { session, user: session.user }, error: null };

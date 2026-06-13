@@ -21,6 +21,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   clearHybridLink: () => ipcRenderer.invoke('clear-hybrid-link'),
   hybridImportFromCloud: () => ipcRenderer.invoke('hybrid-import-from-cloud'),
   hybridSyncNow: () => ipcRenderer.invoke('hybrid-sync-now'),
+  syncHybridKasaUser: (payload) => ipcRenderer.invoke('sync-hybrid-kasa-user', payload),
+  hybridKasaLogin: (opts) => ipcRenderer.invoke('hybrid-kasa-login', opts),
   postgresTestConnection: (config) => ipcRenderer.invoke('postgres-test-connection', config),
   postgresInitDatabase: (config) => ipcRenderer.invoke('postgres-init-database', config),
   sqlLogin: (opts) => ipcRenderer.invoke('sql-login', opts),

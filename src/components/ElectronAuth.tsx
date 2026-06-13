@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
 import { isSqlServerMode, isLocalMode } from '../lib/sqlDb';
-import { isHybridMode } from '../lib/hybridMode';
+import { isHybridMode, isHybridCloudLinked, fetchHybridLinkInfo } from '../lib/hybridMode';
 import { phoneToAuthEmail } from '../lib/phoneAuthEmail';
 import { resolveLoginIdentifier } from '../lib/panelUserLoginResolve';
 import { Eye, EyeOff, ChevronLeft, User, Lock, Building2, Phone, Bike, Delete, Settings } from 'lucide-react';
@@ -97,18 +97,28 @@ export function ElectronAuth({ onCourierMode, onSwitchMode, currentDbMode }: Ele
   const phoneInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    const savedLogin = localStorage.getItem(REMEMBER_KEY);
-    const savedPassword = localStorage.getItem(REMEMBER_PASSWORD_KEY);
-    if (isHybridMode() && localStorage.getItem('shefpos_hybrid_kasa_hint') === '1') {
-      setLoginValue('ADMIN');
-      setPassword('1234');
-      localStorage.removeItem('shefpos_hybrid_kasa_hint');
-      localStorage.removeItem(REMEMBER_KEY);
-      localStorage.removeItem(REMEMBER_PASSWORD_KEY);
-      return;
-    }
-    if (savedLogin) { setLoginValue(savedLogin); setRemember(true); }
-    if (savedPassword) setPassword(savedPassword);
+    void (async () => {
+      const savedLogin = localStorage.getItem(REMEMBER_KEY);
+      const savedPassword = localStorage.getItem(REMEMBER_PASSWORD_KEY);
+      const hintEmail = localStorage.getItem('shefpos_hybrid_kasa_hint_email');
+      if (hintEmail) {
+        setLoginValue(hintEmail);
+        localStorage.removeItem('shefpos_hybrid_kasa_hint_email');
+        localStorage.removeItem('shefpos_hybrid_kasa_hint');
+        localStorage.removeItem(REMEMBER_KEY);
+        localStorage.removeItem(REMEMBER_PASSWORD_KEY);
+        return;
+      }
+      if (isHybridMode() && isHybridCloudLinked()) {
+        const link = await fetchHybridLinkInfo();
+        if (link?.kasaLoginEmail) {
+          setLoginValue(link.kasaLoginEmail);
+          return;
+        }
+      }
+      if (savedLogin) { setLoginValue(savedLogin); setRemember(true); }
+      if (savedPassword) setPassword(savedPassword);
+    })();
   }, []);
 
   useEffect(() => {
@@ -136,6 +146,12 @@ export function ElectronAuth({ onCourierMode, onSwitchMode, currentDbMode }: Ele
 
     if (isSqlServerMode() || effectiveSqlMode) {
       const api = (window as any).electronAPI;
+      if (isHybridMode() && isHybridCloudLinked()) {
+        if (isPhoneInput(trimmed) || (trimmed.includes('@') && !trimmed.endsWith('@shefpos.local'))) {
+          const resolved = await resolveLoginIdentifier(trimmed.includes('@') ? trimmed : loginValue);
+          if (resolved.ok && resolved.email) return resolved.email.toLowerCase();
+        }
+      }
       if (trimmed.includes('@')) return trimmed.toLowerCase();
       if (isPhoneInput(trimmed)) return phoneToAuthEmail(trimmed);
       const sanitized = trimmed
@@ -199,16 +215,6 @@ export function ElectronAuth({ onCourierMode, onSwitchMode, currentDbMode }: Ele
         email = await resolveEmail(loginValue);
       }
       if (!email) { setError('Kullanıcı bulunamadı'); setLoading(false); return; }
-      if (
-        effectiveSqlMode &&
-        isHybridMode() &&
-        email.includes('@') &&
-        !email.endsWith('@shefpos.local')
-      ) {
-        setError('Kasa girişi bulut hesabı değildir. Kullanıcı: ADMIN, şifre: 1234');
-        setLoading(false);
-        return;
-      }
       let result = await signIn(email, password);
       if (
         cloudMode &&
@@ -511,7 +517,7 @@ export function ElectronAuth({ onCourierMode, onSwitchMode, currentDbMode }: Ele
             {hybridMode && (
               <div className="w-full max-w-sm mb-4 rounded-xl border border-orange-400/40 bg-orange-500/10 px-4 py-3 text-sm text-orange-100">
                 <p className="font-semibold text-orange-50">Hibrit kasa girişi</p>
-                <p className="mt-1 text-orange-100/90">Bulut şifresi kasada geçmez. Giriş: <strong>ADMIN</strong> / <strong>1234</strong></p>
+                <p className="mt-1 text-orange-100/90">Bulut telefon/e-posta ve şifrenizle girin — mobil garson ile aynı hesap.</p>
               </div>
             )}
 
@@ -636,7 +642,7 @@ export function ElectronAuth({ onCourierMode, onSwitchMode, currentDbMode }: Ele
 
             {hybridMode && (
               <p className="text-orange-200/80 text-sm mb-6 text-center max-w-sm">
-                Kasa şifresi: <strong>1234</strong> (bulut şifreniz değil)
+                Bulut şifreniz (mobil garson ile aynı)
               </p>
             )}
 

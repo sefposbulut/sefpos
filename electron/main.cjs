@@ -535,6 +535,120 @@ async function ensureDefaultAdminUser(cfg, dbName, { resetPassword = true } = {}
   return { created: false, email: row.email || DEFAULT_SQL_ADMIN_EMAIL, resetPassword: !!resetPassword };
 }
 
+/** Hibrit: bulut kasa girisi icin SQL admin hesabini bulut e-posta/sifresiyle eslestirir. */
+async function syncHybridKasaUserToSql(cfg, dbName, { email, password, sqlTenantId, sqlBranchId, fullName, tenantName }) {
+  const bcrypt = getBcrypt();
+  if (!bcrypt) throw new Error('bcryptjs paketi yuklenemedi');
+  if (!hasSqlDriver()) throw new Error('SQL baglanti kutuphanesi yuklenemedi');
+  const TYPES = getSqlParamTypes();
+  const norm = cfg || loadSettings().sqlServerConfig;
+  const targetDb = dbName || norm?.database || 'sefpos45';
+  const loginEmail = String(email || '').trim().toLowerCase();
+  if (!loginEmail || !sqlTenantId) throw new Error('E-posta ve SQL tenant zorunlu');
+  const hash = await bcrypt.hash(String(password || ''), 10);
+
+  const admins = await runSql(
+    `SELECT TOP 1 u.id AS user_id
+     FROM app_users u
+     INNER JOIN profiles p ON p.id = u.id
+     WHERE p.tenant_id = @tenant
+     ORDER BY CASE WHEN u.email = @defaultAdmin THEN 0 WHEN p.role IN (N'owner', N'admin') THEN 1 ELSE 2 END, u.created_at`,
+    {
+      tenant: { type: TYPES.UniqueIdentifier, value: sqlTenantId },
+      defaultAdmin: { type: TYPES.NVarChar, value: DEFAULT_SQL_ADMIN_EMAIL },
+    },
+    norm,
+    targetDb,
+  );
+  const admin = admins?.[0];
+  if (!admin?.user_id) throw new Error('SQL kasa kullanicisi bulunamadi');
+
+  await runSql(
+    `UPDATE app_users SET email = @email, password_hash = @password_hash WHERE id = @uid`,
+    {
+      uid: { type: TYPES.UniqueIdentifier, value: admin.user_id },
+      email: { type: TYPES.NVarChar, value: loginEmail },
+      password_hash: { type: TYPES.NVarChar, value: hash },
+    },
+    norm,
+    targetDb,
+  );
+
+  await runSql(
+    `UPDATE profiles SET
+       full_name = COALESCE(@name, full_name),
+       branch_id = COALESCE(@branch, branch_id)
+     WHERE id = @uid`,
+    {
+      uid: { type: TYPES.UniqueIdentifier, value: admin.user_id },
+      name: { type: TYPES.NVarChar, value: fullName || null },
+      branch: sqlBranchId ? { type: TYPES.UniqueIdentifier, value: sqlBranchId } : { type: TYPES.UniqueIdentifier, value: null },
+    },
+    norm,
+    targetDb,
+  ).catch(() => {});
+
+  if (tenantName) {
+    await runSql(
+      `UPDATE tenants SET name = COALESCE(@tname, name), deployment_mode = N'hybrid' WHERE id = @tenant`,
+      {
+        tenant: { type: TYPES.UniqueIdentifier, value: sqlTenantId },
+        tname: { type: TYPES.NVarChar, value: tenantName },
+      },
+      norm,
+      targetDb,
+    ).catch(() => {});
+  }
+
+  return { email: loginEmail, userId: admin.user_id };
+}
+
+async function performSqlLoginByEmail(email, password) {
+  const bcrypt = getBcrypt();
+  if (!bcrypt) return { success: false, error: 'bcryptjs paketi yuklenemedi' };
+  if (!hasSqlDriver()) return { success: false, error: 'SQL baglanti kutuphanesi yuklenemedi' };
+  const TYPES = getSqlParamTypes();
+  const loginEmail = String(email || '').trim().toLowerCase();
+  const rows = await runSql(
+    `EXEC sp_get_user_by_email @email`,
+    { email: { type: TYPES.NVarChar, value: loginEmail } },
+  );
+  const row = rows && rows[0];
+  if (!row) return { success: false, error: 'Kullanici bulunamadi: ' + loginEmail };
+  if (!row.password_hash) return { success: false, error: 'Sifre hash bulunamadi - veritabanini yeniden kurun' };
+  const passwordMatch = await bcrypt.compare(String(password), String(row.password_hash));
+  if (!passwordMatch) return { success: false, error: 'Sifre hatali' };
+  const userRecord = {
+    user_id: row.user_id,
+    email: row.email,
+    profile_id: row.profile_id,
+    tenant_id: row.tenant_id,
+    branch_id: row.branch_id,
+    role_id: row.role_id,
+    full_name: row.full_name,
+    role: row.role,
+    is_super_admin: row.is_super_admin === true || row.is_super_admin === 1,
+    onboarding_completed: row.onboarding_completed === true || row.onboarding_completed === 1,
+    allowed_ips: row.allowed_ips,
+    tenant_name: row.tenant_name,
+    tenant_slug: row.tenant_slug,
+    tenant_address: row.tenant_address || null,
+    tenant_phone: row.tenant_phone || null,
+    subscription_plan: row.subscription_plan || 'professional',
+    subscription_expires_at: row.subscription_expires_at || null,
+    subscription_status: row.subscription_status,
+    deployment_mode: row.deployment_mode,
+    lock_pin: row.lock_pin,
+    require_cancel_reason: row.require_cancel_reason === true || row.require_cancel_reason === 1,
+    tenant_onboarding: row.tenant_onboarding === true || row.tenant_onboarding === 1,
+    printer_settings: row.printer_settings,
+    branch_name: row.branch_name,
+    branch_is_main: row.branch_is_main === true || row.branch_is_main === 1,
+    role_permissions: parseSqlRolePermissions(row.role_permissions) || DEFAULT_PERMISSIONS,
+  };
+  return { success: true, data: userRecord };
+}
+
 async function verifyDefaultAdminLogin(cfg, dbName) {
   const bcrypt = getBcrypt();
   if (!bcrypt || !hasSqlDriver()) {
@@ -3166,51 +3280,70 @@ ipcMain.handle('sql-health-check', async (_, config) => {
 
 ipcMain.handle('sql-login', async (_, { email, password }) => {
   try {
-    const bcrypt = getBcrypt();
-    if (!bcrypt) return { success: false, error: 'bcryptjs paketi yuklenemedi' };
-    if (!hasSqlDriver()) return { success: false, error: 'SQL baglanti kutuphanesi yuklenemedi' };
-    const TYPES = getSqlParamTypes();
-    const loginEmail = String(email || '').trim().toLowerCase();
-    const rows = await runSql(
-      `EXEC sp_get_user_by_email @email`,
-      { email: { type: TYPES.NVarChar, value: loginEmail } },
-    );
-    const row = rows && rows[0];
-    if (!row) return { success: false, error: 'Kullanici bulunamadi: ' + loginEmail };
-    if (!row.password_hash) return { success: false, error: 'Sifre hash bulunamadi - veritabanini yeniden kurun' };
-    const passwordMatch = await bcrypt.compare(String(password), String(row.password_hash));
-    if (!passwordMatch) return { success: false, error: 'Sifre hatali' };
-    const userRecord = {
-      user_id: row.user_id,
-      email: row.email,
-      profile_id: row.profile_id,
-      tenant_id: row.tenant_id,
-      branch_id: row.branch_id,
-      role_id: row.role_id,
-      full_name: row.full_name,
-      role: row.role,
-      is_super_admin: row.is_super_admin === true || row.is_super_admin === 1,
-      onboarding_completed: row.onboarding_completed === true || row.onboarding_completed === 1,
-      allowed_ips: row.allowed_ips,
-      tenant_name: row.tenant_name,
-      tenant_slug: row.tenant_slug,
-      tenant_address: row.tenant_address || null,
-      tenant_phone: row.tenant_phone || null,
-      subscription_plan: row.subscription_plan || 'professional',
-      subscription_expires_at: row.subscription_expires_at || null,
-      subscription_status: row.subscription_status,
-      deployment_mode: row.deployment_mode,
-      lock_pin: row.lock_pin,
-      require_cancel_reason: row.require_cancel_reason === true || row.require_cancel_reason === 1,
-      tenant_onboarding: row.tenant_onboarding === true || row.tenant_onboarding === 1,
-      printer_settings: row.printer_settings,
-      branch_name: row.branch_name,
-      branch_is_main: row.branch_is_main === true || row.branch_is_main === 1,
-      role_permissions: parseSqlRolePermissions(row.role_permissions) || DEFAULT_PERMISSIONS,
-    };
-    return { success: true, data: userRecord };
+    return await performSqlLoginByEmail(email, password);
   } catch (err) {
     return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('sync-hybrid-kasa-user', async (_, payload) => {
+  try {
+    const settings = loadSettings();
+    const cfg = settings.sqlServerConfig;
+    if (!cfg) return { success: false, error: 'SQL yapilandirmasi yok' };
+    const norm = normalizeSqlServerConfig(cfg);
+    const dbName = norm.database || 'sefpos45';
+    const result = await syncHybridKasaUserToSql(norm, dbName, payload || {});
+    const link = settings.hybridLink || {};
+    saveSettings({
+      hybridLink: { ...link, kasaLoginEmail: result.email },
+    });
+    return { success: true, ...result };
+  } catch (err) {
+    return { success: false, error: err.message || 'Senkron hatasi' };
+  }
+});
+
+ipcMain.handle('hybrid-kasa-login', async (_, { email, password }) => {
+  try {
+    const settings = loadSettings();
+    const link = settings.hybridLink;
+    if (!link?.sqlTenantId || !link?.cloudTenantId) {
+      return { success: false, error: 'Once bulut hesabini baglayin' };
+    }
+    const cfg = settings.sqlServerConfig;
+    if (!cfg) return { success: false, error: 'SQL yapilandirmasi yok' };
+    const norm = normalizeSqlServerConfig(cfg);
+    const dbName = norm.database || 'sefpos45';
+    const loginEmail = String(email || '').trim().toLowerCase();
+
+    const { cloudPasswordSignIn, fetchCloudProfile } = require('./hybridSync.cjs');
+    const auth = await cloudPasswordSignIn(loginEmail, password);
+    const profile = await fetchCloudProfile(auth.access_token, auth.user?.id);
+    if (!profile?.tenant_id || profile.tenant_id !== link.cloudTenantId) {
+      return { success: false, error: 'Bu bulut hesabi bagli isletmeye ait degil' };
+    }
+
+    await syncHybridKasaUserToSql(norm, dbName, {
+      email: loginEmail,
+      password,
+      sqlTenantId: link.sqlTenantId,
+      sqlBranchId: link.sqlBranchId || profile.branch_id,
+      fullName: profile.full_name,
+      tenantName: link.tenantName,
+    });
+    saveSettings({
+      hybridLink: {
+        ...link,
+        kasaLoginEmail: loginEmail,
+        accessToken: auth.access_token,
+        refreshToken: auth.refresh_token || link.refreshToken || null,
+        expiresAt: auth.expires_at || link.expiresAt || null,
+      },
+    });
+    return await performSqlLoginByEmail(loginEmail, password);
+  } catch (err) {
+    return { success: false, error: err.message || 'Giris basarisiz' };
   }
 });
 

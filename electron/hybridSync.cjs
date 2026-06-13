@@ -38,6 +38,32 @@ async function supabaseRest(path, accessToken, { method = 'GET', body } = {}) {
   return res.json();
 }
 
+async function cloudPasswordSignIn(email, password) {
+  const url = `${supabaseBaseUrl()}/auth/v1/token?grant_type=password`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      apikey: supabaseAnonKey(),
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ email: String(email || '').trim().toLowerCase(), password: String(password || '') }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    if (/invalid login credentials/i.test(text)) throw new Error('Bulut sifresi hatali');
+    throw new Error(`Bulut girisi basarisiz (${res.status})`);
+  }
+  return res.json();
+}
+
+async function fetchCloudProfile(accessToken, userId) {
+  const rows = await supabaseRest(
+    `profiles?id=eq.${userId}&select=id,tenant_id,branch_id,full_name`,
+    accessToken,
+  );
+  return rows?.[0] || null;
+}
+
 function colType(TYPES, col, val) {
   if (val === null || val === undefined) return TYPES.NVarChar;
   if (typeof val === 'boolean') return TYPES.Bit || TYPES.NVarChar;
@@ -317,6 +343,7 @@ function registerHybridSyncIpc(deps) {
         sqlTenantId: link.sqlTenantId,
         sqlBranchId: link.sqlBranchId,
         tenantName: link.tenantName,
+        kasaLoginEmail: link.kasaLoginEmail || null,
         linkedAt: link.linkedAt,
         lastSyncAt: link.lastSyncAt,
         lastSyncError: link.lastSyncError,
@@ -336,6 +363,7 @@ function registerHybridSyncIpc(deps) {
         sqlTenantId: p.sqlTenantId,
         sqlBranchId: p.sqlBranchId || null,
         tenantName: p.tenantName || null,
+        kasaLoginEmail: p.kasaLoginEmail || null,
         accessToken: p.accessToken,
         refreshToken: p.refreshToken || null,
         expiresAt: p.expiresAt || null,
@@ -386,4 +414,9 @@ function registerHybridSyncIpc(deps) {
   });
 }
 
-module.exports = { registerHybridSyncIpc, runHybridSyncNow };
+module.exports = {
+  registerHybridSyncIpc,
+  runHybridSyncNow,
+  cloudPasswordSignIn,
+  fetchCloudProfile,
+};

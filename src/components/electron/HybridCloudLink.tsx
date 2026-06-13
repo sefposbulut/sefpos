@@ -100,12 +100,27 @@ export function HybridCloudLink({ onLinked, onSkip }: Props) {
       }
 
       setStatus('Bulut bağlantısı kaydediliyor…');
+      const syncRes = await api?.syncHybridKasaUser?.({
+        email: loginEmail,
+        password,
+        sqlTenantId,
+        sqlBranchId: sqlBranchId || profile.branch_id,
+        fullName: profile.full_name,
+        tenantName: tenant?.name || '',
+      });
+      if (!syncRes?.success) {
+        setError(syncRes?.error || 'Kasa hesabı eşleştirilemedi');
+        setLoading(false);
+        return;
+      }
+
       const linkRes = await api?.setHybridLink?.({
         cloudTenantId: profile.tenant_id,
         cloudBranchId: profile.branch_id,
         sqlTenantId,
         sqlBranchId,
         tenantName: tenant?.name || '',
+        kasaLoginEmail: loginEmail,
         accessToken: authData.session.access_token,
         refreshToken: authData.session.refresh_token,
         expiresAt: authData.session.expires_at,
@@ -127,14 +142,15 @@ export function HybridCloudLink({ onLinked, onSkip }: Props) {
       await cloud.auth.signOut();
       markHybridCloudLinked(true);
       try {
-        localStorage.setItem('shefpos_hybrid_kasa_hint', '1');
+        localStorage.setItem('shefpos_hybrid_kasa_hint_email', loginEmail);
+        localStorage.removeItem('shefpos_hybrid_kasa_hint');
         localStorage.removeItem('shefpos_remembered_login');
         localStorage.removeItem('shefpos_remembered_password');
       } catch {
         /* ignore */
       }
       setStatus(
-        `Hazır: ${importRes.products || 0} ürün, ${importRes.tables || 0} masa aktarıldı. Mobil garson bulut hesabınızla çalışır; kasa SQL'de kalır.`,
+        `Hazır: ${importRes.products || 0} ürün, ${importRes.tables || 0} masa aktarıldı. Kasaya bulut şifrenizle girebilirsiniz.`,
       );
       onLinked();
     } catch (e: any) {

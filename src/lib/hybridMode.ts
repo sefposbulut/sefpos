@@ -6,6 +6,7 @@ export interface HybridLinkInfo {
   sqlTenantId: string;
   sqlBranchId: string;
   tenantName?: string;
+  kasaLoginEmail?: string | null;
   linkedAt?: string;
   lastSyncAt?: string | null;
   lastSyncError?: string | null;
