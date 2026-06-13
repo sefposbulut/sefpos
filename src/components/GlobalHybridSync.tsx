@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { isHybridCloudLinked, isHybridMode } from '../lib/hybridMode';
+import { clearAllTableGridSnapshots } from '../lib/tableGridData';
 
 const SYNC_MS = 60_000;
 
@@ -18,6 +19,7 @@ export function GlobalHybridSync() {
         .hybridSyncNow()
         .then((res: { success?: boolean }) => {
           if (res?.success) {
+            clearAllTableGridSnapshots();
             window.dispatchEvent(new CustomEvent('sefpos:tables-changed'));
           }
         })

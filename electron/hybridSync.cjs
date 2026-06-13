@@ -137,7 +137,8 @@ async function findLocalGroupByName(runSql, TYPES, cfg, dbName, tenantId, name) 
   if (!name) return null;
   const rows = await runSql(
     `SELECT TOP 1 id FROM table_groups
-     WHERE tenant_id = @tenant AND name = @name`,
+     WHERE tenant_id = @tenant
+       AND LOWER(LTRIM(RTRIM(name))) = LOWER(LTRIM(RTRIM(@name)))`,
     {
       tenant: { type: TYPES.UniqueIdentifier, value: tenantId },
       name: { type: TYPES.NVarChar, value: String(name) },
@@ -235,6 +236,59 @@ async function dedupeRestaurantTablesByNumber(runSql, TYPES, cfg, dbName, tenant
       ).catch(() => {});
       removed++;
     }
+  }
+  return removed;
+}
+
+async function dedupeTableGroupsByName(runSql, TYPES, cfg, dbName, tenantId, branchId) {
+  const rows = await runSql(
+    `SELECT id, name,
+       (SELECT COUNT(*) FROM restaurant_tables rt
+        WHERE rt.group_id = table_groups.id AND rt.tenant_id = @tenant
+          AND rt.branch_id = @branch) AS table_count
+     FROM table_groups
+     WHERE tenant_id = @tenant
+       AND (branch_id = @branch OR branch_id IS NULL)`,
+    {
+      tenant: { type: TYPES.UniqueIdentifier, value: tenantId },
+      branch: { type: TYPES.UniqueIdentifier, value: branchId },
+    },
+    cfg,
+    dbName,
+  ).catch(() => []);
+  const byNorm = new Map();
+  let removed = 0;
+  for (const row of rows || []) {
+    const norm = String(row.name || '').trim().toLowerCase();
+    if (!norm) continue;
+    const existing = byNorm.get(norm);
+    if (!existing) {
+      byNorm.set(norm, row);
+      continue;
+    }
+    const keep = Number(row.table_count || 0) >= Number(existing.table_count || 0) ? row : existing;
+    const drop = keep.id === row.id ? existing : row;
+    await runSql(
+      `UPDATE restaurant_tables SET group_id = @keep WHERE group_id = @drop AND tenant_id = @tenant`,
+      {
+        keep: { type: TYPES.UniqueIdentifier, value: keep.id },
+        drop: { type: TYPES.UniqueIdentifier, value: drop.id },
+        tenant: { type: TYPES.UniqueIdentifier, value: tenantId },
+      },
+      cfg,
+      dbName,
+    ).catch(() => {});
+    await runSql(
+      `DELETE FROM table_groups WHERE id = @drop AND tenant_id = @tenant`,
+      {
+        drop: { type: TYPES.UniqueIdentifier, value: drop.id },
+        tenant: { type: TYPES.UniqueIdentifier, value: tenantId },
+      },
+      cfg,
+      dbName,
+    ).catch(() => {});
+    byNorm.set(norm, keep);
+    removed++;
   }
   return removed;
 }
@@ -362,6 +416,7 @@ async function importCatalogFromCloud({ link, accessToken, runSql, getSqlParamTy
   }
 
   await dedupeRestaurantTablesByNumber(runSql, TYPES, cfg, dbName, sqlTenantId, sqlBranchId, pickSqlRow);
+  await dedupeTableGroupsByName(runSql, TYPES, cfg, dbName, sqlTenantId, sqlBranchId);
 
   return { imported, categories: (categories || []).length, products: (products || []).length, tables: (tables || []).length };
 }
@@ -512,6 +567,14 @@ async function runHybridSyncNow(deps) {
       link.sqlTenantId,
       link.sqlBranchId,
       pickSqlRow,
+    );
+    await dedupeTableGroupsByName(
+      runSql,
+      getSqlParamTypes(),
+      cfg,
+      dbName,
+      link.sqlTenantId,
+      link.sqlBranchId,
     );
     const pull = await pullCloudOrders({ link, accessToken, runSql, getSqlParamTypes, cfg, dbName, sinceIso, pickSqlRow });
     const push = await pushLocalOrders({ link, accessToken, runSql, getSqlParamTypes, cfg, dbName });

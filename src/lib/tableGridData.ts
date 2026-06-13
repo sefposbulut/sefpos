@@ -60,6 +60,55 @@ export type TableGroupCached = {
   prefix: string | null;
 };
 
+function normalizeTableGroupName(name: string | null | undefined): string {
+  return String(name || '')
+    .trim()
+    .toLocaleLowerCase('tr-TR');
+}
+
+/** Hibrit SQL'de ayni isimli cift gruplari (BAHÇE/bahce, Masalar/MASALAR) tek sekmeye indirir. */
+export function dedupeTableGroupsForDisplay(
+  groups: TableGroupCached[],
+  tables: TableGridCachedRow[],
+): { groups: TableGroupCached[]; tables: TableGridCachedRow[] } {
+  if (groups.length < 2) return { groups, tables };
+
+  const tableCount = (gid: string) =>
+    tables.filter((t) => String(t.group_id || '') === gid).length;
+
+  const canonicalByName = new Map<string, TableGroupCached>();
+  const groupIdRemap = new Map<string, string>();
+
+  for (const g of groups) {
+    const key = normalizeTableGroupName(g.name);
+    if (!key) continue;
+    const existing = canonicalByName.get(key);
+    if (!existing) {
+      canonicalByName.set(key, g);
+      continue;
+    }
+    const keepExisting = tableCount(existing.id) >= tableCount(g.id);
+    const canonical = keepExisting ? existing : g;
+    const duplicate = keepExisting ? g : existing;
+    canonicalByName.set(key, canonical);
+    groupIdRemap.set(duplicate.id, canonical.id);
+  }
+
+  if (groupIdRemap.size === 0) return { groups, tables };
+
+  const remappedTables = tables.map((t) => {
+    const gid = t.group_id ? String(t.group_id) : '';
+    if (!gid || !groupIdRemap.has(gid)) return t;
+    return { ...t, group_id: groupIdRemap.get(gid)! };
+  });
+
+  const dedupedGroups = Array.from(canonicalByName.values()).sort((a, b) =>
+    String(a.name || '').localeCompare(String(b.name || ''), 'tr', { sensitivity: 'base' }),
+  );
+
+  return { groups: dedupedGroups, tables: remappedTables };
+}
+
 export const tableGridRuntimeCache = new Map<
   string,
   { tables: TableGridCachedRow[]; groups: TableGroupCached[] }
@@ -486,10 +535,13 @@ export async function fetchCloudTableGridSnapshot(
       fetchRestaurantTablesForBranch(tenantId, branchId),
     ]);
     mapped.sort(naturalSort);
-    const groups = (groupsRes.data || []) as TableGroupCached[];
-    tableGridRuntimeCache.set(cacheKey, { tables: mapped, groups });
-    persistTableGridSnapshot(cacheKey, { tables: mapped, groups });
-    return { tables: mapped, groups };
+    let groups = (groupsRes.data || []) as TableGroupCached[];
+    const deduped = dedupeTableGroupsForDisplay(groups, mapped);
+    groups = deduped.groups;
+    const finalTables = deduped.tables;
+    tableGridRuntimeCache.set(cacheKey, { tables: finalTables, groups });
+    persistTableGridSnapshot(cacheKey, { tables: finalTables, groups });
+    return { tables: finalTables, groups };
   })();
 
   inflight.set(cacheKey, promise);
