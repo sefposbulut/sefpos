@@ -46,8 +46,9 @@ function colType(TYPES, col, val) {
   return TYPES.NVarChar;
 }
 
-async function upsertSqlRow(runSql, TYPES, cfg, dbName, table, row) {
-  const id = row.id;
+async function upsertSqlRow(runSql, TYPES, cfg, dbName, table, row, pickSqlRow) {
+  const filtered = pickSqlRow ? pickSqlRow(table, row) || {} : row;
+  const id = filtered.id;
   if (!id) return;
   const existing = await runSql(
     `SELECT TOP 1 id FROM [${table}] WHERE id = @id`,
@@ -55,10 +56,10 @@ async function upsertSqlRow(runSql, TYPES, cfg, dbName, table, row) {
     cfg,
     dbName,
   );
-  const cols = Object.keys(row).filter((k) => row[k] !== undefined);
+  const cols = Object.keys(filtered).filter((k) => filtered[k] !== undefined);
   const params = {};
   cols.forEach((c) => {
-    params[c] = { type: colType(TYPES, c, row[c]), value: row[c] ?? null };
+    params[c] = { type: colType(TYPES, c, filtered[c]), value: filtered[c] ?? null };
   });
   if (existing?.[0]?.id) {
     const sets = cols.filter((c) => c !== 'id').map((c) => `[${c}] = @${c}`).join(', ');
@@ -72,7 +73,7 @@ async function upsertSqlRow(runSql, TYPES, cfg, dbName, table, row) {
   }
 }
 
-async function importCatalogFromCloud({ link, accessToken, runSql, getSqlParamTypes, cfg, dbName }) {
+async function importCatalogFromCloud({ link, accessToken, runSql, getSqlParamTypes, cfg, dbName, pickSqlRow }) {
   const TYPES = getSqlParamTypes();
   const { cloudTenantId, cloudBranchId, sqlTenantId, sqlBranchId } = link;
   let imported = 0;
@@ -85,7 +86,7 @@ async function importCatalogFromCloud({ link, accessToken, runSql, getSqlParamTy
     await upsertSqlRow(runSql, TYPES, cfg, dbName, 'categories', {
       ...row,
       tenant_id: sqlTenantId,
-    });
+    }, pickSqlRow);
     imported++;
   }
 
@@ -97,7 +98,7 @@ async function importCatalogFromCloud({ link, accessToken, runSql, getSqlParamTy
     await upsertSqlRow(runSql, TYPES, cfg, dbName, 'products', {
       ...row,
       tenant_id: sqlTenantId,
-    });
+    }, pickSqlRow);
     imported++;
   }
 
@@ -110,7 +111,7 @@ async function importCatalogFromCloud({ link, accessToken, runSql, getSqlParamTy
       ...row,
       tenant_id: sqlTenantId,
       branch_id: row.branch_id ? sqlBranchId : null,
-    });
+    }, pickSqlRow);
     imported++;
   }
 
@@ -123,14 +124,14 @@ async function importCatalogFromCloud({ link, accessToken, runSql, getSqlParamTy
       ...row,
       tenant_id: sqlTenantId,
       branch_id: sqlBranchId,
-    });
+    }, pickSqlRow);
     imported++;
   }
 
   return { imported, categories: (categories || []).length, products: (products || []).length, tables: (tables || []).length };
 }
 
-async function pullCloudOrders({ link, accessToken, runSql, getSqlParamTypes, cfg, dbName, sinceIso }) {
+async function pullCloudOrders({ link, accessToken, runSql, getSqlParamTypes, cfg, dbName, sinceIso, pickSqlRow }) {
   const TYPES = getSqlParamTypes();
   const { cloudTenantId, cloudBranchId, sqlTenantId, sqlBranchId } = link;
   let pulled = 0;
@@ -149,12 +150,12 @@ async function pullCloudOrders({ link, accessToken, runSql, getSqlParamTypes, cf
       ...order,
       tenant_id: sqlTenantId,
       branch_id: sqlBranchId,
-    });
+    }, pickSqlRow);
     for (const item of items || []) {
       await upsertSqlRow(runSql, TYPES, cfg, dbName, 'order_items', {
         ...item,
         tenant_id: sqlTenantId,
-      });
+      }, pickSqlRow);
     }
     if (order.table_id) {
       await runSql(
@@ -215,7 +216,7 @@ async function pushLocalOrders({ link, accessToken, runSql, getSqlParamTypes, cf
   return { pushed };
 }
 
-async function pullWaiterCalls({ link, accessToken, runSql, getSqlParamTypes, cfg, dbName, sinceIso }) {
+async function pullWaiterCalls({ link, accessToken, runSql, getSqlParamTypes, cfg, dbName, sinceIso, pickSqlRow }) {
   const TYPES = getSqlParamTypes();
   const { cloudTenantId, cloudBranchId, sqlTenantId, sqlBranchId } = link;
   const since = sinceIso || new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
@@ -230,7 +231,7 @@ async function pullWaiterCalls({ link, accessToken, runSql, getSqlParamTypes, cf
         ...row,
         tenant_id: sqlTenantId,
         branch_id: sqlBranchId,
-      });
+      }, pickSqlRow);
       pulled++;
     }
   } catch {
@@ -240,7 +241,7 @@ async function pullWaiterCalls({ link, accessToken, runSql, getSqlParamTypes, cf
 }
 
 async function runHybridSyncNow(deps) {
-  const { loadSettings, saveSettings, runSql, getSqlParamTypes } = deps;
+  const { loadSettings, saveSettings, runSql, getSqlParamTypes, pickSqlRow } = deps;
   const settings = loadSettings();
   const link = settings.hybridLink;
   const accessToken = link?.accessToken;
@@ -253,9 +254,9 @@ async function runHybridSyncNow(deps) {
   const sinceIso = link.lastSyncAt || null;
 
   try {
-    const pull = await pullCloudOrders({ link, accessToken, runSql, getSqlParamTypes, cfg, dbName, sinceIso });
+    const pull = await pullCloudOrders({ link, accessToken, runSql, getSqlParamTypes, cfg, dbName, sinceIso, pickSqlRow });
     const push = await pushLocalOrders({ link, accessToken, runSql, getSqlParamTypes, cfg, dbName });
-    const calls = await pullWaiterCalls({ link, accessToken, runSql, getSqlParamTypes, cfg, dbName, sinceIso });
+    const calls = await pullWaiterCalls({ link, accessToken, runSql, getSqlParamTypes, cfg, dbName, sinceIso, pickSqlRow });
     const now = new Date().toISOString();
     saveSettings({
       hybridLink: { ...link, lastSyncAt: now, lastSyncError: null },
@@ -276,7 +277,18 @@ async function runHybridSyncNow(deps) {
 }
 
 function registerHybridSyncIpc(deps) {
-  const { ipcMain, loadSettings, saveSettings, runSql, getSqlParamTypes, writeSecureJson, settingsSecurePath } = deps;
+  const {
+    ipcMain,
+    loadSettings,
+    saveSettings,
+    runSql,
+    getSqlParamTypes,
+    writeSecureJson,
+    settingsSecurePath,
+    pickSqlRow,
+    applySqlSchemaPatches,
+    normalizeSqlServerConfig,
+  } = deps;
 
   ipcMain.handle('get-hybrid-link', () => {
     const link = loadSettings().hybridLink || null;
@@ -335,6 +347,8 @@ function registerHybridSyncIpc(deps) {
     const cfg = settings.sqlServerConfig;
     if (!cfg) return { success: false, error: 'SQL yapılandırması yok' };
     try {
+      const norm = normalizeSqlServerConfig(cfg);
+      await applySqlSchemaPatches(norm);
       const result = await importCatalogFromCloud({
         link,
         accessToken: link.accessToken,
@@ -342,6 +356,7 @@ function registerHybridSyncIpc(deps) {
         getSqlParamTypes,
         cfg,
         dbName: cfg.database || 'sefpos45',
+        pickSqlRow,
       });
       return { success: true, ...result };
     } catch (err) {
@@ -350,7 +365,7 @@ function registerHybridSyncIpc(deps) {
   });
 
   ipcMain.handle('hybrid-sync-now', async () => {
-    return runHybridSyncNow({ loadSettings, saveSettings, runSql, getSqlParamTypes });
+    return runHybridSyncNow({ loadSettings, saveSettings, runSql, getSqlParamTypes, pickSqlRow });
   });
 }
 

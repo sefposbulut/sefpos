@@ -81,6 +81,8 @@ IF COL_LENGTH('categories', 'hugin_vat_department') IS NULL
     ALTER TABLE categories ADD hugin_vat_department INT NOT NULL DEFAULT 1;
 IF COL_LENGTH('categories', 'created_at') IS NULL
     ALTER TABLE categories ADD created_at DATETIME2 NOT NULL DEFAULT GETUTCDATE();
+IF COL_LENGTH('categories', 'image_url') IS NULL
+    ALTER TABLE categories ADD image_url NVARCHAR(1000) NULL;
 GO
 
 IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='products' AND xtype='U')

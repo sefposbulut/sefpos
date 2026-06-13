@@ -171,6 +171,7 @@ CREATE TABLE categories (
     color NVARCHAR(20) DEFAULT '#3B82F6',
     sort_order INT DEFAULT 0,
     display_order INT DEFAULT 0,
+    image_url NVARCHAR(1000),
     hugin_vat_department INT DEFAULT 1,
     created_at DATETIME2 DEFAULT GETDATE()
 );
@@ -1187,6 +1188,8 @@ IF COL_LENGTH('categories', 'vat_rate') IS NULL
     ALTER TABLE categories ADD vat_rate INT NULL;
 IF COL_LENGTH('categories', 'hugin_department_id') IS NULL
     ALTER TABLE categories ADD hugin_department_id INT NULL;
+IF COL_LENGTH('categories', 'image_url') IS NULL
+    ALTER TABLE categories ADD image_url NVARCHAR(1000) NULL;
 IF COL_LENGTH('products', 'scale_enabled') IS NULL
     ALTER TABLE products ADD scale_enabled BIT NOT NULL DEFAULT 0;
 IF COL_LENGTH('order_items', 'paid_quantity') IS NULL

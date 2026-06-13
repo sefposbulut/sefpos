@@ -3456,7 +3456,7 @@ ipcMain.handle('sql-find-profile-by-username', async (_, username) => {
 
 /** INSERT/UPDATE: bilinmeyen kolonlari at (PostgREST fazla alan gonderir, SQL Server reddeder). */
 const SQL_ROW_ALLOWLIST = {
-  categories: ['id', 'tenant_id', 'name', 'color', 'sort_order', 'display_order', 'vat_rate', 'hugin_department_id', 'hugin_vat_department', 'created_at'],
+  categories: ['id', 'tenant_id', 'name', 'color', 'sort_order', 'display_order', 'image_url', 'vat_rate', 'hugin_department_id', 'hugin_vat_department', 'created_at'],
   products: ['id', 'tenant_id', 'category_id', 'name', 'description', 'barcode', 'price', 'cost', 'stock_quantity', 'unit', 'tax_rate', 'is_active', 'is_available', 'image_url', 'printer_name', 'scale_enabled', 'plu_code', 'scale_prefix', 'created_at', 'updated_at'],
   product_variants: ['id', 'tenant_id', 'product_id', 'name', 'price_modifier', 'sort_order', 'is_active', 'created_at', 'updated_at'],
   order_items: ['id', 'order_id', 'tenant_id', 'product_id', 'variant_id', 'quantity', 'unit_price', 'tax_rate', 'discount_amount', 'total_amount', 'notes', 'variant_name', 'status', 'cancellation_reason', 'cancelled_by', 'cancelled_at', 'paid_quantity', 'paid_at', 'created_at'],
@@ -4204,6 +4204,9 @@ registerHybridSyncIpc({
   getSqlParamTypes,
   writeSecureJson,
   settingsSecurePath,
+  pickSqlRow,
+  applySqlSchemaPatches,
+  normalizeSqlServerConfig,
 });
 
 app.whenReady().then(() => {
