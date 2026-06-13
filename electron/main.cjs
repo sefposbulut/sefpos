@@ -4207,6 +4207,7 @@ registerHybridSyncIpc({
   pickSqlRow,
   applySqlSchemaPatches,
   normalizeSqlServerConfig,
+  ensureDefaultAdminUser,
 });
 
 app.whenReady().then(() => {

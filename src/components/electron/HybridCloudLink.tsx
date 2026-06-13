@@ -126,6 +126,13 @@ export function HybridCloudLink({ onLinked, onSkip }: Props) {
 
       await cloud.auth.signOut();
       markHybridCloudLinked(true);
+      try {
+        localStorage.setItem('shefpos_hybrid_kasa_hint', '1');
+        localStorage.removeItem('shefpos_remembered_login');
+        localStorage.removeItem('shefpos_remembered_password');
+      } catch {
+        /* ignore */
+      }
       setStatus(
         `Hazır: ${importRes.products || 0} ürün, ${importRes.tables || 0} masa aktarıldı. Mobil garson bulut hesabınızla çalışır; kasa SQL'de kalır.`,
       );

@@ -762,6 +762,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (event === 'SIGNED_OUT') {
         void (async () => {
           if (cancelled) return;
+          // SQL/yerel modda GoTrue refresh yok; yerel oturumu dogrudan oku.
+          if (isSqlServerMode() || isLocalMode()) {
+            try {
+              const { data: { session: localSession } } = await supabase.auth.getSession();
+              if (cancelled) return;
+              if (localSession?.user) {
+                await applySession(localSession, { force: false });
+              } else {
+                await applySession(null);
+              }
+            } catch {
+              if (!cancelled) await applySession(null);
+            }
+            return;
+          }
           // GoTrue bazen gecici SIGNED_OUT yayinlar (uyku, ag, yarim refresh).
           await new Promise((r) => setTimeout(r, 350));
           try {
@@ -830,6 +845,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         };
       }
       return { error };
+    }
+
+    // SQL/yerel: profil yukleme applySession/loadProfile ile yapilir; bulut kontrolleri atlanir.
+    if (isSqlServerMode() || isLocalMode()) {
+      return { error: null };
     }
 
     if (data.user) {

@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
 import { isSqlServerMode, isLocalMode } from '../lib/sqlDb';
+import { isHybridMode } from '../lib/hybridMode';
 import { phoneToAuthEmail } from '../lib/phoneAuthEmail';
 import { resolveLoginIdentifier } from '../lib/panelUserLoginResolve';
 import { Eye, EyeOff, ChevronLeft, User, Lock, Building2, Phone, Bike, Delete, Settings } from 'lucide-react';
@@ -98,6 +99,14 @@ export function ElectronAuth({ onCourierMode, onSwitchMode, currentDbMode }: Ele
   useEffect(() => {
     const savedLogin = localStorage.getItem(REMEMBER_KEY);
     const savedPassword = localStorage.getItem(REMEMBER_PASSWORD_KEY);
+    if (isHybridMode() && localStorage.getItem('shefpos_hybrid_kasa_hint') === '1') {
+      setLoginValue('ADMIN');
+      setPassword('1234');
+      localStorage.removeItem('shefpos_hybrid_kasa_hint');
+      localStorage.removeItem(REMEMBER_KEY);
+      localStorage.removeItem(REMEMBER_PASSWORD_KEY);
+      return;
+    }
     if (savedLogin) { setLoginValue(savedLogin); setRemember(true); }
     if (savedPassword) setPassword(savedPassword);
   }, []);
@@ -190,6 +199,16 @@ export function ElectronAuth({ onCourierMode, onSwitchMode, currentDbMode }: Ele
         email = await resolveEmail(loginValue);
       }
       if (!email) { setError('Kullanıcı bulunamadı'); setLoading(false); return; }
+      if (
+        effectiveSqlMode &&
+        isHybridMode() &&
+        email.includes('@') &&
+        !email.endsWith('@shefpos.local')
+      ) {
+        setError('Kasa girişi bulut hesabı değildir. Kullanıcı: ADMIN, şifre: 1234');
+        setLoading(false);
+        return;
+      }
       let result = await signIn(email, password);
       if (
         cloudMode &&
@@ -443,6 +462,7 @@ export function ElectronAuth({ onCourierMode, onSwitchMode, currentDbMode }: Ele
   const sqlMode = effectiveSqlMode;
   const localMode = effectiveLocalMode;
   const offlineMode = effectiveOfflineMode;
+  const hybridMode = sqlMode && (currentDbMode === 'hybrid' || isHybridMode());
 
   return (
     <div className="min-h-screen flex" style={{ background: bg }}>
@@ -487,6 +507,13 @@ export function ElectronAuth({ onCourierMode, onSwitchMode, currentDbMode }: Ele
             <p className="text-white/50 text-lg mb-10 text-center">
               {offlineMode ? 'Kullanıcı adınızı girin' : 'Telefon numaranızı girin'}
             </p>
+
+            {hybridMode && (
+              <div className="w-full max-w-sm mb-4 rounded-xl border border-orange-400/40 bg-orange-500/10 px-4 py-3 text-sm text-orange-100">
+                <p className="font-semibold text-orange-50">Hibrit kasa girişi</p>
+                <p className="mt-1 text-orange-100/90">Bulut şifresi kasada geçmez. Giriş: <strong>ADMIN</strong> / <strong>1234</strong></p>
+              </div>
+            )}
 
             <div className="w-full max-w-sm">
               {offlineMode ? (
@@ -606,6 +633,12 @@ export function ElectronAuth({ onCourierMode, onSwitchMode, currentDbMode }: Ele
             <h1 className="text-white text-4xl font-bold mb-2 text-center">Şifre</h1>
             <p className="text-white/50 text-lg mb-3 text-center">{loginValue}</p>
             <p className="text-white/30 text-sm mb-10 text-center">Şifrenizi girin</p>
+
+            {hybridMode && (
+              <p className="text-orange-200/80 text-sm mb-6 text-center max-w-sm">
+                Kasa şifresi: <strong>1234</strong> (bulut şifreniz değil)
+              </p>
+            )}
 
             <div className="w-full max-w-sm">
               {offlineMode ? (

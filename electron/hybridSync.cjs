@@ -303,6 +303,7 @@ function registerHybridSyncIpc(deps) {
     pickSqlRow,
     applySqlSchemaPatches,
     normalizeSqlServerConfig,
+    ensureDefaultAdminUser,
   } = deps;
 
   ipcMain.handle('get-hybrid-link', () => {
@@ -364,6 +365,7 @@ function registerHybridSyncIpc(deps) {
     try {
       const norm = normalizeSqlServerConfig(cfg);
       await applySqlSchemaPatches(norm);
+      await ensureDefaultAdminUser(norm, cfg.database || 'sefpos45', { resetPassword: false });
       const result = await importCatalogFromCloud({
         link,
         accessToken: link.accessToken,

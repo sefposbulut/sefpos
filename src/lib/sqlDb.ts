@@ -644,6 +644,11 @@ export const sqlDb = {
       setSqlSession(null);
     },
 
+    async refreshSession() {
+      const session = getSqlSession();
+      return { data: { session }, error: session ? null : new Error('Oturum yok') };
+    },
+
     async getUser() {
       const session = getSqlSession();
       if (!session) return { data: { user: null }, error: null };
