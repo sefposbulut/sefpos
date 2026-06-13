@@ -46,6 +46,25 @@ function colType(TYPES, col, val) {
   return TYPES.NVarChar;
 }
 
+/** Katalog aktarimi: masa yerlesim bilgisi; canli oturum/siparis SQL'de sifirlanir. */
+function sanitizeRestaurantTableForCatalogImport(row, sqlTenantId, sqlBranchId) {
+  const status = String(row?.status || '').toLowerCase();
+  const normalizedStatus =
+    status === 'occupied' || status === 'busy' || status === 'reserved' ? 'available' : (status || 'available');
+  return {
+    ...row,
+    tenant_id: sqlTenantId,
+    branch_id: sqlBranchId,
+    status: normalizedStatus === 'available' || normalizedStatus === 'reserved' ? normalizedStatus : 'available',
+    current_order_id: null,
+    session_start: null,
+    payment_locked: false,
+    payment_locked_at: null,
+    payment_locked_by_session: null,
+    payment_lock_expires_at: null,
+  };
+}
+
 async function upsertSqlRow(runSql, TYPES, cfg, dbName, table, row, pickSqlRow) {
   const filtered = pickSqlRow ? pickSqlRow(table, row) || {} : row;
   const id = filtered.id;
@@ -120,11 +139,7 @@ async function importCatalogFromCloud({ link, accessToken, runSql, getSqlParamTy
     accessToken,
   );
   for (const row of tables || []) {
-    await upsertSqlRow(runSql, TYPES, cfg, dbName, 'restaurant_tables', {
-      ...row,
-      tenant_id: sqlTenantId,
-      branch_id: sqlBranchId,
-    }, pickSqlRow);
+    await upsertSqlRow(runSql, TYPES, cfg, dbName, 'restaurant_tables', sanitizeRestaurantTableForCatalogImport(row, sqlTenantId, sqlBranchId), pickSqlRow);
     imported++;
   }
 
