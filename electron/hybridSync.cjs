@@ -118,6 +118,153 @@ async function upsertSqlRow(runSql, TYPES, cfg, dbName, table, row, pickSqlRow) 
   }
 }
 
+async function findLocalTableByNumber(runSql, TYPES, cfg, dbName, tenantId, branchId, tableNumber) {
+  const rows = await runSql(
+    `SELECT TOP 1 id FROM restaurant_tables
+     WHERE tenant_id = @tenant AND branch_id = @branch AND table_number = @num`,
+    {
+      tenant: { type: TYPES.UniqueIdentifier, value: tenantId },
+      branch: { type: TYPES.UniqueIdentifier, value: branchId },
+      num: { type: TYPES.NVarChar, value: String(tableNumber) },
+    },
+    cfg,
+    dbName,
+  ).catch(() => []);
+  return rows?.[0]?.id || null;
+}
+
+async function findLocalGroupByName(runSql, TYPES, cfg, dbName, tenantId, name) {
+  if (!name) return null;
+  const rows = await runSql(
+    `SELECT TOP 1 id FROM table_groups
+     WHERE tenant_id = @tenant AND name = @name`,
+    {
+      tenant: { type: TYPES.UniqueIdentifier, value: tenantId },
+      name: { type: TYPES.NVarChar, value: String(name) },
+    },
+    cfg,
+    dbName,
+  ).catch(() => []);
+  return rows?.[0]?.id || null;
+}
+
+/** Yerel masa kaydini bulut id ile birlestir; siparis FK'leri korunur. */
+async function mergeRestaurantTableToCloudId(runSql, TYPES, cfg, dbName, localId, cloudRow, pickSqlRow) {
+  const cloudId = cloudRow.id;
+  if (!localId || !cloudId || localId === cloudId) {
+    await upsertSqlRow(runSql, TYPES, cfg, dbName, 'restaurant_tables', cloudRow, pickSqlRow);
+    return cloudId;
+  }
+  await runSql(
+    `UPDATE orders SET table_id = @cloudId WHERE table_id = @localId`,
+    {
+      cloudId: { type: TYPES.UniqueIdentifier, value: cloudId },
+      localId: { type: TYPES.UniqueIdentifier, value: localId },
+    },
+    cfg,
+    dbName,
+  ).catch(() => {});
+  await runSql(
+    `UPDATE restaurant_tables SET current_order_id = NULL WHERE id = @localId`,
+    { localId: { type: TYPES.UniqueIdentifier, value: localId } },
+    cfg,
+    dbName,
+  ).catch(() => {});
+  await runSql(
+    `DELETE FROM restaurant_tables WHERE id = @localId`,
+    { localId: { type: TYPES.UniqueIdentifier, value: localId } },
+    cfg,
+    dbName,
+  ).catch(() => {});
+  await upsertSqlRow(runSql, TYPES, cfg, dbName, 'restaurant_tables', cloudRow, pickSqlRow);
+  return cloudId;
+}
+
+async function dedupeRestaurantTablesByNumber(runSql, TYPES, cfg, dbName, tenantId, branchId, pickSqlRow) {
+  const dupNumbers = await runSql(
+    `SELECT table_number
+     FROM restaurant_tables
+     WHERE tenant_id = @tenant AND branch_id = @branch
+     GROUP BY table_number
+     HAVING COUNT(*) > 1`,
+    {
+      tenant: { type: TYPES.UniqueIdentifier, value: tenantId },
+      branch: { type: TYPES.UniqueIdentifier, value: branchId },
+    },
+    cfg,
+    dbName,
+  ).catch(() => []);
+  let removed = 0;
+  for (const dup of dupNumbers || []) {
+    const rows = await runSql(
+      `SELECT id, created_at FROM restaurant_tables
+       WHERE tenant_id = @tenant AND branch_id = @branch AND table_number = @num
+       ORDER BY created_at DESC`,
+      {
+        tenant: { type: TYPES.UniqueIdentifier, value: tenantId },
+        branch: { type: TYPES.UniqueIdentifier, value: branchId },
+        num: { type: TYPES.NVarChar, value: String(dup.table_number) },
+      },
+      cfg,
+      dbName,
+    ).catch(() => []);
+    if (!rows || rows.length < 2) continue;
+    const keepId = rows[0].id;
+    for (let i = 1; i < rows.length; i++) {
+      const dropId = rows[i].id;
+      await runSql(
+        `UPDATE orders SET table_id = @keep WHERE table_id = @drop`,
+        {
+          keep: { type: TYPES.UniqueIdentifier, value: keepId },
+          drop: { type: TYPES.UniqueIdentifier, value: dropId },
+        },
+        cfg,
+        dbName,
+      ).catch(() => {});
+      await runSql(
+        `UPDATE restaurant_tables SET current_order_id = NULL WHERE id = @drop`,
+        { drop: { type: TYPES.UniqueIdentifier, value: dropId } },
+        cfg,
+        dbName,
+      ).catch(() => {});
+      await runSql(
+        `DELETE FROM restaurant_tables WHERE id = @drop`,
+        { drop: { type: TYPES.UniqueIdentifier, value: dropId } },
+        cfg,
+        dbName,
+      ).catch(() => {});
+      removed++;
+    }
+  }
+  return removed;
+}
+
+async function resolveSqlTableIdForCloudOrder(runSql, TYPES, cfg, dbName, link, cloudTableId, accessToken) {
+  if (!cloudTableId) return null;
+  const { sqlTenantId, sqlBranchId } = link;
+  const byId = await runSql(
+    `SELECT TOP 1 id FROM restaurant_tables WHERE id = @id`,
+    { id: { type: TYPES.UniqueIdentifier, value: cloudTableId } },
+    cfg,
+    dbName,
+  ).catch(() => []);
+  if (byId?.[0]?.id) return cloudTableId;
+
+  let tableNumber = null;
+  try {
+    const cloudRows = await supabaseRest(
+      `restaurant_tables?id=eq.${cloudTableId}&select=table_number`,
+      accessToken,
+    );
+    tableNumber = cloudRows?.[0]?.table_number;
+  } catch {
+    /* ignore */
+  }
+  if (tableNumber == null) return cloudTableId;
+  const localId = await findLocalTableByNumber(runSql, TYPES, cfg, dbName, sqlTenantId, sqlBranchId, tableNumber);
+  return localId || cloudTableId;
+}
+
 async function importCatalogFromCloud({ link, accessToken, runSql, getSqlParamTypes, cfg, dbName, pickSqlRow }) {
   const TYPES = getSqlParamTypes();
   const { cloudTenantId, cloudBranchId, sqlTenantId, sqlBranchId } = link;
@@ -151,12 +298,41 @@ async function importCatalogFromCloud({ link, accessToken, runSql, getSqlParamTy
     `table_groups?tenant_id=eq.${cloudTenantId}&select=*`,
     accessToken,
   );
+  const groupIdMap = new Map();
   for (const row of groups || []) {
-    await upsertSqlRow(runSql, TYPES, cfg, dbName, 'table_groups', {
+    const localGroupId = await findLocalGroupByName(runSql, TYPES, cfg, dbName, sqlTenantId, row.name);
+    const targetGroupId = localGroupId && localGroupId !== row.id ? localGroupId : row.id;
+    groupIdMap.set(row.id, targetGroupId);
+    const groupRow = {
       ...row,
+      id: targetGroupId,
       tenant_id: sqlTenantId,
       branch_id: row.branch_id ? sqlBranchId : null,
-    }, pickSqlRow);
+    };
+    if (localGroupId && localGroupId !== row.id) {
+      await upsertSqlRow(runSql, TYPES, cfg, dbName, 'table_groups', groupRow, pickSqlRow);
+      await runSql(
+        `UPDATE restaurant_tables SET group_id = @target WHERE group_id = @old AND tenant_id = @tenant`,
+        {
+          target: { type: TYPES.UniqueIdentifier, value: targetGroupId },
+          old: { type: TYPES.UniqueIdentifier, value: row.id },
+          tenant: { type: TYPES.UniqueIdentifier, value: sqlTenantId },
+        },
+        cfg,
+        dbName,
+      ).catch(() => {});
+      await runSql(
+        `DELETE FROM table_groups WHERE id = @old AND tenant_id = @tenant`,
+        {
+          old: { type: TYPES.UniqueIdentifier, value: row.id },
+          tenant: { type: TYPES.UniqueIdentifier, value: sqlTenantId },
+        },
+        cfg,
+        dbName,
+      ).catch(() => {});
+    } else {
+      await upsertSqlRow(runSql, TYPES, cfg, dbName, 'table_groups', groupRow, pickSqlRow);
+    }
     imported++;
   }
 
@@ -165,9 +341,27 @@ async function importCatalogFromCloud({ link, accessToken, runSql, getSqlParamTy
     accessToken,
   );
   for (const row of tables || []) {
-    await upsertSqlRow(runSql, TYPES, cfg, dbName, 'restaurant_tables', sanitizeRestaurantTableForCatalogImport(row, sqlTenantId, sqlBranchId), pickSqlRow);
+    const mappedGroupId = row.group_id ? (groupIdMap.get(row.group_id) || row.group_id) : null;
+    const cloudRow = sanitizeRestaurantTableForCatalogImport(row, sqlTenantId, sqlBranchId);
+    if (mappedGroupId) cloudRow.group_id = mappedGroupId;
+    const localId = await findLocalTableByNumber(
+      runSql,
+      TYPES,
+      cfg,
+      dbName,
+      sqlTenantId,
+      sqlBranchId,
+      row.table_number,
+    );
+    if (localId && localId !== cloudRow.id) {
+      await mergeRestaurantTableToCloudId(runSql, TYPES, cfg, dbName, localId, cloudRow, pickSqlRow);
+    } else {
+      await upsertSqlRow(runSql, TYPES, cfg, dbName, 'restaurant_tables', cloudRow, pickSqlRow);
+    }
     imported++;
   }
+
+  await dedupeRestaurantTablesByNumber(runSql, TYPES, cfg, dbName, sqlTenantId, sqlBranchId, pickSqlRow);
 
   return { imported, categories: (categories || []).length, products: (products || []).length, tables: (tables || []).length };
 }
@@ -187,10 +381,14 @@ async function pullCloudOrders({ link, accessToken, runSql, getSqlParamTypes, cf
       `order_items?order_id=eq.${order.id}&select=*`,
       accessToken,
     );
+    const sqlTableId = order.table_id
+      ? await resolveSqlTableIdForCloudOrder(runSql, TYPES, cfg, dbName, link, order.table_id, accessToken)
+      : null;
     await upsertSqlRow(runSql, TYPES, cfg, dbName, 'orders', {
       ...order,
       tenant_id: sqlTenantId,
       branch_id: sqlBranchId,
+      table_id: sqlTableId || order.table_id,
     }, pickSqlRow);
     for (const item of items || []) {
       await upsertSqlRow(runSql, TYPES, cfg, dbName, 'order_items', {
@@ -199,16 +397,27 @@ async function pullCloudOrders({ link, accessToken, runSql, getSqlParamTypes, cf
       }, pickSqlRow);
     }
     if (order.table_id) {
-      await runSql(
-        `UPDATE restaurant_tables SET status = N'busy', current_order_id = @oid WHERE id = @tid AND tenant_id = @tenant`,
-        {
-          oid: { type: TYPES.UniqueIdentifier, value: order.id },
-          tid: { type: TYPES.UniqueIdentifier, value: order.table_id },
-          tenant: { type: TYPES.UniqueIdentifier, value: sqlTenantId },
-        },
+      const sqlTableId = await resolveSqlTableIdForCloudOrder(
+        runSql,
+        TYPES,
         cfg,
         dbName,
-      ).catch(() => {});
+        link,
+        order.table_id,
+        accessToken,
+      );
+      if (sqlTableId) {
+        await runSql(
+          `UPDATE restaurant_tables SET status = N'occupied', current_order_id = @oid WHERE id = @tid AND tenant_id = @tenant`,
+          {
+            oid: { type: TYPES.UniqueIdentifier, value: order.id },
+            tid: { type: TYPES.UniqueIdentifier, value: sqlTableId },
+            tenant: { type: TYPES.UniqueIdentifier, value: sqlTenantId },
+          },
+          cfg,
+          dbName,
+        ).catch(() => {});
+      }
     }
     pulled++;
   }
@@ -295,6 +504,15 @@ async function runHybridSyncNow(deps) {
   const sinceIso = link.lastSyncAt || null;
 
   try {
+    await dedupeRestaurantTablesByNumber(
+      runSql,
+      getSqlParamTypes(),
+      cfg,
+      dbName,
+      link.sqlTenantId,
+      link.sqlBranchId,
+      pickSqlRow,
+    );
     const pull = await pullCloudOrders({ link, accessToken, runSql, getSqlParamTypes, cfg, dbName, sinceIso, pickSqlRow });
     const push = await pushLocalOrders({ link, accessToken, runSql, getSqlParamTypes, cfg, dbName });
     const calls = await pullWaiterCalls({ link, accessToken, runSql, getSqlParamTypes, cfg, dbName, sinceIso, pickSqlRow });

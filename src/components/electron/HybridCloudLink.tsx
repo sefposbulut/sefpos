@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Cloud, Link2, Loader2, CheckCircle2, AlertCircle } from 'lucide-react';
 import { getCloudSupabaseClient } from '../../lib/supabase';
 import { resolveLoginIdentifier } from '../../lib/panelUserLoginResolve';
-import { markHybridCloudLinked } from '../../lib/hybridMode';
+import { markHybridSetupComplete } from '../../lib/hybridMode';
 
 type Props = {
   onLinked: () => void;
@@ -143,7 +143,7 @@ export function HybridCloudLink({ onLinked, onSkip }: Props) {
       }
 
       await cloud.auth.signOut();
-      markHybridCloudLinked(true);
+      markHybridSetupComplete();
       try {
         localStorage.setItem('shefpos_hybrid_kasa_hint_email', loginEmail);
         localStorage.removeItem('shefpos_hybrid_kasa_hint');

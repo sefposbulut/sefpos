@@ -14,7 +14,14 @@ export function GlobalHybridSync() {
 
     const tick = () => {
       if (!navigator.onLine) return;
-      void api.hybridSyncNow().catch(() => {});
+      void api
+        .hybridSyncNow()
+        .then((res: { success?: boolean }) => {
+          if (res?.success) {
+            window.dispatchEvent(new CustomEvent('sefpos:tables-changed'));
+          }
+        })
+        .catch(() => {});
     };
 
     tick();

@@ -38,6 +38,52 @@ export function markHybridCloudLinked(linked: boolean): void {
   }
 }
 
+const SQL_SETUP_KEY = 'shefpos_sql_setup_complete';
+
+/** SQL / hibrit kurulum sihirbazı bir kez tamamlandı — uygulama açılışında tekrar sorma. */
+export function markSqlSetupComplete(): void {
+  try {
+    localStorage.setItem(SQL_SETUP_KEY, 'true');
+  } catch {
+    /* ignore */
+  }
+}
+
+export function isSqlSetupCompleteFlag(): boolean {
+  try {
+    return localStorage.getItem(SQL_SETUP_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+export function markHybridSetupComplete(): void {
+  markSqlSetupComplete();
+  markHybridCloudLinked(true);
+}
+
+/** Electron: SQL yapılandırması veya hibrit bağlantı kayıtlı mı? */
+export async function isElectronSqlReady(): Promise<boolean> {
+  const api = eApi();
+  if (!api?.isElectron) return false;
+  if (isSqlSetupCompleteFlag() || isHybridCloudLinked()) return true;
+  try {
+    const cfg = await api.getSqlServerConfig?.();
+    if (cfg?.host && cfg?.username) {
+      markSqlSetupComplete();
+      return true;
+    }
+  } catch {
+    /* ignore */
+  }
+  return false;
+}
+
+export function isElectronSqlReadySync(): boolean {
+  if (!eApi()?.isElectron) return false;
+  return isSqlSetupCompleteFlag() || isHybridCloudLinked();
+}
+
 export async function fetchHybridLinkInfo(): Promise<HybridLinkInfo | null> {
   const api = eApi();
   if (!api?.getHybridLink) return null;

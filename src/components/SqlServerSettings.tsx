@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Server, Save, Eye, EyeOff, CheckCircle, AlertCircle, ArrowLeft, RefreshCw, X, Download } from 'lucide-react';
+import { markSqlSetupComplete } from '../lib/hybridMode';
 
 export interface SqlServerConfig {
   host: string;
@@ -358,10 +359,12 @@ function SqlServerForm({ onSave, onBack, onClose, showBack = true, inline = fals
 
     try {
       if (api?.setDbMode) {
-        await api.setDbMode('sqlserver');
-        localStorage.setItem('dbMode', 'sqlserver');
-        setActiveMode('sqlserver');
+        const mode = activeMode === 'hybrid' ? 'hybrid' : 'sqlserver';
+        await api.setDbMode(mode);
+        localStorage.setItem('dbMode', mode);
+        setActiveMode(mode);
       }
+      markSqlSetupComplete();
       if (companyName.trim()) await saveCompanyProfile();
       setSaved(true);
       onSave?.(config);

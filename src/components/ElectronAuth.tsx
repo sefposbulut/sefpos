@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
-import { isSqlServerMode, isLocalMode } from '../lib/sqlDb';
 import { isHybridMode, isHybridCloudLinked, fetchHybridLinkInfo } from '../lib/hybridMode';
 import { phoneToAuthEmail } from '../lib/phoneAuthEmail';
 import { resolveLoginIdentifier } from '../lib/panelUserLoginResolve';
@@ -68,9 +67,17 @@ interface ElectronAuthProps {
 }
 
 export function ElectronAuth({ onCourierMode, onSwitchMode, currentDbMode }: ElectronAuthProps) {
+  const storedDbMode = (() => {
+    try {
+      return localStorage.getItem('dbMode') as ElectronAuthProps['currentDbMode'];
+    } catch {
+      return null;
+    }
+  })();
+  const resolvedDbMode = currentDbMode ?? storedDbMode;
   const effectiveSqlMode =
-    currentDbMode === 'sqlserver' || currentDbMode === 'hybrid' || currentDbMode === 'postgres' || isSqlServerMode();
-  const effectiveLocalMode = currentDbMode === 'local' || isLocalMode();
+    resolvedDbMode === 'sqlserver' || resolvedDbMode === 'hybrid' || resolvedDbMode === 'postgres';
+  const effectiveLocalMode = resolvedDbMode === 'local';
   const effectiveOfflineMode = effectiveSqlMode || effectiveLocalMode;
 
   const [view, setView] = useState<'login' | 'register' | 'courier'>('login');
@@ -138,13 +145,13 @@ export function ElectronAuth({ onCourierMode, onSwitchMode, currentDbMode }: Ele
   const resolveEmail = async (val: string): Promise<string | null> => {
     const trimmed = val.trim();
 
-    if (isLocalMode() || effectiveLocalMode) {
+    if (effectiveLocalMode) {
       if (trimmed.includes('@')) return trimmed.toLowerCase();
       const sanitized = trimmed.toLowerCase().replace(/[^a-z0-9._-]/g, '');
       return `${sanitized}@local.shefpos`;
     }
 
-    if (isSqlServerMode() || effectiveSqlMode) {
+    if (effectiveSqlMode) {
       const api = (window as any).electronAPI;
       if (isHybridMode() && isHybridCloudLinked()) {
         if (isPhoneInput(trimmed) || (trimmed.includes('@') && !trimmed.endsWith('@shefpos.local'))) {
@@ -189,7 +196,7 @@ export function ElectronAuth({ onCourierMode, onSwitchMode, currentDbMode }: Ele
     try {
       let email: string | null = null;
       const trimmed = loginValue.trim().toLowerCase();
-      const cloudMode = !effectiveSqlMode && !effectiveLocalMode;
+      const cloudMode = resolvedDbMode === 'cloud' || (!effectiveSqlMode && !effectiveLocalMode);
       if (cloudMode) {
         if (trimmed === ADMIN_LOGIN_EMAIL || trimmed === ADMIN_LOGIN_EMAIL_LEGACY || trimmed === TEST_LOGIN_EMAIL) {
           email = ADMIN_LOGIN_EMAIL;

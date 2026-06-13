@@ -15,6 +15,7 @@ import { SqlServerSettings } from '../SqlServerSettings';
 import { ConnectionModeBadge } from './ConnectionModeBadge';
 import { getConnectionModeDisplay } from '../../lib/connectionMode';
 
+import { markSqlSetupComplete } from '../../lib/hybridMode';
 import { HybridCloudLink } from './HybridCloudLink';
 
 export interface SqlServerDetectResult {
@@ -122,6 +123,7 @@ export function ElectronSetupWizard({
   };
 
   const handleSqlSetupDone = () => {
+    markSqlSetupComplete();
     const mode = selectedMode === 'hybrid' ? 'hybrid' : 'sqlserver';
     localStorage.setItem('dbMode', mode);
     if (selectedMode === 'hybrid') {
@@ -132,6 +134,7 @@ export function ElectronSetupWizard({
   };
 
   const handleCloudLinkDone = () => {
+    markSqlSetupComplete();
     onComplete('hybrid');
   };
 
@@ -349,7 +352,10 @@ export function ElectronSetupWizard({
           {step === 'cloud-link' && (
             <HybridCloudLink
               onLinked={handleCloudLinkDone}
-              onSkip={() => onComplete('hybrid')}
+              onSkip={() => {
+                markSqlSetupComplete();
+                onComplete('hybrid');
+              }}
             />
           )}
 

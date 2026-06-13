@@ -51,6 +51,12 @@ import { useUiPrefs, setHeaderHidden } from './lib/uiPrefs';
 import { Maximize2, Menu as MenuIcon } from 'lucide-react';
 import { Database, supabase } from './lib/supabase';
 import { isSqlServerMode, isLocalMode, isHybridMode, persistElectronDbMode } from './lib/sqlDb';
+import {
+  isElectronSqlReady,
+  isElectronSqlReadySync,
+  isHybridCloudLinked,
+  markSqlSetupComplete,
+} from './lib/hybridMode';
 import { isSqlOnlineOnlyPage, sqlOnlineOnlyPageMessage } from './lib/sqlServerCompat';
 import { queryCache } from './lib/queryCache';
 import { SystemNotificationContainer } from './components/SystemNotificationBanner';
@@ -214,7 +220,7 @@ export default function App() {
   useEffect(() => {
     setDiagnosticsMountedPages([...mountedPagesRef.current]);
   }, [currentPage, mountedPagesVersion]);
-  const [sqlServerConfigured, setSqlServerConfigured] = useState(false);
+  const [sqlServerConfigured, setSqlServerConfigured] = useState(() => isElectronSqlReadySync());
   const [showSqlServerSettings, setShowSqlServerSettings] = useState(false);
   // /login veya AYKA_ADMIN_PATH açıkken Auth tam sayfa (modal değil).
   // DEV ortamında localhost / kökünde de doğrudan login’e yönlendirilir.
@@ -305,8 +311,11 @@ export default function App() {
           persistElectronDbMode('cloud');
           setDbMode('cloud');
         } else if (mode === null) {
-          const saved = localStorage.getItem('dbMode') as 'cloud' | 'sqlserver' | null;
-          if (saved === 'sqlserver' || saved === 'cloud') setDbMode(saved);
+          const saved = localStorage.getItem('dbMode') as 'cloud' | 'sqlserver' | 'hybrid' | null;
+          if (saved === 'sqlserver' || saved === 'cloud' || saved === 'hybrid') {
+            setDbMode(saved);
+            persistElectronDbMode(saved);
+          }
         }
         const effectiveMode =
           mode === 'sqlserver' || mode === 'hybrid'
@@ -314,10 +323,9 @@ export default function App() {
             : (localStorage.getItem('dbMode') as 'cloud' | 'sqlserver' | 'hybrid' | null);
         if (effectiveMode === 'sqlserver' || effectiveMode === 'hybrid') {
           try {
-            const cfg = await api.getSqlServerConfig?.();
-            const isConfigured = !!(cfg?.host && cfg?.username);
-            setSqlServerConfigured(isConfigured);
-            if (!isConfigured) setShowSqlServerSettings(true);
+            const ready = await isElectronSqlReady();
+            setSqlServerConfigured(ready);
+            if (!ready && !isHybridCloudLinked()) setShowSqlServerSettings(true);
           } catch {
             /* ignore */
           }
@@ -461,8 +469,9 @@ export default function App() {
       const target = mode === 'hybrid' ? 'hybrid' : 'sqlserver';
       localStorage.setItem('dbMode', target);
       setDbMode(target);
-      setSqlServerConfigured(false);
-      setShowSqlServerSettings(true);
+      const ready = await isElectronSqlReady();
+      setSqlServerConfigured(ready);
+      if (!ready) setShowSqlServerSettings(true);
       return;
     }
     localStorage.removeItem('dbMode');
@@ -515,12 +524,14 @@ export default function App() {
         onComplete={(mode) => {
           if (mode === 'sqlserver' || mode === 'hybrid') {
             setDbMode(mode);
+            markSqlSetupComplete();
             setSqlServerConfigured(true);
             setShowSqlServerSettings(false);
           } else if (mode === 'local') {
             setDbMode('cloud');
           } else {
             setDbMode('cloud');
+            persistElectronDbMode('cloud');
           }
         }}
       />
@@ -539,10 +550,12 @@ export default function App() {
           api?.setDbMode(null);
         }}
         onSave={() => {
+          markSqlSetupComplete();
           setSqlServerConfigured(true);
           setShowSqlServerSettings(false);
         }}
         onClose={() => {
+          markSqlSetupComplete();
           setSqlServerConfigured(true);
           setShowSqlServerSettings(false);
         }}
