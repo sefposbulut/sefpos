@@ -499,7 +499,7 @@ export function ElectronDesktopShell() {
 
       {!toastDismissed && updateState.kind !== 'idle' && (
         <div
-          className="fixed z-[60] right-3 md:right-5 bottom-12 md:bottom-14 max-w-[320px] rounded-xl border border-orange-300 bg-white/95 backdrop-blur shadow-2xl overflow-hidden"
+          className="fixed z-[99990] right-3 md:right-5 bottom-12 md:bottom-14 max-w-[320px] rounded-xl border border-orange-300 bg-white/95 backdrop-blur shadow-2xl overflow-hidden"
           style={{ fontFamily: 'inherit' }}
         >
           <div className="flex items-start gap-2 p-3">

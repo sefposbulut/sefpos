@@ -2,6 +2,15 @@ import { isHybridMode, isHybridCloudLinked } from './hybridMode';
 
 const eApi = () => (window as any).electronAPI;
 
+function isCloudLoginEmail(email: string): boolean {
+  const em = String(email || '').trim().toLowerCase();
+  return (
+    em.includes('@') &&
+    !em.endsWith('@shefpos.local') &&
+    !em.endsWith('@local.shefpos')
+  );
+}
+
 export function isSqlServerMode(): boolean {
   if (!(eApi()?.isElectron)) return false;
   try {
@@ -609,6 +618,19 @@ export const sqlDb = {
         const session = buildSessionFromRecord(result.data);
         setSqlSession(session);
         return { data: { session, user: session.user }, error: null };
+      }
+
+      /** SQL/hibrit kurulum yarım kaldıysa bulut e-postası SQL'e gitmesin — otomatik bulut modu. */
+      if (isCloudLoginEmail(em)) {
+        try {
+          localStorage.setItem('dbMode', 'cloud');
+          await api.setDbMode?.('cloud');
+          setSqlSession(null);
+        } catch {
+          /* ignore */
+        }
+        const { getRealSupabaseClient } = await import('./supabase');
+        return getRealSupabaseClient().auth.signInWithPassword({ email: em, password });
       }
 
       const result = await api.sqlLogin({ email, password });

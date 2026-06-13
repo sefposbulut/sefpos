@@ -349,6 +349,11 @@ const realSupabase = createClient(supabaseUrl, supabaseAnonKey, {
 
 sefposAuthClientBox.client = realSupabase;
 
+/** SQL proxy disinda gercek bulut oturumu (mod degisimi sonrasi). */
+export function getRealSupabaseClient(): SupabaseClient<Database> {
+  return realSupabase;
+}
+
 /** Hibrit kurulum / bulut baglantisi — SQL proxy fetch'inden bagimsiz, her zaman gercek ag. */
 let cloudOnlySupabase: SupabaseClient<Database> | null = null;
 export function getCloudSupabaseClient(): SupabaseClient<Database> {

@@ -1,11 +1,12 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
-import { isHybridMode, isHybridCloudLinked, fetchHybridLinkInfo } from '../lib/hybridMode';
+import { isHybridMode, isHybridCloudLinked, fetchHybridLinkInfo, switchElectronToCloudMode } from '../lib/hybridMode';
 import { phoneToAuthEmail } from '../lib/phoneAuthEmail';
 import { resolveLoginIdentifier } from '../lib/panelUserLoginResolve';
-import { Eye, EyeOff, ChevronLeft, User, Lock, Building2, Phone, Bike, Delete, Settings } from 'lucide-react';
+import { Eye, EyeOff, ChevronLeft, User, Lock, Building2, Phone, Bike, Delete, Settings, Cloud } from 'lucide-react';
 import { ConnectionModeBadge } from './electron/ConnectionModeBadge';
+import { ElectronLoginUpdatePanel } from './electron/ElectronLoginUpdatePanel';
 
 const logoSrc = new URL('../../public/logo.png', import.meta.url).href;
 
@@ -528,6 +529,24 @@ export function ElectronAuth({ onCourierMode, onSwitchMode, currentDbMode }: Ele
               </div>
             )}
 
+            {sqlMode && !hybridMode && (
+              <div className="w-full max-w-sm mb-4 rounded-xl border border-blue-400/30 bg-blue-500/10 px-4 py-3 text-sm">
+                <p className="text-blue-100/90">
+                  SQL / şube modundasınız. Sadece bulut hesabınızla girecekseniz modu değiştirin.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    void switchElectronToCloudMode().then(() => window.location.reload());
+                  }}
+                  className="mt-2 inline-flex items-center gap-2 text-blue-200 hover:text-white font-semibold text-xs"
+                >
+                  <Cloud className="w-3.5 h-3.5" />
+                  Bulut moduna geç
+                </button>
+              </div>
+            )}
+
             <div className="w-full max-w-sm">
               {offlineMode ? (
                 <div className={fieldBox(false) + ' mb-3'}>
@@ -630,6 +649,8 @@ export function ElectronAuth({ onCourierMode, onSwitchMode, currentDbMode }: Ele
                 <Bike className="w-5 h-5" />
                 Kurye Girişi
               </button>
+
+              <ElectronLoginUpdatePanel />
             </div>
           </>
         ) : (

@@ -84,6 +84,17 @@ export function isElectronSqlReadySync(): boolean {
   return isSqlSetupCompleteFlag() || isHybridCloudLinked();
 }
 
+/** Giriş ekranından tek tıkla bulut modu — SQL/hibrit yerine gerçek bulut oturumu. */
+export async function switchElectronToCloudMode(): Promise<void> {
+  const api = eApi();
+  try {
+    await api?.setDbMode?.('cloud');
+    localStorage.setItem('dbMode', 'cloud');
+  } catch {
+    /* ignore */
+  }
+}
+
 export async function fetchHybridLinkInfo(): Promise<HybridLinkInfo | null> {
   const api = eApi();
   if (!api?.getHybridLink) return null;
