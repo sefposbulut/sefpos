@@ -337,9 +337,23 @@ function SqlServerForm({ onSave, onBack, onClose, showBack = true, inline = fals
     const hostHint = (importResult as { resolvedHost?: string }).resolvedHost
       ? ` Bağlanılan: ${(importResult as { resolvedHost?: string }).resolvedHost}`
       : '';
+
+    let loginHint = '';
+    if (api?.sqlLogin) {
+      const loginCheck = await api.sqlLogin({ email: 'admin@shefpos.local', password: '1234' });
+      if (!loginCheck?.success) {
+        setImportStatus('error');
+        setImportMessage(
+          `Veritabanı kuruldu ancak ADMIN girişi doğrulanamadı: ${loginCheck?.error || 'bilinmeyen hata'}. «Test Et + Kur ve Başla»yı tekrar deneyin.`,
+        );
+        return;
+      }
+      loginHint = ' Giriş doğrulandı: ADMIN / 1234';
+    }
+
     setImportMessage(
       (importResult.output ||
-        'sefpos45 hazır. Giriş: ADMIN / 1234') + hostHint,
+        'sefpos45 hazır. Giriş: ADMIN / 1234') + hostHint + loginHint,
     );
 
     try {

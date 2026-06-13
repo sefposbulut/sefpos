@@ -430,6 +430,134 @@ function tediousTypeToMssql(sql, tediousType) {
   return sql.NVarChar;
 }
 
+/** mssql-only ortamda tedious TYPES yok; param tipleri icin ortak yardimci. */
+function getSqlParamTypes() {
+  const tedious = getTedious();
+  if (tedious?.TYPES) return tedious.TYPES;
+  return {
+    NVarChar: { name: 'NVarChar' },
+    UniqueIdentifier: { name: 'UniqueIdentifier' },
+    DateTime2: { name: 'DateTime2' },
+    Int: { name: 'Int' },
+    Bit: { name: 'Bit' },
+  };
+}
+
+function hasSqlDriver() {
+  return !!(getMssql() || getTedious());
+}
+
+const DEFAULT_SQL_ADMIN_EMAIL = 'admin@shefpos.local';
+const DEFAULT_SQL_ADMIN_PASSWORD = '1234';
+
+/** Kurulum sonrasi varsayilan ADMIN kullanicisini olusturur veya sifreyi dogrular. */
+async function ensureDefaultAdminUser(cfg, dbName, { resetPassword = true } = {}) {
+  const bcrypt = getBcrypt();
+  if (!bcrypt) throw new Error('bcryptjs paketi yuklenemedi');
+  if (!hasSqlDriver()) throw new Error('SQL baglanti kutuphanesi yuklenemedi');
+  const TYPES = getSqlParamTypes();
+  const norm = cfg || loadSettings().sqlServerConfig;
+  if (!norm) throw new Error('SQL Server yapilandirmasi yok');
+  const targetDb = dbName || norm.database || 'sefpos45';
+  const hash = await bcrypt.hash(DEFAULT_SQL_ADMIN_PASSWORD, 10);
+
+  const existing = await runSql(
+    `SELECT u.id AS user_id, u.email, u.password_hash, p.id AS profile_id, p.tenant_id
+     FROM app_users u
+     LEFT JOIN profiles p ON p.id = u.id
+     WHERE u.email = @email OR LOWER(p.full_name) IN ('admin', N'ADMIN')`,
+    { email: { type: TYPES.NVarChar, value: DEFAULT_SQL_ADMIN_EMAIL } },
+    norm,
+    targetDb,
+  );
+  const row = existing && existing[0];
+
+  if (!row?.user_id) {
+    await runSql(
+      `EXEC sp_create_tenant_and_user
+         @email=@email,
+         @password_hash=@password_hash,
+         @full_name=@full_name,
+         @tenant_name=@tenant_name,
+         @tenant_slug=@tenant_slug`,
+      {
+        email: { type: TYPES.NVarChar, value: DEFAULT_SQL_ADMIN_EMAIL },
+        password_hash: { type: TYPES.NVarChar, value: hash },
+        full_name: { type: TYPES.NVarChar, value: 'ADMIN' },
+        tenant_name: { type: TYPES.NVarChar, value: 'Varsayilan Isletme' },
+        tenant_slug: { type: TYPES.NVarChar, value: 'varsayilan-isletme' },
+      },
+      norm,
+      targetDb,
+    );
+    return { created: true, email: DEFAULT_SQL_ADMIN_EMAIL };
+  }
+
+  if (resetPassword) {
+    await runSql(
+      `UPDATE app_users SET password_hash = @password_hash WHERE id = @uid`,
+      {
+        uid: { type: TYPES.UniqueIdentifier, value: row.user_id },
+        password_hash: { type: TYPES.NVarChar, value: hash },
+      },
+      norm,
+      targetDb,
+    );
+  }
+
+  if (!row.profile_id && row.tenant_id) {
+    await runSql(
+      `UPDATE profiles SET full_name = N'ADMIN' WHERE id = @uid`,
+      { uid: { type: TYPES.UniqueIdentifier, value: row.user_id } },
+      norm,
+      targetDb,
+    ).catch(() => {});
+  } else if (!row.profile_id) {
+    await runSql(
+      `EXEC sp_create_tenant_and_user
+         @email=@email,
+         @password_hash=@password_hash,
+         @full_name=@full_name,
+         @tenant_name=@tenant_name,
+         @tenant_slug=@tenant_slug`,
+      {
+        email: { type: TYPES.NVarChar, value: row.email || DEFAULT_SQL_ADMIN_EMAIL },
+        password_hash: { type: TYPES.NVarChar, value: hash },
+        full_name: { type: TYPES.NVarChar, value: 'ADMIN' },
+        tenant_name: { type: TYPES.NVarChar, value: 'Varsayilan Isletme' },
+        tenant_slug: { type: TYPES.NVarChar, value: 'varsayilan-isletme' },
+      },
+      norm,
+      targetDb,
+    );
+  }
+
+  return { created: false, email: row.email || DEFAULT_SQL_ADMIN_EMAIL, resetPassword: !!resetPassword };
+}
+
+async function verifyDefaultAdminLogin(cfg, dbName) {
+  const bcrypt = getBcrypt();
+  if (!bcrypt || !hasSqlDriver()) {
+    return { ok: false, error: 'SQL veya bcrypt kutuphanesi yuklenemedi' };
+  }
+  const TYPES = getSqlParamTypes();
+  const rows = await runSql(
+    `EXEC sp_get_user_by_email @email`,
+    { email: { type: TYPES.NVarChar, value: DEFAULT_SQL_ADMIN_EMAIL } },
+    cfg,
+    dbName,
+  );
+  const row = rows && rows[0];
+  if (!row?.password_hash) {
+    return { ok: false, error: 'ADMIN kullanicisi bulunamadi — kurulumu tekrarlayin' };
+  }
+  const match = await bcrypt.compare(DEFAULT_SQL_ADMIN_PASSWORD, String(row.password_hash));
+  if (!match) {
+    return { ok: false, error: 'ADMIN sifresi 1234 ile eslesmiyor' };
+  }
+  return { ok: true, email: DEFAULT_SQL_ADMIN_EMAIL };
+}
+
 let mssqlPool = null;
 let mssqlPoolKey = null;
 
@@ -1550,7 +1678,7 @@ function supabaseFetch(endpoint, options = {}) {
 
 function isElectronSqlServerMode() {
   const s = loadSettings();
-  return s.dbMode === 'sqlserver' && !!s.sqlServerConfig;
+  return (s.dbMode === 'sqlserver' || s.dbMode === 'hybrid') && !!s.sqlServerConfig;
 }
 
 async function updatePrintJobStatus(jobId, status, error) {
@@ -2659,41 +2787,11 @@ ipcMain.handle('import-sqlserver-schema', async (_, config) => {
 
     let adminCreated = false;
     try {
-      const bcrypt = getBcrypt();
-      if (bcrypt) {
-        const adminEmail = 'admin@shefpos.local';
-        const existing = await runSql(
-          `SELECT COUNT(*) AS cnt FROM app_users u
-           LEFT JOIN profiles p ON p.id = u.id
-           WHERE u.email = @email OR LOWER(p.full_name) = 'admin'`,
-          { email: { type: getTedious().TYPES.NVarChar, value: adminEmail } },
-          norm,
-          norm.database || 'sefpos45',
-        );
-        const cnt = existing && existing[0] ? (Number(existing[0].cnt) || 0) : 0;
-        if (cnt === 0) {
-          const hash = await bcrypt.hash('1234', 10);
-          await runSql(
-            `EXEC sp_create_tenant_and_user @email, @password_hash, @full_name, @tenant_name, @tenant_slug`,
-            {
-              email: { type: getTedious().TYPES.NVarChar, value: adminEmail },
-              password_hash: { type: getTedious().TYPES.NVarChar, value: hash },
-              full_name: { type: getTedious().TYPES.NVarChar, value: 'ADMIN' },
-              tenant_name: { type: getTedious().TYPES.NVarChar, value: 'Varsayilan Isletme' },
-              tenant_slug: { type: getTedious().TYPES.NVarChar, value: 'varsayilan-isletme' },
-            },
-            norm,
-            norm.database || 'sefpos45',
-          );
-          adminCreated = true;
-        } else {
-          await runSql(
-            `UPDATE profiles SET full_name = 'ADMIN' WHERE id IN (SELECT id FROM app_users WHERE email = @email)`,
-            { email: { type: getTedious().TYPES.NVarChar, value: adminEmail } },
-            norm,
-            norm.database || 'sefpos45',
-          ).catch(() => {});
-        }
+      const ensured = await ensureDefaultAdminUser(norm, dbName, { resetPassword: true });
+      adminCreated = !!ensured.created;
+      const verify = await verifyDefaultAdminLogin(norm, dbName);
+      if (!verify.ok) {
+        errors.push(verify.error || 'ADMIN giris dogrulamasi basarisiz');
       }
     } catch (adminErr) {
       errors.push('Admin kullanici olusturulamadi: ' + (adminErr.message || '').slice(0, 150));
@@ -3070,14 +3168,15 @@ ipcMain.handle('sql-login', async (_, { email, password }) => {
   try {
     const bcrypt = getBcrypt();
     if (!bcrypt) return { success: false, error: 'bcryptjs paketi yuklenemedi' };
-    const tedious = getTedious();
-    if (!tedious) return { success: false, error: 'tedious paketi yuklenemedi' };
+    if (!hasSqlDriver()) return { success: false, error: 'SQL baglanti kutuphanesi yuklenemedi' };
+    const TYPES = getSqlParamTypes();
+    const loginEmail = String(email || '').trim().toLowerCase();
     const rows = await runSql(
       `EXEC sp_get_user_by_email @email`,
-      { email: { type: tedious.TYPES.NVarChar, value: email } }
+      { email: { type: TYPES.NVarChar, value: loginEmail } },
     );
     const row = rows && rows[0];
-    if (!row) return { success: false, error: 'Kullanici bulunamadi: ' + email };
+    if (!row) return { success: false, error: 'Kullanici bulunamadi: ' + loginEmail };
     if (!row.password_hash) return { success: false, error: 'Sifre hash bulunamadi - veritabanini yeniden kurun' };
     const passwordMatch = await bcrypt.compare(String(password), String(row.password_hash));
     if (!passwordMatch) return { success: false, error: 'Sifre hatali' };
@@ -3329,18 +3428,23 @@ ipcMain.handle('local-db-delete', (_, { table, id }) => {
 
 ipcMain.handle('sql-find-profile-by-username', async (_, username) => {
   try {
-    const tedious = getTedious();
-    if (!tedious) return { success: false, error: 'tedious paketi yuklenemedi' };
+    if (!hasSqlDriver()) return { success: false, error: 'SQL baglanti kutuphanesi yuklenemedi' };
+    const TYPES = getSqlParamTypes();
     const sanitized = (username || '').trim().toLowerCase();
+    if (sanitized === 'admin' || sanitized === 'adm') {
+      return { success: true, email: DEFAULT_SQL_ADMIN_EMAIL };
+    }
     const rows = await runSql(
       `SELECT TOP 1 u.email FROM app_users u LEFT JOIN profiles p ON p.id = u.id
-       WHERE u.email = @exact OR u.email LIKE @pattern1 OR u.email LIKE @pattern2 OR LOWER(p.full_name) = @sanitized
+       WHERE u.email = @exact OR u.email LIKE @pattern1 OR u.email LIKE @pattern2
+         OR LOWER(p.full_name) = @sanitized OR UPPER(p.full_name) = @upperName
        ORDER BY u.created_at`,
       {
-        exact: { type: tedious.TYPES.NVarChar, value: sanitized + '@shefpos.local' },
-        pattern1: { type: tedious.TYPES.NVarChar, value: sanitized + '@%.shefpos.local' },
-        pattern2: { type: tedious.TYPES.NVarChar, value: sanitized + '@%' },
-        sanitized: { type: tedious.TYPES.NVarChar, value: sanitized },
+        exact: { type: TYPES.NVarChar, value: sanitized + '@shefpos.local' },
+        pattern1: { type: TYPES.NVarChar, value: sanitized + '@%.shefpos.local' },
+        pattern2: { type: TYPES.NVarChar, value: sanitized + '@%' },
+        sanitized: { type: TYPES.NVarChar, value: sanitized },
+        upperName: { type: TYPES.NVarChar, value: (username || '').trim().toUpperCase() },
       }
     );
     const row = rows && rows[0];
@@ -4089,6 +4193,17 @@ ipcMain.handle('get-device-fingerprint', async () => {
   const hash = crypto.createHash('sha256').update(combined).digest('hex');
 
   return hash;
+});
+
+const { registerHybridSyncIpc } = require('./hybridSync.cjs');
+registerHybridSyncIpc({
+  ipcMain,
+  loadSettings,
+  saveSettings,
+  runSql,
+  getSqlParamTypes,
+  writeSecureJson,
+  settingsSecurePath,
 });
 
 app.whenReady().then(() => {

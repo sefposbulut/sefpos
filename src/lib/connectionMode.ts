@@ -1,4 +1,4 @@
-export type ConnectionModeKey = 'cloud' | 'sqlserver' | 'local' | 'terminal' | null;
+export type ConnectionModeKey = 'cloud' | 'sqlserver' | 'hybrid' | 'local' | 'terminal' | null;
 
 export interface ConnectionModeDisplay {
   key: ConnectionModeKey;
@@ -11,7 +11,7 @@ export interface ConnectionModeDisplay {
 export function readElectronDbMode(): ConnectionModeKey {
   try {
     const raw = localStorage.getItem('dbMode');
-    if (raw === 'cloud' || raw === 'sqlserver' || raw === 'local' || raw === 'terminal') return raw;
+    if (raw === 'cloud' || raw === 'sqlserver' || raw === 'hybrid' || raw === 'local' || raw === 'terminal') return raw;
     if (raw === 'postgres') return 'sqlserver';
   } catch {
     /* ignore */
@@ -27,6 +27,14 @@ export function getConnectionModeDisplay(mode: ConnectionModeKey): ConnectionMod
         label: 'SQL Server (Offline şube)',
         shortLabel: 'SQL Server',
         description: 'Kendi veritabanınız · internet gerekmez',
+        tone: 'sql',
+      };
+    case 'hybrid':
+      return {
+        key: 'hybrid',
+        label: 'Hibrit (SQL + Bulut)',
+        shortLabel: 'Hibrit',
+        description: 'Kasa SQL · mobil garson bulut · otomatik senkron',
         tone: 'sql',
       };
     case 'local':

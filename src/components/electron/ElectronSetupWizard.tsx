@@ -15,6 +15,8 @@ import { SqlServerSettings } from '../SqlServerSettings';
 import { ConnectionModeBadge } from './ConnectionModeBadge';
 import { getConnectionModeDisplay } from '../../lib/connectionMode';
 
+import { HybridCloudLink } from './HybridCloudLink';
+
 export interface SqlServerDetectResult {
   ok: boolean;
   platform: string;
@@ -30,17 +32,17 @@ export interface SqlServerDetectResult {
   sqlExpressRunning: boolean;
 }
 
-type WizardStep = 'mode' | 'sql-check' | 'sql-setup' | 'ready';
+type WizardStep = 'mode' | 'sql-check' | 'sql-setup' | 'cloud-link' | 'ready';
 
 type Props = {
-  initialMode?: 'cloud' | 'sqlserver' | 'local' | null;
+  initialMode?: 'cloud' | 'sqlserver' | 'hybrid' | 'local' | null;
   needsSqlSetup?: boolean;
-  onComplete: (mode: 'cloud' | 'sqlserver' | 'local') => void;
+  onComplete: (mode: 'cloud' | 'sqlserver' | 'hybrid' | 'local') => void;
   onBackToLogin?: () => void;
 };
 
 function resolveInitialStep(initialMode: Props['initialMode'], needsSqlSetup?: boolean): WizardStep {
-  if (initialMode === 'sqlserver' && needsSqlSetup) return 'sql-check';
+  if ((initialMode === 'sqlserver' || initialMode === 'hybrid') && needsSqlSetup) return 'sql-check';
   if (initialMode === 'cloud' || initialMode === 'local') return 'ready';
   return 'mode';
 }
@@ -55,7 +57,9 @@ export function ElectronSetupWizard({
   const [selectedMode, setSelectedMode] = useState<ElectronConnectMode | null>(
     initialMode === 'sqlserver'
       ? 'sqlserver'
-      : initialMode === 'cloud'
+      : initialMode === 'hybrid'
+        ? 'hybrid'
+        : initialMode === 'cloud'
         ? 'cloud'
         : initialMode === 'local'
           ? 'local'
@@ -101,8 +105,9 @@ export function ElectronSetupWizard({
     await api?.setDbMode?.(mode);
     setSelectedMode(mode);
 
-    if (mode === 'sqlserver' || mode === 'postgres') {
-      localStorage.setItem('dbMode', 'sqlserver');
+    if (mode === 'sqlserver' || mode === 'postgres' || mode === 'hybrid') {
+      localStorage.setItem('dbMode', mode === 'hybrid' ? 'hybrid' : 'sqlserver');
+      await api?.setDbMode?.(mode === 'hybrid' ? 'hybrid' : 'sqlserver');
       setStep('sql-check');
       return;
     }
@@ -117,8 +122,17 @@ export function ElectronSetupWizard({
   };
 
   const handleSqlSetupDone = () => {
-    localStorage.setItem('dbMode', 'sqlserver');
+    const mode = selectedMode === 'hybrid' ? 'hybrid' : 'sqlserver';
+    localStorage.setItem('dbMode', mode);
+    if (selectedMode === 'hybrid') {
+      setStep('cloud-link');
+      return;
+    }
     onComplete('sqlserver');
+  };
+
+  const handleCloudLinkDone = () => {
+    onComplete('hybrid');
   };
 
   const handleReadyContinue = () => {
@@ -128,6 +142,7 @@ export function ElectronSetupWizard({
 
   const readyDisplay = useMemo(() => {
     if (selectedMode === 'local') return getConnectionModeDisplay('local');
+    if (selectedMode === 'hybrid') return getConnectionModeDisplay('hybrid');
     if (selectedMode === 'sqlserver') return getConnectionModeDisplay('sqlserver');
     return getConnectionModeDisplay('cloud');
   }, [selectedMode]);
@@ -136,13 +151,16 @@ export function ElectronSetupWizard({
     mode: 'Mod seçimi',
     'sql-check': 'SQL Server kontrolü',
     'sql-setup': 'Veritabanı kurulumu',
+    'cloud-link': 'Bulut bağlantısı',
     ready: 'Hazır',
   };
 
   const stepOrder: WizardStep[] =
-    selectedMode === 'sqlserver'
-      ? ['mode', 'sql-check', 'sql-setup', 'ready']
-      : ['mode', 'ready'];
+    selectedMode === 'hybrid'
+      ? ['mode', 'sql-check', 'sql-setup', 'cloud-link', 'ready']
+      : selectedMode === 'sqlserver'
+        ? ['mode', 'sql-check', 'sql-setup', 'ready']
+        : ['mode', 'ready'];
   const stepIndex = Math.max(0, stepOrder.indexOf(step));
 
   if (step === 'mode') {
@@ -326,6 +344,13 @@ export function ElectronSetupWizard({
                 onClose={handleSqlSetupDone}
               />
             </div>
+          )}
+
+          {step === 'cloud-link' && (
+            <HybridCloudLink
+              onLinked={handleCloudLinkDone}
+              onSkip={() => onComplete('hybrid')}
+            />
           )}
 
           {step === 'ready' && (

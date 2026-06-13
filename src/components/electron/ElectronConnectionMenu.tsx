@@ -11,7 +11,7 @@ import {
 } from 'lucide-react';
 import { publicAsset } from '../../lib/assetUrl';
 
-export type ElectronConnectMode = 'cloud' | 'sqlserver' | 'postgres' | 'terminal' | 'local';
+export type ElectronConnectMode = 'cloud' | 'sqlserver' | 'hybrid' | 'postgres' | 'terminal' | 'local';
 
 type Props = {
   onSelect: (mode: ElectronConnectMode) => void;
@@ -39,6 +39,13 @@ const PRIMARY: {
     icon: HardDrive,
     title: 'Yerel kasa',
     subtitle: 'İnternet gerekmez · tek bilgisayar · hızlı kurulum',
+  },
+  {
+    key: 'hybrid',
+    icon: Server,
+    title: 'Hibrit (SQL + Bulut)',
+    subtitle: 'Kasa SQL · mobil garson bulut · mevcut veriniz aktarılır',
+    badge: 'Önerilen şube',
   },
   {
     key: 'sqlserver',

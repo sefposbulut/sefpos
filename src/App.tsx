@@ -50,7 +50,7 @@ import { ShiftQuickClose } from './components/ShiftQuickClose';
 import { useUiPrefs, setHeaderHidden } from './lib/uiPrefs';
 import { Maximize2, Menu as MenuIcon } from 'lucide-react';
 import { Database, supabase } from './lib/supabase';
-import { isSqlServerMode } from './lib/sqlDb';
+import { isSqlServerMode, isLocalMode, isHybridMode, persistElectronDbMode } from './lib/sqlDb';
 import { isSqlOnlineOnlyPage, sqlOnlineOnlyPageMessage } from './lib/sqlServerCompat';
 import { queryCache } from './lib/queryCache';
 import { SystemNotificationContainer } from './components/SystemNotificationBanner';
@@ -62,6 +62,7 @@ import {
 import { processWipeLocalNotification, shouldAutoProcessWipeLocal } from './lib/remoteWipe';
 import { OnlineOrderToast } from './components/OnlineOrderToast';
 import { GlobalGetirSync } from './components/GlobalGetirSync';
+import { GlobalHybridSync } from './components/GlobalHybridSync';
 import { PrintStatusToast } from './components/PrintStatusToast';
 import { TerminalLogin, TerminalApp } from './components/TerminalMode';
 import { isTerminalMode, exitTerminalMode } from './lib/terminalMode';
@@ -77,7 +78,7 @@ interface SystemNotification {
 
 type Table = Database['public']['Tables']['restaurant_tables']['Row'];
 
-function readInitialElectronDbMode(): 'cloud' | 'sqlserver' | null {
+function readInitialElectronDbMode(): 'cloud' | 'sqlserver' | 'hybrid' | null {
   if (!(window as Window & { electronAPI?: unknown }).electronAPI) return null;
   try {
     const saved = localStorage.getItem('dbMode');
@@ -85,7 +86,7 @@ function readInitialElectronDbMode(): 'cloud' | 'sqlserver' | null {
       localStorage.setItem('dbMode', 'sqlserver');
       return 'sqlserver';
     }
-    if (saved === 'sqlserver' || saved === 'cloud') return saved;
+    if (saved === 'sqlserver' || saved === 'hybrid' || saved === 'cloud') return saved as 'cloud' | 'sqlserver' | 'hybrid';
   } catch {
     /* ignore */
   }
@@ -177,7 +178,7 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tenant?.id]);
   const [showShiftQuickClose, setShowShiftQuickClose] = useState(false);
-  const [dbMode, setDbMode] = useState<'cloud' | 'sqlserver' | null>(readInitialElectronDbMode);
+  const [dbMode, setDbMode] = useState<'cloud' | 'sqlserver' | 'hybrid' | null>(readInitialElectronDbMode);
   // Sıcak yol (masa/paket/online): bir kez açılınca display:none ile saklanır.
   // Soğuk sayfalar (stok, rapor, gün sonu…): çıkınca unmount — gizli poll/kanal birikmez.
   // Web: yalnızca masalar önceden mount — online/paket ilk tıklamada açılır (gizli yük azalır).
@@ -296,22 +297,22 @@ export default function App() {
       api.getDbMode?.() ?? Promise.resolve(null),
       new Promise<null>((resolve) => window.setTimeout(() => resolve(null), 600)),
     ])
-      .then(async (mode: 'cloud' | 'sqlserver' | null) => {
-        if (mode === 'sqlserver') {
-          localStorage.setItem('dbMode', 'sqlserver');
-          setDbMode('sqlserver');
+      .then(async (mode: 'cloud' | 'sqlserver' | 'hybrid' | null) => {
+        if (mode === 'sqlserver' || mode === 'hybrid') {
+          persistElectronDbMode(mode);
+          setDbMode(mode);
         } else if (mode === 'cloud') {
-          localStorage.setItem('dbMode', 'cloud');
+          persistElectronDbMode('cloud');
           setDbMode('cloud');
         } else if (mode === null) {
           const saved = localStorage.getItem('dbMode') as 'cloud' | 'sqlserver' | null;
           if (saved === 'sqlserver' || saved === 'cloud') setDbMode(saved);
         }
         const effectiveMode =
-          mode === 'sqlserver'
-            ? 'sqlserver'
-            : (localStorage.getItem('dbMode') as 'cloud' | 'sqlserver' | null);
-        if (effectiveMode === 'sqlserver') {
+          mode === 'sqlserver' || mode === 'hybrid'
+            ? mode
+            : (localStorage.getItem('dbMode') as 'cloud' | 'sqlserver' | 'hybrid' | null);
+        if (effectiveMode === 'sqlserver' || effectiveMode === 'hybrid') {
           try {
             const cfg = await api.getSqlServerConfig?.();
             const isConfigured = !!(cfg?.host && cfg?.username);
@@ -456,9 +457,10 @@ export default function App() {
       setDbMode('cloud');
       return;
     }
-    if (mode === 'sqlserver' || mode === 'postgres') {
-      localStorage.setItem('dbMode', 'sqlserver');
-      setDbMode('sqlserver');
+    if (mode === 'sqlserver' || mode === 'postgres' || mode === 'hybrid') {
+      const target = mode === 'hybrid' ? 'hybrid' : 'sqlserver';
+      localStorage.setItem('dbMode', target);
+      setDbMode(target);
       setSqlServerConfigured(false);
       setShowSqlServerSettings(true);
       return;
@@ -505,14 +507,14 @@ export default function App() {
     }} />;
   }
 
-  if (isElectron && (dbMode === null || (dbMode === 'sqlserver' && !sqlServerConfigured))) {
+  if (isElectron && (dbMode === null || ((dbMode === 'sqlserver' || dbMode === 'hybrid') && !sqlServerConfigured))) {
     return (
       <ElectronSetupWizard
         initialMode={dbMode}
-        needsSqlSetup={dbMode === 'sqlserver' && !sqlServerConfigured}
+        needsSqlSetup={(dbMode === 'sqlserver' || dbMode === 'hybrid') && !sqlServerConfigured}
         onComplete={(mode) => {
-          if (mode === 'sqlserver') {
-            setDbMode('sqlserver');
+          if (mode === 'sqlserver' || mode === 'hybrid') {
+            setDbMode(mode);
             setSqlServerConfigured(true);
             setShowSqlServerSettings(false);
           } else if (mode === 'local') {
@@ -932,6 +934,7 @@ export default function App() {
         onDismiss={(id) => setSystemNotifications(prev => prev.filter(n => n.id !== id))}
       />
       <GlobalGetirSync />
+      <GlobalHybridSync />
       <OnlineOrderToast
         onOpenOnlineOrders={() => handleNavigate('online-orders')}
         currentPage={currentPage}

@@ -1,6 +1,7 @@
 import { isSqlServerMode } from './sqlDb';
+import { isHybridMode, isHybridCloudLinked } from './hybridMode';
 
-/** Bulutta çalışır; SQL Server offline kurulumda devre dışı (hata yerine bilgi). */
+/** Bulutta çalışır; saf SQL offline kurulumda devre dışı (hata yerine bilgi). */
 export const SQL_ONLINE_ONLY_PAGES = new Set([
   'online-orders',
   'integrations',
@@ -24,12 +25,17 @@ export const SQL_OFFLINE_MODULES = [
 ] as const;
 
 export function isSqlOnlineOnlyPage(page: string): boolean {
-  return isSqlServerMode() && SQL_ONLINE_ONLY_PAGES.has(page);
+  if (!isSqlServerMode()) return false;
+  if (isHybridMode() && isHybridCloudLinked()) return false;
+  return SQL_ONLINE_ONLY_PAGES.has(page);
 }
 
 export function sqlOnlineOnlyPageMessage(page: string): string {
-  if (page === 'online-orders') {
-    return 'Online siparişler (Getir / Yemeksepeti) yalnızca bulut bağlantısında çalışır. SQL Server modunda masalar, kasa, ürünler ve raporlar kullanılabilir.';
+  if (isHybridMode() && !isHybridCloudLinked()) {
+    return 'Hibrit mod: önce bulut hesabını bağlayın (kurulum sihirbazı veya Ayarlar). Bağlandıktan sonra mobil garson bulut üzerinden çalışır.';
   }
-  return 'Bu bölüm internet ve bulut hesabı gerektirir. SQL Server offline modunda kullanılamaz.';
+  if (page === 'online-orders') {
+    return 'Online siparişler (Getir / Yemeksepeti) yalnızca bulut bağlantısında çalışır. Hibrit modda kasa SQL, platform siparişleri buluttan senkron edilir.';
+  }
+  return 'Bu bölüm internet ve bulut hesabı gerektirir. Saf SQL modunda kullanılamaz; hibrit modda bulut bağlantısı gerekir.';
 }

@@ -347,6 +347,11 @@ const realSupabase = createClient(supabaseUrl, supabaseAnonKey, {
 
 sefposAuthClientBox.client = realSupabase;
 
+/** Hibrit kurulum: bulut oturumu (SQL proxy dışında). */
+export function getCloudSupabaseClient() {
+  return realSupabase;
+}
+
 if (typeof window !== 'undefined') {
   installSupabaseDiagnostics(realSupabase);
 }

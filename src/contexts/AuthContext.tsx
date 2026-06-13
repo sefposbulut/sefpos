@@ -3,6 +3,7 @@ import { User, Session } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
 import { Database } from '../lib/supabase';
 import { isSqlServerMode, isLocalMode } from '../lib/sqlDb';
+import { isHybridMode } from '../lib/hybridMode';
 import { prefetchCloudTableGrid } from '../lib/tableGridData';
 import { prefetchTakeawayActiveOrders } from '../lib/takeawayOrdersApi';
 import { prefetchOnlineOrders } from '../lib/onlineOrdersWarm';
@@ -431,7 +432,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           subscription_expires_at: rec?.subscription_expires_at || null,
           max_branches: null,
           notes: null,
-          deployment_mode: 'sqlserver',
+          deployment_mode: isHybridMode() ? 'hybrid' : 'offline',
           onboarding_completed: rec?.tenant_onboarding === true ? true : (rec?.onboarding_completed === true ? true : false),
           created_at: new Date().toISOString(),
           logo_url: null,

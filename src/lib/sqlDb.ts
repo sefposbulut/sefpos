@@ -2,7 +2,24 @@ const eApi = () => (window as any).electronAPI;
 
 export function isSqlServerMode(): boolean {
   if (!(eApi()?.isElectron)) return false;
-  return localStorage.getItem('dbMode') === 'sqlserver';
+  try {
+    const saved = localStorage.getItem('dbMode');
+    return saved === 'sqlserver' || saved === 'postgres' || saved === 'hybrid';
+  } catch {
+    /* ignore */
+  }
+  return false;
+}
+
+/** Electron ayar dosyasindan gelen modu localStorage ile hizalar (giris ekrani icin). */
+export function persistElectronDbMode(mode: string | null | undefined): void {
+  if (!mode) return;
+  const normalized = mode === 'postgres' ? 'sqlserver' : mode;
+  try {
+    localStorage.setItem('dbMode', normalized);
+  } catch {
+    /* ignore */
+  }
 }
 
 export function isLocalMode(): boolean {

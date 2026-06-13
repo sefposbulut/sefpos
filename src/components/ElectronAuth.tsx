@@ -67,6 +67,11 @@ interface ElectronAuthProps {
 }
 
 export function ElectronAuth({ onCourierMode, onSwitchMode, currentDbMode }: ElectronAuthProps) {
+  const effectiveSqlMode =
+    currentDbMode === 'sqlserver' || currentDbMode === 'hybrid' || currentDbMode === 'postgres' || isSqlServerMode();
+  const effectiveLocalMode = currentDbMode === 'local' || isLocalMode();
+  const effectiveOfflineMode = effectiveSqlMode || effectiveLocalMode;
+
   const [view, setView] = useState<'login' | 'register' | 'courier'>('login');
   const [step, setStep] = useState<'phone' | 'password'>('phone');
   const [loginValue, setLoginValue] = useState('');
@@ -114,13 +119,13 @@ export function ElectronAuth({ onCourierMode, onSwitchMode, currentDbMode }: Ele
   const resolveEmail = async (val: string): Promise<string | null> => {
     const trimmed = val.trim();
 
-    if (isLocalMode()) {
+    if (isLocalMode() || effectiveLocalMode) {
       if (trimmed.includes('@')) return trimmed.toLowerCase();
       const sanitized = trimmed.toLowerCase().replace(/[^a-z0-9._-]/g, '');
       return `${sanitized}@local.shefpos`;
     }
 
-    if (isSqlServerMode()) {
+    if (isSqlServerMode() || effectiveSqlMode) {
       const api = (window as any).electronAPI;
       if (trimmed.includes('@')) return trimmed.toLowerCase();
       if (isPhoneInput(trimmed)) return phoneToAuthEmail(trimmed);
@@ -159,7 +164,7 @@ export function ElectronAuth({ onCourierMode, onSwitchMode, currentDbMode }: Ele
     try {
       let email: string | null = null;
       const trimmed = loginValue.trim().toLowerCase();
-      const cloudMode = !isSqlServerMode() && !isLocalMode();
+      const cloudMode = !effectiveSqlMode && !effectiveLocalMode;
       if (cloudMode) {
         if (trimmed === ADMIN_LOGIN_EMAIL || trimmed === ADMIN_LOGIN_EMAIL_LEGACY || trimmed === TEST_LOGIN_EMAIL) {
           email = ADMIN_LOGIN_EMAIL;
@@ -197,9 +202,9 @@ export function ElectronAuth({ onCourierMode, onSwitchMode, currentDbMode }: Ele
       if (result.error) {
         if ((result as any).suspended) { setIsSuspended(true); setError(result.error.message); setLoading(false); return; }
         const msg = (result.error as any).message || '';
-        if (isSqlServerMode()) {
+        if (effectiveSqlMode) {
           if (msg.includes('Kullanici bulunamadi') || msg.includes('bulunamadi')) {
-            setError('Kullanıcı bulunamadı. Lütfen önce veritabanını kurulum ekranından oluşturun.');
+            setError('Kullanıcı bulunamadı. Kurulum ekranında «Test Et + Kur ve Başla»yı tekrar çalıştırın; giriş: ADMIN / 1234');
           } else if (msg.includes('Sifre hatali')) {
             setError('Şifre hatalı');
           } else if (msg.includes('tedious') || msg.includes('SQL')) {
@@ -435,9 +440,9 @@ export function ElectronAuth({ onCourierMode, onSwitchMode, currentDbMode }: Ele
     );
   }
 
-  const sqlMode = currentDbMode === 'sqlserver' || currentDbMode === 'postgres' || isSqlServerMode();
-  const localMode = currentDbMode === 'local' || isLocalMode();
-  const offlineMode = sqlMode || localMode;
+  const sqlMode = effectiveSqlMode;
+  const localMode = effectiveLocalMode;
+  const offlineMode = effectiveOfflineMode;
 
   return (
     <div className="min-h-screen flex" style={{ background: bg }}>
@@ -463,7 +468,9 @@ export function ElectronAuth({ onCourierMode, onSwitchMode, currentDbMode }: Ele
             <ConnectionModeBadge
               mode={
                 sqlMode
-                  ? 'sqlserver'
+                  ? currentDbMode === 'hybrid' || localStorage.getItem('dbMode') === 'hybrid'
+                    ? 'hybrid'
+                    : 'sqlserver'
                   : localMode
                     ? 'local'
                     : 'cloud'
