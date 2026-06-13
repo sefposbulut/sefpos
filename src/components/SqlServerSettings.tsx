@@ -20,9 +20,9 @@ interface Props {
 }
 
 const defaultConfig: SqlServerConfig = {
-  host: '.\\sqlexpressayka',
+  host: '.\\SQLEXPRESS',
   port: '',
-  database: 'aykasoft',
+  database: 'sefpos45',
   username: 'sa',
   password: '',
   encrypt: false,
@@ -123,6 +123,16 @@ function SqlServerForm({ onSave, onBack, onClose, showBack = true, inline = fals
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
       onSave?.(config);
+      const api2 = (window as any).electronAPI;
+      if (api2?.sqlHealthCheck && !isPostgresMode) {
+        const health = await api2.sqlHealthCheck(config);
+        if (health?.success && !health.ok && health.missing?.length) {
+          setImportStatus('error');
+          setImportMessage(
+            `Bağlantı kaydedildi; eksik tablolar: ${health.missing.join(', ')}. «Eksik tabloları güncelle» ile patch uygulayın.`,
+          );
+        }
+      }
     } finally {
       setSaving(false);
     }
@@ -273,10 +283,11 @@ function SqlServerForm({ onSave, onBack, onClose, showBack = true, inline = fals
     }
     setTestStatus('testing');
     setTestMessage('');
+    setImportStatus('idle');
     const api = (window as any).electronAPI;
-    if (!api?.sqlTestConnection) {
+    if (!api?.sqlTestConnection || !api?.importSqlServerSchema) {
       setTestStatus('error');
-      setTestMessage('Bu özellik sadece Electron uygulamasında çalışır.');
+      setTestMessage('Bu özellik yalnızca Sefpos.exe içinde çalışır.');
       return;
     }
     const result = await Promise.race([
@@ -294,11 +305,46 @@ function SqlServerForm({ onSave, onBack, onClose, showBack = true, inline = fals
       return;
     }
     setTestStatus('ok');
-    setTestMessage((result as { sqlVersion?: string }).sqlVersion
-      ? `Bağlantı OK (${(result as { sqlVersion?: string }).sqlVersion}). Veritabanı kuruluyor…`
-      : 'Bağlantı OK. Veritabanı kuruluyor…');
+    setTestMessage('Bağlantı OK. Veritabanı kuruluyor…');
     if (api?.setSqlServerConfig) await api.setSqlServerConfig(config);
-    await handleImport();
+
+    setImportStatus('importing');
+    setImportMessage('Veritabanı oluşturuluyor, bu işlem 1–3 dakika sürebilir…');
+    const importResult = await Promise.race([
+      api.importSqlServerSchema(config),
+      new Promise<{ success: false; error: string }>((resolve) =>
+        window.setTimeout(
+          () => resolve({ success: false, error: 'Kurulum zaman aşımı (3 dk).' }),
+          180_000,
+        ),
+      ),
+    ]);
+    if (!importResult.success) {
+      setImportStatus('error');
+      setImportMessage(importResult.error || 'Kurulum başarısız.');
+      return;
+    }
+    setImportStatus('ok');
+    const hostHint = (importResult as { resolvedHost?: string }).resolvedHost
+      ? ` Bağlanılan: ${(importResult as { resolvedHost?: string }).resolvedHost}`
+      : '';
+    setImportMessage(
+      (importResult.output ||
+        'sefpos45 hazır. Giriş: ADMIN / 1234') + hostHint,
+    );
+
+    try {
+      if (api?.setDbMode) {
+        await api.setDbMode('sqlserver');
+        localStorage.setItem('dbMode', 'sqlserver');
+        setActiveMode('sqlserver');
+      }
+      if (companyName.trim()) await saveCompanyProfile();
+      setSaved(true);
+      onSave?.(config);
+    } catch {
+      /* kayıt hatası import sonrası ayrı gösterilmez */
+    }
   };
 
   if (loading) {
@@ -390,7 +436,7 @@ function SqlServerForm({ onSave, onBack, onClose, showBack = true, inline = fals
             />
             {!isPostgresMode && (
               <p className={`text-xs mt-1 ${inline ? 'text-gray-500' : 'text-slate-500'}`}>
-                Sizin sunucu gibi: <code>.\sqlexpressayka</code> — Port boş. ŞefPOS, SQL Browser olmadan doğrudan TCP portunu Windows kayıt defterinden bulur.
+                İsimli örnek: <code>.\SQLEXPRESS</code> — Port genelde boş. Özel kurulum: <code>.\INSTANCEADINIZ</code>
               </p>
             )}
           </div>
@@ -412,7 +458,7 @@ function SqlServerForm({ onSave, onBack, onClose, showBack = true, inline = fals
             type="text"
             value={config.database}
             onChange={e => handleChange('database', e.target.value)}
-            placeholder="aykasoft veya sefpos45"
+            placeholder="sefpos45"
             className={inputCls}
           />
         </div>
@@ -564,7 +610,7 @@ function SqlServerForm({ onSave, onBack, onClose, showBack = true, inline = fals
               Otomatik Kurulum
             </p>
           <p className={`text-xs mb-3 ${inline ? 'text-slate-600' : 'text-slate-400'}`}>
-              Kaydet butonuna bastıktan sonra <strong>sefpos45</strong> veritabanını otomatik hazırlayın.
+              <strong>Kur ve Başla</strong> ile test, veritabanı, patch ve kayıt tek adımda yapılır. Giriş: <strong>ADMIN</strong> / <strong>1234</strong>
             </p>
 
             {importStatus !== 'idle' && (
@@ -602,7 +648,7 @@ function SqlServerForm({ onSave, onBack, onClose, showBack = true, inline = fals
                   : 'bg-emerald-600/90 hover:bg-emerald-500 text-white'
               }`}
             >
-              Test Et + Veritabanını Kur
+              Test Et + Kur ve Başla
             </button>
             <button
               type="button"

@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
+import { isSqlServerMode } from '../lib/sqlDb';
 import { isActivePosPage, PAGE_CHANGE_EVENT } from '../lib/pageActivity';
 import { startAdaptivePoller } from '../lib/pollSchedule';
 
@@ -157,8 +158,8 @@ export function WaiterCallBell({ headerVariant = 'default' }: WaiterCallBellProp
 
     const stopPoll = startAdaptivePoller({
       diagLabel: 'waiter-calls-poll',
-      baseMs: 60_000,
-      idleMs: 120_000,
+      baseMs: isSqlServerMode() ? 90_000 : 60_000,
+      idleMs: isSqlServerMode() ? 180_000 : 120_000,
       hiddenMs: 0,
       run: () => {
         if (!isActivePosPage('tables', 'waiter-app', 'desktop-home')) return;

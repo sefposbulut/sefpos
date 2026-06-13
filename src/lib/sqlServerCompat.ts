@@ -8,6 +8,21 @@ export const SQL_ONLINE_ONLY_PAGES = new Set([
   'platforms',
 ]);
 
+/** SQL modunda tam desteklenen POS modülleri (offline). */
+export const SQL_OFFLINE_MODULES = [
+  'Masalar ve sipariş',
+  'Ödeme ve adisyon',
+  'Ürün / menü',
+  'Paket servis (manuel)',
+  'Kasa ve vardiya',
+  'Gün sonu',
+  'Stok / reçete (patch sonrası)',
+  'Yazdırma (yerel print_jobs)',
+  'Garson terminali (aynı SQL)',
+  'Cari müşteri',
+  'Raporlar',
+] as const;
+
 export function isSqlOnlineOnlyPage(page: string): boolean {
   return isSqlServerMode() && SQL_ONLINE_ONLY_PAGES.has(page);
 }

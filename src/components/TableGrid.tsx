@@ -461,7 +461,9 @@ export function TableGrid({
           groups: groups as unknown as TableGroupCached[],
         });
         const warmIds = mapped.map((t) => t.current_order_id);
-        setTimeout(() => bulkWarmOrderItemsForOrders(warmIds), 0);
+        if (!isSqlServerMode()) {
+          setTimeout(() => bulkWarmOrderItemsForOrders(warmIds), 0);
+        }
       } catch (e) {
         console.error('TableGrid local load error:', e);
         setTables([]);
@@ -510,7 +512,9 @@ export function TableGrid({
           ),
         );
         const warmIds = mapped.map((t) => t.current_order_id);
-        queueMicrotask(() => bulkWarmOrderItemsForOrders(warmIds));
+        if (!isSqlServerMode()) {
+          queueMicrotask(() => bulkWarmOrderItemsForOrders(warmIds));
+        }
       } else {
         const ramAfter = tableGridRuntimeCache.get(cacheKey);
         if (ramAfter?.tables?.length) {
@@ -806,7 +810,11 @@ export function TableGrid({
       };
     }
     if (isSqlServerMode()) {
+      timer = setInterval(() => {
+        if (document.visibilityState === 'visible') void loadAll(false, { silent: true });
+      }, 45_000);
       return () => {
+        if (timer) clearInterval(timer);
         if (updateTimerRef.current) clearTimeout(updateTimerRef.current);
       };
     }

@@ -2,9 +2,7 @@ const eApi = () => (window as any).electronAPI;
 
 export function isSqlServerMode(): boolean {
   if (!(eApi()?.isElectron)) return false;
-  const mode = localStorage.getItem('dbMode');
-  // Backward compatibility: keep existing sqlserver mode, add postgres mode.
-  return mode === 'sqlserver' || mode === 'postgres';
+  return localStorage.getItem('dbMode') === 'sqlserver';
 }
 
 export function isLocalMode(): boolean {

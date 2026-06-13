@@ -441,11 +441,37 @@ async function closeMssqlPool() {
   }
 }
 
-async function mssqlConnect(cfg, dbName) {
+/** Tek sorguda connect/close yapmak kasayı kilitler — havuz paylaşılır. */
+async function getMssqlPool(cfg, dbName) {
   const sql = getMssql();
   if (!sql) throw new Error('mssql paketi yuklenemedi. Uygulamayi yeniden yukleyin.');
   const config = buildMssqlConfig(cfg, dbName);
-  return sql.connect(config);
+  const key = JSON.stringify(config);
+  if (mssqlPool && mssqlPoolKey === key) {
+    return mssqlPool;
+  }
+  await closeMssqlPool();
+  const pool = new sql.ConnectionPool(config);
+  pool.on('error', () => {
+    closeMssqlPool();
+  });
+  mssqlPool = await pool.connect();
+  mssqlPoolKey = key;
+  return mssqlPool;
+}
+
+async function mssqlConnect(cfg, dbName) {
+  return getMssqlPool(cfg, dbName);
+}
+
+/** Kurulum / test — paylaşılan havuzu kapatmaz. */
+async function mssqlConnectOnce(cfg, dbName) {
+  const sql = getMssql();
+  if (!sql) throw new Error('mssql paketi yuklenemedi. Uygulamayi yeniden yukleyin.');
+  const config = buildMssqlConfig(cfg, dbName);
+  const pool = new sql.ConnectionPool(config);
+  await pool.connect();
+  return pool;
 }
 
 async function mssqlQuery(pool, sqlText, params) {
@@ -461,7 +487,7 @@ async function mssqlQuery(pool, sqlText, params) {
 }
 
 async function mssqlTestConnection(norm) {
-  const pool = await mssqlConnect(norm, 'master');
+  const pool = await mssqlConnectOnce(norm, 'master');
   try {
     const rows = await mssqlQuery(pool, 'SELECT @@VERSION AS ver', null);
     return { rows, resolvedHost: formatSqlResolvedHost(norm, 'master') };
@@ -635,13 +661,8 @@ async function runSql(sqlText, params, config, dbName) {
   const targetDb = dbName || cfg.database || 'sefpos45';
 
   if (getMssql()) {
-    let pool;
-    try {
-      pool = await mssqlConnect(cfg, targetDb);
-      return await mssqlQuery(pool, sqlText, params);
-    } finally {
-      if (pool) try { await pool.close(); } catch {}
-    }
+    const pool = await getMssqlPool(cfg, targetDb);
+    return await mssqlQuery(pool, sqlText, params);
   }
 
   const tedious = getTedious();
@@ -1704,6 +1725,7 @@ let pendingJobsPollTimer = null;
 let pendingJobsFetchInFlight = false;
 /** Önceki: 1 sn — üst üste binen HTTP/yazdırma tüm Windows'u kilitleyebiliyordu */
 const PENDING_JOBS_POLL_MS = 15_000;
+const PENDING_JOBS_POLL_SQL_MS = 25_000;
 // Son register-printers çağrısındaki kasa yazıcı listesi. processPrintJob
 // içinde printer_name boş geldiğinde (mobile/web fallback insertleri)
 // mutfak benzeri ilk yazıcıyı seçmek için kullanılır.
@@ -1795,6 +1817,7 @@ function pickDefaultKitchenPrinter() {
 // job kontrolü (üst üste istek yok). Realtime çalışıyorsa fiş anında basılır.
 function startPendingJobsPolling() {
   if (pendingJobsPollTimer) return;
+  const tickMs = isElectronSqlServerMode() ? PENDING_JOBS_POLL_SQL_MS : PENDING_JOBS_POLL_MS;
   pendingJobsPollTimer = setInterval(() => {
     const sqlMode = isElectronSqlServerMode();
     if (!currentTenantId || (!sqlMode && !currentUserJwt)) return;
@@ -1808,7 +1831,7 @@ function startPendingJobsPolling() {
     if (!sqlMode && !realtimeConnected && currentTenantId && currentUserJwt) {
       try { connectRealtimePrintAgent(); } catch {}
     }
-  }, PENDING_JOBS_POLL_MS);
+  }, tickMs);
 }
 function stopPendingJobsPolling() {
   if (pendingJobsPollTimer) {
@@ -2380,11 +2403,14 @@ ipcMain.handle('set-zoom', (_, zoomFactor) => {
 
 ipcMain.handle('get-db-mode', () => {
   const settings = loadSettings();
-  return settings.dbMode || null;
+  const mode = settings.dbMode || null;
+  if (mode === 'postgres') return 'sqlserver';
+  return mode;
 });
 
 ipcMain.handle('set-db-mode', (_, mode) => {
-  saveSettings({ dbMode: mode });
+  const normalized = mode === 'postgres' ? 'sqlserver' : mode;
+  saveSettings({ dbMode: normalized });
   return true;
 });
 
@@ -2422,7 +2448,7 @@ async function applySqlSchemaPatches(norm) {
   let executed = 0;
   const errors = [];
   const pool = getMssql()
-    ? await mssqlConnect(norm, dbName)
+    ? await mssqlConnectOnce(norm, dbName)
     : await tediousConnect(norm, dbName);
   const useMssql = !!getMssql() && pool.request;
   try {
@@ -2499,7 +2525,7 @@ ipcMain.handle('import-sqlserver-schema', async (_, config) => {
 
     const dbName = (norm.database || 'sefpos45').replace(/[^a-zA-Z0-9_]/g, '') || 'sefpos45';
     const masterPool = getMssql()
-      ? await mssqlConnect(norm, 'master')
+      ? await mssqlConnectOnce(norm, 'master')
       : await tediousConnect(norm, 'master');
     const useMssql = !!getMssql() && masterPool.request;
     try {
@@ -2526,7 +2552,7 @@ ipcMain.handle('import-sqlserver-schema', async (_, config) => {
     let executed = 0;
     const errors = [];
     const schemaConn = getMssql()
-      ? await mssqlConnect(norm, dbName)
+      ? await mssqlConnectOnce(norm, dbName)
       : await tediousConnect(norm, dbName);
     const schemaMssql = !!getMssql() && schemaConn.request;
     try {
@@ -2612,6 +2638,7 @@ ipcMain.handle('import-sqlserver-schema', async (_, config) => {
     }
 
     const patch = await applySqlSchemaPatches(norm);
+    closeMssqlPool();
     const patchNote =
       patch.executed > 0
         ? ` Ek tablolar: ${patch.executed} patch.`
@@ -2938,6 +2965,42 @@ ipcMain.handle('postgres-init-database', async (_, config) => {
     return { success: true, output: `${norm.database} veritabanı hazırlandı.` };
   } catch (err) {
     return { success: false, error: err.message || 'PostgreSQL kurulum hatası' };
+  }
+});
+
+ipcMain.handle('sql-health-check', async (_, config) => {
+  try {
+    if (!getMssql() && !getTedious()) {
+      return { success: false, ok: false, error: 'SQL kutuphanesi yuklenemedi', missing: [] };
+    }
+    const norm = normalizeSqlServerConfig(config || loadSettings().sqlServerConfig);
+    const required = [
+      'restaurant_tables',
+      'orders',
+      'order_items',
+      'products',
+      'categories',
+      'app_users',
+      'payment_transactions',
+    ];
+    const missing = [];
+    const tedious = getTedious();
+    for (const tableName of required) {
+      const rows = await runSql(
+        `SELECT 1 AS ok FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = @t`,
+        { t: { type: tedious.TYPES.NVarChar, value: tableName } },
+        norm,
+      );
+      if (!rows?.length) missing.push(tableName);
+    }
+    return {
+      success: true,
+      ok: missing.length === 0,
+      missing,
+      database: norm.database || 'sefpos45',
+    };
+  } catch (err) {
+    return { success: false, ok: false, error: err.message || 'Kontrol basarisiz', missing: [] };
   }
 });
 

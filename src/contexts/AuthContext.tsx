@@ -1366,7 +1366,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // Restoran POS: çevrimiçi nabız (~60 sn). Kurucu super_admin POS'ta ping gönderir;
   // yalnızca lisans paneli URL'sinde (/ayka-yonetim45) ping kapalı.
   useEffect(() => {
-    if (!user?.id || !tenant?.id || !profile) {
+    if (!user?.id || !tenant?.id || !profile || isSqlServerMode() || isLocalMode()) {
       void stopTenantPresenceTracking();
       return;
     }

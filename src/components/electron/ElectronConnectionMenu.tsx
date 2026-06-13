@@ -44,7 +44,8 @@ const PRIMARY: {
     key: 'sqlserver',
     icon: Server,
     title: 'SQL Server (şube sunucusu)',
-    subtitle: 'Kendi veritabanınız · çoklu kasa · buluta bağlı değil',
+    subtitle: 'Kendi veritabanınız · çoklu kasa · internet gerekmez',
+    badge: 'Offline şube',
   },
 ];
 
@@ -55,16 +56,10 @@ const ADVANCED: {
   hint: string;
 }[] = [
   {
-    key: 'postgres',
-    icon: Server,
-    title: 'PostgreSQL (gelişmiş)',
-    hint: 'SQL Server ile aynı altyapı · şema içe aktarımı gerekir',
-  },
-  {
     key: 'terminal',
     icon: Monitor,
     title: 'Garson terminali',
-    hint: 'Ana kasaya bağlı ikinci ekran',
+    hint: 'Ana kasaya bağlı ikinci ekran (aynı SQL Server)',
   },
 ];
 

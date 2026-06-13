@@ -79,6 +79,10 @@ function readInitialElectronDbMode(): 'cloud' | 'sqlserver' | null {
   if (!(window as Window & { electronAPI?: unknown }).electronAPI) return null;
   try {
     const saved = localStorage.getItem('dbMode');
+    if (saved === 'postgres') {
+      localStorage.setItem('dbMode', 'sqlserver');
+      return 'sqlserver';
+    }
     if (saved === 'sqlserver' || saved === 'cloud') return saved;
   } catch {
     /* ignore */
@@ -336,14 +340,15 @@ export default function App() {
     })();
   }, [tenant?.id]);
 
-  /** Electron ana sayfa verisi masalar ekranina gecmeden once yuklensin (cache). */
+  /** Electron ana sayfa verisi masalar ekranina gecmeden once yuklensin (cache). SQL modunda atlanir — agir sorgu kasmasin. */
   useEffect(() => {
     if (!isElectron || !tenant?.id || !activeBranch?.id) return;
+    if (isSqlServerMode()) return;
     preloadElectronHomeData(tenant.id, activeBranch.id);
   }, [isElectron, tenant?.id, activeBranch?.id, dbMode]);
 
   useEffect(() => {
-    if (!tenant || !user) return;
+    if (!tenant || !user || isSqlServerMode()) return;
 
     const channel = supabase
       .channel(`system-notifs-${tenant.id}`)
@@ -450,7 +455,7 @@ export default function App() {
       return;
     }
     if (mode === 'sqlserver' || mode === 'postgres') {
-      localStorage.setItem('dbMode', mode);
+      localStorage.setItem('dbMode', 'sqlserver');
       setDbMode('sqlserver');
       setSqlServerConfigured(false);
       setShowSqlServerSettings(true);
