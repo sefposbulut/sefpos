@@ -4,7 +4,8 @@ import { supabase } from '../lib/supabase';
 import { isSqlServerMode, isLocalMode } from '../lib/sqlDb';
 import { phoneToAuthEmail } from '../lib/phoneAuthEmail';
 import { resolveLoginIdentifier } from '../lib/panelUserLoginResolve';
-import { Eye, EyeOff, ChevronLeft, User, Lock, Building2, Phone, Bike, Delete, Cloud, Server, Settings, HardDrive } from 'lucide-react';
+import { Eye, EyeOff, ChevronLeft, User, Lock, Building2, Phone, Bike, Delete, Settings } from 'lucide-react';
+import { ConnectionModeBadge } from './electron/ConnectionModeBadge';
 
 const logoSrc = new URL('../../public/logo.png', import.meta.url).href;
 
@@ -459,16 +460,17 @@ export function ElectronAuth({ onCourierMode, onSwitchMode, currentDbMode }: Ele
 
         {step === 'phone' && (
           <div className="flex items-center gap-2 mb-8">
-            <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold border ${
-              sqlMode
-                ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
-                : localMode
-                  ? 'bg-amber-500/10 border-amber-500/30 text-amber-400'
-                  : 'bg-blue-500/10 border-blue-500/30 text-blue-400'
-            }`}>
-              {sqlMode ? <Server className="w-3.5 h-3.5" /> : localMode ? <HardDrive className="w-3.5 h-3.5" /> : <Cloud className="w-3.5 h-3.5" />}
-              {sqlMode ? 'PostgreSQL Modu' : localMode ? 'Yerel Mod' : 'Bulut Modu'}
-            </div>
+            <ConnectionModeBadge
+              mode={
+                sqlMode
+                  ? 'sqlserver'
+                  : localMode
+                    ? 'local'
+                    : 'cloud'
+              }
+              variant="dark"
+              compact
+            />
           </div>
         )}
 

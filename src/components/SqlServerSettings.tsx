@@ -17,6 +17,8 @@ interface Props {
   onClose?: () => void;
   showBack?: boolean;
   inline?: boolean;
+  /** Kurulum sihirbazından önerilen sunucu (ör. .\\SQLEXPRESS) */
+  suggestedHost?: string;
 }
 
 const defaultConfig: SqlServerConfig = {
@@ -29,8 +31,11 @@ const defaultConfig: SqlServerConfig = {
   trustServerCertificate: true,
 };
 
-function SqlServerForm({ onSave, onBack, onClose, showBack = true, inline = false }: Props) {
-  const [config, setConfig] = useState<SqlServerConfig>(defaultConfig);
+function SqlServerForm({ onSave, onBack, onClose, showBack = true, inline = false, suggestedHost }: Props) {
+  const [config, setConfig] = useState<SqlServerConfig>(() => ({
+    ...defaultConfig,
+    host: suggestedHost || defaultConfig.host,
+  }));
   const [showPassword, setShowPassword] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -55,7 +60,11 @@ function SqlServerForm({ onSave, onBack, onClose, showBack = true, inline = fals
     const api = (window as any).electronAPI;
     if (api?.getSqlServerConfig) {
       api.getSqlServerConfig().then((c: SqlServerConfig | null) => {
-        if (c) setConfig({ ...defaultConfig, ...c });
+        if (c?.host) {
+          setConfig({ ...defaultConfig, ...c });
+        } else if (suggestedHost) {
+          setConfig((prev) => ({ ...prev, host: suggestedHost }));
+        }
         setLoading(false);
       });
     } else {
@@ -64,7 +73,7 @@ function SqlServerForm({ onSave, onBack, onClose, showBack = true, inline = fals
     if (api?.getDbMode) {
       api.getDbMode().then((mode: string | null) => setActiveMode(mode));
     }
-  }, []);
+  }, [suggestedHost]);
 
   const handleChange = (field: keyof SqlServerConfig, value: string | boolean) => {
     setConfig(prev => ({ ...prev, [field]: value }));

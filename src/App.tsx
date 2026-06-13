@@ -6,6 +6,7 @@ import { Auth } from './components/Auth';
 import { AykaLogin } from './components/AykaLogin';
 import { ElectronAuth } from './components/ElectronAuth';
 import { ElectronConnectionMenu, type ElectronConnectMode } from './components/electron/ElectronConnectionMenu';
+import { ElectronSetupWizard } from './components/electron/ElectronSetupWizard';
 import { ElectronDesktopHome } from './components/electron/ElectronDesktopHome';
 import { preloadElectronHomeData } from './lib/electronDashboardData';
 import { setActivePosPage } from './lib/pageActivity';
@@ -31,6 +32,7 @@ import { TakeawayOrders } from './components/TakeawayOrders';
 import { OnboardingWizard } from './components/OnboardingWizard';
 import { TrialExpiredOverlay } from './components/TrialExpiredOverlay';
 import { getTrialInfo } from './lib/tenantTrial';
+import { getLicenseInfo } from './lib/licenseDisplay';
 import { AdminPanel } from './components/AdminPanel';
 import { Customers } from './components/customers/Customers';
 import { LoyaltyPage } from './components/loyalty/LoyaltyPage';
@@ -503,11 +505,27 @@ export default function App() {
     }} />;
   }
 
-  if (isElectron && dbMode === null) {
-    return <ElectronConnectionMenu onSelect={handleDbModeSelect} />;
+  if (isElectron && (dbMode === null || (dbMode === 'sqlserver' && !sqlServerConfigured))) {
+    return (
+      <ElectronSetupWizard
+        initialMode={dbMode}
+        needsSqlSetup={dbMode === 'sqlserver' && !sqlServerConfigured}
+        onComplete={(mode) => {
+          if (mode === 'sqlserver') {
+            setDbMode('sqlserver');
+            setSqlServerConfigured(true);
+            setShowSqlServerSettings(false);
+          } else if (mode === 'local') {
+            setDbMode('cloud');
+          } else {
+            setDbMode('cloud');
+          }
+        }}
+      />
+    );
   }
 
-  if (isElectron && dbMode === 'sqlserver' && (showSqlServerSettings || !sqlServerConfigured)) {
+  if (isElectron && showSqlServerSettings) {
     return (
       <SqlServerSettings
         showBack={true}
@@ -671,8 +689,9 @@ export default function App() {
   // - Lisans aktif edildiginde (subscription_status: active/expired ise plan != trial)
   //   bu blok otomatik kapanir.
   const trialInfo = getTrialInfo(tenant);
+  const licenseInfo = getLicenseInfo(tenant);
   const isAdminRole = profile?.role === 'super_admin';
-  if (trialInfo.expired && tenant && !isAdminRole) {
+  if ((trialInfo.expired || licenseInfo.blocked) && tenant && !isAdminRole) {
     return <TrialExpiredOverlay />;
   }
 

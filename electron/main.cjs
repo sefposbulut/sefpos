@@ -2401,6 +2401,68 @@ ipcMain.handle('set-zoom', (_, zoomFactor) => {
   return true;
 });
 
+/** Windows kayıt defterinden SQL Server örneklerini listeler (kurulum sihirbazı). */
+function detectSqlServerInstances() {
+  const downloadUrl = 'https://go.microsoft.com/fwlink/?linkid=866662';
+  if (process.platform !== 'win32') {
+    return {
+      ok: false,
+      platform: process.platform,
+      hasSqlServer: false,
+      instances: [],
+      recommendedHost: '.\\SQLEXPRESS',
+      downloadUrl,
+      sqlExpressInstalled: false,
+      sqlExpressRunning: false,
+    };
+  }
+  const instances = [];
+  try {
+    const namesOut = execSync(
+      'reg query "HKLM\\SOFTWARE\\Microsoft\\Microsoft SQL Server\\Instance Names\\SQL"',
+      { encoding: 'utf8', windowsHide: true, timeout: 8000 },
+    );
+    for (const line of namesOut.split(/\r?\n/)) {
+      const m = line.match(/^\s+(\S+)\s+REG_SZ\s+(\S+)/);
+      if (!m) continue;
+      const instanceName = m[1];
+      let serviceRunning = false;
+      const serviceName = instanceName.toUpperCase() === 'MSSQLSERVER'
+        ? 'MSSQLSERVER'
+        : `MSSQL$${instanceName}`;
+      try {
+        const svcOut = execSync(`sc query "${serviceName}"`, {
+          encoding: 'utf8',
+          windowsHide: true,
+          timeout: 5000,
+        });
+        serviceRunning = /STATE\s+:\s+\d+\s+RUNNING/i.test(svcOut);
+      } catch { /* ignore */ }
+      const tcpPort = resolveNamedInstanceTcpPort(instanceName);
+      instances.push({ instanceName, serviceRunning, tcpPort });
+    }
+  } catch { /* SQL yüklü değil */ }
+  const sqlexpress = instances.find((i) => i.instanceName.toUpperCase() === 'SQLEXPRESS');
+  const first = instances[0];
+  const recommendedHost = sqlexpress
+    ? '.\\SQLEXPRESS'
+    : first
+      ? `.\\${first.instanceName}`
+      : '.\\SQLEXPRESS';
+  return {
+    ok: true,
+    platform: process.platform,
+    hasSqlServer: instances.length > 0,
+    instances,
+    recommendedHost,
+    downloadUrl,
+    sqlExpressInstalled: !!sqlexpress,
+    sqlExpressRunning: !!sqlexpress?.serviceRunning,
+  };
+}
+
+ipcMain.handle('detect-sql-server', () => detectSqlServerInstances());
+
 ipcMain.handle('get-db-mode', () => {
   const settings = loadSettings();
   const mode = settings.dbMode || null;

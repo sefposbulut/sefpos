@@ -1,4 +1,4 @@
-import{r as _a}from"./lucide-B3VI4C90.js";var Co={exports:{}},ve={},xo={exports:{}},_o={};/**
+import{r as _a}from"./lucide-D1Ndx1Pg.js";var Co={exports:{}},ve={},xo={exports:{}},_o={};/**
  * @license React
  * scheduler.production.min.js
  *

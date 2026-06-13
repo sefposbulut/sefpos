@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   sqlApplySchemaPatches: (config) => ipcRenderer.invoke('sql-apply-schema-patches', config),
   sqlTestConnection: (config) => ipcRenderer.invoke('sql-test-connection', config),
   sqlHealthCheck: (config) => ipcRenderer.invoke('sql-health-check', config),
+  detectSqlServer: () => ipcRenderer.invoke('detect-sql-server'),
   postgresTestConnection: (config) => ipcRenderer.invoke('postgres-test-connection', config),
   postgresInitDatabase: (config) => ipcRenderer.invoke('postgres-init-database', config),
   sqlLogin: (opts) => ipcRenderer.invoke('sql-login', opts),

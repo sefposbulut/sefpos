@@ -1,10 +1,13 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersonalActiveShift } from '../contexts/ActiveShiftContext';
-import { LogOut, User, Settings, ChevronDown, MapPin, Check, Building2, Zap, ZoomIn, ZoomOut, Bell, Headphones as HeadphonesIcon, X, Send, Sparkles, Phone, Mail, ArrowLeft, LayoutGrid, PlayCircle, Lock, Minimize2, UserCheck, Trash2, Home, ChevronRight } from 'lucide-react';
+import { LogOut, User, Settings, ChevronDown, MapPin, Check, Building2, Zap, ZoomIn, ZoomOut, Bell, Headphones as HeadphonesIcon, X, Send, Sparkles, Phone, Mail, ArrowLeft, LayoutGrid, PlayCircle, Lock, Minimize2, UserCheck, Trash2, Home, ChevronRight, Key } from 'lucide-react';
 import { WaiterCallBell } from './WaiterCallBell';
 import { supabase } from '../lib/supabase';
 import { getTrialInfo, formatTrialRemaining } from '../lib/tenantTrial';
+import { getLicenseInfo } from '../lib/licenseDisplay';
+import { readElectronDbMode } from '../lib/connectionMode';
+import { ConnectionModeBadge } from './electron/ConnectionModeBadge';
 import type { ActiveShift } from '../lib/useActiveShift';
 import { shiftDurationLabel, shiftIcon } from '../lib/businessDay';
 import { useUiPrefs, setHeaderHidden, setUiScale, bumpUiScale, resetUiScale, UI_SCALE_MIN, UI_SCALE_MAX, UI_SCALE_STEP } from '../lib/uiPrefs';
@@ -127,12 +130,16 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
   const [supportLoading, setSupportLoading] = useState(false);
   const [supportSent, setSupportSent] = useState(false);
   const [showTrialInfo, setShowTrialInfo] = useState(false);
+  const [showLicenseInfo, setShowLicenseInfo] = useState(false);
   const [clearingNotifId, setClearingNotifId] = useState<string | null>(null);
   const [clearingAllNotifs, setClearingAllNotifs] = useState(false);
 
   const trialInfo = getTrialInfo(tenant as any);
+  const licenseInfo = getLicenseInfo(tenant as any);
   const showTrialBadge = trialInfo.isTrial;
+  const showLicenseBadge = !showTrialBadge && !!tenant;
   const trialUrgent = trialInfo.isTrial && (trialInfo.expired || trialInfo.remainingHours <= 24);
+  const licenseUrgent = showLicenseBadge && (licenseInfo.expired || licenseInfo.expiringSoon);
 
   // Electron uzerinde calisirken (varsa) Electron'in zoom state'ini de
   // uygulamamiz tercihine senkronize et — boylece pencere yenilense bile
@@ -471,6 +478,9 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
                   </button>
                 </div>
               )}
+              {isElectron && (
+                <ConnectionModeBadge mode={readElectronDbMode()} electronHeader />
+              )}
               {showTrialBadge && (
                 <button
                   type="button"
@@ -519,6 +529,61 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
                       }`}
                     >
                       {trialInfo.expired ? 'Süre bitti' : formatTrialRemaining(trialInfo)}
+                    </span>
+                  </span>
+                </button>
+              )}
+
+              {showLicenseBadge && (
+                <button
+                  type="button"
+                  onClick={() => setShowLicenseInfo(true)}
+                  title={
+                    licenseInfo.expired
+                      ? 'Lisans süresi doldu — detay için tıklayın'
+                      : `${licenseInfo.planLabel} · ${licenseInfo.remainingText} — detay için tıklayın`
+                  }
+                  className={`hidden sm:inline-flex items-center gap-2 pl-1 pr-3 py-1 rounded-full transition active:scale-95 ${
+                    isElectron ? 'hover:bg-white/10' : 'bg-transparent hover:bg-slate-100/70'
+                  }`}
+                >
+                  <span
+                    className={`w-7 h-7 rounded-full flex items-center justify-center shadow-inner ${
+                      licenseInfo.expired
+                        ? 'bg-gradient-to-br from-red-500 to-rose-600'
+                        : licenseUrgent
+                          ? 'bg-gradient-to-br from-amber-400 to-orange-500'
+                          : 'bg-gradient-to-br from-emerald-400 to-teal-600'
+                    }`}
+                  >
+                    <Key className="w-3.5 h-3.5 text-white" />
+                  </span>
+                  <span className="flex items-baseline gap-1.5 leading-none">
+                    <span
+                      className={`text-[9px] md:text-[10px] uppercase tracking-[0.12em] font-bold ${
+                        isElectron
+                          ? licenseInfo.expired
+                            ? 'text-red-200'
+                            : 'text-white/80'
+                          : licenseInfo.expired
+                            ? 'text-red-600'
+                            : 'text-slate-500'
+                      }`}
+                    >
+                      Lisans
+                    </span>
+                    <span
+                      className={`text-sm md:text-base font-extrabold whitespace-nowrap ${
+                        isElectron
+                          ? 'text-white'
+                          : licenseInfo.expired
+                            ? 'text-red-700'
+                            : licenseUrgent
+                              ? 'text-orange-700'
+                              : 'text-slate-800'
+                      }`}
+                    >
+                      {licenseInfo.expired ? 'Süre bitti' : licenseInfo.remainingText}
                     </span>
                   </span>
                 </button>
@@ -925,6 +990,91 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
                 <button
                   onClick={() => setShowTrialInfo(false)}
                   className="w-full mt-4 py-2.5 text-slate-500 hover:text-slate-700 font-semibold text-sm transition"
+                >
+                  Kapat
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+
+      {showLicenseInfo && tenant && (
+        <>
+          <div
+            className="fixed inset-0 z-[60] bg-slate-900/40 backdrop-blur-sm"
+            onClick={() => setShowLicenseInfo(false)}
+          />
+          <div className="fixed inset-0 z-[61] flex items-center justify-center p-4 pointer-events-none">
+            <div className="pointer-events-auto w-full max-w-md bg-white rounded-3xl shadow-2xl overflow-hidden">
+              <div className="bg-gradient-to-br from-emerald-500 via-teal-600 to-slate-800 px-6 py-7 text-white text-center relative">
+                <button
+                  onClick={() => setShowLicenseInfo(false)}
+                  className="absolute top-3 right-3 p-1.5 rounded-lg hover:bg-white/20 transition"
+                  title="Kapat"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+                <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-white/20 backdrop-blur mb-3 ring-4 ring-white/20">
+                  <Key className="w-7 h-7" />
+                </div>
+                <h3 className="text-xl font-black tracking-tight">Lisans Bilgisi</h3>
+                <p className="text-white/90 text-sm mt-1">Ayka panelindeki kayıtla aynı</p>
+              </div>
+
+              <div className="p-6">
+                <div className="bg-slate-50 rounded-2xl p-4 mb-4 space-y-2 text-sm">
+                  <div className="flex justify-between gap-3">
+                    <span className="text-slate-500">Firma</span>
+                    <span className="font-bold text-slate-800 text-right truncate">{tenant.name}</span>
+                  </div>
+                  <div className="flex justify-between gap-3">
+                    <span className="text-slate-500">Paket</span>
+                    <span className="font-semibold text-slate-800">{licenseInfo.planLabel}</span>
+                  </div>
+                  <div className="flex justify-between gap-3">
+                    <span className="text-slate-500">Durum</span>
+                    <span
+                      className={`font-bold ${
+                        licenseInfo.expired ? 'text-red-600' : licenseInfo.expiringSoon ? 'text-orange-600' : 'text-emerald-700'
+                      }`}
+                    >
+                      {licenseInfo.statusLabel}
+                    </span>
+                  </div>
+                  {licenseInfo.expiresAt && (
+                    <div className="flex justify-between gap-3 pt-1 border-t border-slate-200">
+                      <span className="text-slate-500">Bitiş tarihi</span>
+                      <span className="font-semibold text-slate-800">
+                        {licenseInfo.expiresAt.toLocaleDateString('tr-TR', {
+                          day: '2-digit',
+                          month: 'long',
+                          year: 'numeric',
+                        })}
+                      </span>
+                    </div>
+                  )}
+                  {!licenseInfo.expired && licenseInfo.remainingText && (
+                    <div className="flex justify-between gap-3">
+                      <span className="text-slate-500">Kalan</span>
+                      <span className="font-extrabold text-slate-800">{licenseInfo.remainingText}</span>
+                    </div>
+                  )}
+                  {isElectron && (
+                    <div className="flex justify-between gap-3 items-center pt-1 border-t border-slate-200">
+                      <span className="text-slate-500">Bağlantı modu</span>
+                      <ConnectionModeBadge mode={readElectronDbMode()} compact />
+                    </div>
+                  )}
+                </div>
+
+                <p className="text-xs text-slate-500 text-center mb-4">
+                  Lisans uzatma ve paket değişikliği Ayka yönetim panelinden yapılır; masaüstünde otomatik güncellenir.
+                </p>
+
+                <button
+                  onClick={() => setShowLicenseInfo(false)}
+                  className="w-full py-2.5 text-slate-500 hover:text-slate-700 font-semibold text-sm transition"
                 >
                   Kapat
                 </button>
