@@ -3586,14 +3586,14 @@ export function Settings({ onClose }: SettingsProps) {
                         setHuginTesting(true);
                         setHuginTestResult(null);
                         const result = await testHuginConnection(huginSettings);
-                        if (result.success && result.serialNo && !huginSettings.serialNo.trim()) {
+                        if (result.success && result.serialNo) {
                           const next = { ...huginSettings, serialNo: result.serialNo };
                           setHuginSettings(next);
                           saveHuginSettings(next);
                         }
                         const msg = result.success
-                          ? result.serialNo && !huginSettings.serialNo.trim()
-                            ? `Bağlantı OK. Mali sicil kaydedildi: ${result.serialNo}`
+                          ? result.serialNo
+                            ? `Bağlantı ve belge testi OK. Mali sicil: ${result.serialNo}`
                             : 'Cihaza başarıyla bağlandı!'
                           : (result.error || 'Bağlantı hatası');
                         setHuginTestResult({ ok: result.success, msg });
