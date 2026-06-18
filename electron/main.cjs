@@ -4357,10 +4357,16 @@ ipcMain.handle('hugin-request', async (_, opts = {}) => {
       });
       res.on('end', () => {
         const status = res.statusCode || 0;
+        const hdrs = {};
+        for (const [k, v] of Object.entries(res.headers || {})) {
+          if (Array.isArray(v)) hdrs[String(k).toLowerCase()] = v.join(', ');
+          else if (v != null) hdrs[String(k).toLowerCase()] = String(v);
+        }
         resolve({
           ok: status >= 200 && status < 300,
           status,
           body: data,
+          headers: hdrs,
         });
       });
     });

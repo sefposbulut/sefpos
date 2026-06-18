@@ -52,6 +52,7 @@ export interface HuginHttpResult {
   ok: boolean;
   status: number;
   body: string;
+  headers?: Record<string, string>;
   error?: string;
 }
 
@@ -256,7 +257,11 @@ export async function huginHttpRequest(opts: {
     }
     const response = await fetch(opts.url, init);
     const body = await response.text().catch(() => '');
-    return { ok: response.ok, status: response.status, body };
+    const hdrs: Record<string, string> = {};
+    response.headers.forEach((v, k) => {
+      hdrs[k.toLowerCase()] = v;
+    });
+    return { ok: response.ok, status: response.status, body, headers: hdrs };
   } catch (err: any) {
     if (err?.name === 'TimeoutError' || err?.name === 'AbortError') {
       return { ok: false, status: 0, body: '', error: 'Zaman aşımı — IP ve cihazda PC Link açık mı kontrol edin.' };
@@ -288,29 +293,140 @@ function pcLinkHeaders(settings: HuginSettings, includeSerial = true): Record<st
   return headers;
 }
 
-function extractDocumentId(json: Record<string, unknown> | null): string | null {
-  if (!json) return null;
-  const data = json.data;
-  if (data && typeof data === 'object') {
-    const d = data as Record<string, unknown>;
-    for (const key of ['documentId', 'id', 'document_id']) {
-      if (typeof d[key] === 'string' && d[key]) return d[key] as string;
+function extractDocumentId(
+  json: Record<string, unknown> | null,
+  rawBody = '',
+  headers?: Record<string, string>,
+): string | null {
+  const fromLoc = documentIdFromLocation(headers);
+  if (fromLoc) return fromLoc;
+
+  if (json) {
+    if (typeof json.data === 'string' && json.data.trim()) {
+      const s = json.data.trim();
+      if (looksLikeDocumentId(s)) return s;
+    }
+    const data = json.data;
+    if (data && typeof data === 'object') {
+      const d = data as Record<string, unknown>;
+      for (const key of Object.keys(d)) {
+        if (!/id|document/i.test(key)) continue;
+        const v = d[key];
+        if (typeof v === 'string' && v.trim() && looksLikeDocumentId(v.trim())) return v.trim();
+        if (typeof v === 'number' && Number.isFinite(v)) return String(v);
+      }
+    }
+    for (const key of Object.keys(json)) {
+      if (!/id|document/i.test(key)) continue;
+      const v = json[key];
+      if (typeof v === 'string' && v.trim() && looksLikeDocumentId(v.trim())) return v.trim();
+      if (typeof v === 'number' && Number.isFinite(v)) return String(v);
+    }
+    const deep = findDocumentIdDeep(json);
+    if (deep) return deep;
+  }
+
+  const trimmed = String(rawBody || '').trim();
+  if (trimmed && !trimmed.startsWith('{') && looksLikeDocumentId(trimmed)) return trimmed;
+  const uuidMatch = trimmed.match(
+    /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i,
+  );
+  if (uuidMatch) return uuidMatch[0];
+
+  return null;
+}
+
+function looksLikeDocumentId(value: string): boolean {
+  const s = value.trim();
+  if (!s || s.length > 80) return false;
+  if (/^[0-9a-f-]{36}$/i.test(s)) return true;
+  if (/^[A-Z]{2}\d{5,}$/i.test(s)) return true;
+  if (/^\d{4,}$/.test(s)) return true;
+  return /^[A-Za-z0-9_-]{6,}$/.test(s);
+}
+
+function documentIdFromLocation(headers?: Record<string, string>): string | null {
+  if (!headers) return null;
+  const loc = headers.location || headers.Location;
+  if (!loc) return null;
+  const m = String(loc).match(/\/documents\/([^/?#]+)/i);
+  return m?.[1] ? decodeURIComponent(m[1]) : null;
+}
+
+function findDocumentIdDeep(obj: unknown, depth = 0): string | null {
+  if (depth > 8 || obj == null) return null;
+  if (typeof obj === 'string') {
+    const s = obj.trim();
+    return looksLikeDocumentId(s) ? s : null;
+  }
+  if (typeof obj === 'number' && Number.isFinite(obj)) return String(obj);
+  if (typeof obj !== 'object') return null;
+  const rec = obj as Record<string, unknown>;
+  for (const [key, val] of Object.entries(rec)) {
+    if (/document.*id|^id$/i.test(key)) {
+      if (typeof val === 'string' && val.trim() && looksLikeDocumentId(val.trim())) return val.trim();
+      if (typeof val === 'number' && Number.isFinite(val)) return String(val);
     }
   }
-  for (const key of ['documentId', 'id']) {
-    if (typeof json[key] === 'string' && json[key]) return json[key] as string;
+  for (const val of Object.values(rec)) {
+    const found = findDocumentIdDeep(val, depth + 1);
+    if (found) return found;
   }
   return null;
 }
 
+function huginApiErrorMessage(json: Record<string, unknown> | null, fallback: string): string {
+  if (!json) return fallback;
+  const status = String(json.status || '').toUpperCase();
+  if (status && status !== 'SUCCESS' && status !== 'OK') {
+    const msg =
+      (typeof json.message === 'string' && json.message) ||
+      (typeof json.error === 'string' && json.error) ||
+      (json.data &&
+        typeof json.data === 'object' &&
+        typeof (json.data as Record<string, unknown>).message === 'string' &&
+        ((json.data as Record<string, unknown>).message as string)) ||
+      fallback;
+    return msg;
+  }
+  return fallback;
+}
+
+async function ensurePcLinkSerial(settings: HuginSettings): Promise<HuginSettings> {
+  if (settings.serialNo?.trim()) return settings;
+  const base = deviceBaseUrl(settings);
+  const result = await huginHttpRequest({
+    method: 'GET',
+    url: `${base}/v1/settings`,
+    headers: pcLinkHeaders(settings, false),
+    timeoutMs: 10000,
+  });
+  if (!result.ok) return settings;
+  const json = parseJsonSafe(result.body);
+  const sn = extractSerialNo(json);
+  if (!sn) return settings;
+  const next = { ...settings, serialNo: sn };
+  saveHuginSettings(next);
+  return next;
+}
+
 function extractSerialNo(json: Record<string, unknown> | null): string | null {
   if (!json) return null;
+  const tryObj = (obj: Record<string, unknown>): string | null => {
+    for (const key of Object.keys(obj)) {
+      if (!/serial|fiscal|sicil/i.test(key)) continue;
+      const v = obj[key];
+      if (typeof v === 'string' && v.trim()) return v.trim();
+      if (typeof v === 'number' && Number.isFinite(v)) return String(v);
+    }
+    return null;
+  };
   const data = json.data;
   if (data && typeof data === 'object') {
-    const sn = (data as Record<string, unknown>).serialNo;
-    if (typeof sn === 'string' && sn.trim()) return sn.trim();
+    const sn = tryObj(data as Record<string, unknown>);
+    if (sn) return sn;
   }
-  return null;
+  return tryObj(json);
 }
 
 function mapPaymentType(method: 'cash' | 'credit_card'): string {
@@ -451,9 +567,18 @@ async function testTpsConnection(settings: HuginSettings): Promise<{ success: bo
 
 // ——— PC Link (developer.hugin.com.tr) ———
 
-async function sendPcLinkSale(req: HuginSaleRequest, settings: HuginSettings): Promise<HuginSaleResult> {
+async function sendPcLinkSale(req: HuginSaleRequest, settingsInput: HuginSettings): Promise<HuginSaleResult> {
   const hasCard = req.payments.some((p) => p.method === 'credit_card');
   const completeTimeoutMs = hasCard ? 120_000 : 45_000;
+  let settings = await ensurePcLinkSerial(settingsInput);
+  if (!settings.serialNo?.trim()) {
+    return {
+      success: false,
+      error:
+        'Yazarkasa eşleşmesi yok. Cihazda PC Link → VKN girin, «Eşleşme bekleniyor» iken Ayarlar → Yazarkasa → Bağlantı testi yapın.',
+      failureKind: 'generic',
+    };
+  }
   const base = deviceBaseUrl(settings);
   const headers = pcLinkHeaders(settings, true);
 
@@ -462,14 +587,15 @@ async function sendPcLinkSale(req: HuginSaleRequest, settings: HuginSettings): P
     url: `${base}/v1/documents`,
     headers,
     body: { docCategory: 'SALE' },
-    timeoutMs: 12000,
+    timeoutMs: 15000,
   });
 
+  const createdJson = parseJsonSafe(create.body);
+
   if (!create.ok) {
-    const msg = parseJsonSafe(create.body);
     const errText =
-      (msg && typeof msg.message === 'string' && msg.message) ||
-      create.body?.slice(0, 180) ||
+      huginApiErrorMessage(createdJson, '') ||
+      create.body?.slice(0, 200) ||
       create.error ||
       'Belge başlatılamadı';
     const err = `PC Link belge açma (HTTP ${create.status}): ${errText}`;
@@ -480,12 +606,23 @@ async function sendPcLinkSale(req: HuginSaleRequest, settings: HuginSettings): P
     };
   }
 
-  const created = parseJsonSafe(create.body);
-  const documentId = extractDocumentId(created);
-  if (!documentId) {
+  const apiStatus = String(createdJson?.status || '').toUpperCase();
+  if (apiStatus && apiStatus !== 'SUCCESS' && apiStatus !== 'OK') {
+    const err = huginApiErrorMessage(createdJson, 'Belge başlatılamadı');
     return {
       success: false,
-      error: 'PC Link yanıtında belge kimliği alınamadı. Cihaz eşleşmesini kontrol edin.',
+      error: `PC Link: ${err}`,
+      failureKind: 'generic',
+    };
+  }
+
+  const documentId = extractDocumentId(createdJson, create.body, create.headers);
+  if (!documentId) {
+    const hint = create.body?.trim().slice(0, 160) || '(boş yanıt)';
+    return {
+      success: false,
+      error:
+        `Belge kimliği alınamadı. Cihazda eşleşme (VKN/MAC/mali sicil) ve PC Link açık mı kontrol edin. Yanıt: ${hint}`,
       failureKind: 'generic',
     };
   }
@@ -624,9 +761,14 @@ export async function sendSaleToHugin(req: HuginSaleRequest): Promise<HuginSaleR
   if (validation) return { success: false, error: validation };
 
   if (settings.apiMode === 'pc_link' && !settings.serialNo.trim()) {
+    settings = await ensurePcLinkSerial(settings);
+  }
+
+  if (settings.apiMode === 'pc_link' && !settings.serialNo.trim()) {
     return {
       success: false,
-      error: 'PC Link mali sicil (X-SerialNo) boş. Ayarlar → Yazarkasa → Bağlantı testi yapın veya sicili girin.',
+      error:
+        'PC Link mali sicil (X-SerialNo) yok. Cihazda eşleşme beklenirken Ayarlar → Yazarkasa → Bağlantı testi yapın.',
     };
   }
 
