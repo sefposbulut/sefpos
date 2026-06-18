@@ -1,5 +1,7 @@
 /** Hugin yazarkasa — TPS (HTTP/3001) ve PC Link S1 (HTTPS/4443). Bkz. developer.hugin.com.tr */
 
+import { dispatchPrintToast } from './printToasts';
+
 export type HuginApiMode = 'pc_link' | 'tps';
 
 export interface HuginSettings {
@@ -26,7 +28,8 @@ export interface HuginSaleItem {
   quantity: number;
   unitPrice: number;
   totalPrice: number;
-  categoryVatRate?: number | null;
+  /** Ürün / satır KDV oranı (%). Kategori grubu değil. */
+  productVatRate?: number | null;
   categoryDepartmentId?: number | null;
 }
 
@@ -37,7 +40,8 @@ export interface HuginPaymentSplit {
 
 export interface HuginSaleRequest {
   orderNumber: number;
-  tableLabel: string;
+  /** @deprecated Mali fişte kullanılmıyor */
+  tableLabel?: string;
   items: HuginSaleItem[];
   totalAmount: number;
   discountAmount: number;
@@ -146,11 +150,20 @@ export function buildHuginItemsFromOrderLines(
     if (totalPrice <= 0) continue;
 
     const products = row.products as
-      | { name?: string; category_id?: string; categories?: { vat_rate?: number | null; hugin_department_id?: number | null } }
+      | { name?: string; category_id?: string; tax_rate?: number | null; categories?: { vat_rate?: number | null; hugin_department_id?: number | null } }
       | undefined;
     const catFromProduct = products?.categories;
     const catId = products?.category_id as string | undefined;
     const catFallback = catId && fallbackCategories ? fallbackCategories.get(catId) : undefined;
+
+    const lineTax = row.tax_rate != null ? Number(row.tax_rate) : NaN;
+    const productTax = products?.tax_rate != null ? Number(products.tax_rate) : NaN;
+    const productVatRate =
+      Number.isFinite(lineTax) && lineTax >= 0
+        ? lineTax
+        : Number.isFinite(productTax) && productTax >= 0
+          ? productTax
+          : null;
 
     const name =
       (products?.name && String(products.name)) ||
@@ -162,7 +175,7 @@ export function buildHuginItemsFromOrderLines(
       quantity: qty,
       unitPrice: unitPrice > 0 ? unitPrice : totalPrice / qty,
       totalPrice,
-      categoryVatRate: catFromProduct?.vat_rate ?? catFallback?.vat_rate ?? null,
+      productVatRate,
       categoryDepartmentId:
         catFromProduct?.hugin_department_id ?? catFallback?.hugin_department_id ?? null,
     });
@@ -383,7 +396,7 @@ function buildTpsSalePayload(req: HuginSaleRequest, settings: HuginSettings) {
     Amount: item.totalPrice,
     Price: item.unitPrice,
     DepartmentId: item.categoryDepartmentId ?? settings.departmentId,
-    VatRate: item.categoryVatRate ?? settings.vatRate,
+    VatRate: item.productVatRate ?? settings.vatRate,
     Definition: item.productName.substring(0, 48),
   }));
 
@@ -400,7 +413,6 @@ function buildTpsSalePayload(req: HuginSaleRequest, settings: HuginSettings) {
     SaleItems: saleItems,
     PayItems: payItems,
     SalesTotal: req.totalAmount,
-    FooterNotes: [`Masa: ${req.tableLabel}`, `Siparis No: ${req.orderNumber}`],
   };
 }
 
@@ -485,7 +497,7 @@ async function sendPcLinkSale(req: HuginSaleRequest, settings: HuginSettings): P
       quantity: qty,
       amount: formatMoney(item.totalPrice),
       price: formatMoney(item.unitPrice > 0 ? item.unitPrice : item.totalPrice / qty),
-      vatRate: item.categoryVatRate ?? settings.vatRate,
+      vatRate: item.productVatRate ?? settings.vatRate,
     };
     const dept = item.categoryDepartmentId ?? settings.departmentId;
     if (dept > 0) row.departmentId = dept;
@@ -501,8 +513,6 @@ async function sendPcLinkSale(req: HuginSaleRequest, settings: HuginSettings): P
   if (req.discountAmount > 0) {
     completeBody.discountAmount = formatMoney(req.discountAmount);
   }
-  const footer = [`Masa: ${req.tableLabel}`, `Sipariş: ${req.orderNumber}`].join(' · ');
-  if (footer) completeBody.footerNotes = [footer];
 
   const complete = await huginHttpRequest({
     method: 'PUT',
@@ -566,6 +576,37 @@ function validateSettings(settings: HuginSettings): string | null {
 
   if (!settings.okcId.trim()) return 'TPS için OKC ID gerekli.';
   return null;
+}
+
+/** Ödeme sonrası yazarkasayı arka planda çalıştır; kasa ekranı bekletilmez. */
+export function runHuginSaleInBackground(
+  salePromise: Promise<HuginSaleResult>,
+  payments: Array<{ payment_method?: string | null; amount?: number | null }>,
+): void {
+  const hasCard = paymentsForHugin(payments).some((p) => p.method === 'credit_card');
+  dispatchPrintToast({
+    kind: 'queued',
+    message: hasCard ? 'Kart geçiliyor…' : 'Fiş basılıyor…',
+    target: 'Hugin',
+    durationMs: 10_000,
+  });
+  void salePromise.then((result) => {
+    if (result.skipped) return;
+    if (result.success) {
+      dispatchPrintToast({
+        kind: 'success',
+        message: hasCard ? 'Kart işlemi tamamlandı' : 'Mali fiş yazdırıldı',
+        target: 'Hugin',
+      });
+      return;
+    }
+    dispatchPrintToast({
+      kind: 'error',
+      message: hasCard ? 'Kart işlemi tamamlanamadı' : 'Fiş basılamadı',
+      detail: result.error,
+      target: 'Hugin',
+    });
+  });
 }
 
 export async function sendSaleToHugin(req: HuginSaleRequest): Promise<HuginSaleResult> {

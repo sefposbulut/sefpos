@@ -59,8 +59,8 @@ export function HuginPaymentGate({
         <p className="text-base font-black text-amber-900">{message}</p>
         <p className="text-xs text-amber-800 leading-relaxed">
           {hasCardPayment
-            ? 'Müşteri kartı okutsun. Fiş yazarkasadan çıkana kadar bu ekran açık kalır.'
-            : 'Nakit fiş yazdırılıyor. Lütfen bekleyin.'}
+            ? 'Kart işlemi yazarkasada sürüyor. Ödeme kaydedildi; fiş arka planda tamamlanır.'
+            : 'Fiş yazdırılıyor. Ödeme kaydedildi; işleme devam edebilirsiniz.'}
         </p>
         <p className="text-[11px] text-amber-700">Yazarkasada işlemi elle iptal etmeyin — ŞefPOS üzerinden yönetin.</p>
       </div>

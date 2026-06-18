@@ -12,8 +12,7 @@ import {
   printToAdisyonPrinter,
   resolveReceiptBusinessHeader,
 } from '../lib/printService';
-import { buildHuginItemsFromOrderLines, loadHuginSettings, paymentsForHugin, sendSaleToHugin } from '../lib/huginTps';
-import { dispatchPrintToast } from '../lib/printToasts';
+import { buildHuginItemsFromOrderLines, loadHuginSettings, paymentsForHugin, sendSaleToHugin, runHuginSaleInBackground } from '../lib/huginTps';
 import { BarcodeScannerModal } from './BarcodeScannerModal';
 import { playScanSuccess, playScanError, primeAudio } from '../lib/beep';
 import { ensureCashRegisterRowForPayment } from '../lib/cashRegisterFallback';
@@ -539,29 +538,26 @@ export function QuickSale({ isActive = true }: { isActive?: boolean }) {
             quantity: l.quantity,
             unit_price: Number(l.product.price),
             total_amount: Number(l.product.price) * l.quantity,
+            tax_rate: l.product.tax_rate ?? null,
             products: {
               name: l.product.name,
               category_id: l.product.category_id,
+              tax_rate: l.product.tax_rate ?? null,
               categories: l.product.categories,
             },
           })),
         );
         if (huginPay.length > 0 && huginItems.length > 0) {
-          void sendSaleToHugin({
-            orderNumber: order.order_number,
-            tableLabel: 'Hızlı Satış',
-            items: huginItems,
-            totalAmount: totalNow,
-            discountAmount: discountNow,
-            payments: huginPay,
-          }).then((r) => {
-            if (r.skipped) return;
-            if (r.success) {
-              dispatchPrintToast({ kind: 'success', message: 'Mali fiş yazarkasaya gönderildi', target: 'Hugin' });
-            } else {
-              dispatchPrintToast({ kind: 'error', message: 'Yazarkasa fişi basılamadı', detail: r.error, target: 'Hugin' });
-            }
-          });
+          runHuginSaleInBackground(
+            sendSaleToHugin({
+              orderNumber: order.order_number,
+              items: huginItems,
+              totalAmount: totalNow,
+              discountAmount: discountNow,
+              payments: huginPay,
+            }),
+            [{ payment_method: method, amount }],
+          );
         }
       }
 

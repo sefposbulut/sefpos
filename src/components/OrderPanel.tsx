@@ -18,6 +18,7 @@ import {
   sendSaleToHugin,
   shouldSendHuginForPayments,
   type HuginSaleResult,
+  runHuginSaleInBackground,
 } from '../lib/huginTps';
 import { dispatchPrintToast } from '../lib/printToasts';
 import type { HuginPaymentGateProps } from './HuginPaymentGate';
@@ -2204,7 +2205,6 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
       };
     }
 
-    const tableLabel = table.table_number === 0 ? 'Paket' : `Masa ${table.table_number}`;
     let lines = existingOrderItems as Array<Record<string, unknown>>;
     if (lines.length === 0) {
       lines = (await fetchOrderPanelItems(currentOrder.id)) as Array<Record<string, unknown>>;
@@ -2220,7 +2220,6 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
 
     return sendSaleToHugin({
       orderNumber: currentOrder.order_number,
-      tableLabel,
       items: huginItems,
       totalAmount: total,
       discountAmount,
@@ -2384,35 +2383,10 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
         huginCtxRef.current = ctx;
 
         if (needsHugin) {
-          const huginPayments = paymentsForHugin(payments);
-          setHuginGate({
-            phase: 'waiting',
-            message: huginPayments.some((p) => p.method === 'credit_card')
-              ? 'Kart ödemesi — yazarkasa bekleniyor'
-              : 'Nakit fiş — yazarkasa bekleniyor',
-            hasCardPayment: huginPayments.some((p) => p.method === 'credit_card'),
-          });
-
-          const result = await runHuginFiscalSale(payments, total, discountAmount);
-          if (result.documentId) huginOpenDocIdRef.current = result.documentId;
-
-          if (!result.success && !result.skipped) {
-            showHuginFailedGate(result, ctx, {
-              onRetry: () => void handleHuginRetry(),
-              onSwitchToCash: () => void handleHuginSwitchToCash(),
-              onCancelFiscal: () => void handleHuginCancelFiscal(),
-              onAbortPayment: () => void handleHuginAbortPayment(),
-            });
-            return;
-          }
-
-          if (!result.skipped) {
-            dispatchPrintToast({
-              kind: 'success',
-              message: 'Mali fiş yazarkasadan alındı',
-              target: 'Hugin',
-            });
-          }
+          runHuginSaleInBackground(
+            runHuginFiscalSale(payments, total, discountAmount),
+            payments,
+          );
         }
 
         await finalizeCompletedOrder(shouldPrintReceipt, payments, discountAmount, total);
