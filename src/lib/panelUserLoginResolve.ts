@@ -1,4 +1,4 @@
-import { supabase } from './supabase';
+import { getLoginLookupSupabase } from './supabase';
 import { phoneToAuthEmail } from './phoneAuthEmail';
 
 export type LoginIdentifierKind = 'email' | 'phone' | 'username';
@@ -51,7 +51,7 @@ export async function resolveLoginIdentifier(input: string): Promise<LoginIdenti
   // 2) Telefon
   const phone = normalizePhone(trimmed);
   if (phone) {
-    const { data, error } = await supabase
+    const { data, error } = await getLoginLookupSupabase()
       .from('profiles')
       .select('email')
       .eq('phone', phone)
@@ -75,7 +75,7 @@ export async function resolveLoginIdentifier(input: string): Promise<LoginIdenti
 
   // Once gercek `username` kolonunu dene
   {
-    const { data, error } = await supabase
+    const { data, error } = await getLoginLookupSupabase()
       .from('profiles')
       .select('email')
       .eq('username', u)
@@ -91,7 +91,7 @@ export async function resolveLoginIdentifier(input: string): Promise<LoginIdenti
 
   // Geri uyumluluk: eski kayitlarda username bos olabilir; email pattern fallback
   {
-    const { data, error } = await supabase
+    const { data, error } = await getLoginLookupSupabase()
       .from('profiles')
       .select('email')
       .ilike('email', `${u}@%.shefpos.local`)

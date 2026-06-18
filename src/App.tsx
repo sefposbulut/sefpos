@@ -56,6 +56,7 @@ import {
   isElectronSqlReadySync,
   isHybridCloudLinked,
   markSqlSetupComplete,
+  activateElectronCloudMode,
 } from './lib/hybridMode';
 import { isSqlOnlineOnlyPage, sqlOnlineOnlyPageMessage } from './lib/sqlServerCompat';
 import { queryCache } from './lib/queryCache';
@@ -465,6 +466,11 @@ export default function App() {
       setDbMode('cloud');
       return;
     }
+    if (mode === 'cloud') {
+      await activateElectronCloudMode();
+      setDbMode('cloud');
+      return;
+    }
     if (mode === 'sqlserver' || mode === 'postgres' || mode === 'hybrid') {
       const target = mode === 'hybrid' ? 'hybrid' : 'sqlserver';
       localStorage.setItem('dbMode', target);
@@ -627,8 +633,8 @@ export default function App() {
             setDbMode(null);
           }}
           currentDbMode={
-            (localStorage.getItem('dbMode') as 'cloud' | 'sqlserver' | 'postgres' | 'local' | null) ||
-            (dbMode as 'cloud' | 'sqlserver' | null)
+            (dbMode as 'cloud' | 'sqlserver' | 'hybrid' | 'postgres' | 'local' | null) ||
+            (localStorage.getItem('dbMode') as 'cloud' | 'sqlserver' | 'postgres' | 'local' | null)
           }
         />
       );

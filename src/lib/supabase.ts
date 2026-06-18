@@ -354,6 +354,11 @@ export function getRealSupabaseClient(): SupabaseClient<Database> {
   return realSupabase;
 }
 
+/** Giriş ekranı / bulut auth — SQL proxy'den bağımsız (telefon→e-posta lookup). */
+export function getLoginLookupSupabase(): SupabaseClient<Database> {
+  return realSupabase;
+}
+
 /** Hibrit kurulum / bulut baglantisi — SQL proxy fetch'inden bagimsiz, her zaman gercek ag. */
 let cloudOnlySupabase: SupabaseClient<Database> | null = null;
 export function getCloudSupabaseClient(): SupabaseClient<Database> {

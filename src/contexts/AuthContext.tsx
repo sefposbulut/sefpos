@@ -1,8 +1,8 @@
 import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { User, Session } from '@supabase/supabase-js';
-import { supabase } from '../lib/supabase';
+import { supabase, getRealSupabaseClient } from '../lib/supabase';
 import { Database } from '../lib/supabase';
-import { isSqlServerMode, isLocalMode } from '../lib/sqlDb';
+import { isSqlServerMode, isLocalMode, isElectronCloudMode } from '../lib/sqlDb';
 import { isHybridMode } from '../lib/hybridMode';
 import { prefetchCloudTableGrid } from '../lib/tableGridData';
 import { prefetchTakeawayActiveOrders } from '../lib/takeawayOrdersApi';
@@ -829,7 +829,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const signIn = async (email: string, password: string) => {
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    const authApi =
+      isElectron && isElectronCloudMode()
+        ? getRealSupabaseClient().auth
+        : supabase.auth;
+    const { data, error } = await authApi.signInWithPassword({ email, password });
     if (error) {
       const status = (error as { status?: number }).status;
       const m = String(error.message || '');

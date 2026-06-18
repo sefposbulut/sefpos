@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
-import { isHybridMode, isHybridCloudLinked, fetchHybridLinkInfo, switchElectronToCloudMode } from '../lib/hybridMode';
+import { isHybridMode, isHybridCloudLinked, fetchHybridLinkInfo, switchElectronToCloudMode, activateElectronCloudMode } from '../lib/hybridMode';
+import { persistElectronDbMode, syncElectronDbModeFromMain } from '../lib/sqlDb';
 import { phoneToAuthEmail } from '../lib/phoneAuthEmail';
 import { resolveLoginIdentifier } from '../lib/panelUserLoginResolve';
 import { Eye, EyeOff, ChevronLeft, User, Lock, Building2, Phone, Bike, Delete, Settings, Cloud } from 'lucide-react';
@@ -75,7 +76,17 @@ export function ElectronAuth({ onCourierMode, onSwitchMode, currentDbMode }: Ele
       return null;
     }
   })();
-  const resolvedDbMode = currentDbMode ?? storedDbMode;
+  const [liveDbMode, setLiveDbMode] = useState<ElectronAuthProps['currentDbMode']>(
+    currentDbMode ?? storedDbMode,
+  );
+
+  useEffect(() => {
+    void syncElectronDbModeFromMain().then((mode) => {
+      if (mode) setLiveDbMode(mode);
+    });
+  }, []);
+
+  const resolvedDbMode = liveDbMode ?? currentDbMode ?? storedDbMode;
   const effectiveSqlMode =
     resolvedDbMode === 'sqlserver' || resolvedDbMode === 'hybrid' || resolvedDbMode === 'postgres';
   const effectiveLocalMode = resolvedDbMode === 'local';
@@ -195,10 +206,21 @@ export function ElectronAuth({ onCourierMode, onSwitchMode, currentDbMode }: Ele
     if (step === 'phone') { setStep('password'); return; }
     setLoading(true);
     try {
+      const synced = await syncElectronDbModeFromMain();
+      const modeNow = synced ?? resolvedDbMode;
+      const sqlNow =
+        modeNow === 'sqlserver' || modeNow === 'hybrid' || modeNow === 'postgres';
+      const localNow = modeNow === 'local';
+      const cloudModeNow = modeNow === 'cloud' || (!sqlNow && !localNow);
+
+      if (cloudModeNow) {
+        await activateElectronCloudMode();
+        setLiveDbMode('cloud');
+      }
+
       let email: string | null = null;
       const trimmed = loginValue.trim().toLowerCase();
-      const cloudMode = resolvedDbMode === 'cloud' || (!effectiveSqlMode && !effectiveLocalMode);
-      if (cloudMode) {
+      if (cloudModeNow) {
         if (trimmed === ADMIN_LOGIN_EMAIL || trimmed === ADMIN_LOGIN_EMAIL_LEGACY || trimmed === TEST_LOGIN_EMAIL) {
           email = ADMIN_LOGIN_EMAIL;
           if (trimmed === TEST_LOGIN_EMAIL) email = TEST_LOGIN_EMAIL;
@@ -225,7 +247,7 @@ export function ElectronAuth({ onCourierMode, onSwitchMode, currentDbMode }: Ele
       if (!email) { setError('Kullanıcı bulunamadı'); setLoading(false); return; }
       let result = await signIn(email, password);
       if (
-        cloudMode &&
+        cloudModeNow &&
         (trimmed === ADMIN_LOGIN_EMAIL || trimmed === ADMIN_LOGIN_EMAIL_LEGACY) &&
         result.error?.message?.includes('Invalid login credentials')
       ) {
@@ -235,7 +257,7 @@ export function ElectronAuth({ onCourierMode, onSwitchMode, currentDbMode }: Ele
       if (result.error) {
         if ((result as any).suspended) { setIsSuspended(true); setError(result.error.message); setLoading(false); return; }
         const msg = (result.error as any).message || '';
-        if (effectiveSqlMode) {
+        if (effectiveSqlMode && !cloudModeNow) {
           if (msg.includes('Kullanici bulunamadi') || msg.includes('bulunamadi')) {
             setError('Kullanıcı bulunamadı. Kurulum ekranında «Test Et + Kur ve Başla»yı tekrar çalıştırın; giriş: ADMIN / 1234');
           } else if (msg.includes('Sifre hatali')) {

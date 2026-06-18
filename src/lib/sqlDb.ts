@@ -33,6 +33,32 @@ export function persistElectronDbMode(mode: string | null | undefined): void {
   }
 }
 
+export function isElectronCloudMode(): boolean {
+  if (!(eApi()?.isElectron)) return false;
+  try {
+    return localStorage.getItem('dbMode') === 'cloud';
+  } catch {
+    return false;
+  }
+}
+
+/** Ana süreçteki dbMode ile localStorage'ı eşitle (eski hybrid kalıntısını önler). */
+export async function syncElectronDbModeFromMain(): Promise<
+  'cloud' | 'sqlserver' | 'hybrid' | 'local' | null
+> {
+  const api = eApi();
+  if (!api?.getDbMode) return null;
+  try {
+    const mode = await api.getDbMode();
+    if (!mode) return null;
+    const normalized = mode === 'postgres' ? 'sqlserver' : mode;
+    persistElectronDbMode(normalized);
+    return normalized as 'cloud' | 'sqlserver' | 'hybrid' | 'local';
+  } catch {
+    return null;
+  }
+}
+
 export function isLocalMode(): boolean {
   return !!(eApi()?.isElectron) && localStorage.getItem('dbMode') === 'local';
 }

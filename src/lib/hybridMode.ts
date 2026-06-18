@@ -86,10 +86,18 @@ export function isElectronSqlReadySync(): boolean {
 
 /** Giriş ekranından tek tıkla bulut modu — SQL/hibrit yerine gerçek bulut oturumu. */
 export async function switchElectronToCloudMode(): Promise<void> {
+  await activateElectronCloudMode();
+}
+
+/** Bulut bağlantı modu: SQL/hibrit kalıntılarını temizle, gerçek Supabase oturumu. */
+export async function activateElectronCloudMode(): Promise<void> {
   const api = eApi();
   try {
     await api?.setDbMode?.('cloud');
     localStorage.setItem('dbMode', 'cloud');
+    localStorage.removeItem('shefpos_hybrid_linked');
+    localStorage.removeItem('shefpos_sql_session');
+    localStorage.removeItem('shefpos_sql_setup_complete');
   } catch {
     /* ignore */
   }

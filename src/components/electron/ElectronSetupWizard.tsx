@@ -15,7 +15,7 @@ import { SqlServerSettings } from '../SqlServerSettings';
 import { ConnectionModeBadge } from './ConnectionModeBadge';
 import { getConnectionModeDisplay } from '../../lib/connectionMode';
 
-import { markSqlSetupComplete } from '../../lib/hybridMode';
+import { markSqlSetupComplete, activateElectronCloudMode } from '../../lib/hybridMode';
 import { HybridCloudLink } from './HybridCloudLink';
 
 export interface SqlServerDetectResult {
@@ -117,8 +117,7 @@ export function ElectronSetupWizard({
       setStep('ready');
       return;
     }
-    localStorage.removeItem('dbMode');
-    await api?.setDbMode?.('cloud');
+    await activateElectronCloudMode();
     setStep('ready');
   };
 
