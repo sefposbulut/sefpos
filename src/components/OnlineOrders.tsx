@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, Fragment, useMemo } from 'react';
+import { subscribeOnlineOrdersRealtime } from '../lib/onlineOrdersRealtimeHub';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { ShoppingBag, Clock, Phone, MapPin, Check, X, ChevronDown, ChevronUp, Bike, Package, RefreshCw, Volume2, VolumeX, AlertTriangle, Hash, Tag, BellRing, Printer, Store } from 'lucide-react';
@@ -443,25 +444,13 @@ export function OnlineOrders({ isActive = true }: { isActive?: boolean }) {
       }, 350);
     };
 
-    const channel = supabase
-      .channel(`online-orders-${tenant.id}`)
-      .on('postgres_changes', {
-        event: 'INSERT',
-        schema: 'public',
-        table: 'online_orders',
-        filter: `tenant_id=eq.${tenant.id}`,
-      }, scheduleReload)
-      .on('postgres_changes', {
-        event: 'UPDATE',
-        schema: 'public',
-        table: 'online_orders',
-        filter: `tenant_id=eq.${tenant.id}`,
-      }, scheduleReload)
-      .subscribe();
+    const unsubRealtime = subscribeOnlineOrdersRealtime(tenant.id, () => {
+      scheduleReload();
+    });
 
     return () => {
       if (reloadTimer) clearTimeout(reloadTimer);
-      supabase.removeChannel(channel);
+      unsubRealtime();
     };
   }, [tenant, isActive, loadOrders]);
 

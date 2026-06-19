@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, memo, useRef } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersonalActiveShift } from '../contexts/ActiveShiftContext';
 import { LogOut, User, Settings, ChevronDown, MapPin, Check, Building2, Zap, ZoomIn, ZoomOut, Bell, Headphones as HeadphonesIcon, X, Send, Sparkles, Phone, Mail, ArrowLeft, LayoutGrid, PlayCircle, Lock, Minimize2, UserCheck, Trash2, Home, ChevronRight, Key } from 'lucide-react';
@@ -26,6 +26,7 @@ import {
   shouldAutoProcessWipeLocal,
   skipWipeLocalNotification,
 } from '../lib/remoteWipe';
+import { dispatchSupportNotifBanner } from '../lib/supportNotificationBridge';
 import { publicAsset } from '../lib/assetUrl';
 import {
   ELECTRON_HEADER_BAR_CLASS,
@@ -98,7 +99,7 @@ const PAGE_LABELS: Record<string, string> = {
   shifts: 'Vardiyalar',
 };
 
-export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackToTables, onOpenShifts }: HeaderProps) {
+function HeaderInner({ onOpenSettings, onOpenOnboarding, currentPage, onBackToTables, onOpenShifts }: HeaderProps) {
   const {
     profile,
     tenant,
@@ -133,6 +134,11 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
   const [showLicenseInfo, setShowLicenseInfo] = useState(false);
   const [clearingNotifId, setClearingNotifId] = useState<string | null>(null);
   const [clearingAllNotifs, setClearingAllNotifs] = useState(false);
+  const supportSentTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => () => {
+    if (supportSentTimerRef.current) clearTimeout(supportSentTimerRef.current);
+  }, []);
 
   const trialInfo = getTrialInfo(tenant as any);
   const licenseInfo = getLicenseInfo(tenant as any);
@@ -234,6 +240,12 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
           setSystemUnreadCount(countUnreadNotifications(next, tenant.id));
           return next;
         });
+        dispatchSupportNotifBanner({
+          id: n.id,
+          title: n.title || 'Bildirim',
+          message: n.message || '',
+          type: n.type || 'info',
+        });
       })
       .on('postgres_changes', {
         event: 'UPDATE',
@@ -291,7 +303,8 @@ export function Header({ onOpenSettings, onOpenOnboarding, currentPage, onBackTo
     setSupportMessage('');
     setSupportPriority('medium');
     await loadTickets();
-    setTimeout(() => setSupportSent(false), 3000);
+    if (supportSentTimerRef.current) clearTimeout(supportSentTimerRef.current);
+    supportSentTimerRef.current = setTimeout(() => setSupportSent(false), 3000);
   };
 
   const totalUnread = unreadCount + systemUnreadCount;
@@ -1349,3 +1362,5 @@ function ShiftBadge({ activeShift, dayLocked, onClick }: ShiftBadgeProps) {
     </button>
   );
 }
+
+export const Header = memo(HeaderInner);

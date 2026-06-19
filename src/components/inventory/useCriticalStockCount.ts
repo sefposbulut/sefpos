@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
+import { subscribeIngredientsRealtime } from '../../lib/ingredientsRealtimeHub';
 import { useAuth } from '../../contexts/AuthContext';
 
 /**
@@ -39,29 +40,13 @@ export function useCriticalStockCount(): number {
 
     void refresh();
 
-    const ch = supabase
-      .channel(`ingredients-critical-${tenant.id}`)
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'ingredients', filter: `tenant_id=eq.${tenant.id}` },
-        () => {
-          void refresh();
-        },
-      )
-      .subscribe();
-
-    const timer = setInterval(() => {
+    const unsub = subscribeIngredientsRealtime(tenant.id, () => {
       void refresh();
-    }, 60_000);
+    });
 
     return () => {
       mounted = false;
-      try {
-        supabase.removeChannel(ch);
-      } catch {
-        /* noop */
-      }
-      clearInterval(timer);
+      unsub();
     };
   }, [tenant?.id]);
 

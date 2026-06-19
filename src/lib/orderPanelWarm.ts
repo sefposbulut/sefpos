@@ -3,7 +3,7 @@ import { isSqlServerMode } from './sqlDb';
 import { orderTotalsFromItems } from './orderOptimistic';
 import { fetchOrderPanelItems, fetchOrderPanelItemsBulk } from './sqlOrderItems';
 
-const warmRows = new Map<string, { rows: any[] }>();
+const warmRows = new Map<string, { rows: any[]; touched: number }>();
 const inflightItems = new Map<string, Promise<void>>();
 
 export type PanelWarmBundle = {
@@ -12,11 +12,37 @@ export type PanelWarmBundle = {
   payments: any[];
 };
 
-const warmPanel = new Map<string, PanelWarmBundle>();
+const warmPanel = new Map<string, PanelWarmBundle & { touched: number }>();
 const inflightPanel = new Map<string, Promise<void>>();
 
-const ORDER_PANEL_SELECT =
+const MAX_WARM_PANEL_ENTRIES = 24;
+const warmTouchOrder: string[] = [];
+
+function touchWarmOrder(orderId: string): void {
+  const i = warmTouchOrder.indexOf(orderId);
+  if (i >= 0) warmTouchOrder.splice(i, 1);
+  warmTouchOrder.push(orderId);
+}
+
+function pruneWarmPanelCaches(): void {
+  while (warmTouchOrder.length > MAX_WARM_PANEL_ENTRIES) {
+    const drop = warmTouchOrder.shift();
+    if (!drop) break;
+    warmPanel.delete(drop);
+    warmRows.delete(drop);
+    try {
+      sessionStorage.removeItem(SNAPSHOT_PREFIX + drop);
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+export const ORDER_PANEL_SELECT =
   'id, order_number, subtotal, discount_amount, total_amount, payment_status, status, waiter_name, branch_id, table_id, order_type, customer_name, customer_phone, delivery_address, delivery_note, courier_name, estimated_delivery_minutes, paid_at, created_at, tenant_id';
+
+export const PAYMENT_TRANSACTION_SELECT =
+  'id, order_id, amount, payment_method, created_at, tenant_id, created_by, customer_id';
 
 async function fetchPanelItems(orderId: string): Promise<any[]> {
   return fetchOrderPanelItems(orderId);
@@ -53,10 +79,19 @@ export function clearWarmOrderPanelCache(orderId: string): void {
   if (!orderId) return;
   warmPanel.delete(orderId);
   warmRows.delete(orderId);
+  const i = warmTouchOrder.indexOf(orderId);
+  if (i >= 0) warmTouchOrder.splice(i, 1);
   try {
     sessionStorage.removeItem(SNAPSHOT_PREFIX + orderId);
   } catch {
     /* ignore */
+  }
+}
+
+/** Ödeme / kapanış sonrası toplu temizlik */
+export function evictWarmCachesForOrders(orderIds: (string | null | undefined)[]): void {
+  for (const id of orderIds) {
+    if (id) clearWarmOrderPanelCache(id);
   }
 }
 
@@ -90,8 +125,10 @@ export function warmOrderPanelBundle(orderId: string | null | undefined) {
         order,
         payments: (payRes.data || []) as any[],
       };
-      warmPanel.set(orderId, bundle);
-      warmRows.set(orderId, { rows });
+      warmPanel.set(orderId, { ...bundle, touched: Date.now() });
+      warmRows.set(orderId, { rows, touched: Date.now() });
+      touchWarmOrder(orderId);
+      pruneWarmPanelCaches();
       persistOrderItemsSnapshot(orderId, rows);
     } finally {
       inflightPanel.delete(orderId);
@@ -115,13 +152,16 @@ async function prefetchItemsOnly(orderId: string): Promise<void> {
   const p = (async () => {
     try {
       const rows = await fetchPanelItems(orderId);
-      warmRows.set(orderId, { rows });
+      warmRows.set(orderId, { rows, touched: Date.now() });
       const existing = warmPanel.get(orderId);
       warmPanel.set(orderId, {
         rows,
         order: existing?.order ?? null,
         payments: existing?.payments ?? [],
+        touched: Date.now(),
       });
+      touchWarmOrder(orderId);
+      pruneWarmPanelCaches();
     } finally {
       inflightItems.delete(orderId);
     }
@@ -221,14 +261,18 @@ function runBulkWarmBatch(): void {
       const grouped = await fetchOrderPanelItemsBulk(todo);
       for (const oid of todo) {
         const rows = grouped.get(oid) || [];
-        warmRows.set(oid, { rows });
+        warmRows.set(oid, { rows, touched: Date.now() });
+        const prev = warmPanel.get(oid);
         warmPanel.set(oid, {
           rows,
-          order: warmPanel.get(oid)?.order ?? null,
-          payments: warmPanel.get(oid)?.payments ?? [],
+          order: prev?.order ?? null,
+          payments: prev?.payments ?? [],
+          touched: Date.now(),
         });
+        touchWarmOrder(oid);
         persistOrderItemsSnapshot(oid, rows);
       }
+      pruneWarmPanelCaches();
     } finally {
       inflightBulk.delete(key);
       if (pendingBulkIds.size > 0) scheduleBulkWarmBatch();

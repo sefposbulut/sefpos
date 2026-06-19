@@ -274,7 +274,7 @@ export function TableToPackageTransferModal({
         order: null,
       });
       takeWarmOrderItems(sourceId);
-      requestHybridSync(0);
+      requestHybridSync(600);
       onTransferred();
     } catch (e: any) {
       setErr(e?.message || 'Aktarım başarısız.');

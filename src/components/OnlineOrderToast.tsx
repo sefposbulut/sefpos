@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Bell, X, CheckCircle2, ChevronRight } from 'lucide-react';
 import { supabase } from '../lib/supabase';
+import { subscribeOnlineOrdersRealtime } from '../lib/onlineOrdersRealtimeHub';
 import { useAuth } from '../contexts/AuthContext';
 import {
   isAudioUnlocked,
@@ -70,6 +71,8 @@ export function OnlineOrderToast({ onOpenOnlineOrders, currentPage }: Props) {
 
   useEffect(() => {
     if (!tenant) return;
+    if (currentPage === 'online-orders') return;
+
     const fetchPlatform = async (
       platformId: string | null,
     ): Promise<{ code: string; name: string }> => {
@@ -172,37 +175,17 @@ export function OnlineOrderToast({ onOpenOnlineOrders, currentPage }: Props) {
       });
     };
 
-    const channel = supabase
-      .channel(`global-online-orders-${tenant.id}`)
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'online_orders',
-          filter: `tenant_id=eq.${tenant.id}`,
-        },
-        async (payload) => {
-          await pushToastFromRow(payload.new as any);
-        },
-      )
-      .on(
-        'postgres_changes',
-        {
-          event: 'UPDATE',
-          schema: 'public',
-          table: 'online_orders',
-          filter: `tenant_id=eq.${tenant.id}`,
-        },
-        async (payload) => {
-          const row = payload.new as any;
-          const old = payload.old as any;
-          if (!row?.id) return;
-          if (old?.status && NEWISH_STATUSES.has(old.status)) return;
-          await pushToastFromRow(row);
-        },
-      )
-      .subscribe();
+    const unsubRealtime = subscribeOnlineOrdersRealtime(tenant.id, async (evt) => {
+      if (evt.eventType === 'INSERT') {
+        await pushToastFromRow(evt.new);
+        return;
+      }
+      const row = evt.new;
+      const old = evt.old;
+      if (!row?.id) return;
+      if (old?.status && NEWISH_STATUSES.has(String(old.status))) return;
+      await pushToastFromRow(row);
+    });
 
     const onPolled = async () => {
       if (!wantsOnlineOrderToastPoll()) return;
@@ -228,10 +211,10 @@ export function OnlineOrderToast({ onOpenOnlineOrders, currentPage }: Props) {
     window.addEventListener(GETIR_ORDERS_POLLED_EVENT, onPolled);
 
     return () => {
-      supabase.removeChannel(channel);
+      unsubRealtime();
       window.removeEventListener(GETIR_ORDERS_POLLED_EVENT, onPolled);
     };
-  }, [tenant]);
+  }, [tenant, currentPage]);
 
   if (currentPage === 'online-orders') return null;
   if (toasts.length === 0) return null;

@@ -118,6 +118,17 @@ export function clearTableGridRuntimeCache(): void {
   tableGridRuntimeCache.clear();
 }
 
+/** Yalnızca aktif şube önbelleğini tut — şube değişiminde RAM şişmesin. */
+export function pruneTableGridRuntimeCache(keepKey: string | null): void {
+  if (!keepKey) {
+    tableGridRuntimeCache.clear();
+    return;
+  }
+  for (const key of tableGridRuntimeCache.keys()) {
+    if (key !== keepKey) tableGridRuntimeCache.delete(key);
+  }
+}
+
 /** Ayarlar → önbellek temizle: RAM + sessionStorage masa önbelleği. */
 export function clearAllTableGridSnapshots(): void {
   clearTableGridRuntimeCache();

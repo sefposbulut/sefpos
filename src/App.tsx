@@ -61,12 +61,7 @@ import {
 import { isSqlOnlineOnlyPage, sqlOnlineOnlyPageMessage } from './lib/sqlServerCompat';
 import { queryCache } from './lib/queryCache';
 import { SystemNotificationContainer } from './components/SystemNotificationBanner';
-import {
-  fetchSupportNotifications,
-  getDismissedIds,
-  isNotificationUnread,
-} from './lib/supportNotifications';
-import { processWipeLocalNotification, shouldAutoProcessWipeLocal } from './lib/remoteWipe';
+import { SUPPORT_NOTIF_BANNER_EVENT, type SupportNotifBannerDetail } from './lib/supportNotificationBridge';
 import { OnlineOrderToast } from './components/OnlineOrderToast';
 import { GlobalGetirSync } from './components/GlobalGetirSync';
 import { GlobalHybridSync } from './components/GlobalHybridSync';
@@ -291,6 +286,7 @@ export default function App() {
   const [systemNotifications, setSystemNotifications] = useState<SystemNotification[]>([]);
   const [isLocked, setIsLocked] = useState(false);
   const seenNotifIds = useRef<Set<string>>(new Set());
+  const SEEN_NOTIF_IDS_CAP = 500;
   const tableRefreshRef = useRef<(() => void) | null>(null);
 
   
@@ -340,6 +336,13 @@ export default function App() {
   const showNewNotification = useCallback((n: { id: string; title: string; message: string; type: string }) => {
     if (seenNotifIds.current.has(n.id)) return;
     seenNotifIds.current.add(n.id);
+    if (seenNotifIds.current.size > SEEN_NOTIF_IDS_CAP) {
+      let drop = seenNotifIds.current.size - SEEN_NOTIF_IDS_CAP;
+      for (const id of seenNotifIds.current) {
+        seenNotifIds.current.delete(id);
+        if (--drop <= 0) break;
+      }
+    }
     setSystemNotifications(prev => [...prev, { id: n.id, title: n.title, message: n.message, type: n.type || 'info' }]);
   }, []);
 
@@ -348,7 +351,9 @@ export default function App() {
     void (async () => {
       const { APP_VERSION } = await import('./lib/appVersion');
       queryCache.bustMenuCacheIfAppVersionChanged(APP_VERSION, tenant.id);
-      await queryCache.hydrateForTenant(tenant.id);
+      if (!isSqlServerMode()) {
+        await queryCache.hydrateForTenant(tenant.id);
+      }
     })();
   }, [tenant?.id]);
 
@@ -362,52 +367,14 @@ export default function App() {
   useEffect(() => {
     if (!tenant || !user || isSqlServerMode()) return;
 
-    const channel = supabase
-      .channel(`system-notifs-${tenant.id}`)
-      .on('postgres_changes', {
-        event: 'INSERT',
-        schema: 'public',
-        table: 'support_notifications',
-      }, (payload) => {
-        const n = payload.new as any;
-        if (n.tenant_id && n.tenant_id !== tenant.id) return;
-        if (n.type === 'revoke') return;
-        if (n.type === 'wipe_local') {
-          if (shouldAutoProcessWipeLocal(n, 'realtime')) {
-            void processWipeLocalNotification(n);
-          }
-          return;
-        }
-        showNewNotification(n);
-      })
-      .subscribe(async (status) => {
-        if (status === 'SUBSCRIBED') {
-          // Kanal baglanmadan hemen once gelen bildirimleri kacirmamak icin kisa pencere
-          const since = new Date(Date.now() - 60_000).toISOString();
-          const rows = await fetchSupportNotifications(tenant.id, 20);
-          const dismissed = getDismissedIds(tenant.id);
-          rows
-            .filter(
-              (n) =>
-                n.created_at >= since &&
-                isNotificationUnread(n, tenant.id, dismissed),
-            )
-            .reverse()
-            .forEach((n) => {
-              if (n.type === 'wipe_local') {
-                if (shouldAutoProcessWipeLocal(n, 'catchup')) {
-                  void processWipeLocalNotification(n);
-                }
-                return;
-              }
-              showNewNotification(n);
-            });
-        }
-      });
-
-    return () => {
-      supabase.removeChannel(channel);
+    const onBanner = (e: Event) => {
+      const detail = (e as CustomEvent<SupportNotifBannerDetail>).detail;
+      if (!detail?.id) return;
+      showNewNotification(detail);
     };
+
+    window.addEventListener(SUPPORT_NOTIF_BANNER_EVENT, onBanner);
+    return () => window.removeEventListener(SUPPORT_NOTIF_BANNER_EVENT, onBanner);
   }, [tenant, user, showNewNotification]);
 
   const handleTableGridRefresh = useCallback((fn: () => void) => {

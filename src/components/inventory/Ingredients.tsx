@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Plus, Search, AlertTriangle, X, Save, Trash2, RefreshCw, Boxes } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
+import { subscribeIngredientsRealtime } from '../../lib/ingredientsRealtimeHub';
 import { useAuth } from '../../contexts/AuthContext';
 
 interface Ingredient {
@@ -71,15 +72,8 @@ export function Ingredients() {
   useEffect(() => {
     void load();
     if (!tenant?.id) return;
-    const ch = supabase
-      .channel(`ingredients-${tenant.id}`)
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'ingredients', filter: `tenant_id=eq.${tenant.id}` },
-        () => { void load(); },
-      )
-      .subscribe();
-    return () => { try { supabase.removeChannel(ch); } catch { /* noop */ } };
+    const unsub = subscribeIngredientsRealtime(tenant.id, () => { void load(); });
+    return () => { unsub(); };
   }, [tenant?.id, load]);
 
   const filtered = useMemo(() => {

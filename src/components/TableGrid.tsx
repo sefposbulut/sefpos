@@ -3,12 +3,13 @@ import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { isModuleEnabled } from '../lib/modules';
 import { Database } from '../lib/supabase';
-import { Plus, Minus, Clock, Lock, ZoomIn, ZoomOut, ScanBarcode, Truck, Eye, EyeOff, Receipt, Maximize2, LayoutGrid } from 'lucide-react';
+import { Plus, Minus, ZoomIn, ZoomOut, ScanBarcode, Truck, Eye, EyeOff, Receipt, Maximize2, LayoutGrid } from 'lucide-react';
 import { useUiPrefs, setHeaderHidden } from '../lib/uiPrefs';
 import { ReprintReceiptModal } from './ReprintReceiptModal';
 import { isLocalMode, isOfflineMode, isSqlServerMode } from '../lib/sqlDb';
 import { warmOrderPanelBundle, bulkWarmOrderItemsForOrders, prefetchWarmOrderPanel } from '../lib/orderPanelWarm';
-import { LiveDuration } from './LiveDuration';
+import { FooterClock } from './FooterClock';
+import { TableGridCell, type TableGridCellModel } from './TableGridCell';
 import { getTrialInfo, formatTrialRemaining, type TenantTrialFields } from '../lib/tenantTrial';
 import { APP_DISPLAY_VERSION } from '../lib/appVersion';
 import {
@@ -21,6 +22,7 @@ import {
   buildOrderEmbedFromJoin,
   fetchRestaurantTablesForBranch,
   fetchCloudTableGridSnapshot,
+  pruneTableGridRuntimeCache,
   type TableGridCachedRow,
   type TableGroupCached,
   type TableGridOrderEmbed,
@@ -31,7 +33,6 @@ import {
   isStaleTableSnapshotAfterClear,
 } from '../lib/tableOptimisticClear';
 import { insertRestaurantTablesSkipDuplicates } from '../lib/restaurantTableBulk';
-import { subscribeLiveTick } from '../lib/liveTick';
 
 /** Her masa yenilemesinde RPC cagirmayalim — POS akisini yavaslatiyordu. */
 let lastStaleUnlockAt = 0;
@@ -290,9 +291,7 @@ export function TableGrid({
     [],
   );
 
-  // Footer kuşağı state'i: kullanıcı sağ tıklayınca açık masa toplam tutarını
-  // gizleyebilsin (kişisel tercih, cihaza yazılır). Saat/tarih için 30 sn'lik
-  // tikleyici aşağıda useEffect ile besleniyor.
+  // Footer kuşağı: kullanıcı sağ tıklayınca açık masa toplam tutarını gizleyebilir.
   const [footerAmountVisible, setFooterAmountVisible] = useState<boolean>(() => {
     try {
       const v = localStorage.getItem(FOOTER_AMOUNT_VISIBLE_KEY);
@@ -301,11 +300,6 @@ export function TableGrid({
       return true;
     }
   });
-  const [now, setNow] = useState<Date>(() => new Date());
-  useEffect(() => {
-    if (!isActive) return;
-    return subscribeLiveTick(() => setNow(new Date()));
-  }, [isActive]);
   useEffect(() => {
     try {
       localStorage.setItem(FOOTER_AMOUNT_VISIBLE_KEY, footerAmountVisible ? '1' : '0');
@@ -353,6 +347,10 @@ export function TableGrid({
     () => (tenant?.id && activeBranch?.id ? `${tenant.id}:${activeBranch.id}` : null),
     [tenant?.id, activeBranch?.id]
   );
+
+  useEffect(() => {
+    pruneTableGridRuntimeCache(cacheKey);
+  }, [cacheKey]);
 
   const getAutoMobileCols = useCallback((_count: number) => {
     // Mobilde varsayılan 4 sütun — kartlar daha dar, sağ kenar dokunulabilir kalır.
@@ -547,8 +545,8 @@ export function TableGrid({
       if (tablesReloadTimerRef.current) clearTimeout(tablesReloadTimerRef.current);
       tablesReloadTimerRef.current = setTimeout(() => {
         tablesReloadTimerRef.current = null;
-        void loadAll(false);
-      }, 800);
+        void loadAll(false, { silent: true });
+      }, 1_500);
     };
     window.addEventListener('sefpos:tables-changed', onTablesChanged);
     return () => {
@@ -744,6 +742,14 @@ export function TableGrid({
     onSelectTable(table);
   }, [onSelectTable]);
 
+  const handleCellSelect = useCallback((table: TableGridCellModel) => {
+    handleSelectTableInstant(table as TableWithOrder);
+  }, [handleSelectTableInstant]);
+
+  const handleCellPrefetch = useCallback((table: TableGridCellModel) => {
+    prefetchTableOrder(table as TableWithOrder);
+  }, [prefetchTableOrder]);
+
   useEffect(() => {
     if (!mobileColsTouched) return;
     try {
@@ -812,7 +818,7 @@ export function TableGrid({
     if (isSqlServerMode()) {
       timer = setInterval(() => {
         if (document.visibilityState === 'visible') void loadAll(false, { silent: true });
-      }, 45_000);
+      }, 90_000);
       return () => {
         if (timer) clearInterval(timer);
         if (updateTimerRef.current) clearTimeout(updateTimerRef.current);
@@ -913,12 +919,12 @@ export function TableGrid({
   }, [onRefresh, loadAll]);
 
   useEffect(() => {
-    if (!cacheKey) return;
+    if (!cacheKey || !isActive) return;
     tableGridRuntimeCache.set(cacheKey, {
       tables: tables as unknown as TableGridCachedRow[],
       groups: tableGroups as unknown as TableGroupCached[],
     });
-  }, [cacheKey, tables, tableGroups]);
+  }, [cacheKey, tables, tableGroups, isActive]);
 
   // tablesRef her render'da güncel olsun (subscription callback'leri için).
   useEffect(() => {
@@ -1297,71 +1303,20 @@ export function TableGrid({
               paddingBottom: 'calc(64px + env(safe-area-inset-bottom, 0px))',
             }}
           >
-          {filteredTables.map((table) => {
-            const isLocked = !!(table as any).payment_locked;
-            const isPartial = !isLocked && table.order?.payment_status === 'partial';
-            const bgColor = isPartial
-              ? 'bg-amber-500'
-              : table.status === 'occupied'
-                ? 'bg-green-600'
-                : 'bg-orange-500';
-            const tableNum = String(table.table_number);
-            const isMany = mobileTableCols >= 5;
-            const isMedium = mobileTableCols === 4;
-            const cardH = isMany ? 64 : isMedium ? 84 : 100;
-            const numFontSize = isMany
-              ? (tableNum.length <= 2 ? 20 : 14)
-              : isMedium
-                ? (tableNum.length <= 2 ? 26 : 18)
-                : (tableNum.length <= 2 ? 34 : tableNum.length <= 4 ? 24 : 18);
-            const subFontSize = isMany ? 11 : isMedium ? 12 : 14;
-            const dkFontSize = isMany ? 10 : isMedium ? 11 : 12;
-            return (
-              <button
-                key={table.id}
-                onPointerDown={(e) => {
-                  e.currentTarget.style.transform = 'scale(0.93)';
-                  if (!isLocked && table.current_order_id) prefetchTableOrder(table);
-                }}
-                onPointerUp={(e) => {
-                  e.currentTarget.style.transform = '';
-                  if (!isLocked && !mobileScrollMovedRef.current) handleSelectTableInstant(table);
-                }}
-                onPointerLeave={(e) => { e.currentTarget.style.transform = ''; }}
-                className={`${bgColor} rounded-xl flex flex-col items-center justify-center text-white shadow-lg relative select-none overflow-hidden touch-manipulation`}
-                style={{ height: cardH, transition: 'transform 0.08s ease' }}
-              >
-                {isLocked && (
-                  <div className="absolute top-1 right-1 rounded-full bg-black/25 p-0.5">
-                    <Lock style={{ width: isMany ? 12 : 16, height: isMany ? 12 : 16 }} className="text-white" />
-                  </div>
-                )}
-                <div className="font-black leading-none tracking-tight" style={{ fontSize: numFontSize, fontFamily: corporateFontFamily }}>{tableNum}</div>
-                {isLocked ? (
-                  <div className="font-bold opacity-90 tracking-tight" style={{ fontSize: dkFontSize, marginTop: 2, fontFamily: corporateFontFamily }}>ödeme</div>
-                ) : isPartial ? (
-                  <>
-                    <div className="font-black opacity-95 tracking-tight" style={{ fontSize: subFontSize, marginTop: 3, fontFamily: corporateFontFamily }}>
-                      {fmtInt(table.order!.remaining_amount ?? table.order!.total_amount)}
-                    </div>
-                    <div className="font-black opacity-95 tracking-wide" style={{ fontSize: dkFontSize, marginTop: 1, fontFamily: corporateFontFamily }}>KISMİ ÖD.</div>
-                  </>
-                ) : table.status === 'occupied' && table.order ? (
-                  <div className="font-black opacity-95 tracking-tight" style={{ fontSize: subFontSize, marginTop: 3, fontFamily: corporateFontFamily }}>
-                    {fmtInt(table.order.total_amount)}
-                  </div>
-                ) : (
-                  <div className="font-bold opacity-90 tracking-tight" style={{ fontSize: subFontSize, marginTop: 3, fontFamily: corporateFontFamily }}>BOŞ</div>
-                )}
-                {table.session_start && table.status === 'occupied' && !isLocked && !isPartial && (
-                  <div className="font-bold opacity-90 flex items-center gap-0.5 tracking-tight" style={{ fontSize: dkFontSize, marginTop: 2, fontFamily: corporateFontFamily }}>
-                    <Clock style={{ width: dkFontSize - 1, height: dkFontSize - 1 }} className="shrink-0" />
-                    <LiveDuration startTime={table.session_start} />
-                  </div>
-                )}
-              </button>
-            );
-          })}
+          {filteredTables.map((table) => (
+            <TableGridCell
+              key={table.id}
+              table={table}
+              variant="mobile"
+              colCount={mobileTableCols}
+              isActive={isActive}
+              corporateFontFamily={corporateFontFamily}
+              fmtInt={fmtInt}
+              onSelect={handleCellSelect}
+              onPrefetch={handleCellPrefetch}
+              mobileScrollMovedRef={mobileScrollMovedRef}
+            />
+          ))}
           </div>
         </div>
 
@@ -1451,72 +1406,19 @@ export function TableGrid({
         className="hidden md:grid gap-3 flex-1 min-h-0 overflow-y-auto pb-16"
         style={{ gridTemplateColumns: `repeat(${desktopTableCols}, minmax(0, 1fr))`, gridAutoRows: '1fr', alignContent: 'start' }}
       >
-        {filteredTables.map((table) => {
-          const isLocked = !!(table as any).payment_locked;
-          const isPartial = !isLocked && table.order?.payment_status === 'partial';
-          const statusColor = isPartial
-            ? 'bg-amber-500'
-            : table.status === 'occupied'
-              ? 'bg-green-600'
-              : table.status === 'reserved'
-                ? 'bg-yellow-500'
-                : 'bg-orange-500';
-          const tableNum = String(table.table_number);
-          const isSmall = desktopTableCols >= 9;
-          const isMedium = desktopTableCols >= 7;
-          const numFontSize = isSmall
-            ? (tableNum.length <= 2 ? 28 : 19)
-            : isMedium
-              ? (tableNum.length <= 2 ? 34 : 23)
-              : (tableNum.length <= 2 ? 44 : tableNum.length <= 4 ? 32 : 24);
-          const subFontSize = isSmall ? 14 : isMedium ? 16 : 18;
-          const dkFontSize = isSmall ? 12 : isMedium ? 13 : 14;
-          return (
-            <button
-              key={table.id}
-              onPointerDown={(e) => {
-                if (!isLocked) {
-                  e.currentTarget.style.transform = 'scale(0.93)';
-                  if (table.current_order_id) prefetchTableOrder(table);
-                }
-              }}
-              onPointerUp={(e) => { e.currentTarget.style.transform = ''; if (!isLocked) handleSelectTableInstant(table); }}
-              onPointerLeave={(e) => { e.currentTarget.style.transform = ''; }}
-              className={`${statusColor} rounded-2xl flex flex-col items-center justify-center text-white aspect-square shadow-lg hover:shadow-xl relative select-none overflow-hidden`}
-              style={{ transition: 'transform 0.08s ease', padding: isSmall ? 6 : 14 }}
-            >
-              {isLocked && (
-                <div className="absolute top-1.5 right-1.5 rounded-full bg-black/25 p-0.5">
-                  <Lock style={{ width: isSmall ? 14 : 18, height: isSmall ? 14 : 18 }} className="text-white" />
-                </div>
-              )}
-              <div className="font-black leading-none tracking-tight" style={{ fontSize: numFontSize, marginBottom: 4, fontFamily: corporateFontFamily }}>{table.table_number}</div>
-
-              {isLocked ? (
-                <div className="font-bold opacity-90 tracking-tight" style={{ fontSize: dkFontSize, fontFamily: corporateFontFamily }}>ödeme</div>
-              ) : isPartial ? (
-                <>
-                  <div className="font-black leading-tight tracking-tight" style={{ fontSize: subFontSize, fontFamily: corporateFontFamily }}>
-                    {fmtInt(table.order!.remaining_amount ?? table.order!.total_amount)}
-                  </div>
-                  <div className="font-black tracking-wide mt-1" style={{ fontSize: dkFontSize, fontFamily: corporateFontFamily }}>KISMİ ÖDEME</div>
-                </>
-              ) : table.status === 'occupied' && table.order ? (
-                <>
-                  <div className="font-black leading-tight tracking-tight" style={{ fontSize: subFontSize, fontFamily: corporateFontFamily }}>{fmtInt(table.order.total_amount)}</div>
-                  {table.session_start && (
-                    <div className="font-bold opacity-90 flex items-center gap-0.5 mt-1.5 tracking-tight" style={{ fontSize: dkFontSize, fontFamily: corporateFontFamily }}>
-                      <Clock style={{ width: dkFontSize, height: dkFontSize }} className="shrink-0" />
-                      <LiveDuration startTime={table.session_start} />
-                    </div>
-                  )}
-                </>
-              ) : (
-                <div className="font-bold opacity-85 tracking-tight" style={{ fontSize: subFontSize, fontFamily: corporateFontFamily }}>Boş</div>
-              )}
-            </button>
-          );
-        })}
+        {filteredTables.map((table) => (
+          <TableGridCell
+            key={table.id}
+            table={table}
+            variant="desktop"
+            colCount={desktopTableCols}
+            isActive={isActive}
+            corporateFontFamily={corporateFontFamily}
+            fmtInt={fmtInt}
+            onSelect={handleCellSelect}
+            onPrefetch={handleCellPrefetch}
+          />
+        ))}
       </div>
 
       {(() => {
@@ -1529,15 +1431,6 @@ export function TableGrid({
           return sum + (typeof remaining === 'number' ? remaining : total);
         }, 0);
         const totalLabel = fmtMoney(occupiedTotal);
-        const dateStr = now.toLocaleDateString('tr-TR', {
-          day: '2-digit',
-          month: '2-digit',
-          year: 'numeric',
-        });
-        const timeStr = now.toLocaleTimeString('tr-TR', {
-          hour: '2-digit',
-          minute: '2-digit',
-        });
         const trial = getTrialInfo(tenant as any);
         const firmName = (tenant as any)?.name?.trim() || '—';
         const licenseInfo = formatLicenseStatus(tenant as any);
@@ -1597,7 +1490,7 @@ export function TableGrid({
                   </span>
                 </button>
                 <FooterSep />
-                <span className="font-semibold tabular-nums">{dateStr} · {timeStr}</span>
+                <FooterClock active={isActive} />
               </div>
             </div>
           </div>

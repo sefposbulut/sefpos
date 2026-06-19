@@ -59,7 +59,10 @@ import {
   warmOrderItemsForPanel,
   takeWarmOrderItems,
   clearWarmOrderPanelCache,
+  evictWarmCachesForOrders,
   whenWarmOrderPanelReady,
+  ORDER_PANEL_SELECT,
+  PAYMENT_TRANSACTION_SELECT,
 } from '../lib/orderPanelWarm';
 import {
   PAYMENT_LOCK_TTL_MS,
@@ -940,6 +943,15 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
   }, [processBarcodeString]);
 
   useEffect(() => {
+    return () => {
+      for (const t of saveItemQuantityTimersRef.current.values()) {
+        clearTimeout(t);
+      }
+      saveItemQuantityTimersRef.current.clear();
+    };
+  }, []);
+
+  useEffect(() => {
     const electronAPI = (window as any).electronAPI;
     if (!electronAPI) return;
 
@@ -1117,10 +1129,10 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
       }
 
       const [orderRes, paymentsRes] = await Promise.all([
-        supabase.from('orders').select('*').eq('id', currentOrderId).maybeSingle(),
+        supabase.from('orders').select(ORDER_PANEL_SELECT).eq('id', currentOrderId).maybeSingle(),
         supabase
           .from('payment_transactions')
-          .select('*')
+          .select(PAYMENT_TRANSACTION_SELECT)
           .eq('order_id', currentOrderId)
           .order('created_at', { ascending: false }),
       ]);
@@ -1285,7 +1297,7 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
       });
 
       dispatchTablesGridReload();
-      requestHybridSync(0);
+      requestHybridSync(600);
 
       const branchId = (table as any).branch_id || activeBranch?.id;
       const destFresh = await fetchRestaurantTableWithOrder(
@@ -1930,7 +1942,7 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
 
       const orderForTotals = createdOrder ?? snapOrder ?? (await supabase
         .from('orders')
-        .select('*')
+        .select(ORDER_PANEL_SELECT)
         .eq('id', orderId!)
         .maybeSingle()
         .then((res) => res.data as Order | null));
@@ -2268,6 +2280,7 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
     }
 
     const stockOrderId = currentOrder.id;
+    evictWarmCachesForOrders([stockOrderId]);
     const stockItemsSnapshot = existingOrderItems;
     const orderItemsSnapshot = existingOrderItems;
 
@@ -2316,7 +2329,7 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
       console.error('Sipariş tamamlama (background):', e);
     });
 
-    requestHybridSync(0);
+    requestHybridSync(600);
 
     void applyOrderStockMovements(stockOrderId, stockItemsSnapshot).catch((e) => {
       console.warn('Stok hareketi tamamlanamadı:', e);

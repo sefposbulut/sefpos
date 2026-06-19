@@ -5,6 +5,9 @@
 
 const DEFAULT_SUPABASE_URL = 'https://xdfnozfuuzctubijbnds.supabase.co';
 const DEFAULT_SUPABASE_ANON_KEY = 'sb_publishable_wrSHY5Kzkw-bx0XzYM5VFA_FK3BFF_x';
+/** Rutin sync dongusunde masa/grup dedupe en fazla bu aralikta bir calisir. */
+const HYBRID_DEDUPE_MIN_MS = 30 * 60 * 1000;
+let lastRoutineHybridDedupeAt = 0;
 
 function supabaseBaseUrl() {
   return (process.env.VITE_SUPABASE_URL || DEFAULT_SUPABASE_URL).replace(/\/$/, '');
@@ -853,23 +856,27 @@ async function doHybridSyncCycle(deps) {
   const freshToken = await ensureHybridAccessToken(link, saveSettings);
   const branchCache = new Map();
   const TYPES = getSqlParamTypes();
-  await dedupeRestaurantTablesByNumber(
-    runSql,
-    TYPES,
-    cfg,
-    dbName,
-    link.sqlTenantId,
-    link.sqlBranchId,
-    pickSqlRow,
-  );
-  await dedupeTableGroupsByName(
-    runSql,
-    TYPES,
-    cfg,
-    dbName,
-    link.sqlTenantId,
-    link.sqlBranchId,
-  );
+  const dedupeNow = Date.now();
+  if (!lastRoutineHybridDedupeAt || dedupeNow - lastRoutineHybridDedupeAt >= HYBRID_DEDUPE_MIN_MS) {
+    await dedupeRestaurantTablesByNumber(
+      runSql,
+      TYPES,
+      cfg,
+      dbName,
+      link.sqlTenantId,
+      link.sqlBranchId,
+      pickSqlRow,
+    );
+    await dedupeTableGroupsByName(
+      runSql,
+      TYPES,
+      cfg,
+      dbName,
+      link.sqlTenantId,
+      link.sqlBranchId,
+    );
+    lastRoutineHybridDedupeAt = dedupeNow;
+  }
 
   const ctx = {
     link,
@@ -910,6 +917,12 @@ async function doHybridSyncCycle(deps) {
     pushedOrdersErrors: orders.errors.length,
     lastSyncAt: now,
     warning: syncError,
+    hadChanges:
+      (orders.pushed || 0) +
+        (orders.pulled || 0) +
+        (tables.synced || 0) +
+        (calls.pulled || 0) >
+      0,
   };
 }
 

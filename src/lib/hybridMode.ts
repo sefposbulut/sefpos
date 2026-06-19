@@ -12,6 +12,16 @@ export interface HybridLinkInfo {
   lastSyncError?: string | null;
 }
 
+export interface HybridSyncResult {
+  success?: boolean;
+  error?: string;
+  hadChanges?: boolean;
+  pushedOrders?: number;
+  pulledOrders?: number;
+  pushedTables?: number;
+  pulledCalls?: number;
+}
+
 export function isHybridMode(): boolean {
   if (!(eApi()?.isElectron)) return false;
   try {
@@ -123,17 +133,54 @@ let syncTimer: ReturnType<typeof setTimeout> | null = null;
 let syncInFlight = false;
 let syncQueued = false;
 let offlinePending = false;
+let lastSyncStartedAt = 0;
+let lastUiRefreshAt = 0;
 
-/** Senkron tamamlandiginda masa izgarasini tazele. */
+/** Ardışık tam senkronlar arası minimum süre (kasa kasmasın). */
+const MIN_SYNC_GAP_MS = 2_500;
+/** Masa ızgarasını yenileme üst sınırı. */
+const MIN_UI_REFRESH_GAP_MS = 2_000;
+/** Olay birleştirme (sipariş/masa burst). */
+const DEFAULT_SYNC_DEBOUNCE_MS = 900;
+
+function hybridSyncHadChanges(res: HybridSyncResult | null | undefined): boolean {
+  if (!res?.success) return false;
+  if (res.hadChanges === true) return true;
+  if (res.hadChanges === false) return false;
+  return (
+    (res.pushedOrders || 0) +
+      (res.pulledOrders || 0) +
+      (res.pushedTables || 0) +
+      (res.pulledCalls || 0) >
+    0
+  );
+}
+
+/** Senkron tamamlandiginda yalnizca veri degisti ise masa izgarasini tazele. */
 export function notifyHybridSyncSuccess(): void {
+  const now = Date.now();
+  if (now - lastUiRefreshAt < MIN_UI_REFRESH_GAP_MS) return;
+  lastUiRefreshAt = now;
   clearAllTableGridSnapshots();
   window.dispatchEvent(new CustomEvent('sefpos:tables-changed'));
 }
 
-async function executeHybridSync(): Promise<void> {
+async function executeHybridSync(force = false): Promise<void> {
   if (!isHybridMode() || !isHybridCloudLinked()) return;
   if (typeof navigator !== 'undefined' && !navigator.onLine) {
     offlinePending = true;
+    return;
+  }
+  const now = Date.now();
+  if (!force && now - lastSyncStartedAt < MIN_SYNC_GAP_MS) {
+    syncQueued = true;
+    if (!syncTimer) {
+      const wait = MIN_SYNC_GAP_MS - (now - lastSyncStartedAt);
+      syncTimer = setTimeout(() => {
+        syncTimer = null;
+        void executeHybridSync(false);
+      }, wait);
+    }
     return;
   }
   if (syncInFlight) {
@@ -144,25 +191,25 @@ async function executeHybridSync(): Promise<void> {
   if (!api?.hybridSyncNow) return;
 
   syncInFlight = true;
+  lastSyncStartedAt = Date.now();
   try {
-    const res = await api.hybridSyncNow();
-    if (res?.success) notifyHybridSyncSuccess();
+    const res = (await api.hybridSyncNow()) as HybridSyncResult | undefined;
+    if (hybridSyncHadChanges(res)) notifyHybridSyncSuccess();
   } catch {
     /* ignore */
   } finally {
     syncInFlight = false;
     if (syncQueued) {
       syncQueued = false;
-      void executeHybridSync();
+      void executeHybridSync(false);
     }
   }
 }
 
 /**
- * Hibrit: siparis/masa degisince bulut↔SQL aninda esitle.
- * @param delayMs Birlestirme suresi (varsayilan ~1 kare, ~16ms).
+ * Hibrit: siparis/masa degisince bulut↔SQL esitle (birlesik, kasmayi onler).
  */
-export function requestHybridSync(delayMs = 16): void {
+export function requestHybridSync(delayMs = DEFAULT_SYNC_DEBOUNCE_MS): void {
   if (!isHybridMode() || !isHybridCloudLinked()) return;
   if (typeof navigator !== 'undefined' && !navigator.onLine) {
     offlinePending = true;
@@ -171,7 +218,7 @@ export function requestHybridSync(delayMs = 16): void {
   if (syncTimer) clearTimeout(syncTimer);
   syncTimer = setTimeout(() => {
     syncTimer = null;
-    void executeHybridSync();
+    void executeHybridSync(false);
   }, delayMs);
 }
 
@@ -180,5 +227,7 @@ export function flushHybridSyncOnReconnect(): void {
   if (!isHybridMode() || !isHybridCloudLinked()) return;
   if (typeof navigator !== 'undefined' && !navigator.onLine) return;
   if (offlinePending) offlinePending = false;
-  requestHybridSync(0);
+  if (syncTimer) clearTimeout(syncTimer);
+  syncTimer = null;
+  void executeHybridSync(true);
 }

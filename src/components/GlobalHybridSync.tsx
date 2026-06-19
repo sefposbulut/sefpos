@@ -6,15 +6,31 @@ import {
   isHybridMode,
   requestHybridSync,
 } from '../lib/hybridMode';
+import { getActivePosPage, PAGE_CHANGE_EVENT } from '../lib/pageActivity';
 import { getCloudSupabaseClient } from '../lib/supabase';
 
-/** Yedek periyodik senkron (realtime kacirirsa). */
-const BACKUP_SYNC_MS = 2_000;
+/** Yedek periyodik senkron (realtime kacirirsa). Kasa kasmasin diye seyrek. */
+const BACKUP_SYNC_MS = 45_000;
 
-/** Hibrit mod: bulut ↔ SQL anlik senkron (online iken). */
+const LIVE_SYNC_PAGES = new Set([
+  'tables',
+  'takeaway',
+  'quick-sale',
+  'online-orders',
+  'desktop-home',
+]);
+
+function shouldRunHybridBackup(): boolean {
+  if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return false;
+  return LIVE_SYNC_PAGES.has(getActivePosPage());
+}
+
+/** Hibrit mod: bulut ↔ SQL senkron (online iken, POS ekranlarinda). */
 export function GlobalHybridSync() {
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const channelRef = useRef<RealtimeChannel | null>(null);
+  const cloudRef = useRef<ReturnType<typeof getCloudSupabaseClient> | null>(null);
+  const lastBackupAtRef = useRef(0);
 
   useEffect(() => {
     if (!isHybridMode() || !isHybridCloudLinked()) return;
@@ -23,12 +39,15 @@ export function GlobalHybridSync() {
 
     let cancelled = false;
 
+    const onRealtime = () => requestHybridSync(1_200);
+
     const startCloudRealtime = async () => {
       if (!api.getHybridCloudSession) return;
       const sess = await api.getHybridCloudSession();
       if (cancelled || !sess?.success || !sess.accessToken || !sess.cloudTenantId) return;
 
       const cloud = getCloudSupabaseClient();
+      cloudRef.current = cloud;
       await cloud.auth.setSession({
         access_token: sess.accessToken,
         refresh_token: sess.refreshToken || '',
@@ -41,17 +60,17 @@ export function GlobalHybridSync() {
         .on(
           'postgres_changes',
           { event: '*', schema: 'public', table: 'orders', filter: `tenant_id=eq.${tenantId}` },
-          () => requestHybridSync(0),
+          onRealtime,
         )
         .on(
           'postgres_changes',
           { event: '*', schema: 'public', table: 'order_items', filter: `tenant_id=eq.${tenantId}` },
-          () => requestHybridSync(0),
+          onRealtime,
         )
         .on(
           'postgres_changes',
           { event: 'UPDATE', schema: 'public', table: 'restaurant_tables', filter: `tenant_id=eq.${tenantId}` },
-          () => requestHybridSync(0),
+          onRealtime,
         )
         .subscribe();
 
@@ -60,20 +79,39 @@ export function GlobalHybridSync() {
 
     void startCloudRealtime();
 
-    requestHybridSync(0);
-    timerRef.current = setInterval(() => {
+    const runBackup = () => {
+      if (!shouldRunHybridBackup()) return;
+      const now = Date.now();
+      if (now - lastBackupAtRef.current < BACKUP_SYNC_MS - 5_000) return;
+      lastBackupAtRef.current = now;
       if (navigator.onLine) requestHybridSync(0);
-    }, BACKUP_SYNC_MS);
+    };
+
+    requestHybridSync(400);
+    timerRef.current = setInterval(runBackup, BACKUP_SYNC_MS);
 
     const onOnline = () => flushHybridSyncOnReconnect();
+    const onPage = () => runBackup();
+    const onVis = () => {
+      if (document.visibilityState === 'visible') runBackup();
+    };
+
     window.addEventListener('online', onOnline);
+    window.addEventListener(PAGE_CHANGE_EVENT, onPage);
+    document.addEventListener('visibilitychange', onVis);
 
     return () => {
       cancelled = true;
       if (timerRef.current) clearInterval(timerRef.current);
       window.removeEventListener('online', onOnline);
-      void channelRef.current?.unsubscribe();
+      window.removeEventListener(PAGE_CHANGE_EVENT, onPage);
+      document.removeEventListener('visibilitychange', onVis);
+      const cloud = cloudRef.current;
+      if (channelRef.current && cloud) {
+        void cloud.removeChannel(channelRef.current);
+      }
       channelRef.current = null;
+      cloudRef.current = null;
     };
   }, []);
 
