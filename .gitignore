@@ -38,3 +38,6 @@ scripts/_tmp-*.txt
 scripts/_tmp-*.log
 
 .git_commit_msg.tmp
+
+# Bulut / VDS dalı — ana kasa release'ini kirletmesin
+sefposbulut/
