@@ -8,6 +8,7 @@ import { supabase } from '../lib/supabase';
 import { isSqlServerMode } from '../lib/sqlDb';
 import { isActivePosPage, PAGE_CHANGE_EVENT } from '../lib/pageActivity';
 import { startAdaptivePoller } from '../lib/pollSchedule';
+import { ELECTRON_HEADER_ICON_BTN_CLASS } from '../lib/electronLayout';
 
 interface WaiterCall {
   id: string;
@@ -355,10 +356,10 @@ export function WaiterCallBell({ headerVariant = 'default' }: WaiterCallBellProp
         className={`relative rounded-lg transition-all active:scale-95 ${
           pendingCount > 0
             ? headerVariant === 'electron-bar'
-              ? 'h-10 w-10 inline-flex items-center justify-center text-white bg-white/25 hover:bg-white/35 ring-2 ring-white/45 shadow-md animate-pulse'
+              ? 'h-10 w-10 inline-flex items-center justify-center text-white bg-gradient-to-br from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 shadow-md animate-pulse'
               : 'p-1.5 md:p-2 text-white bg-gradient-to-br from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 shadow-md animate-pulse'
             : headerVariant === 'electron-bar'
-              ? 'h-10 w-10 inline-flex items-center justify-center text-white hover:text-white hover:bg-white/12'
+              ? `${ELECTRON_HEADER_ICON_BTN_CLASS}`
               : 'p-1.5 md:p-2 text-slate-600 hover:text-slate-900 hover:bg-slate-100'
         }`}
         title={pendingCount > 0 ? `${pendingCount} bekleyen garson çağrısı` : 'Garson çağrıları'}

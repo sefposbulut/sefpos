@@ -244,7 +244,7 @@ export function ElectronDesktopHome({
   return (
     <div className="fixed inset-0 z-[30] flex flex-col overflow-hidden select-none bg-[#eceff3] text-slate-900">
       <div className="relative flex flex-col flex-1 min-h-0">
-        <header className="shrink-0 mx-4 mt-4 rounded-2xl bg-gradient-to-br from-orange-500 via-orange-600 to-orange-700 text-white shadow-lg border border-orange-800/20">
+        <header className="shrink-0 mx-4 mt-4 rounded-2xl bg-white text-slate-800 shadow-sm border border-slate-200 border-t-[3px] border-t-orange-500">
           <div className="px-5 py-4 md:px-6 md:py-5 flex flex-col xl:flex-row xl:items-center xl:justify-between gap-4">
             <div className="flex items-center gap-3 min-w-0">
               <img
@@ -256,11 +256,11 @@ export function ElectronDesktopHome({
                 }}
               />
               <div className="min-w-0">
-                <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-white/75">Günlük özet</p>
-                <h1 className="text-2xl md:text-[1.75rem] font-black leading-tight tracking-tight">
+                <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Günlük özet</p>
+                <h1 className="text-2xl md:text-[1.75rem] font-black leading-tight tracking-tight text-slate-900">
                   Hoş geldiniz, {firstName}
                 </h1>
-                <p className="text-sm text-white/90 truncate">
+                <p className="text-sm text-slate-600 truncate">
                   {tenantName}
                   {activeBranch?.name ? ` · ${activeBranch.name}` : ''}
                 </p>
@@ -292,12 +292,12 @@ export function ElectronDesktopHome({
           </div>
           {!branchId && branches.length > 0 ? (
             <div className="px-5 pb-3 -mt-1 flex flex-wrap items-center gap-2">
-              <span className="text-xs text-amber-100 font-semibold">Şube seçin:</span>
+              <span className="text-xs text-orange-700 font-semibold">Şube seçin:</span>
               {branches.length === 1 ? (
                 <button
                   type="button"
                   onClick={() => setActiveBranch(branches[0]!)}
-                  className="text-xs font-bold bg-white/20 hover:bg-white/30 px-3 py-1 rounded-lg border border-white/30"
+                  className="text-xs font-bold bg-orange-50 hover:bg-orange-100 px-3 py-1 rounded-lg border border-orange-200 text-orange-800"
                 >
                   {branches[0]!.name}
                 </button>
@@ -461,9 +461,9 @@ function HeaderActions({
 
 function HubHeaderKpi({ label, value }: { label: string; value: string }) {
   return (
-    <div className="min-w-[92px] px-3 py-2 rounded-xl bg-white/15 border border-white/25 backdrop-blur-[2px]">
-      <p className="text-[9px] font-bold uppercase tracking-wide text-white/75 leading-tight">{label}</p>
-      <p className="text-sm md:text-base font-black tabular-nums truncate mt-0.5">{value}</p>
+    <div className="min-w-[92px] px-3 py-2 rounded-xl bg-slate-50 border border-slate-200">
+      <p className="text-[9px] font-bold uppercase tracking-wide text-slate-500 leading-tight">{label}</p>
+      <p className="text-sm md:text-base font-black tabular-nums truncate mt-0.5 text-slate-900">{value}</p>
     </div>
   );
 }

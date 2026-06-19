@@ -48,9 +48,10 @@ export function ConnectionModeBadge({
   const display = getConnectionModeDisplay(effectiveMode);
 
   if (electronHeader) {
+    const palette = toneClass;
     return (
       <span
-        className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-white/10 border border-white/20 text-[10px] font-bold text-white/90 ${className}`}
+        className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-bold border ${palette[display.tone]} ${className}`}
         title={display.description}
       >
         <ModeIcon tone={display.tone} />
