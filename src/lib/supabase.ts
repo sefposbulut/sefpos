@@ -2,6 +2,10 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { sqlDb, localDb, isSqlServerMode, isLocalMode } from './sqlDb';
 import { isHybridMode } from './hybridMode';
 import { installSupabaseDiagnostics, recordHttpRequest } from './resourceDiagnostics';
+import {
+  purgeSupabaseAuthLocalStorage,
+  sanitizeSupabaseAuthStorageOnBoot,
+} from './authSessionSnap';
 
 const isElectronRuntime = !!(window as any).electronAPI;
 const runtimeDbUrl = localStorage.getItem('shefpos_db_url');
@@ -199,23 +203,39 @@ export async function invokeEdgeFunction<T = unknown>(
  * yeniden girişi önlemek için).
  */
 const sefposAuthClientBox: { client: SupabaseClient<Database> | null } = { client: null };
+let invalidRefreshHandled = false;
+let invalidRefreshPurgeInFlight = false;
 
-async function clearInvalidRefreshSessionIfNeeded(href: string, res: Response): Promise<void> {
-  if (!href.includes('/auth/v1/token') || res.status !== 400) return;
+/** AuthContext: gecersiz refresh sonrasi yeniden refresh denemesini atla. */
+export function consumeInvalidRefreshHandled(): boolean {
+  const v = invalidRefreshHandled;
+  invalidRefreshHandled = false;
+  return v;
+}
+
+async function clearInvalidRefreshSessionIfNeeded(href: string, res: Response): Promise<boolean> {
+  if (!href.includes('/auth/v1/token') || res.status !== 400) return false;
   let body = '';
   try {
     body = (await res.clone().text()).toLowerCase();
   } catch {
-    return;
+    return false;
   }
   const invalid =
     body.includes('invalid_refresh_token') ||
     body.includes('invalid refresh token') ||
     body.includes('refresh token not found') ||
     body.includes('refresh_token_not_found');
-  if (!invalid) return;
+  if (!invalid) return false;
+  if (invalidRefreshPurgeInFlight) return true;
+  invalidRefreshPurgeInFlight = true;
+  invalidRefreshHandled = true;
+  purgeSupabaseAuthLocalStorage();
   const client = sefposAuthClientBox.client;
-  if (!client) return;
+  if (!client) {
+    invalidRefreshPurgeInFlight = false;
+    return true;
+  }
   queueMicrotask(() => {
     void (async () => {
       try {
@@ -226,9 +246,16 @@ async function clearInvalidRefreshSessionIfNeeded(href: string, res: Response): 
         } catch {
           /* ignore */
         }
+      } finally {
+        invalidRefreshPurgeInFlight = false;
       }
     })();
   });
+  return true;
+}
+
+if (typeof window !== 'undefined') {
+  sanitizeSupabaseAuthStorageOnBoot();
 }
 
 const realSupabase = createClient(supabaseUrl, supabaseAnonKey, {
@@ -324,8 +351,8 @@ const realSupabase = createClient(supabaseUrl, supabaseAnonKey, {
           });
       }
       return nativeFetch(input as RequestInfo, init as RequestInit | undefined).then(async (res) => {
-        await clearInvalidRefreshSessionIfNeeded(href, res);
-        if (import.meta.env.DEV && href.includes('/auth/v1/') && !res.ok) {
+        const authCleared = await clearInvalidRefreshSessionIfNeeded(href, res);
+        if (import.meta.env.DEV && href.includes('/auth/v1/') && !res.ok && !authCleared) {
           try {
             const snippet = (await res.clone().text()).slice(0, 900);
             const log = res.status >= 500 ? console.error : console.warn;

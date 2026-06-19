@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { User, Session } from '@supabase/supabase-js';
-import { supabase, getRealSupabaseClient } from '../lib/supabase';
+import { supabase, getRealSupabaseClient, consumeInvalidRefreshHandled } from '../lib/supabase';
 import { Database } from '../lib/supabase';
 import { isSqlServerMode, isLocalMode, isElectronCloudMode } from '../lib/sqlDb';
 import { isHybridMode } from '../lib/hybridMode';
@@ -34,6 +34,9 @@ import {
   persistAuthSessionSnap,
   readAuthSessionSnap,
   resolveBootAuthState,
+  isRefreshTokenNotFoundError,
+  purgeSupabaseAuthLocalStorage,
+  readStoredSupabaseRefreshToken,
 } from '../lib/authSessionSnap';
 
 type Profile = Database['public']['Tables']['profiles']['Row'];
@@ -737,7 +740,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         try {
           const { data: { session } } = await supabase.auth.getSession();
           await applySession(session);
-        } catch {
+        } catch (err) {
+          if (isRefreshTokenNotFoundError(err)) {
+            purgeSupabaseAuthLocalStorage();
+            try {
+              await supabase.auth.signOut({ scope: 'local' });
+            } catch {
+              /* ignore */
+            }
+            if (!cancelled) await applySession(null);
+            return;
+          }
           if (cancelled) return;
           await new Promise((r) => setTimeout(r, 60));
           if (cancelled) return;
@@ -777,6 +790,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             }
             return;
           }
+          if (consumeInvalidRefreshHandled()) {
+            await applySession(null);
+            return;
+          }
+          if (!readStoredSupabaseRefreshToken()) {
+            await applySession(null);
+            return;
+          }
           // GoTrue bazen gecici SIGNED_OUT yayinlar (uyku, ag, yarim refresh).
           await new Promise((r) => setTimeout(r, 350));
           try {
@@ -793,7 +814,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             } else {
               await applySession(null);
             }
-          } catch {
+          } catch (err) {
+            if (isRefreshTokenNotFoundError(err)) {
+              purgeSupabaseAuthLocalStorage();
+              try {
+                await supabase.auth.signOut({ scope: 'local' });
+              } catch {
+                /* ignore */
+              }
+            }
             if (!cancelled) await applySession(null);
           }
         })();

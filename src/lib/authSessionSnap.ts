@@ -47,6 +47,75 @@ export function clearAuthSessionSnap(): void {
   }
 }
 
+/** GoTrue oturum anahtarlarini temizle (gecersiz refresh token sonrasi). */
+export function purgeSupabaseAuthLocalStorage(): void {
+  try {
+    const keys: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && (k.endsWith('-auth-token') || k.includes('supabase.auth'))) keys.push(k);
+    }
+    for (const k of keys) localStorage.removeItem(k);
+  } catch {
+    /* ignore */
+  }
+  clearAuthSessionSnap();
+}
+
+function parseAuthStorageRefreshToken(raw: string): string | null {
+  try {
+    const parsed = JSON.parse(raw) as {
+      refresh_token?: string;
+      currentSession?: { refresh_token?: string };
+    };
+    const rt = parsed.refresh_token ?? parsed.currentSession?.refresh_token;
+    return typeof rt === 'string' && rt.length > 0 ? rt : null;
+  } catch {
+    return null;
+  }
+}
+
+/** localStorage'daki Supabase refresh token (yoksa null). */
+export function readStoredSupabaseRefreshToken(): string | null {
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (!k || (!k.endsWith('-auth-token') && !k.includes('supabase.auth'))) continue;
+      const raw = localStorage.getItem(k);
+      if (!raw) continue;
+      const rt = parseAuthStorageRefreshToken(raw);
+      if (rt) return rt;
+    }
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
+/**
+ * Uygulama acilisinda: auth kaydi var ama refresh token yoksa GoTrue 400 dongusune
+ * girmeden once temizle.
+ */
+export function sanitizeSupabaseAuthStorageOnBoot(): boolean {
+  if (typeof window === 'undefined') return false;
+  if (!hasLikelyStoredAuthSession()) return false;
+  if (readStoredSupabaseRefreshToken()) return false;
+  purgeSupabaseAuthLocalStorage();
+  return true;
+}
+
+export function isRefreshTokenNotFoundError(err: unknown): boolean {
+  const msg = String((err as { message?: string })?.message ?? err ?? '').toLowerCase();
+  const code = String((err as { code?: string })?.code ?? '').toLowerCase();
+  return (
+    code === 'refresh_token_not_found' ||
+    msg.includes('refresh_token_not_found') ||
+    msg.includes('refresh token not found') ||
+    msg.includes('invalid refresh token') ||
+    msg.includes('invalid_refresh_token')
+  );
+}
+
 function resolveActiveBranch(snap: AuthSessionSnap): Branch | null {
   try {
     const lsId = localStorage.getItem(ACTIVE_BRANCH_LS_KEY);
