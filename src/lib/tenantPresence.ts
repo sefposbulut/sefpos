@@ -1,5 +1,6 @@
 import { supabase } from './supabase';
 import { startAdaptivePoller } from './pollSchedule';
+import { isElectronRuntime } from './electronSessionHygiene';
 
 export const PROFILE_BASE_SELECT =
   'id, tenant_id, full_name, email, role, branch_id' as const;
@@ -95,8 +96,8 @@ export async function fetchOnlineProfileIdsByTenant(
 }
 
 /** Açık uygulama: ~90 sn nabız (gizli sekme: yok). Admin çevrimiçi göstergesi için. */
-const LAST_ACTIVE_PING_MS = 90_000;
-const LAST_ACTIVE_PING_IDLE_MS = 180_000;
+const LAST_ACTIVE_PING_MS = isElectronRuntime() ? 180_000 : 90_000;
+const LAST_ACTIVE_PING_IDLE_MS = isElectronRuntime() ? 300_000 : 180_000;
 
 let stopPingPoller: (() => void) | null = null;
 let kickoffTimer: ReturnType<typeof setTimeout> | null = null;

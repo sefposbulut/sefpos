@@ -39,6 +39,19 @@ import {
   readStoredSupabaseRefreshToken,
 } from '../lib/authSessionSnap';
 
+/** Electron acilisinda agir liste on-yuklemesi kasar — ilgili sayfa acilinca yuklenir. */
+function warmPosCachesIfWeb(tenantId: string, branchId: string): void {
+  if (typeof window !== 'undefined' && (window as any).electronAPI) return;
+  if (isLocalMode() || isSqlServerMode()) return;
+  prefetchCloudTableGrid(tenantId, branchId);
+  prefetchTakeawayActiveOrders(tenantId, branchId);
+  prefetchOnlineOrders(tenantId);
+}
+
+let profileLoadInflight: Promise<void> | null = null;
+let lastProfileLoadFinishedAt = 0;
+const PROFILE_LOAD_MIN_GAP_MS = 45_000;
+
 type Profile = Database['public']['Tables']['profiles']['Row'];
 type Tenant = Database['public']['Tables']['tenants']['Row'];
 type Role = Database['public']['Tables']['roles']['Row'];
@@ -305,9 +318,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // taraf indaki sessionStorage/RAM cache'inden anlik tile'lari cizer; bu
       // arka plan istegi tamamlandiginda da otomatik olarak guncellenir.
       if (nextBranch && !isLocalMode() && !isSqlServerMode()) {
-        prefetchCloudTableGrid(tenantId, nextBranch.id);
-        prefetchTakeawayActiveOrders(tenantId, nextBranch.id);
-        prefetchOnlineOrders(tenantId);
+        warmPosCachesIfWeb(tenantId, nextBranch.id);
       }
       setActiveBranchState(nextBranch);
       return { active: nextBranch, list: branchList };
@@ -318,7 +329,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const loadProfile = async (userId: string) => {
+  const loadProfile = async (userId: string, opts?: { force?: boolean }) => {
+    const now = Date.now();
+    if (!opts?.force) {
+      if (profileLoadInflight) return profileLoadInflight;
+      if (now - lastProfileLoadFinishedAt < PROFILE_LOAD_MIN_GAP_MS) return;
+    }
+
+    const run = (async () => {
     try {
       setProfileLoadFailed(false);
 
@@ -639,7 +657,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       });
     } catch {
       setProfileLoadFailed(true);
+    } finally {
+      lastProfileLoadFinishedAt = Date.now();
+      profileLoadInflight = null;
     }
+    })();
+
+    profileLoadInflight = run;
+    return run;
   };
 
   useEffect(() => {
@@ -647,15 +672,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     hideBootSplash();
     const tid = boot.snap.tenant.id;
     const bid = boot.activeBranch?.id;
-    if (bid && !isLocalMode() && !isSqlServerMode()) {
-      prefetchCloudTableGrid(tid, bid);
-      prefetchTakeawayActiveOrders(tid, bid);
-      prefetchOnlineOrders(tid);
-    }
-    if (boot.user?.id) {
-      void loadProfile(boot.user.id);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    if (bid) warmPosCachesIfWeb(tid, bid);
+    // loadProfile: applySession/getSession zaten cagirir — cift profil yuklemesi yapma
   }, []);
 
   useEffect(() => {
@@ -1354,9 +1372,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     localStorage.setItem('shefpos_active_branch', branch.id);
     const tid = tenant?.id;
     if (tid && !isLocalMode() && !isSqlServerMode()) {
-      prefetchCloudTableGrid(tid, branch.id);
-      prefetchTakeawayActiveOrders(tid, branch.id);
-      prefetchOnlineOrders(tid);
+      warmPosCachesIfWeb(tid, branch.id);
     }
   };
 

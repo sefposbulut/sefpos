@@ -514,8 +514,8 @@ export function TakeawayOrders({ isActive = true }: TakeawayOrdersProps) {
     let lastSig = '';
     const stopPoll = startAdaptivePoller({
       diagLabel: 'takeaway-backup-poll',
-      baseMs: 120_000,
-      idleMs: 180_000,
+      baseMs: 180_000,
+      idleMs: 300_000,
       hiddenMs: 0,
       run: async () => {
         if (formOpenRef.current) return;

@@ -6,6 +6,8 @@ import { AuthProvider } from './contexts/AuthContext';
 import { ElectronDesktopShell } from './components/ElectronDesktopShell';
 import { PublicMenu } from './components/PublicMenu';
 import { hideBootSplash } from './lib/bootSplash';
+import { installDevPerfBoot } from './lib/devPerfBoot';
+import { installElectronSessionHygiene } from './lib/electronSessionHygiene';
 
 /**
  * Üst seviye Error Boundary. Tek bir alt component runtime hatası verirse
@@ -191,6 +193,8 @@ function renderApp() {
 }
 
 renderApp();
+installDevPerfBoot();
+installElectronSessionHygiene();
 
 // React mount sonrasi HTML splash hemen kalksin (cift splash suresi kisalir)
 requestAnimationFrame(() => hideBootSplash());

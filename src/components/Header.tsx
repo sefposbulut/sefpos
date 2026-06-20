@@ -34,7 +34,14 @@ import {
   ELECTRON_HEADER_ACCENT_CHIP_CLASS,
   ELECTRON_HEADER_ICON_BTN_CLASS,
   ELECTRON_HEADER_LOGO_CLASS,
-  ELECTRON_HEADER_SLOGAN_CLASS,
+  ELECTRON_HEADER_BRAND_BLOCK,
+  ELECTRON_HEADER_BRAND_NAME,
+  ELECTRON_HEADER_SLOGAN_LINE,
+  ELECTRON_HEADER_SLOGAN_BLOCK,
+  ELECTRON_HEADER_HOME_BTN_CLASS,
+  ELECTRON_HEADER_TOOLBAR_GROUP,
+  ELECTRON_HEADER_ROW_CLASS,
+  ELECTRON_HEADER_PADDING,
   ELECTRON_HEADER_TOOL_H,
   ELECTRON_HEADER_LOGOUT_CLASS,
 } from '../lib/electronLayout';
@@ -333,57 +340,72 @@ function HeaderInner({ onOpenSettings, onOpenOnboarding, currentPage, onBackToTa
             : 'fixed top-0 left-0 right-0 bg-white shadow-sm border-b border-slate-200 z-30'
         }
       >
-        <div className={isElectron ? 'px-3 md:px-6' : 'px-3 md:px-6'}>
-          <div className="flex justify-between items-center h-14 md:h-20 w-full">
+        <div className={isElectron ? `${ELECTRON_HEADER_PADDING} overflow-hidden` : 'px-3 md:px-6'}>
+          <div className={isElectron ? ELECTRON_HEADER_ROW_CLASS : 'flex justify-between items-center h-14 md:h-20 w-full'}>
             <div
-              className={`flex items-center gap-2 md:gap-3 min-w-0 ${isElectron ? '' : 'ml-12 md:ml-16'}`}
+              className={`flex items-center gap-2 min-w-0 flex-1 ${isElectron ? '' : 'ml-12 md:ml-16'}`}
             >
               {isElectron ? (
-                <div className={`flex items-center gap-2 md:gap-3 shrink-0 ${onBackToTables ? '' : ''}`}>
-                  {onBackToTables ? (
-                    <button
-                      type="button"
-                      onClick={onBackToTables}
-                      className="md:hidden flex-shrink-0 rounded-full active:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-400"
-                      aria-label="Ana sayfa"
-                    >
+                <>
+                  <div className={ELECTRON_HEADER_BRAND_BLOCK}>
+                    {onBackToTables && !onTablesHub ? (
+                      <button
+                        type="button"
+                        onClick={onBackToTables}
+                        title="Ana sayfa"
+                        aria-label="Ana sayfa"
+                        className="shrink-0 rounded-full hover:opacity-90 active:scale-95 transition focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-400"
+                      >
+                        <img
+                          src={logoSrc}
+                          alt="ŞefPOS"
+                          className={`${ELECTRON_HEADER_LOGO_CLASS} pointer-events-none`}
+                          draggable={false}
+                          onError={(e) => {
+                            (e.currentTarget as HTMLImageElement).src = publicAsset('logo.png');
+                          }}
+                        />
+                      </button>
+                    ) : (
                       <img
                         src={logoSrc}
                         alt="ŞefPOS"
-                        className={`${ELECTRON_HEADER_LOGO_CLASS} pointer-events-none`}
+                        className={ELECTRON_HEADER_LOGO_CLASS}
                         draggable={false}
                         onError={(e) => {
                           (e.currentTarget as HTMLImageElement).src = publicAsset('logo.png');
                         }}
                       />
-                    </button>
-                  ) : null}
-                  <div className={`items-center gap-2 md:gap-3 ${onBackToTables ? 'hidden md:flex' : 'flex'}`}>
-                    <img
-                      src={logoSrc}
-                      alt="ŞefPOS"
-                      className={ELECTRON_HEADER_LOGO_CLASS}
-                      draggable={false}
-                      onError={(e) => {
-                        (e.currentTarget as HTMLImageElement).src = publicAsset('logo.png');
-                      }}
-                    />
-                    <div className="flex flex-col justify-center min-w-0 sm:hidden">
-                      <span className="text-[9px] font-semibold uppercase tracking-widest text-slate-500 leading-none">
-                        Yeni nesil
-                      </span>
-                      <span className="text-sm font-extrabold text-slate-800 leading-tight">adisyon</span>
-                    </div>
-                    <div className={ELECTRON_HEADER_SLOGAN_CLASS}>
-                      <span className="text-[10px] md:text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500 leading-none">
-                        Yeni nesil
-                      </span>
-                      <span className="text-base md:text-lg font-extrabold text-slate-800 tracking-tight leading-tight mt-0.5">
-                        adisyon
-                      </span>
+                    )}
+                    <div className={ELECTRON_HEADER_SLOGAN_BLOCK}>
+                      <span className={ELECTRON_HEADER_BRAND_NAME}>ŞefPOS</span>
+                      <span className={ELECTRON_HEADER_SLOGAN_LINE}>Her Masada Var</span>
                     </div>
                   </div>
-                </div>
+                  {onTablesHub && onBackToTables && (
+                    <button
+                      type="button"
+                      onClick={onBackToTables}
+                      title="Ana sayfa"
+                      aria-label="Ana sayfa"
+                      className={ELECTRON_HEADER_HOME_BTN_CLASS}
+                    >
+                      <Home className="w-[18px] h-[18px] shrink-0" strokeWidth={2.25} />
+                      <span className="hidden sm:inline text-xs font-semibold whitespace-nowrap">Ana sayfa</span>
+                    </button>
+                  )}
+                  {showBackNav && pageLabel && (
+                    <button
+                      type="button"
+                      onClick={onBackToTables}
+                      title="Ana sayfaya dön"
+                      className={`hidden lg:inline-flex ${ELECTRON_HEADER_CHIP_CLASS} pl-2 pr-2.5 ml-1 flex-shrink-0`}
+                    >
+                      <ArrowLeft className="w-4 h-4 text-slate-500" strokeWidth={2.25} />
+                      <span className="text-xs font-semibold text-slate-600">Geri</span>
+                    </button>
+                  )}
+                </>
               ) : (
                 <>
                   {onBackToTables ? (
@@ -410,7 +432,7 @@ function HeaderInner({ onOpenSettings, onOpenOnboarding, currentPage, onBackToTa
                 </>
               )}
 
-              {onTablesHub && onBackToTables && (
+              {!isElectron && onTablesHub && onBackToTables && (
                 <button
                   type="button"
                   onClick={onBackToTables}
@@ -421,7 +443,7 @@ function HeaderInner({ onOpenSettings, onOpenOnboarding, currentPage, onBackToTa
                 </button>
               )}
 
-              {showBackNav && onBackToTables && (
+              {showBackNav && onBackToTables && !isElectron && (
                 <>
                   <button
                     type="button"
@@ -467,8 +489,8 @@ function HeaderInner({ onOpenSettings, onOpenOnboarding, currentPage, onBackToTa
             </div>
 
             <div
-              className={`flex items-center gap-1 md:gap-1.5 ${
-                isElectron ? 'md:gap-2' : 'space-x-1.5 md:space-x-2'
+              className={`flex items-center gap-1 md:gap-1.5 shrink-0 ${
+                isElectron ? 'md:gap-1.5' : 'space-x-1.5 md:space-x-2'
               }`}
             >
               {impersonationTenantId && (
@@ -487,10 +509,7 @@ function HeaderInner({ onOpenSettings, onOpenOnboarding, currentPage, onBackToTa
                   </button>
                 </div>
               )}
-              {isElectron && (
-                <ConnectionModeBadge mode={readElectronDbMode()} electronHeader />
-              )}
-              {showTrialBadge && (
+              {showTrialBadge && !isElectron && (
                 <button
                   type="button"
                   onClick={() => setShowTrialInfo(true)}
@@ -533,7 +552,7 @@ function HeaderInner({ onOpenSettings, onOpenOnboarding, currentPage, onBackToTa
                 </button>
               )}
 
-              {showLicenseBadge && (
+              {showLicenseBadge && !isElectron && (
                 <button
                   type="button"
                   onClick={() => setShowLicenseInfo(true)}
@@ -545,36 +564,64 @@ function HeaderInner({ onOpenSettings, onOpenOnboarding, currentPage, onBackToTa
                   className={`hidden sm:inline-flex items-center gap-2 pl-1 pr-3 py-1 rounded-full transition active:scale-95 bg-transparent hover:bg-slate-100/70`}
                 >
                   <span
-                    className={`w-7 h-7 rounded-full flex items-center justify-center shadow-inner ${
-                      licenseInfo.expired
-                        ? 'bg-gradient-to-br from-red-500 to-rose-600'
-                        : licenseUrgent
-                          ? 'bg-gradient-to-br from-amber-400 to-orange-500'
-                          : 'bg-gradient-to-br from-emerald-400 to-teal-600'
-                    }`}
+                    className={
+                      isElectron
+                        ? ''
+                        : `w-7 h-7 rounded-full flex items-center justify-center shadow-inner ${
+                            licenseInfo.expired
+                              ? 'bg-gradient-to-br from-red-500 to-rose-600'
+                              : licenseUrgent
+                                ? 'bg-gradient-to-br from-amber-400 to-orange-500'
+                                : 'bg-gradient-to-br from-emerald-400 to-teal-600'
+                          }`
+                    }
                   >
-                    <Key className="w-3.5 h-3.5 text-white" />
-                  </span>
-                  <span className="flex items-baseline gap-1.5 leading-none">
-                    <span
-                      className={`text-[9px] md:text-[10px] uppercase tracking-[0.12em] font-bold ${
-                        licenseInfo.expired ? 'text-red-600' : 'text-slate-500'
+                    <Key
+                      className={`${isElectron ? 'w-3.5 h-3.5' : 'w-3.5 h-3.5 text-white'} ${
+                        isElectron
+                          ? licenseInfo.expired
+                            ? 'text-red-600'
+                            : licenseUrgent
+                              ? 'text-orange-600'
+                              : 'text-emerald-600'
+                          : ''
                       }`}
-                    >
-                      Lisans
-                    </span>
+                    />
+                  </span>
+                  {isElectron ? (
                     <span
-                      className={`text-sm md:text-base font-extrabold whitespace-nowrap ${
+                      className={`text-xs font-bold tabular-nums whitespace-nowrap ${
                         licenseInfo.expired
                           ? 'text-red-700'
                           : licenseUrgent
                             ? 'text-orange-700'
-                            : 'text-slate-800'
+                            : 'text-slate-700'
                       }`}
                     >
                       {licenseInfo.expired ? 'Süre bitti' : licenseInfo.remainingText}
                     </span>
-                  </span>
+                  ) : (
+                    <span className="flex items-baseline gap-1.5 leading-none">
+                      <span
+                        className={`text-[9px] md:text-[10px] uppercase tracking-[0.12em] font-bold ${
+                          licenseInfo.expired ? 'text-red-600' : 'text-slate-500'
+                        }`}
+                      >
+                        Lisans
+                      </span>
+                      <span
+                        className={`text-sm md:text-base font-extrabold whitespace-nowrap ${
+                          licenseInfo.expired
+                            ? 'text-red-700'
+                            : licenseUrgent
+                              ? 'text-orange-700'
+                              : 'text-slate-800'
+                        }`}
+                      >
+                        {licenseInfo.expired ? 'Süre bitti' : licenseInfo.remainingText}
+                      </span>
+                    </span>
+                  )}
                 </button>
               )}
 
@@ -655,7 +702,9 @@ function HeaderInner({ onOpenSettings, onOpenOnboarding, currentPage, onBackToTa
               )}
 
               <div
-                className={`flex items-center gap-2 px-2.5 rounded-lg min-w-0 flex-shrink overflow-hidden ${ELECTRON_HEADER_CHIP_CLASS} max-w-[44px] sm:max-w-[160px] md:max-w-[11rem]`}
+                className={`flex items-center gap-1.5 px-2 rounded-lg min-w-0 flex-shrink overflow-hidden ${ELECTRON_HEADER_CHIP_CLASS} ${
+                  isElectron ? 'w-10 md:w-auto max-w-none' : 'max-w-[44px] sm:max-w-[160px] md:max-w-[11rem]'
+                }`}
                 title={`${userLabel} — ${roleLabels[profile?.role || ''] || profile?.role}`}
               >
                 <User className="w-[18px] h-[18px] flex-shrink-0 text-slate-500" />
@@ -669,7 +718,7 @@ function HeaderInner({ onOpenSettings, onOpenOnboarding, currentPage, onBackToTa
                 </div>
               </div>
 
-              {(profile?.role === 'owner' || profile?.role === 'admin') && onOpenOnboarding && (
+              {(profile?.role === 'owner' || profile?.role === 'admin') && onOpenOnboarding && !onTablesHub && (
                 <button
                   onClick={onOpenOnboarding}
                   className={`hidden md:inline-flex ${ELECTRON_HEADER_ACCENT_CHIP_CLASS} px-3 text-xs font-semibold`}
@@ -680,7 +729,7 @@ function HeaderInner({ onOpenSettings, onOpenOnboarding, currentPage, onBackToTa
                 </button>
               )}
 
-              <div className={isElectron ? 'hidden sm:flex items-center gap-1' : 'hidden sm:contents'}>
+              <div className={isElectron ? ELECTRON_HEADER_TOOLBAR_GROUP : 'hidden sm:contents'}>
               <WaiterCallBell headerVariant={isElectron ? 'electron-bar' : 'default'} />
 
               <button
@@ -700,7 +749,9 @@ function HeaderInner({ onOpenSettings, onOpenOnboarding, currentPage, onBackToTa
                     })();
                   }
                 }}
-                className={`relative rounded-lg transition-all active:scale-95 ${ELECTRON_HEADER_ICON_BTN_CLASS}`}
+                className={`relative rounded-lg transition-all active:scale-95 ${
+                  isElectron ? 'p-2 hover:bg-white text-slate-600' : ELECTRON_HEADER_ICON_BTN_CLASS
+                }`}
                 title="Bildirimler"
               >
                 <Bell className="w-[18px] h-[18px]" strokeWidth={2} />
@@ -715,7 +766,9 @@ function HeaderInner({ onOpenSettings, onOpenOnboarding, currentPage, onBackToTa
 
               <button
                 onClick={() => { setShowSupport(!showSupport); setShowNotifications(false); }}
-                className={`hidden sm:inline-flex rounded-lg transition-all active:scale-95 ${ELECTRON_HEADER_ICON_BTN_CLASS}`}
+                className={`hidden sm:inline-flex rounded-lg transition-all active:scale-95 ${
+                  isElectron ? 'p-2 hover:bg-white text-slate-600' : ELECTRON_HEADER_ICON_BTN_CLASS
+                }`}
                 title="Destek"
               >
                 <HeadphonesIcon className="w-[18px] h-[18px]" strokeWidth={2} />
@@ -723,15 +776,23 @@ function HeaderInner({ onOpenSettings, onOpenOnboarding, currentPage, onBackToTa
 
               <button
                 onClick={onOpenSettings}
-                className={`hidden sm:inline-flex rounded-lg transition-all active:scale-95 ${ELECTRON_HEADER_ICON_BTN_CLASS}`}
+                className={`hidden sm:inline-flex rounded-lg transition-all active:scale-95 ${
+                  isElectron ? 'p-2 hover:bg-white text-slate-600' : ELECTRON_HEADER_ICON_BTN_CLASS
+                }`}
                 title="Ayarlar"
               >
                 <Settings className="w-[18px] h-[18px]" strokeWidth={2} />
               </button>
 
+              <span className={isElectron ? 'hidden md:block w-px h-6 bg-slate-200 mx-0.5' : 'hidden'} aria-hidden />
+
               {/* Arayuz olcegi (her ortamda calisir, kalicidir). */}
               <div
-                className={`hidden md:flex items-center gap-0.5 rounded-lg px-1 ${ELECTRON_HEADER_CHIP_CLASS} w-auto px-1.5`}
+                className={
+                  isElectron
+                    ? 'hidden md:flex items-center gap-0.5 px-0.5'
+                    : `hidden md:flex items-center gap-0.5 rounded-lg px-1 ${ELECTRON_HEADER_CHIP_CLASS} w-auto px-1.5`
+                }
               >
                 <button
                   onClick={() => changeZoom(-UI_SCALE_STEP)}
@@ -761,7 +822,9 @@ function HeaderInner({ onOpenSettings, onOpenOnboarding, currentPage, onBackToTa
               {/* Tam Ekran POS — ust meunyu gizler, kalicidir. Sadece masaustu. */}
               <button
                 onClick={() => setHeaderHidden(true)}
-                className={`hidden md:inline-flex rounded-lg transition-all active:scale-95 ${ELECTRON_HEADER_ICON_BTN_CLASS}`}
+                className={`hidden md:inline-flex rounded-lg transition-all active:scale-95 ${
+                  isElectron ? 'p-2 hover:bg-white text-slate-600' : ELECTRON_HEADER_ICON_BTN_CLASS
+                }`}
                 title="Tam Ekran POS modu (üst menüyü gizle)"
               >
                 <Minimize2 className="w-[18px] h-[18px]" strokeWidth={2} />

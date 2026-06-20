@@ -439,8 +439,20 @@ export function resolveReceiptBusinessHeader(
  */
 let _lastCloudPullAt: number = 0;
 
+let lastPrintSettingsCloudFetchAt = 0;
+const PRINT_SETTINGS_CLOUD_MIN_MS = 120_000;
+let printSettingsCloudInflight: Promise<PrintSettings | null> | null = null;
+
 export async function fetchPrintSettingsFromCloud(): Promise<PrintSettings | null> {
   if (!_currentTenantId) return null;
+  const now = Date.now();
+  if (now - lastPrintSettingsCloudFetchAt < PRINT_SETTINGS_CLOUD_MIN_MS) {
+    return loadPrintSettings();
+  }
+  if (printSettingsCloudInflight) return printSettingsCloudInflight;
+
+  printSettingsCloudInflight = (async () => {
+  lastPrintSettingsCloudFetchAt = now;
   // Snapshot: ağ çağrısı sırasında kullanıcı tenant/branch değiştirebilir.
   // Aşağıda dönen yanıt yalnızca bu (tenant, branch) için cache'e yazılır;
   // değişmişse yanıtı kullanmadan döneriz — başka tenant'ın anahtarına
@@ -543,7 +555,11 @@ export async function fetchPrintSettingsFromCloud(): Promise<PrintSettings | nul
   } catch (err: any) {
     console.warn('[ŞefPOS] print_settings cloud fetch exception:', err?.message || err);
     return null;
+  } finally {
+    printSettingsCloudInflight = null;
   }
+  })();
+  return printSettingsCloudInflight;
 }
 
 async function pushPrintSettingsToCloud(settings: PrintSettings): Promise<void> {

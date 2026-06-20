@@ -60,6 +60,34 @@ const fs = require('fs');
 const os = require('os');
 const https = require('https');
 
+/** Windows/Electron: stdout kapalıyken console.* EPIPE ile main process'i çökertmesin. */
+function installSafeConsolePipes() {
+  const swallow = (stream) => {
+    if (!stream || typeof stream.on !== 'function') return;
+    stream.on('error', (err) => {
+      if (err && (err.code === 'EPIPE' || err.code === 'ENOTCONN')) return;
+    });
+  };
+  swallow(process.stdout);
+  swallow(process.stderr);
+}
+installSafeConsolePipes();
+
+process.on('uncaughtException', (err) => {
+  if (err && (err.code === 'EPIPE' || err.code === 'ENOTCONN')) return;
+  safeConsoleWrite(console.error, '[sefpos-main] uncaughtException:', err?.message || err);
+});
+
+function safeConsoleWrite(writeFn, ...args) {
+  try {
+    writeFn(...args);
+  } catch (err) {
+    if (err?.code !== 'EPIPE' && err?.code !== 'ENOTCONN') {
+      /* ignore broken pipe */
+    }
+  }
+}
+
 /** Repo kökündeki sefpos-dev-port.json — tek kaynak (Vite ile aynı) */
 function readSefposDevServerPort() {
   try {
@@ -1327,9 +1355,9 @@ const PRINT_AGENT_PORT = 7878;
 function paLog(level, message, extra) {
   const prefix = '[print-agent]';
   const args = extra !== undefined ? [prefix, message, extra] : [prefix, message];
-  if (level === 'error') console.error(...args);
-  else if (level === 'warn') console.warn(...args);
-  else console.log(...args);
+  if (level === 'error') safeConsoleWrite(console.error, ...args);
+  else if (level === 'warn') safeConsoleWrite(console.warn, ...args);
+  else safeConsoleWrite(console.log, ...args);
   try {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('print-agent-log', {
@@ -2040,6 +2068,9 @@ async function fetchPendingJobs() {
 
 let realtimeWs = null;
 let realtimeReconnectTimer = null;
+let realtimeReconnectAttempts = 0;
+const REALTIME_RECONNECT_BASE_MS = 8_000;
+const REALTIME_RECONNECT_MAX_MS = 120_000;
 let realtimeConnected = false;
 let currentTenantId = null;
 let currentBranchId = null;
@@ -2049,6 +2080,8 @@ let pendingJobsPollTimer = null;
 let pendingJobsFetchInFlight = false;
 /** Önceki: 1 sn — üst üste binen HTTP/yazdırma tüm Windows'u kilitleyebiliyordu */
 const PENDING_JOBS_POLL_MS = 15_000;
+/** Realtime bağlıyken yedek poll seyrek (gün boyu açık kasada HTTP birikimini keser) */
+const PENDING_JOBS_POLL_REALTIME_MS = 45_000;
 const PENDING_JOBS_POLL_SQL_MS = 25_000;
 // Son register-printers çağrısındaki kasa yazıcı listesi. processPrintJob
 // içinde printer_name boş geldiğinde (mobile/web fallback insertleri)
@@ -2141,27 +2174,73 @@ function pickDefaultKitchenPrinter() {
 // job kontrolü (üst üste istek yok). Realtime çalışıyorsa fiş anında basılır.
 function startPendingJobsPolling() {
   if (pendingJobsPollTimer) return;
-  const tickMs = isElectronSqlServerMode() ? PENDING_JOBS_POLL_SQL_MS : PENDING_JOBS_POLL_MS;
-  pendingJobsPollTimer = setInterval(() => {
+
+  const scheduleNext = () => {
     const sqlMode = isElectronSqlServerMode();
-    if (!currentTenantId || (!sqlMode && !currentUserJwt)) return;
-    if (pendingJobsFetchInFlight) return;
-    pendingJobsFetchInFlight = true;
-    fetchPendingJobs()
-      .catch(() => {})
-      .finally(() => {
-        pendingJobsFetchInFlight = false;
-      });
-    if (!sqlMode && !realtimeConnected && currentTenantId && currentUserJwt) {
-      try { connectRealtimePrintAgent(); } catch {}
-    }
-  }, tickMs);
+    const delay = sqlMode
+      ? PENDING_JOBS_POLL_SQL_MS
+      : realtimeConnected
+        ? PENDING_JOBS_POLL_REALTIME_MS
+        : PENDING_JOBS_POLL_MS;
+    pendingJobsPollTimer = setTimeout(() => {
+      pendingJobsPollTimer = null;
+      const sqlModeTick = isElectronSqlServerMode();
+      if (!currentTenantId || (!sqlModeTick && !currentUserJwt)) {
+        scheduleNext();
+        return;
+      }
+      if (pendingJobsFetchInFlight) {
+        scheduleNext();
+        return;
+      }
+      pendingJobsFetchInFlight = true;
+      fetchPendingJobs()
+        .catch(() => {})
+        .finally(() => {
+          pendingJobsFetchInFlight = false;
+        });
+      if (!sqlModeTick && !realtimeConnected && currentTenantId && currentUserJwt && !realtimeReconnectTimer) {
+        scheduleRealtimeReconnect('poll-fallback');
+      }
+      scheduleNext();
+    }, delay);
+  };
+
+  scheduleNext();
 }
 function stopPendingJobsPolling() {
   if (pendingJobsPollTimer) {
-    clearInterval(pendingJobsPollTimer);
+    clearTimeout(pendingJobsPollTimer);
     pendingJobsPollTimer = null;
   }
+}
+
+function clearRealtimeReconnectTimer() {
+  if (realtimeReconnectTimer) {
+    clearTimeout(realtimeReconnectTimer);
+    realtimeReconnectTimer = null;
+  }
+}
+
+function scheduleRealtimeReconnect(reason) {
+  if (isElectronSqlServerMode()) return;
+  if (!currentTenantId || !currentUserJwt) return;
+  if (realtimeReconnectTimer) return;
+  const delay = Math.min(
+    REALTIME_RECONNECT_BASE_MS * Math.pow(1.6, realtimeReconnectAttempts),
+    REALTIME_RECONNECT_MAX_MS,
+  );
+  realtimeReconnectAttempts += 1;
+  paLog('warn', 'Realtime yeniden bağlanma planlandı', { reason, delayMs: Math.round(delay) });
+  realtimeReconnectTimer = setTimeout(() => {
+    realtimeReconnectTimer = null;
+    try {
+      connectRealtimePrintAgent();
+    } catch (err) {
+      paLog('warn', 'Realtime bağlanma denemesi başarısız', { message: err?.message || String(err) });
+      scheduleRealtimeReconnect('connect-failed');
+    }
+  }, delay);
 }
 
 function connectRealtimePrintAgent() {
@@ -2169,7 +2248,10 @@ function connectRealtimePrintAgent() {
   // Do not open realtime socket before authenticated tenant context exists.
   if (!currentTenantId || !currentUserJwt) return;
 
+  clearRealtimeReconnectTimer();
+
   if (realtimeWs) {
+    try { realtimeWs.removeAllListeners(); } catch {}
     try { realtimeWs.close(); } catch {}
     realtimeWs = null;
   }
@@ -2183,10 +2265,21 @@ function connectRealtimePrintAgent() {
 
   let heartbeatInterval = null;
   let msgRef = 1;
+  let closed = false;
+
+  const cleanup = () => {
+    if (heartbeatInterval) {
+      clearInterval(heartbeatInterval);
+      heartbeatInterval = null;
+    }
+    if (realtimeWs === ws) realtimeWs = null;
+    realtimeConnected = false;
+  };
 
   ws.on('open', () => {
+    realtimeReconnectAttempts = 0;
     realtimeConnected = true;
-    console.log('Supabase Realtime bağlandı (Print Agent)');
+    paLog('log', 'Supabase Realtime bağlandı (Print Agent)');
 
     const filter = currentTenantId
       ? `tenant_id=eq.${currentTenantId}`
@@ -2209,16 +2302,24 @@ function connectRealtimePrintAgent() {
       payload.access_token = currentUserJwt;
     }
 
-    ws.send(JSON.stringify({
-      topic: 'realtime:public:print_jobs',
-      event: 'phx_join',
-      payload,
-      ref: String(msgRef++),
-    }));
+    try {
+      ws.send(JSON.stringify({
+        topic: 'realtime:public:print_jobs',
+        event: 'phx_join',
+        payload,
+        ref: String(msgRef++),
+      }));
+    } catch (err) {
+      paLog('warn', 'Realtime join gönderilemedi', { message: err?.message || String(err) });
+    }
 
     heartbeatInterval = setInterval(() => {
       if (ws.readyState === ws.OPEN) {
-        ws.send(JSON.stringify({ topic: 'phoenix', event: 'heartbeat', payload: {}, ref: String(msgRef++) }));
+        try {
+          ws.send(JSON.stringify({ topic: 'phoenix', event: 'heartbeat', payload: {}, ref: String(msgRef++) }));
+        } catch {
+          /* socket kapanıyor */
+        }
       }
     }, 25000);
 
@@ -2247,19 +2348,21 @@ function connectRealtimePrintAgent() {
         }
       }
     } catch (err) {
-      console.error('Realtime mesaj hatası:', err.message);
+      paLog('warn', 'Realtime mesaj hatası', { message: err?.message || String(err) });
     }
   });
 
   ws.on('close', () => {
-    realtimeConnected = false;
-    if (heartbeatInterval) { clearInterval(heartbeatInterval); heartbeatInterval = null; }
-    console.log('Supabase Realtime bağlantısı kesildi. 5 saniye sonra yeniden bağlanılacak...');
-    realtimeReconnectTimer = setTimeout(connectRealtimePrintAgent, 5000);
+    if (closed) return;
+    closed = true;
+    cleanup();
+    paLog('log', 'Supabase Realtime bağlantısı kesildi.');
+    scheduleRealtimeReconnect('close');
   });
 
   ws.on('error', (err) => {
-    console.error('Realtime WebSocket hatası:', err.message);
+    paLog('warn', 'Realtime WebSocket hatası', { message: err?.message || String(err) });
+    // close olayı gelince tek noktadan yeniden bağlanır
   });
 }
 
@@ -3164,8 +3267,9 @@ ipcMain.handle('register-printers', async (_, { tenantId, branchId, userJwt }) =
 
     if (!isElectronSqlServerMode()) {
       if (tenantChanged || branchChanged || !realtimeConnected) {
-        console.log('Tenant/branch değişti, Realtime yeniden bağlanıyor...');
+        paLog('log', 'Tenant/branch değişti, Realtime yeniden bağlanıyor...');
         processingJobIds.clear();
+        realtimeReconnectAttempts = 0;
         connectRealtimePrintAgent();
       } else {
         fetchPendingJobs();

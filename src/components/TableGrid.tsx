@@ -11,6 +11,8 @@ import { warmOrderPanelBundle, bulkWarmOrderItemsForOrders, prefetchWarmOrderPan
 import { FooterClock } from './FooterClock';
 import { TableGridCell, type TableGridCellModel } from './TableGridCell';
 import { getTrialInfo, formatTrialRemaining, type TenantTrialFields } from '../lib/tenantTrial';
+import { getLicenseInfo } from '../lib/licenseDisplay';
+import { getConnectionModeDisplay, readElectronDbMode } from '../lib/connectionMode';
 import { APP_DISPLAY_VERSION } from '../lib/appVersion';
 import {
   tableGridRuntimeCache,
@@ -34,6 +36,9 @@ import {
 } from '../lib/tableOptimisticClear';
 import { insertRestaurantTablesSkipDuplicates } from '../lib/restaurantTableBulk';
 
+/** Realtime burst birlestirme — 200ms yerine kasa icin daha uzun. */
+const TABLE_GRID_FLUSH_DEBOUNCE_MS = 800;
+const TABLE_GRID_MAX_FLUSH_BATCH = 28;
 /** Her masa yenilemesinde RPC cagirmayalim — POS akisini yavaslatiyordu. */
 let lastStaleUnlockAt = 0;
 const STALE_UNLOCK_MIN_MS = 5 * 60 * 1000;
@@ -63,20 +68,13 @@ function prettyPlan(plan: string | null | undefined): string {
   return PLAN_LABELS[k] || (plan.charAt(0).toUpperCase() + plan.slice(1));
 }
 
-function formatLicenseStatus(tenant: TenantTrialFields | null | undefined): string {
-  if (!tenant) return '—';
-  const trial = getTrialInfo(tenant);
-  if (trial.isTrial) {
-    return trial.expired ? 'Deneme (süresi doldu)' : `Deneme · ${formatTrialRemaining(trial)}`;
+function formatFooterLicense(tenant: TenantTrialFields | null | undefined): string {
+  const info = getLicenseInfo(tenant);
+  if (info.isTrial) {
+    return info.expired ? 'Deneme (süresi doldu)' : `Deneme · ${info.remainingText}`;
   }
-  const s = (tenant.subscription_status || '').toLowerCase();
-  const map: Record<string, string> = {
-    active: 'Aktif',
-    suspended: 'Askıya alındı',
-    cancelled: 'İptal',
-    trial: 'Deneme',
-  };
-  return map[s] || tenant.subscription_status || '—';
+  if (info.expired || info.blocked) return info.statusLabel;
+  return info.remainingText || info.statusLabel;
 }
 
 function FooterInfoItem({
@@ -338,6 +336,8 @@ export function TableGrid({
   const channelsRef = useRef<ReturnType<typeof supabase.channel>[]>([]);
   const pendingUpdatesRef = useRef<Set<string>>(new Set());
   const updateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flushInFlightRef = useRef(false);
+  const orderIdToTableIdRef = useRef<Map<string, string>>(new Map());
   const tablesRef = useRef<TableWithOrder[]>([]);
   /** Mobil masa listesinde kaydırma ile yanlışlıkla masa açılmasını önler */
   const mobilePointerStartRef = useRef<{ x: number; y: number } | null>(null);
@@ -458,8 +458,8 @@ export function TableGrid({
           tables: mapped as unknown as TableGridCachedRow[],
           groups: groups as unknown as TableGroupCached[],
         });
-        const warmIds = mapped.map((t) => t.current_order_id);
-        if (!isSqlServerMode()) {
+        const warmIds = mapped.map((t) => t.current_order_id).filter(Boolean).slice(0, 6);
+        if (!isSqlServerMode() && warmIds.length > 0) {
           setTimeout(() => bulkWarmOrderItemsForOrders(warmIds), 0);
         }
       } catch (e) {
@@ -509,8 +509,8 @@ export function TableGrid({
             { keepOpenTab: !resetGroup && prev === null },
           ),
         );
-        const warmIds = mapped.map((t) => t.current_order_id);
-        if (!isSqlServerMode()) {
+        const warmIds = mapped.map((t) => t.current_order_id).filter(Boolean).slice(0, 6);
+        if (!isSqlServerMode() && warmIds.length > 0) {
           queueMicrotask(() => bulkWarmOrderItemsForOrders(warmIds));
         }
       } else {
@@ -595,9 +595,19 @@ export function TableGrid({
 
   const flushPendingUpdates = useCallback(async () => {
     if (pendingUpdatesRef.current.size === 0) return;
-    const ids = Array.from(pendingUpdatesRef.current);
-    pendingUpdatesRef.current.clear();
+    if (flushInFlightRef.current) {
+      if (updateTimerRef.current) clearTimeout(updateTimerRef.current);
+      updateTimerRef.current = setTimeout(flushPendingUpdates, TABLE_GRID_FLUSH_DEBOUNCE_MS);
+      return;
+    }
+    flushInFlightRef.current = true;
+    const ids = Array.from(pendingUpdatesRef.current).slice(0, TABLE_GRID_MAX_FLUSH_BATCH);
+    for (const id of ids) pendingUpdatesRef.current.delete(id);
 
+    /** Realtime artimli guncelleme: join total yeter; order_items toplami + DB sync yok. */
+    const enrichLite = { lite: true, alwaysItemSum: false, syncOrderTotals: false as const };
+
+    try {
     if (isSqlServerMode()) {
       const { data: tableRows } = await supabase
         .from('restaurant_tables')
@@ -627,7 +637,7 @@ export function TableGrid({
             payment_status: (row.payment_status as string | null) ?? null,
           });
         }
-        await enrichTableGridOrders(orderMap, { lite: true, alwaysItemSum: true, syncOrderTotals: true });
+        await enrichTableGridOrders(orderMap, enrichLite);
       }
 
       const updatedRows: TableWithOrder[] = (tableRows as any[]).map((t) => {
@@ -671,7 +681,7 @@ export function TableGrid({
         orderMap.set(embed.id, embed);
       }
       if (orderMap.size > 0) {
-        await enrichTableGridOrders(orderMap, { lite: true, alwaysItemSum: true, syncOrderTotals: true });
+        await enrichTableGridOrders(orderMap, enrichLite);
         for (const row of updatedRows) {
           const oid = row.order?.id;
           if (!oid) continue;
@@ -712,18 +722,76 @@ export function TableGrid({
         }),
       );
     }
+    } finally {
+      flushInFlightRef.current = false;
+      if (pendingUpdatesRef.current.size > 0) {
+        if (updateTimerRef.current) clearTimeout(updateTimerRef.current);
+        updateTimerRef.current = setTimeout(flushPendingUpdates, TABLE_GRID_FLUSH_DEBOUNCE_MS);
+      }
+    }
   }, []);
 
   const scheduleUpdate = useCallback((tableId: string) => {
     pendingUpdatesRef.current.add(tableId);
     if (updateTimerRef.current) clearTimeout(updateTimerRef.current);
-    updateTimerRef.current = setTimeout(flushPendingUpdates, 200);
+    updateTimerRef.current = setTimeout(flushPendingUpdates, TABLE_GRID_FLUSH_DEBOUNCE_MS);
   }, [flushPendingUpdates]);
 
   const findTableIdByOrderId = useCallback((orderId: string | null | undefined) => {
     if (!orderId) return null;
-    const t = tablesRef.current.find(x => x.current_order_id === orderId);
-    return t?.id || null;
+    return orderIdToTableIdRef.current.get(orderId) ?? null;
+  }, []);
+
+  /** orders UPDATE — bellek icinde yama; HTTP flush yok (Realtime firtinasi kesilir). */
+  const patchTableFromOrderRow = useCallback((newRow: Record<string, unknown>, oldRow?: Record<string, unknown>) => {
+    const orderId = String(newRow.id || '');
+    const tableId = String(newRow.table_id || oldRow?.table_id || '');
+    if (!orderId && !tableId) return false;
+
+    const rows = tablesRef.current;
+    const relevant = rows.some(
+      (t) => (tableId && t.id === tableId) || (orderId && t.current_order_id === orderId),
+    );
+    if (!relevant) return false;
+
+    const status = String(newRow.status || '').toLowerCase();
+    const closed = status === 'closed' || status === 'cancelled' || status === 'completed';
+
+    setTables((prev) =>
+      prev.map((t) => {
+        const matchesTable = tableId && t.id === tableId;
+        const matchesOrder = orderId && t.current_order_id === orderId;
+        if (!matchesTable && !matchesOrder) return t;
+
+        if (closed && matchesOrder) {
+          const cleared = {
+            ...t,
+            current_order_id: null,
+            status: 'available' as const,
+            order: undefined,
+          };
+          return isStaleTableSnapshotAfterClear(t.id, t, cleared) ? t : cleared;
+        }
+
+        if (!orderId) return t;
+        const total = Number(newRow.total_amount ?? t.order?.total_amount ?? 0);
+        const ps = (newRow.payment_status as string | null | undefined) ?? t.order?.payment_status ?? null;
+        const patched = {
+          ...t,
+          status: t.status === 'available' ? ('occupied' as const) : t.status,
+          current_order_id: t.current_order_id || orderId,
+          order: {
+            id: orderId,
+            total_amount: total,
+            order_number: String(newRow.order_number ?? t.order?.order_number ?? ''),
+            payment_status: ps,
+            remaining_amount: ps === 'paid' ? 0 : ps === 'partial' ? t.order?.remaining_amount ?? total : total,
+          },
+        };
+        return isStaleTableSnapshotAfterClear(t.id, t, patched) ? t : patched;
+      }),
+    );
+    return true;
   }, []);
 
   const scheduleGroupsReload = useCallback(() => {
@@ -846,52 +914,40 @@ export function TableGrid({
         const id = (payload.new as any)?.id;
         if (id) scheduleUpdate(id);
       })
-      // 2) Sipariş (yeni açılış / güncelleme / iptal/kapanış)
+      // 2) Sipariş — UPDATE bellek yaması; INSERT/DELETE icin batch flush
       .on('postgres_changes', {
-        event: '*',
+        event: 'UPDATE',
         schema: 'public',
         table: 'orders',
         filter: `branch_id=eq.${activeBranch.id}`,
       }, (payload) => {
-        const newRow: any = payload.new;
-        const oldRow: any = payload.old;
-        if (payload.eventType === 'INSERT') {
-          const tableId = newRow?.table_id;
-          if (tableId) scheduleUpdate(tableId);
-          return;
-        }
-        if (payload.eventType === 'DELETE') {
-          const tableId = oldRow?.table_id;
-          if (tableId) scheduleUpdate(tableId);
-          return;
-        }
-        // UPDATE
-        const tableId = newRow?.table_id || oldRow?.table_id;
+        const newRow = (payload.new || {}) as Record<string, unknown>;
+        const oldRow = (payload.old || {}) as Record<string, unknown>;
+        if (patchTableFromOrderRow(newRow, oldRow)) return;
+        const tableId = String(newRow.table_id || oldRow.table_id || '');
         if (tableId) scheduleUpdate(tableId);
       })
-      // 3) Sipariş satırları → bağlı masanın total/remaining'i güncellensin
       .on('postgres_changes', {
-        event: '*',
+        event: 'INSERT',
         schema: 'public',
-        table: 'order_items',
-        filter: `tenant_id=eq.${tenant.id}`,
+        table: 'orders',
+        filter: `branch_id=eq.${activeBranch.id}`,
       }, (payload) => {
-        const orderId = (payload.new as any)?.order_id || (payload.old as any)?.order_id;
-        const tableId = findTableIdByOrderId(orderId);
+        const tableId = (payload.new as any)?.table_id;
         if (tableId) scheduleUpdate(tableId);
       })
-      // 4) Parça/full ödemeler → kalan tutar/payment_status anında değişsin
       .on('postgres_changes', {
-        event: '*',
+        event: 'DELETE',
         schema: 'public',
-        table: 'payment_transactions',
-        filter: `tenant_id=eq.${tenant.id}`,
+        table: 'orders',
+        filter: `branch_id=eq.${activeBranch.id}`,
       }, (payload) => {
-        const orderId = (payload.new as any)?.order_id || (payload.old as any)?.order_id;
-        const tableId = findTableIdByOrderId(orderId);
+        const tableId = (payload.old as any)?.table_id;
         if (tableId) scheduleUpdate(tableId);
       })
-      // 5) Masa grupları (ad/renk/sıra değiştiğinde tek seferde tazele)
+      // order_items / payment_transactions tenant geneli dinlenmez — her kalem HTTP firtinasi yapardi.
+      // Tutar/odeme orders UPDATE ile gelir; kismi odeme icin payment_status=partial flush yeter.
+      // 3) Masa grupları (ad/renk/sıra değiştiğinde tek seferde tazele)
       .on('postgres_changes', {
         event: '*',
         schema: 'public',
@@ -912,7 +968,7 @@ export function TableGrid({
       channelsRef.current.forEach(ch => supabase.removeChannel(ch));
       channelsRef.current = [];
     };
-  }, [tenant?.id, activeBranch?.id, isActive, loadAll, scheduleUpdate, findTableIdByOrderId, scheduleGroupsReload]);
+  }, [tenant?.id, activeBranch?.id, isActive, loadAll, scheduleUpdate, scheduleGroupsReload, patchTableFromOrderRow]);
 
   useEffect(() => {
     if (onRefresh) onRefresh(loadAll);
@@ -926,9 +982,14 @@ export function TableGrid({
     });
   }, [cacheKey, tables, tableGroups, isActive]);
 
-  // tablesRef her render'da güncel olsun (subscription callback'leri için).
+  // tablesRef + orderId→masa haritasi (Realtime O(1) lookup).
   useEffect(() => {
     tablesRef.current = tables;
+    const m = new Map<string, string>();
+    for (const t of tables) {
+      if (t.current_order_id) m.set(String(t.current_order_id), t.id);
+    }
+    orderIdToTableIdRef.current = m;
   }, [tables]);
 
   useEffect(() => {
@@ -1404,7 +1465,7 @@ export function TableGrid({
 
       <div
         className="hidden md:grid gap-3 flex-1 min-h-0 overflow-y-auto pb-16"
-        style={{ gridTemplateColumns: `repeat(${desktopTableCols}, minmax(0, 1fr))`, gridAutoRows: '1fr', alignContent: 'start' }}
+        style={{ gridTemplateColumns: `repeat(${desktopTableCols}, minmax(0, 1fr))`, alignContent: 'start' }}
       >
         {filteredTables.map((table) => (
           <TableGridCell
@@ -1433,7 +1494,10 @@ export function TableGrid({
         const totalLabel = fmtMoney(occupiedTotal);
         const trial = getTrialInfo(tenant as any);
         const firmName = (tenant as any)?.name?.trim() || '—';
-        const licenseInfo = formatLicenseStatus(tenant as any);
+        const licenseFooterValue = formatFooterLicense(tenant as any);
+        const connectionLabel = isElectronRuntime
+          ? getConnectionModeDisplay(readElectronDbMode() ?? 'cloud').shortLabel
+          : null;
         const packageName = trial.isTrial ? 'Deneme' : prettyPlan((tenant as any)?.subscription_plan);
         const branchName = (activeBranch as any)?.name?.trim() || '—';
 
@@ -1449,7 +1513,13 @@ export function TableGrid({
               <div className="flex items-center gap-2 md:gap-3 shrink-0">
                 <FooterInfoItem label="Firma Bilgisi" value={firmName} />
                 <FooterSep />
-                <FooterInfoItem label="Lisans" value={licenseInfo} valueMaxClass="max-w-[6rem] md:max-w-[9rem]" />
+                {connectionLabel ? (
+                  <>
+                    <FooterInfoItem label="Bağlantı" value={connectionLabel} valueMaxClass="max-w-[5rem]" />
+                    <FooterSep />
+                  </>
+                ) : null}
+                <FooterInfoItem label="Lisans" value={licenseFooterValue} valueMaxClass="max-w-[6rem] md:max-w-[9rem]" />
                 <FooterSep />
                 <FooterInfoItem label="Paket Adı" value={packageName} valueMaxClass="max-w-[5rem] md:max-w-[8rem]" />
                 <FooterSep />

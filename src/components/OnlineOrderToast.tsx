@@ -12,7 +12,7 @@ import {
 import { PlatformLogo } from './PlatformLogo';
 import { callGetir } from '../lib/getirApi';
 import { GETIR_ORDERS_POLLED_EVENT } from './GlobalGetirSync';
-import { wantsOnlineOrderToastPoll } from '../lib/pageActivity';
+import { wantsGlobalOnlineOrderAlerts, wantsOnlineOrderToastPoll } from '../lib/pageActivity';
 
 interface ToastOrderItem {
   name: string;
@@ -72,6 +72,7 @@ export function OnlineOrderToast({ onOpenOnlineOrders, currentPage }: Props) {
   useEffect(() => {
     if (!tenant) return;
     if (currentPage === 'online-orders') return;
+    if (!wantsGlobalOnlineOrderAlerts()) return;
 
     const fetchPlatform = async (
       platformId: string | null,

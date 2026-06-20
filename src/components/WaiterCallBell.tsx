@@ -159,8 +159,8 @@ export function WaiterCallBell({ headerVariant = 'default' }: WaiterCallBellProp
 
     const stopPoll = startAdaptivePoller({
       diagLabel: 'waiter-calls-poll',
-      baseMs: isSqlServerMode() ? 90_000 : 60_000,
-      idleMs: isSqlServerMode() ? 180_000 : 120_000,
+      baseMs: isSqlServerMode() ? 120_000 : 90_000,
+      idleMs: isSqlServerMode() ? 240_000 : 150_000,
       hiddenMs: 0,
       run: () => {
         if (!isActivePosPage('tables', 'waiter-app', 'desktop-home')) return;

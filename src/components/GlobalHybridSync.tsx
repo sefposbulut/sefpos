@@ -9,15 +9,15 @@ import {
 import { getActivePosPage, PAGE_CHANGE_EVENT } from '../lib/pageActivity';
 import { getCloudSupabaseClient } from '../lib/supabase';
 
-/** Yedek periyodik senkron (realtime kacirirsa). Kasa kasmasin diye seyrek. */
-const BACKUP_SYNC_MS = 45_000;
+/** Yedek periyodik senkron — kasa kasmasin diye seyrek (45sn → 120sn). */
+const BACKUP_SYNC_MS = 120_000;
 
+/** Yalnizca aktif satis ekranlari — ana sayfada hibrit yedek yok. */
 const LIVE_SYNC_PAGES = new Set([
   'tables',
   'takeaway',
   'quick-sale',
   'online-orders',
-  'desktop-home',
 ]);
 
 function shouldRunHybridBackup(): boolean {
@@ -39,7 +39,7 @@ export function GlobalHybridSync() {
 
     let cancelled = false;
 
-    const onRealtime = () => requestHybridSync(1_200);
+    const onRealtime = () => requestHybridSync(2_500);
 
     const startCloudRealtime = async () => {
       if (!api.getHybridCloudSession) return;
@@ -64,11 +64,6 @@ export function GlobalHybridSync() {
         )
         .on(
           'postgres_changes',
-          { event: '*', schema: 'public', table: 'order_items', filter: `tenant_id=eq.${tenantId}` },
-          onRealtime,
-        )
-        .on(
-          'postgres_changes',
           { event: 'UPDATE', schema: 'public', table: 'restaurant_tables', filter: `tenant_id=eq.${tenantId}` },
           onRealtime,
         )
@@ -87,7 +82,10 @@ export function GlobalHybridSync() {
       if (navigator.onLine) requestHybridSync(0);
     };
 
-    requestHybridSync(400);
+    const bootTimer = window.setTimeout(() => {
+      if (shouldRunHybridBackup()) requestHybridSync(800);
+    }, 6_000);
+
     timerRef.current = setInterval(runBackup, BACKUP_SYNC_MS);
 
     const onOnline = () => flushHybridSyncOnReconnect();
@@ -102,6 +100,7 @@ export function GlobalHybridSync() {
 
     return () => {
       cancelled = true;
+      window.clearTimeout(bootTimer);
       if (timerRef.current) clearInterval(timerRef.current);
       window.removeEventListener('online', onOnline);
       window.removeEventListener(PAGE_CHANGE_EVENT, onPage);

@@ -31,6 +31,7 @@ import {
   TABLE_GRID_TABLE_COLS,
 } from '../lib/tableGridData';
 import { fetchOrderPanelItems } from '../lib/sqlOrderItems';
+import { applyOrderStockMovementsBatch } from '../lib/orderStockMovements';
 import { displayMetaText, hasDisplayMetaText } from '../lib/displayText';
 import { startAdaptivePoller } from '../lib/pollSchedule';
 import { useOrderSessionStore } from '../stores/orderSessionStore';
@@ -56,6 +57,8 @@ import {
   readPersistedOrderItemsSnapshot,
   persistOrderItemsSnapshot,
   warmOrderPanelBundle,
+  getWarmPanelAgeMs,
+  getInflightPanelPromise,
   warmOrderItemsForPanel,
   takeWarmOrderItems,
   clearWarmOrderPanelCache,
@@ -619,82 +622,15 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
 
   const applyOrderStockMovements = useCallback(async (orderId: string, items: (OrderItem & { products: Product })[]) => {
     if (!tenant) return;
-
     const branchId = (table as any).branch_id || activeBranch?.id || null;
-    const qtyByProduct = new Map<string, number>();
-    const productById = new Map<string, Product>();
-
-    items.forEach((item) => {
-      const qty = Number(item.quantity || 0);
-      if (!item.product_id || qty <= 0) return;
-      qtyByProduct.set(item.product_id, (qtyByProduct.get(item.product_id) || 0) + qty);
-      if ((item as any).products) productById.set(item.product_id, (item as any).products);
+    await applyOrderStockMovementsBatch({
+      tenantId: tenant.id,
+      branchId,
+      orderId,
+      orderNumber: String((currentOrder as any)?.order_number || ''),
+      items,
     });
-
-    for (const [productId, qty] of qtyByProduct.entries()) {
-      const { data: existingMove } = await supabase
-        .from('stock_movements')
-        .select('id')
-        .eq('tenant_id', tenant.id)
-        .eq('product_id', productId)
-        .eq('reference_type', 'sale_order')
-        .eq('reference_no', orderId)
-        .maybeSingle();
-      if (existingMove?.id) continue;
-
-      const { data: productRow } = await supabase
-        .from('products')
-        .select('id, stock_quantity, cost')
-        .eq('id', productId)
-        .eq('tenant_id', tenant.id)
-        .maybeSingle();
-
-      if (productRow?.id) {
-        const current = Number((productRow as any).stock_quantity || 0);
-        const next = Math.max(0, current - qty);
-        await supabase
-          .from('products')
-          .update({ stock_quantity: next })
-          .eq('id', productId)
-          .eq('tenant_id', tenant.id);
-      }
-
-      if (branchId) {
-        const { data: branchStock } = await supabase
-          .from('branch_product_stocks')
-          .select('quantity')
-          .eq('tenant_id', tenant.id)
-          .eq('branch_id', branchId)
-          .eq('product_id', productId)
-          .maybeSingle();
-        const currentBranchQty = Number((branchStock as any)?.quantity || 0);
-        const nextBranchQty = Math.max(0, currentBranchQty - qty);
-        await supabase
-          .from('branch_product_stocks')
-          .upsert({
-            tenant_id: tenant.id,
-            branch_id: branchId,
-            product_id: productId,
-            quantity: nextBranchQty,
-          }, { onConflict: 'tenant_id,branch_id,product_id' });
-      }
-
-      const p = productById.get(productId);
-      const unitCost = Number((productRow as any)?.cost ?? p?.cost ?? 0);
-      await supabase.from('stock_movements').insert({
-        tenant_id: tenant.id,
-        product_id: productId,
-        movement_type: 'out',
-        quantity: qty,
-        unit_cost: unitCost,
-        total_cost: Number((unitCost * qty).toFixed(2)),
-        source_branch_id: branchId,
-        reference_type: 'sale_order',
-        reference_no: orderId,
-        note: `Satis siparisi #${(currentOrder as any)?.order_number || ''}`,
-      } as any);
-    }
-  }, [tenant?.id, table?.id, (table as any)?.branch_id, activeBranch?.id, currentOrder?.id, (currentOrder as any)?.order_number]);
+  }, [tenant?.id, (table as any)?.branch_id, activeBranch?.id, currentOrder?.id, (currentOrder as any)?.order_number]);
 
   const openTableTransfer = async () => {
     if (!tenant || !currentOrder) return;
@@ -833,12 +769,6 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
       const snap = queryCache.peekProductsAndCategories(tenant.id, activeBranch?.id || undefined);
       if (snap) {
         applyMenu(snap.products as any, snap.categories as any, snap.productVariants as any);
-        void queryCache
-          .getProductsAndCategories(tenant.id, activeBranch?.id || undefined, false)
-          .then(({ products, categories, productVariants }) => {
-            applyMenu(products as any, categories as any, productVariants as any);
-          })
-          .catch((error) => console.error('OrderPanel menu load error:', error));
         return;
       }
     }
@@ -853,11 +783,8 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
   }, [tenant?.id, activeBranch?.id]);
 
   useEffect(() => {
-    if (!tenant) return;
-    supabase.from('tenants').select('require_cancel_reason').eq('id', tenant.id).maybeSingle().then(({ data }) => {
-      if (data) setRequireCancelReason(!!(data as any).require_cancel_reason);
-    });
-  }, [tenant?.id]);
+    setRequireCancelReason(!!tenant?.require_cancel_reason);
+  }, [tenant?.id, tenant?.require_cancel_reason]);
 
   const processBarcodeString = useCallback((barcode: string) => {
     const clean = barcode.trim();
@@ -1039,7 +966,7 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
   // Sadece bu masanın güncel sipariş id'si için filtre uygulanır → düşük gürültü.
   const loadExistingOrderRef = useRef<() => void>(() => {});
   useEffect(() => {
-    loadExistingOrderRef.current = () => { void loadExistingOrder(); };
+    loadExistingOrderRef.current = () => { void loadExistingOrder({ force: true }); };
   });
   useEffect(() => {
     if (!tenant?.id) return;
@@ -1047,8 +974,8 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
     if (!oid) return;
     if (isOfflineMode()) {
       const stopPoll = startAdaptivePoller({
-        baseMs: isSqlServerMode() ? 60_000 : 12_000,
-        idleMs: isSqlServerMode() ? 90_000 : 20_000,
+        baseMs: isSqlServerMode() ? 90_000 : 20_000,
+        idleMs: isSqlServerMode() ? 120_000 : 35_000,
         hiddenMs: 0,
         run: () => {
           if (submittingRef.current || saveItemQuantityTimersRef.current.size > 0) return;
@@ -1060,9 +987,18 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
     }
 
     let reloadTimer: ReturnType<typeof setTimeout> | null = null;
+    let lastReloadAt = 0;
+    const ORDER_PANEL_RELOAD_DEBOUNCE_MS = 450;
+    const ORDER_PANEL_RELOAD_MIN_GAP_MS = 900;
     const scheduleReload = () => {
       if (reloadTimer) clearTimeout(reloadTimer);
-      reloadTimer = setTimeout(() => loadExistingOrderRef.current?.(), 180);
+      reloadTimer = setTimeout(() => {
+        reloadTimer = null;
+        const now = Date.now();
+        if (now - lastReloadAt < ORDER_PANEL_RELOAD_MIN_GAP_MS) return;
+        lastReloadAt = now;
+        loadExistingOrderRef.current?.();
+      }, ORDER_PANEL_RELOAD_DEBOUNCE_MS);
     };
 
     const ch = supabase
@@ -1078,43 +1014,7 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
     };
   }, [tenant?.id, currentOrder?.id, table.current_order_id]);
 
-  const loadExistingOrder = async () => {
-    if (!tenant) {
-      setOrderHydrating(false);
-      return;
-    }
-    if (submittingRef.current || saveItemQuantityTimersRef.current.size > 0) {
-      return;
-    }
-    if (deletingOrderItemIdsRef.current.size > 0) {
-      return;
-    }
-
-    const currentOrderId = table.current_order_id;
-    if (!currentOrderId) {
-      setCurrentOrder(null);
-      setExistingOrderItems([]);
-      setPaymentTransactions([]);
-      setOrderHydrating(false);
-      return;
-    }
-
-    const bundle = peekWarmPanelBundle(currentOrderId);
-    const cachedLines = peekWarmOrderItems(currentOrderId);
-    const persisted = readPersistedOrderItemsSnapshot(currentOrderId);
-    const localLines =
-      (cachedLines?.length ? cachedLines : null) ??
-      (persisted?.length ? persisted : null) ??
-      (bundle?.rows?.length ? bundle.rows : null);
-
-    if (localLines) {
-      setExistingOrderItems(localLines);
-      persistOrderItemsSnapshot(currentOrderId, localLines);
-      setOrderHydrating(false);
-    }
-    if (bundle?.order) setCurrentOrder(bundle.order as Order);
-    if (bundle?.payments?.length) setPaymentTransactions(bundle.payments as PaymentTransaction[]);
-
+  const loadExistingOrderFromServer = async (currentOrderId: string) => {
     try {
       const itemsRows = await fetchOrderPanelItems(currentOrderId);
       const rows = (itemsRows || []) as any[];
@@ -1177,6 +1077,77 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
     } finally {
       setOrderHydrating(false);
     }
+  };
+
+  const loadExistingOrder = async (opts?: { force?: boolean }) => {
+    if (!tenant) {
+      setOrderHydrating(false);
+      return;
+    }
+    if (submittingRef.current || saveItemQuantityTimersRef.current.size > 0) {
+      return;
+    }
+    if (deletingOrderItemIdsRef.current.size > 0) {
+      return;
+    }
+
+    const currentOrderId = table.current_order_id;
+    if (!currentOrderId) {
+      setCurrentOrder(null);
+      setExistingOrderItems([]);
+      setPaymentTransactions([]);
+      setOrderHydrating(false);
+      return;
+    }
+
+    const bundle = peekWarmPanelBundle(currentOrderId);
+    const cachedLines = peekWarmOrderItems(currentOrderId);
+    const persisted = readPersistedOrderItemsSnapshot(currentOrderId);
+    const localLines =
+      (cachedLines?.length ? cachedLines : null) ??
+      (persisted?.length ? persisted : null) ??
+      (bundle?.rows?.length ? bundle.rows : null);
+
+    if (localLines) {
+      setExistingOrderItems(localLines);
+      persistOrderItemsSnapshot(currentOrderId, localLines);
+      setOrderHydrating(false);
+    }
+    if (bundle?.order) setCurrentOrder(bundle.order as Order);
+    if (bundle?.payments?.length) setPaymentTransactions(bundle.payments as PaymentTransaction[]);
+
+    const inflightWarm = getInflightPanelPromise(currentOrderId);
+    if (inflightWarm) {
+      try {
+        await inflightWarm;
+      } catch {
+        /* warm başarısız — sunucudan çek */
+      }
+    }
+
+    const warmBundle = peekWarmPanelBundle(currentOrderId);
+    const warmAge = getWarmPanelAgeMs(currentOrderId);
+    const warmFresh =
+      !opts?.force &&
+      warmBundle?.rows?.length &&
+      warmBundle.order &&
+      warmAge !== null &&
+      warmAge < 20_000;
+
+    if (warmFresh && warmBundle) {
+      setExistingOrderItems(warmBundle.rows);
+      persistOrderItemsSnapshot(currentOrderId, warmBundle.rows);
+      setCurrentOrder(warmBundle.order as Order);
+      if (warmBundle.payments?.length) setPaymentTransactions(warmBundle.payments as PaymentTransaction[]);
+      setOrderHydrating(false);
+      window.setTimeout(() => {
+        if (submittingRef.current || saveItemQuantityTimersRef.current.size > 0) return;
+        void loadExistingOrderFromServer(currentOrderId);
+      }, 5_000);
+      return;
+    }
+
+    await loadExistingOrderFromServer(currentOrderId);
   };
 
   const openTableMerge = async () => {

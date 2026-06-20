@@ -3,6 +3,8 @@
  * App.tsx her geçişte setActivePosPage çağırır.
  */
 
+import { isUserIdle } from './pollSchedule';
+
 export const PAGE_CHANGE_EVENT = 'sefpos:page-change';
 
 let activePage = 'tables';
@@ -39,8 +41,6 @@ export function getGetirPollTier(): GetirPollTier {
     case 'online-orders':
       return 'fast';
     case 'tables':
-      return 'moderate';
-    case 'desktop-home':
       return 'slow';
     default:
       return 'off';
@@ -55,4 +55,15 @@ export function wantsFrequentGetirSync(): boolean {
 /** Getir poll sonrası yedek DB taraması (toast) — yalnızca sipariş/masa ekranı */
 export function wantsOnlineOrderToastPoll(): boolean {
   return activePage === 'online-orders' || activePage === 'tables';
+}
+
+/**
+ * Global online sipariş toast + hub realtime.
+ * Paket / hızlı satış ekranında gün boyu ek kanal açma (Getir poll zaten kapalı).
+ */
+export function wantsGlobalOnlineOrderAlerts(): boolean {
+  if (activePage === 'online-orders') return false;
+  if (activePage === 'takeaway' || activePage === 'quick-sale') return false;
+  if (activePage === 'desktop-home') return false;
+  return true;
 }

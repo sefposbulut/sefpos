@@ -388,15 +388,39 @@ export default defineConfig(({ mode, command }) => {
       },
     },
     optimizeDeps: {
-      exclude: ['lucide-react'],
+      /** exclude edilirse dev'de 1500+ ayrı ikon .js isteği (Network kasması). */
+      include: [
+        'lucide-react',
+        'xlsx',
+        'zustand',
+        '@supabase/supabase-js',
+        'react',
+        'react-dom',
+        'react/jsx-runtime',
+        'react/jsx-dev-runtime',
+        'html2canvas',
+        'jspdf',
+      ],
     },
     build: {
       rollupOptions: {
         output: {
-          manualChunks: {
-            supabase: ['@supabase/supabase-js'],
-            lucide: ['lucide-react'],
-            'react-vendor': ['react', 'react-dom'],
+          manualChunks(id) {
+            if (!id.includes('node_modules')) {
+              if (id.includes('/components/landing/')) return 'landing';
+              if (id.includes('/components/reports/')) return 'reports';
+              if (id.includes('/components/Settings')) return 'settings';
+              if (id.includes('/components/Products')) return 'products';
+              if (id.includes('/components/AdminPanel')) return 'admin';
+              return undefined;
+            }
+            if (id.includes('lucide-react')) return 'lucide';
+            if (id.includes('@supabase')) return 'supabase';
+            if (id.includes('xlsx')) return 'xlsx';
+            if (id.includes('html2canvas')) return 'html2canvas';
+            if (id.includes('jspdf')) return 'pdf';
+            if (id.includes('react-dom') || id.includes('/react/')) return 'react-vendor';
+            return undefined;
           },
         },
       },

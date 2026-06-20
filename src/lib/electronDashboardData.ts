@@ -1,5 +1,5 @@
 import { supabase } from './supabase';
-import { writeElectronHomeCache } from './electronHomeCache';
+import { writeElectronHomeCache, readElectronHomeCache, isElectronHomeCacheFresh } from './electronHomeCache';
 
 export type DashboardSnapshot = {
   /** Aktif şubede `current_order_id` dolu masa sayısı */
@@ -339,7 +339,7 @@ async function fetchTodayOrdersWithItems(
     .gte('created_at', dayStart)
     .lte('created_at', dayEnd)
     .order('created_at', { ascending: false })
-    .limit(500);
+    .limit(80);
 
   if (error) {
     console.warn('[fetchElectronTopSellers] orders', error.message);
@@ -466,23 +466,60 @@ export type ElectronHomeBundle = {
   topSellers: TopSellerRow[];
 };
 
+const inflightHomeBundle = new Map<string, Promise<ElectronHomeBundle>>();
+
 export async function fetchElectronHomeBundle(
   tenantId: string,
   branchId: string | null,
 ): Promise<ElectronHomeBundle> {
-  const [stats, recent, topSellers] = await Promise.all([
-    fetchElectronDashboardSnapshot(tenantId, branchId),
-    fetchElectronRecentActivity(tenantId, branchId, 8),
-    fetchElectronTopSellers(tenantId, branchId, 10),
-  ]);
-  return { stats, recent, topSellers };
+  if (!branchId) {
+    return {
+      stats: {
+        openTablesWithOrder: 0,
+        occupiedTables: 0,
+        totalTables: 0,
+        todayRevenue: 0,
+        yesterdayRevenue: 0,
+        todayOrderCount: 0,
+        todayTakeawayCount: 0,
+        todayOnlineCount: 0,
+        pendingOnlineCount: 0,
+      },
+      recent: [],
+      topSellers: [],
+    };
+  }
+
+  const key = `${tenantId}:${branchId}`;
+  if (isElectronHomeCacheFresh(tenantId, branchId)) {
+    const cached = readElectronHomeCache(tenantId, branchId);
+    if (cached) {
+      return { stats: cached.stats, recent: cached.recent, topSellers: cached.topSellers };
+    }
+  }
+
+  const inflight = inflightHomeBundle.get(key);
+  if (inflight) return inflight;
+
+  const promise = (async () => {
+    const [stats, recent, topSellers] = await Promise.all([
+      fetchElectronDashboardSnapshot(tenantId, branchId),
+      fetchElectronRecentActivity(tenantId, branchId, 8),
+      fetchElectronTopSellers(tenantId, branchId, 10),
+    ]);
+    const bundle = { stats, recent, topSellers };
+    writeElectronHomeCache(tenantId, branchId, bundle);
+    return bundle;
+  })();
+
+  inflightHomeBundle.set(key, promise);
+  promise.finally(() => inflightHomeBundle.delete(key));
+  return promise;
 }
 
-/** Electron acilisinda arka planda cagrilir; ana sayfa aninda cache'den dolar. */
-export function preloadElectronHomeData(tenantId: string, branchId: string): void {
-  void fetchElectronHomeBundle(tenantId, branchId).then((bundle) => {
-    writeElectronHomeCache(tenantId, branchId, bundle);
-  });
+/** @deprecated ElectronDesktopHome kendi yenilemesini yapar — cift fetch yapmayin. */
+export function preloadElectronHomeData(_tenantId: string, _branchId: string): void {
+  /* no-op: fetchElectronHomeBundle cache + dedupe ElectronDesktopHome icinde */
 }
 
 export function formatDashboardDateLabel(): string {

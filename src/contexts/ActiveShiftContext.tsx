@@ -7,14 +7,20 @@ type ActiveShiftContextValue = ReturnType<typeof useActiveShift>;
 const ActiveShiftContext = createContext<ActiveShiftContextValue | null>(null);
 
 /** Header + vardiya modal tek dinleyici — çift poll / Realtime kanalı önlenir. */
-export function ActiveShiftProvider({ children }: { children: ReactNode }) {
+export function ActiveShiftProvider({
+  children,
+  trackingEnabled = true,
+}: {
+  children: ReactNode;
+  trackingEnabled?: boolean;
+}) {
   const { tenant, user, activeBranch, shiftsEnabled, permissions, businessDayStartHour } = useAuth();
   const canUseShifts = !!permissions?.can_use_shifts;
   const value = useActiveShift({
     tenantId: tenant?.id || null,
     branchId: activeBranch?.id || null,
     userId: user?.id || null,
-    enabled: !!tenant && shiftsEnabled && canUseShifts,
+    enabled: trackingEnabled && !!tenant && shiftsEnabled && canUseShifts,
     cutoffHour: businessDayStartHour,
   });
   return (

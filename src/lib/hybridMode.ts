@@ -137,11 +137,11 @@ let lastSyncStartedAt = 0;
 let lastUiRefreshAt = 0;
 
 /** Ardışık tam senkronlar arası minimum süre (kasa kasmasın). */
-const MIN_SYNC_GAP_MS = 2_500;
+const MIN_SYNC_GAP_MS = 5_000;
 /** Masa ızgarasını yenileme üst sınırı. */
-const MIN_UI_REFRESH_GAP_MS = 2_000;
+const MIN_UI_REFRESH_GAP_MS = 3_000;
 /** Olay birleştirme (sipariş/masa burst). */
-const DEFAULT_SYNC_DEBOUNCE_MS = 900;
+const DEFAULT_SYNC_DEBOUNCE_MS = 1_500;
 
 function hybridSyncHadChanges(res: HybridSyncResult | null | undefined): boolean {
   if (!res?.success) return false;

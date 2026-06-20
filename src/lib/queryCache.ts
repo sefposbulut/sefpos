@@ -339,6 +339,14 @@ class QueryCache {
       }
     }
   }
+
+  /** Uzun oturum: bellekteki eski menü/masa önbelleğini budar (IndexedDB dokunulmaz). */
+  pruneStaleInMemory(maxAgeMs = 2 * 60 * 60 * 1000): void {
+    const cutoff = Date.now() - maxAgeMs;
+    for (const [key, entry] of this.cache) {
+      if (entry.timestamp < cutoff) this.cache.delete(key);
+    }
+  }
 }
 
 export const queryCache = new QueryCache();

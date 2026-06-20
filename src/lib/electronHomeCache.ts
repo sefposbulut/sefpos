@@ -44,3 +44,16 @@ export function writeElectronHomeCache(
     /* quota */
   }
 }
+
+/** Ag yukunu kes — taze cache varsa dashboard sorgularini atlama. */
+export const ELECTRON_HOME_CACHE_FRESH_MS = 90_000;
+
+export function isElectronHomeCacheFresh(
+  tenantId: string,
+  branchId: string,
+  maxAgeMs = ELECTRON_HOME_CACHE_FRESH_MS,
+): boolean {
+  const hit = readElectronHomeCache(tenantId, branchId);
+  if (!hit?.cachedAt) return false;
+  return Date.now() - hit.cachedAt < maxAgeMs;
+}

@@ -47,13 +47,41 @@ import { TENANT_CURRENCY_OPTIONS, normalizeCurrencyCode, type TenantCurrencyCode
 
 type TableGroup = Database['public']['Tables']['table_groups']['Row'];
 
+type SettingsTabId =
+  | 'tables'
+  | 'products'
+  | 'manage'
+  | 'platforms'
+  | 'integrations'
+  | 'partner-api'
+  | 'branches'
+  | 'printers'
+  | 'account'
+  | 'system'
+  | 'security'
+  | 'branch-products'
+  | 'database'
+  | 'hugin'
+  | 'devices'
+  | 'waiters'
+  | 'scale'
+  | 'qr-menu'
+  | 'caller-id'
+  | 'loyalty';
+
 interface SettingsProps {
   onClose: () => void;
+  /** Dev tanılama / dış olay ile doğrudan sekme açma */
+  initialTab?: SettingsTabId;
 }
 
-export function Settings({ onClose }: SettingsProps) {
+export function Settings({ onClose, initialTab }: SettingsProps) {
   const { tenant, profile, activeBranch, refreshProfile, refreshBranches } = useAuth();
-  const [activeTab, setActiveTab] = useState<'tables' | 'products' | 'manage' | 'platforms' | 'integrations' | 'partner-api' | 'branches' | 'printers' | 'account' | 'system' | 'security' | 'branch-products' | 'database' | 'hugin' | 'devices' | 'waiters' | 'scale' | 'qr-menu' | 'caller-id' | 'loyalty'>('branches');
+  const [activeTab, setActiveTab] = useState<SettingsTabId>(initialTab ?? 'branches');
+
+  useEffect(() => {
+    if (initialTab) setActiveTab(initialTab);
+  }, [initialTab]);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [groups, setGroups] = useState<TableGroup[]>([]);
   const [showGroupForm, setShowGroupForm] = useState(false);

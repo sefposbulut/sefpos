@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ArrowDown, ArrowUp, Bell, Flame, LogOut, Phone, Settings } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { publicAsset } from '../../lib/assetUrl';
@@ -14,7 +14,7 @@ import {
 } from '../../lib/electronDashboardData';
 import { startAdaptivePoller } from '../../lib/pollSchedule';
 import { isActivePosPage } from '../../lib/pageActivity';
-import { readElectronHomeCache, writeElectronHomeCache } from '../../lib/electronHomeCache';
+import { readElectronHomeCache, writeElectronHomeCache, isElectronHomeCacheFresh } from '../../lib/electronHomeCache';
 import {
   readElectronHubMenuCache,
   writeElectronHubMenuCache,
@@ -165,8 +165,19 @@ export function ElectronDesktopHome({
     [tenantId, branchId],
   );
 
-  const refreshData = useCallback(async () => {
+  const refreshData = useCallback(async (opts?: { force?: boolean }) => {
     if (!tenantId || !branchId) return;
+    if (!opts?.force && isElectronHomeCacheFresh(tenantId, branchId)) {
+      const cached = readElectronHomeCache(tenantId, branchId);
+      if (cached) applyBundle(cached);
+      try {
+        const notifs = await fetchSupportNotifications(tenantId);
+        setSystemNotifs(notifs);
+      } catch {
+        setSystemNotifs([]);
+      }
+      return;
+    }
     const bundle = await fetchElectronHomeBundle(tenantId, branchId);
     applyBundle(bundle);
     try {
@@ -176,6 +187,9 @@ export function ElectronDesktopHome({
       setSystemNotifs([]);
     }
   }, [tenantId, branchId, applyBundle]);
+
+  const refreshDataRef = useRef(refreshData);
+  refreshDataRef.current = refreshData;
 
   useEffect(() => {
     if (!tenantId || !branchId) return;
@@ -188,21 +202,22 @@ export function ElectronDesktopHome({
       setTopSellers([]);
       setDataReady(false);
     }
-    void refreshData();
+    void refreshDataRef.current();
     const stopPoll = startAdaptivePoller({
-      baseMs: 120_000,
-      idleMs: 240_000,
+      diagLabel: 'electron-home-refresh',
+      baseMs: 180_000,
+      idleMs: 300_000,
       hiddenMs: 0,
       run: () => {
         if (!isActivePosPage('desktop-home')) return;
-        void refreshData();
+        void refreshDataRef.current({ force: true });
       },
       immediate: false,
     });
     return () => {
       stopPoll();
     };
-  }, [tenantId, branchId, applyBundle, refreshData]);
+  }, [tenantId, branchId, applyBundle]);
 
   const handleTileClick = (page: string) => {
     if (page === 'settings') {

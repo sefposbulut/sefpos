@@ -215,6 +215,17 @@ export function peekWarmPanelBundle(orderId: string): PanelWarmBundle | null {
   return warmPanel.get(orderId) ?? null;
 }
 
+/** Warm önbelleğin yaşı (ms); yoksa null. */
+export function getWarmPanelAgeMs(orderId: string): number | null {
+  const e = warmPanel.get(orderId);
+  if (!e) return null;
+  return Date.now() - e.touched;
+}
+
+export function getInflightPanelPromise(orderId: string): Promise<void> | undefined {
+  return inflightPanel.get(orderId);
+}
+
 /** Tek seferlik tüket; OrderPanel effect içinde sunucu ile hizalanır */
 export function takeWarmOrderItems(orderId: string): { rows: any[] } | undefined {
   const e = warmRows.get(orderId);
@@ -230,8 +241,8 @@ export function takeWarmOrderItems(orderId: string): { rows: any[] } | undefined
  * karede boyanır (network round-trip beklenmez).
  */
 const inflightBulk = new Map<string, Promise<void>>();
-const BULK_WARM_MAX = 12;
-const BULK_WARM_DEBOUNCE_MS = 500;
+const BULK_WARM_MAX = 6;
+const BULK_WARM_DEBOUNCE_MS = 1_200;
 let bulkWarmTimer: ReturnType<typeof setTimeout> | null = null;
 const pendingBulkIds = new Set<string>();
 

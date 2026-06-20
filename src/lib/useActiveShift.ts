@@ -118,7 +118,7 @@ export function useActiveShift({ branchId, tenantId, userId, enabled = true, cut
       refreshTimer = setTimeout(() => {
         refreshTimer = null;
         refresh();
-      }, 3000);
+      }, 8_000);
     };
 
     const channel = supabase

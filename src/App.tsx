@@ -3,50 +3,52 @@ import { useAuth } from './contexts/AuthContext';
 import { isAykaAdminPath } from './lib/aykaRoute';
 import { canAccessAdminPanel, clearAykaSessionFlag } from './lib/adminAccess';
 import { Auth } from './components/Auth';
-import { AykaLogin } from './components/AykaLogin';
 import { ElectronAuth } from './components/ElectronAuth';
 import { ElectronConnectionMenu, type ElectronConnectMode } from './components/electron/ElectronConnectionMenu';
 import { ElectronSetupWizard } from './components/electron/ElectronSetupWizard';
 import { ElectronDesktopHome } from './components/electron/ElectronDesktopHome';
-import { preloadElectronHomeData } from './lib/electronDashboardData';
 import { setActivePosPage } from './lib/pageActivity';
-import { purgeColdMountedPages, shouldRenderPosPage } from './lib/posPageMount';
+import { purgeMountedPagesForSession, shouldRenderPosPage } from './lib/posPageMount';
 import { setDiagnosticsMountedPages } from './lib/resourceDiagnostics';
 import { ActiveShiftProvider } from './contexts/ActiveShiftContext';
 import { registerPosStressHooks } from './lib/posStressBridge';
 import { SqlServerSettings } from './components/SqlServerSettings';
-import { LandingPage } from './components/landing/LandingPage';
 import { isLandingPath } from './components/landing/landingRoutes';
-import { CourierApp } from './components/CourierApp';
-import { WaiterApp } from './components/WaiterApp';
 import { Header } from './components/Header';
 import { MainMenu } from './components/MainMenu';
 import { TableGrid } from './components/TableGrid';
 import { OrderPanel } from './components/OrderPanel';
-import { Products } from './components/Products';
-import { Settings } from './components/Settings';
-import { CashRegister } from './components/CashRegister';
-import { UserManagement } from './components/UserManagement';
 import { OnlineOrders } from './components/OnlineOrders';
 import { TakeawayOrders } from './components/TakeawayOrders';
-import { OnboardingWizard } from './components/OnboardingWizard';
 import { TrialExpiredOverlay } from './components/TrialExpiredOverlay';
-import { getTrialInfo } from './lib/tenantTrial';
-import { getLicenseInfo } from './lib/licenseDisplay';
-import { AdminPanel } from './components/AdminPanel';
-import { Customers } from './components/customers/Customers';
-import { LoyaltyPage } from './components/loyalty/LoyaltyPage';
-import { EndOfDay } from './components/EndOfDay';
-import { Reports } from './components/reports/Reports';
-import { primeReportsStockCountTab } from './lib/reportsNav';
-import { CancelLogs } from './components/CancelLogs';
-import { PinLockScreen } from './components/PinLockScreen';
-import { Inventory } from './components/inventory/Inventory';
-import { ProductStockCount } from './components/inventory/ProductStockCount';
-import { QuickSale } from './components/QuickSale';
-import { ShiftManager } from './components/ShiftManager';
+import {
+  LazyAdminPanel,
+  LazyAykaLogin,
+  LazyCancelLogs,
+  LazyCashRegister,
+  LazyCourierApp,
+  LazyCustomers,
+  LazyEndOfDay,
+  LazyInventory,
+  LazyLandingPage,
+  LazyLoyaltyPage,
+  LazyOnboardingWizard,
+  LazyProductStockCount,
+  LazyProducts,
+  LazyQuickSale,
+  LazyReports,
+  LazySettings,
+  LazyShiftManager,
+  LazyUserManagement,
+  LazyWaiterApp,
+  PosPageSuspense,
+} from './lib/lazyPosPages';
 import { ShiftAutoStartPrompt } from './components/ShiftAutoStartPrompt';
 import { ShiftQuickClose } from './components/ShiftQuickClose';
+import { getTrialInfo } from './lib/tenantTrial';
+import { getLicenseInfo } from './lib/licenseDisplay';
+import { primeReportsStockCountTab } from './lib/reportsNav';
+import { PinLockScreen } from './components/PinLockScreen';
 import { useUiPrefs, setHeaderHidden } from './lib/uiPrefs';
 import { Maximize2, Menu as MenuIcon } from 'lucide-react';
 import { Database, supabase } from './lib/supabase';
@@ -118,6 +120,7 @@ export default function App() {
   });
 
   const isElectron = useMemo(() => !!(window as any).electronAPI, []);
+  const headerTopOffset = isElectron ? 'top-14' : 'top-14 md:top-20';
   const uiPrefs = useUiPrefs();
   // POS modu (Tam Ekran / Header gizle) sadece masaustu (md+) icin etkin.
   // Mobilde zaten alan dar ve farkli optimizasyonlar var; orada Header
@@ -191,24 +194,11 @@ export default function App() {
   useEffect(() => {
     if (!currentPage) return;
     mountedPagesRef.current.add(currentPage);
-    purgeColdMountedPages(mountedPagesRef.current, currentPage);
+    purgeMountedPagesForSession(mountedPagesRef.current, currentPage, { electron: isElectron });
     setMountedPagesVersion((v) => v + 1);
-  }, [currentPage]);
+  }, [currentPage, isElectron]);
 
-  /** Electron: yalnızca masalar geç yüklenir; paket ilk tıklamada mount (arka planda CID/realtime şişmesin). */
-  useEffect(() => {
-    if (!isElectron || !tenant?.id || !user) return;
-    let cancelled = false;
-    const t = window.setTimeout(() => {
-      if (cancelled) return;
-      mountedPagesRef.current.add('tables');
-      setMountedPagesVersion((v) => v + 1);
-    }, 4_000);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(t);
-    };
-  }, [isElectron, tenant?.id, user?.id]);
+  // Electron: masalar arka planda pre-mount yok — yalnizca kullanici Masalar'a gecince mount olur.
   useEffect(() => {
     setActivePosPage(currentPage);
   }, [currentPage]);
@@ -281,6 +271,9 @@ export default function App() {
   });
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [settingsInitialTab, setSettingsInitialTab] = useState<
+    'system' | 'branches' | undefined
+  >(undefined);
   const [showCashRegister, setShowCashRegister] = useState(false);
   const [showAdminPanel, setShowAdminPanel] = useState(false);
   const [systemNotifications, setSystemNotifications] = useState<SystemNotification[]>([]);
@@ -290,6 +283,16 @@ export default function App() {
   const tableRefreshRef = useRef<(() => void) | null>(null);
 
   
+  useEffect(() => {
+    const onOpenSettingsTab = (e: Event) => {
+      const tab = (e as CustomEvent<{ tab?: string }>).detail?.tab;
+      setShowSettings(true);
+      if (tab === 'system') setSettingsInitialTab('system');
+    };
+    window.addEventListener('sefpos:open-settings-tab', onOpenSettingsTab);
+    return () => window.removeEventListener('sefpos:open-settings-tab', onOpenSettingsTab);
+  }, []);
+
   useEffect(() => {
     if (!isElectron) {
       setDbMode(null);
@@ -352,17 +355,13 @@ export default function App() {
       const { APP_VERSION } = await import('./lib/appVersion');
       queryCache.bustMenuCacheIfAppVersionChanged(APP_VERSION, tenant.id);
       if (!isSqlServerMode()) {
+        if (isElectron) {
+          await new Promise((r) => window.setTimeout(r, 20_000));
+        }
         await queryCache.hydrateForTenant(tenant.id);
       }
     })();
   }, [tenant?.id]);
-
-  /** Electron ana sayfa verisi masalar ekranina gecmeden once yuklensin (cache). SQL modunda atlanir — agir sorgu kasmasin. */
-  useEffect(() => {
-    if (!isElectron || !tenant?.id || !activeBranch?.id) return;
-    if (isSqlServerMode()) return;
-    preloadElectronHomeData(tenant.id, activeBranch.id);
-  }, [isElectron, tenant?.id, activeBranch?.id, dbMode]);
 
   useEffect(() => {
     if (!tenant || !user || isSqlServerMode()) return;
@@ -480,13 +479,17 @@ export default function App() {
   }
 
   if (courierMode) {
-    return <CourierApp onExit={() => {
-      localStorage.removeItem('shefpos_courier_session');
-      const url = new URL(window.location.href);
-      url.searchParams.delete('courier');
-      window.history.replaceState({}, '', url.toString());
-      setCourierMode(false);
-    }} />;
+    return (
+      <PosPageSuspense>
+        <LazyCourierApp onExit={() => {
+          localStorage.removeItem('shefpos_courier_session');
+          const url = new URL(window.location.href);
+          url.searchParams.delete('courier');
+          window.history.replaceState({}, '', url.toString());
+          setCourierMode(false);
+        }} />
+      </PosPageSuspense>
+    );
   }
 
   if (isElectron && (dbMode === null || ((dbMode === 'sqlserver' || dbMode === 'hybrid') && !sqlServerConfigured))) {
@@ -547,21 +550,23 @@ export default function App() {
     (profile.role === 'waiter' || isWaiterAppRoute())
   ) {
     return (
-      <WaiterApp
-        onLogout={async () => {
-          try {
-            localStorage.removeItem('waiter_session');
-          } catch {
-            /* ignore */
-          }
-          const url = new URL(window.location.href);
-          url.searchParams.delete('waiter');
-          url.searchParams.delete('garson');
-          window.history.replaceState({}, '', url.toString());
-          await signOut();
-          window.location.assign('/login?waiter=1');
-        }}
-      />
+      <PosPageSuspense>
+        <LazyWaiterApp
+          onLogout={async () => {
+            try {
+              localStorage.removeItem('waiter_session');
+            } catch {
+              /* ignore */
+            }
+            const url = new URL(window.location.href);
+            url.searchParams.delete('waiter');
+            url.searchParams.delete('garson');
+            window.history.replaceState({}, '', url.toString());
+            await signOut();
+            window.location.assign('/login?waiter=1');
+          }}
+        />
+      </PosPageSuspense>
     );
   }
 
@@ -614,12 +619,20 @@ export default function App() {
       // Gizli lisans paneli yolu (src/lib/aykaRoute.ts) — ayrı login ekranı.
       const path = typeof window !== 'undefined' ? window.location.pathname : '';
       if (isAykaAdminPath(path)) {
-        return <AykaLogin onBackToLanding={goToLanding} />;
+        return (
+          <PosPageSuspense>
+            <LazyAykaLogin onBackToLanding={goToLanding} />
+          </PosPageSuspense>
+        );
       }
       // /login → restoran kullanıcıları için genel giriş ekranı
       return <Auth onBackToLanding={goToLanding} />;
     }
-    return <LandingPage onLogin={goToLogin} />;
+    return (
+      <PosPageSuspense>
+        <LazyLandingPage onLogin={goToLogin} />
+      </PosPageSuspense>
+    );
   }
 
   const isAykaRoute =
@@ -628,14 +641,16 @@ export default function App() {
   if (user && profile && isAykaRoute) {
     if (canAccessAdminPanel(profile, { isAykaRoute: true })) {
       return (
-        <AdminPanel
-          onExit={() => {
-            setShowAdminPanel(false);
-            clearAykaSessionFlag();
-            void signOut();
-            window.location.assign('/');
-          }}
-        />
+        <PosPageSuspense>
+          <LazyAdminPanel
+            onExit={() => {
+              setShowAdminPanel(false);
+              clearAykaSessionFlag();
+              void signOut();
+              window.location.assign('/');
+            }}
+          />
+        </PosPageSuspense>
       );
     }
     if (profile.is_super_admin) {
@@ -664,12 +679,16 @@ export default function App() {
 
   const needsOnboarding = user && tenant && profile?.role === 'owner' && (tenant.onboarding_completed === false || tenant.onboarding_completed === null) && !onboardingDone;
   if (needsOnboarding || showOnboarding) {
-    return <OnboardingWizard onComplete={async () => {
-      localStorage.setItem('onboarding_dismissed', 'true');
-      setOnboardingDone(true);
-      setShowOnboarding(false);
-      await refreshProfile();
-    }} />;
+    return (
+      <PosPageSuspense>
+        <LazyOnboardingWizard onComplete={async () => {
+          localStorage.setItem('onboarding_dismissed', 'true');
+          setOnboardingDone(true);
+          setShowOnboarding(false);
+          await refreshProfile();
+        }} />
+      </PosPageSuspense>
+    );
   }
 
   // Trial bittiyse super_admin / aykasoft hesaplari haric tum app erisimi engelle.
@@ -687,12 +706,15 @@ export default function App() {
   const shouldRenderPage = (page: string) =>
     shouldRenderPosPage(page, currentPage, mountedPagesRef.current);
   const onElectronHome = isElectron && currentPage === 'desktop-home';
+  const shiftPages = new Set(['shifts', 'endofday', 'quick-sale', 'tables', 'cashier']);
+  /** Paket/ürün/rapor gün boyu açıkken gereksiz vardiya poll+realtime açma */
+  const shiftTrackingEnabled = shiftPages.has(currentPage) || showShiftQuickClose;
 
   // Mobilde efektif olarak her zaman header acik.
   const headerHidden = (uiPrefs.headerHidden && isDesktopViewport) || onElectronHome;
 
   return (
-    <ActiveShiftProvider>
+    <ActiveShiftProvider trackingEnabled={shiftTrackingEnabled}>
     <div
       className="min-h-screen bg-slate-50"
       data-header-hidden={headerHidden ? 'true' : 'false'}
@@ -787,7 +809,7 @@ export default function App() {
             overscrollBehaviorY: 'contain',
             WebkitOverflowScrolling: 'touch',
           }}
-          className="fixed inset-0 top-14 md:top-20 bg-gradient-to-br from-slate-50 to-slate-100 overflow-auto"
+          className={`fixed inset-0 ${headerTopOffset} bg-gradient-to-br from-slate-50 to-slate-100 overflow-auto`}
         >
           <div className="p-3 md:p-6">
             <TableGrid
@@ -801,36 +823,42 @@ export default function App() {
       )}
 
       {shouldRenderPage('takeaway') && (
-        <div style={{ display: show('takeaway') ? undefined : 'none' }} className="fixed inset-0 top-14 md:top-20 overflow-auto">
+        <div style={{ display: show('takeaway') ? undefined : 'none' }} className={`fixed inset-0 ${headerTopOffset} overflow-auto`}>
           <TakeawayOrders isActive={currentPage === 'takeaway'} />
         </div>
       )}
 
       {shouldRenderPage('online-orders') && (
-        <div style={{ display: show('online-orders') ? undefined : 'none' }} className="fixed inset-0 top-14 md:top-20 overflow-auto">
+        <div style={{ display: show('online-orders') ? undefined : 'none' }} className={`fixed inset-0 ${headerTopOffset} overflow-auto`}>
           <OnlineOrders isActive={currentPage === 'online-orders'} />
         </div>
       )}
 
       {shouldRenderPage('products') && (
-        <div className="fixed inset-0 top-14 md:top-20 overflow-hidden">
-          <Products isActive />
+        <div className={`fixed inset-0 ${headerTopOffset} overflow-hidden`}>
+          <PosPageSuspense>
+            <LazyProducts isActive />
+          </PosPageSuspense>
         </div>
       )}
 
       {shouldRenderPage('product-stock-count') && (
         <div
           style={{ display: show('product-stock-count') ? undefined : 'none' }}
-          className="fixed inset-0 top-14 md:top-20 bg-gradient-to-br from-slate-50 to-slate-100 overflow-y-auto min-h-0"
+          className={`fixed inset-0 ${headerTopOffset} bg-gradient-to-br from-slate-50 to-slate-100 overflow-y-auto min-h-0`}
         >
-          <ProductStockCount />
+          <PosPageSuspense>
+            <LazyProductStockCount />
+          </PosPageSuspense>
         </div>
       )}
 
       {shouldRenderPage('users') && (
-        <div className="fixed inset-0 top-14 md:top-20 bg-gradient-to-br from-slate-50 to-slate-100 overflow-auto">
+        <div className={`fixed inset-0 ${headerTopOffset} bg-gradient-to-br from-slate-50 to-slate-100 overflow-auto`}>
           <div className="p-3 md:p-6 max-w-7xl mx-auto">
-            <UserManagement />
+            <PosPageSuspense>
+              <LazyUserManagement />
+            </PosPageSuspense>
           </div>
         </div>
       )}
@@ -838,60 +866,76 @@ export default function App() {
       {shouldRenderPage('customers') && (
         <div
           style={{ display: show('customers') ? undefined : 'none' }}
-          className="fixed inset-0 top-14 md:top-20 bg-gradient-to-br from-slate-50 to-slate-100 overflow-hidden"
+          className={`fixed inset-0 ${headerTopOffset} bg-gradient-to-br from-slate-50 to-slate-100 overflow-hidden`}
         >
-          <Customers isActive={currentPage === 'customers'} />
+          <PosPageSuspense>
+            <LazyCustomers isActive={currentPage === 'customers'} />
+          </PosPageSuspense>
         </div>
       )}
 
       {shouldRenderPage('loyalty') && (
         <div
           style={{ display: show('loyalty') ? undefined : 'none' }}
-          className="fixed inset-0 top-14 md:top-20 bg-gradient-to-br from-slate-50 to-slate-100 overflow-hidden"
+          className={`fixed inset-0 ${headerTopOffset} bg-gradient-to-br from-slate-50 to-slate-100 overflow-hidden`}
         >
-          <LoyaltyPage
-            isActive={currentPage === 'loyalty'}
-            onBack={() => setCurrentPage(isElectron ? 'desktop-home' : 'tables')}
-          />
+          <PosPageSuspense>
+            <LazyLoyaltyPage
+              isActive={currentPage === 'loyalty'}
+              onBack={() => setCurrentPage(isElectron ? 'desktop-home' : 'tables')}
+            />
+          </PosPageSuspense>
         </div>
       )}
 
       {shouldRenderPage('reports') && (
         <div>
-          <Reports isActive />
+          <PosPageSuspense>
+            <LazyReports isActive />
+          </PosPageSuspense>
         </div>
       )}
 
       {shouldRenderPage('endofday') && (
         <div>
-          <EndOfDay isActive />
+          <PosPageSuspense>
+            <LazyEndOfDay isActive />
+          </PosPageSuspense>
         </div>
       )}
 
       {shouldRenderPage('cancel-logs') && (
         <div style={{ display: show('cancel-logs') ? undefined : 'none' }}>
-          <CancelLogs onClose={() => setCurrentPage(isElectron ? 'desktop-home' : 'tables')} />
+          <PosPageSuspense>
+            <LazyCancelLogs onClose={() => setCurrentPage(isElectron ? 'desktop-home' : 'tables')} />
+          </PosPageSuspense>
         </div>
       )}
 
       {shouldRenderPage('inventory') && (
         <div
           style={{ display: show('inventory') ? undefined : 'none' }}
-          className="fixed inset-0 top-14 md:top-20 bg-gradient-to-br from-slate-50 to-slate-100 overflow-hidden"
+          className={`fixed inset-0 ${headerTopOffset} bg-gradient-to-br from-slate-50 to-slate-100 overflow-hidden`}
         >
-          <Inventory />
+          <PosPageSuspense>
+            <LazyInventory />
+          </PosPageSuspense>
         </div>
       )}
 
       {shouldRenderPage('quick-sale') && (
-        <div className="fixed inset-0 top-14 md:top-20 bg-gradient-to-br from-slate-50 to-slate-100 overflow-hidden">
-          <QuickSale isActive />
+        <div className={`fixed inset-0 ${headerTopOffset} bg-gradient-to-br from-slate-50 to-slate-100 overflow-hidden`}>
+          <PosPageSuspense>
+            <LazyQuickSale isActive />
+          </PosPageSuspense>
         </div>
       )}
 
       {shouldRenderPage('shifts') && (
         <div>
-          <ShiftManager />
+          <PosPageSuspense>
+            <LazyShiftManager />
+          </PosPageSuspense>
         </div>
       )}
 
@@ -908,11 +952,21 @@ export default function App() {
       )}
 
       {showSettings && (
-        <Settings onClose={() => setShowSettings(false)} />
+        <PosPageSuspense>
+          <LazySettings
+            initialTab={settingsInitialTab}
+            onClose={() => {
+              setShowSettings(false);
+              setSettingsInitialTab(undefined);
+            }}
+          />
+        </PosPageSuspense>
       )}
 
       {showCashRegister && (
-        <CashRegister onClose={() => setShowCashRegister(false)} />
+        <PosPageSuspense>
+          <LazyCashRegister onClose={() => setShowCashRegister(false)} />
+        </PosPageSuspense>
       )}
 
       <SystemNotificationContainer

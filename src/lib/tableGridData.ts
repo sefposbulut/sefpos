@@ -1,5 +1,6 @@
 import { supabase } from './supabase';
 import { isSqlServerMode } from './sqlDb';
+import { getActivePosPage } from './pageActivity';
 
 /** SQL + basit sorgu: join gerektirmez */
 export const TABLE_GRID_TABLE_COLS =
@@ -402,6 +403,10 @@ export async function fetchRestaurantTableWithOrder(
   } as TableGridCachedRow;
 }
 
+/** orders.total_amount arka plan düzeltmesi — Realtime burst'te DB'yi yorma. */
+const lastOrderTotalSyncAt = new Map<string, number>();
+const ORDER_TOTAL_SYNC_COOLDOWN_MS = 60_000;
+
 export async function enrichTableGridOrders(
   orderMap: Map<string, TableGridOrderEmbed>,
   opts?: {
@@ -499,10 +504,15 @@ export async function enrichTableGridOrders(
         Math.abs(itemSum - prevTotal) > 0.009 &&
         embed.payment_status !== 'paid'
       ) {
-        void supabase
-          .from('orders')
-          .update({ subtotal: itemSum, tax_amount: 0, total_amount: itemSum })
-          .eq('id', oid);
+        const now = Date.now();
+        const last = lastOrderTotalSyncAt.get(oid) ?? 0;
+        if (now - last >= ORDER_TOTAL_SYNC_COOLDOWN_MS) {
+          lastOrderTotalSyncAt.set(oid, now);
+          void supabase
+            .from('orders')
+            .update({ subtotal: itemSum, tax_amount: 0, total_amount: itemSum })
+            .eq('id', oid);
+        }
       }
     } else if (sumByOrder.has(oid)) {
       const itemSum = sumByOrder.get(oid) || 0;
@@ -563,5 +573,16 @@ export async function fetchCloudTableGridSnapshot(
 /** Profil/şube hazır olur olmaz çağır; TableGrid açılmadan cache dolabilir */
 export function prefetchCloudTableGrid(tenantId: string, branchId: string): void {
   if (!tenantId || !branchId) return;
-  void fetchCloudTableGridSnapshot(tenantId, branchId).catch(() => {});
+  const run = () => {
+    if (typeof window !== 'undefined' && (window as any).electronAPI) {
+      const page = getActivePosPage();
+      if (page !== 'tables' && page !== 'quick-sale') return;
+    }
+    void fetchCloudTableGridSnapshot(tenantId, branchId).catch(() => {});
+  };
+  if (typeof window !== 'undefined' && (window as any).electronAPI) {
+    window.setTimeout(run, 20_000);
+    return;
+  }
+  run();
 }
