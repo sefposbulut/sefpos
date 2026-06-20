@@ -2069,8 +2069,10 @@ async function fetchPendingJobs() {
 let realtimeWs = null;
 let realtimeReconnectTimer = null;
 let realtimeReconnectAttempts = 0;
+let realtimeReconnectSuspended = false;
 const REALTIME_RECONNECT_BASE_MS = 8_000;
 const REALTIME_RECONNECT_MAX_MS = 120_000;
+const REALTIME_403_SUSPEND_AFTER = 5;
 let realtimeConnected = false;
 let currentTenantId = null;
 let currentBranchId = null;
@@ -2199,7 +2201,7 @@ function startPendingJobsPolling() {
         .finally(() => {
           pendingJobsFetchInFlight = false;
         });
-      if (!sqlModeTick && !realtimeConnected && currentTenantId && currentUserJwt && !realtimeReconnectTimer) {
+      if (!sqlModeTick && !realtimeConnected && shouldAttemptRealtimeConnect() && !realtimeReconnectTimer) {
         scheduleRealtimeReconnect('poll-fallback');
       }
       scheduleNext();
@@ -2222,9 +2224,32 @@ function clearRealtimeReconnectTimer() {
   }
 }
 
+function resetRealtimeReconnectState() {
+  realtimeReconnectAttempts = 0;
+  realtimeReconnectSuspended = false;
+  clearRealtimeReconnectTimer();
+}
+
+function shouldAttemptRealtimeConnect() {
+  if (isElectronSqlServerMode()) return false;
+  if (!currentTenantId || !currentUserJwt) return false;
+  if (realtimeReconnectSuspended) return false;
+  return true;
+}
+
+function noteRealtime403(context) {
+  if (!String(context || '').includes('403')) return;
+  if (realtimeReconnectAttempts >= REALTIME_403_SUSPEND_AFTER && !realtimeReconnectSuspended) {
+    realtimeReconnectSuspended = true;
+    paLog(
+      'warn',
+      'Realtime 403 tekrarlandi — aninda fiş icin HTTP poll kullanilacak (Realtime kapali)',
+    );
+  }
+}
+
 function scheduleRealtimeReconnect(reason) {
-  if (isElectronSqlServerMode()) return;
-  if (!currentTenantId || !currentUserJwt) return;
+  if (!shouldAttemptRealtimeConnect()) return;
   if (realtimeReconnectTimer) return;
   const delay = Math.min(
     REALTIME_RECONNECT_BASE_MS * Math.pow(1.6, realtimeReconnectAttempts),
@@ -2244,9 +2269,7 @@ function scheduleRealtimeReconnect(reason) {
 }
 
 function connectRealtimePrintAgent() {
-  if (isElectronSqlServerMode()) return;
-  // Do not open realtime socket before authenticated tenant context exists.
-  if (!currentTenantId || !currentUserJwt) return;
+  if (!shouldAttemptRealtimeConnect()) return;
 
   clearRealtimeReconnectTimer();
 
@@ -2256,16 +2279,28 @@ function connectRealtimePrintAgent() {
     realtimeWs = null;
   }
 
-  const token = currentUserJwt || SUPABASE_ANON_KEY;
-  const wsUrl = SUPABASE_URL.replace('https://', 'wss://') + '/realtime/v1/websocket?apikey=' + SUPABASE_ANON_KEY + '&vsn=1.0.0';
+  // Handshake: anon/publishable apikey (user JWT sadece phx_join access_token).
+  // User JWT Authorization header'da 403 verir (Supabase Realtime protokolu).
+  const wsUrl =
+    SUPABASE_URL.replace('https://', 'wss://') +
+    '/realtime/v1/websocket?apikey=' +
+    encodeURIComponent(SUPABASE_ANON_KEY) +
+    '&vsn=1.0.0';
 
   const { WebSocket } = require('ws');
-  const ws = new WebSocket(wsUrl, { headers: { 'Authorization': `Bearer ${token}` } });
+  const ws = new WebSocket(wsUrl, {
+    headers: {
+      Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+      apikey: SUPABASE_ANON_KEY,
+    },
+  });
   realtimeWs = ws;
 
   let heartbeatInterval = null;
   let msgRef = 1;
+  const joinRef = '1';
   let closed = false;
+  let opened = false;
 
   const cleanup = () => {
     if (heartbeatInterval) {
@@ -2277,7 +2312,9 @@ function connectRealtimePrintAgent() {
   };
 
   ws.on('open', () => {
+    opened = true;
     realtimeReconnectAttempts = 0;
+    realtimeReconnectSuspended = false;
     realtimeConnected = true;
     paLog('log', 'Supabase Realtime bağlandı (Print Agent)');
 
@@ -2307,7 +2344,8 @@ function connectRealtimePrintAgent() {
         topic: 'realtime:public:print_jobs',
         event: 'phx_join',
         payload,
-        ref: String(msgRef++),
+        ref: joinRef,
+        join_ref: joinRef,
       }));
     } catch (err) {
       paLog('warn', 'Realtime join gönderilemedi', { message: err?.message || String(err) });
@@ -2316,7 +2354,13 @@ function connectRealtimePrintAgent() {
     heartbeatInterval = setInterval(() => {
       if (ws.readyState === ws.OPEN) {
         try {
-          ws.send(JSON.stringify({ topic: 'phoenix', event: 'heartbeat', payload: {}, ref: String(msgRef++) }));
+          ws.send(JSON.stringify({
+            topic: 'phoenix',
+            event: 'heartbeat',
+            payload: {},
+            ref: String(msgRef++),
+            join_ref: joinRef,
+          }));
         } catch {
           /* socket kapanıyor */
         }
@@ -2329,6 +2373,15 @@ function connectRealtimePrintAgent() {
   ws.on('message', async (data) => {
     try {
       const msg = JSON.parse(data.toString());
+
+      if (msg.event === 'phx_reply') {
+        if (msg.payload?.status === 'error') {
+          const reason = JSON.stringify(msg.payload?.response || msg.payload || '');
+          paLog('warn', 'Realtime channel join reddedildi', { reason });
+          noteRealtime403(reason);
+        }
+        return;
+      }
 
       if (msg.event === 'postgres_changes' && msg.payload?.data?.type === 'INSERT') {
         const record = msg.payload.data.record;
@@ -2356,13 +2409,18 @@ function connectRealtimePrintAgent() {
     if (closed) return;
     closed = true;
     cleanup();
-    paLog('log', 'Supabase Realtime bağlantısı kesildi.');
-    scheduleRealtimeReconnect('close');
+    if (opened) {
+      paLog('log', 'Supabase Realtime bağlantısı kesildi.');
+    }
+    if (shouldAttemptRealtimeConnect()) {
+      scheduleRealtimeReconnect('close');
+    }
   });
 
   ws.on('error', (err) => {
-    paLog('warn', 'Realtime WebSocket hatası', { message: err?.message || String(err) });
-    // close olayı gelince tek noktadan yeniden bağlanır
+    const message = err?.message || String(err);
+    paLog('warn', 'Realtime WebSocket hatası', { message });
+    noteRealtime403(message);
   });
 }
 
@@ -3156,6 +3214,7 @@ ipcMain.handle('register-printers', async (_, { tenantId, branchId, userJwt }) =
     currentTenantId = tenantId;
     currentBranchId = branchId || null;
     currentUserJwt = userJwt;
+    resetRealtimeReconnectState();
 
     const printers = await getSystemPrinters();
     registeredKasaPrinters = printers || [];
@@ -3269,7 +3328,7 @@ ipcMain.handle('register-printers', async (_, { tenantId, branchId, userJwt }) =
       if (tenantChanged || branchChanged || !realtimeConnected) {
         paLog('log', 'Tenant/branch değişti, Realtime yeniden bağlanıyor...');
         processingJobIds.clear();
-        realtimeReconnectAttempts = 0;
+        resetRealtimeReconnectState();
         connectRealtimePrintAgent();
       } else {
         fetchPendingJobs();
