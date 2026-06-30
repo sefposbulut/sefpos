@@ -516,6 +516,8 @@ function DeliveryOrderFormInner({ couriers, editOrder, prefillCustomer, onClose 
         const friendly =
           msg.includes('orders_tenant_id_order_number_key') || msg.includes('duplicate key')
             ? 'Sipariş numarası çakıştı. Lütfen «Siparişi Oluştur»a bir kez daha basın.'
+            : lower.includes('order_number allocation failed')
+              ? 'Sipariş numarası üretilemedi. Birkaç saniye bekleyip tekrar deneyin.'
             : lower.includes('statement timeout') || lower.includes('canceling statement')
               ? 'Sipariş kaydı sunucuda zaman aşımına uğradı. Birkaç saniye bekleyip tekrar deneyin.'
               : msg;
