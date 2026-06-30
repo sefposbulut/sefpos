@@ -146,7 +146,11 @@ export function Settings({ onClose, initialTab }: SettingsProps) {
         setUpdateCheckState({ kind: 'error', message: String(res.error) });
         return;
       }
-      if (res?.version) {
+      if (res?.version && appVersion && res.version !== appVersion) {
+        setUpdateCheckState({ kind: 'available', version: String(res.version) });
+      } else if (res?.version && appVersion && res.version === appVersion) {
+        setUpdateCheckState({ kind: 'not_available' });
+      } else if (res?.version) {
         setUpdateCheckState({ kind: 'available', version: String(res.version) });
       } else {
         setUpdateCheckState({ kind: 'not_available' });

@@ -4317,9 +4317,11 @@ ipcMain.handle('check-for-updates', async () => {
   }
   _manualUpdateCheckInFlight = true;
   _manualUpdateCheckUntil = Date.now() + 120_000;
-  try {
-    const result = await autoUpdater.checkForUpdates();
-    return { version: result?.updateInfo?.version || null };
+    try {
+      const result = await autoUpdater.checkForUpdates();
+      const remote = result?.updateInfo?.version || null;
+      const available = result?.isUpdateAvailable === true;
+      return { version: available ? remote : null };
   } catch (err) {
     return { error: friendlyUpdateError(err) };
   } finally {
