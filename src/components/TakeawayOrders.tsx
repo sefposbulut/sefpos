@@ -103,7 +103,10 @@ const STATUS_NEXT_TAKEAWAY: Record<string, string> = {
 const PAYMENT_LABELS: Record<string, { label: string; icon: any; color: string }> = {
   cash:   { label: 'Nakit',  icon: Banknote,    color: 'text-green-600' },
   card:   { label: 'Kart',   icon: CreditCard,  color: 'text-blue-600' },
+  credit_card: { label: 'Kart', icon: CreditCard, color: 'text-blue-600' },
   online: { label: 'Online', icon: Smartphone,  color: 'text-orange-600' },
+  open_account: { label: 'Açık hesap', icon: CreditCard, color: 'text-teal-600' },
+  account: { label: 'Açık hesap', icon: CreditCard, color: 'text-teal-600' },
 };
 
 interface TakeawayOrdersProps {

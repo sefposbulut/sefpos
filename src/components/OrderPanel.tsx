@@ -446,9 +446,11 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
         })
       );
     }
-    if (bundle?.payments?.length) {
-      setPaymentTransactions(bundle.payments as PaymentTransaction[]);
-    }
+    // Her zaman set et (boş dizi dahil) — eski sipariş ödemeleri state'te kalıp
+    // kalan tutarı 0 göstermesin
+    setPaymentTransactions(
+      Array.isArray(bundle?.payments) ? (bundle!.payments as PaymentTransaction[]) : [],
+    );
     if (hasLocalLines) {
       setExistingOrderItems(earlyLines ?? persisted ?? bundle!.rows);
     } else if (oid) {
@@ -457,9 +459,11 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
         setExistingOrderItems(warmBundle.rows);
         persistOrderItemsSnapshot(oid, warmBundle.rows);
         if (warmBundle.order) setCurrentOrder(warmBundle.order as Order);
-        if (warmBundle.payments?.length) {
-          setPaymentTransactions(warmBundle.payments as PaymentTransaction[]);
-        }
+        setPaymentTransactions(
+          Array.isArray(warmBundle.payments)
+            ? (warmBundle.payments as PaymentTransaction[])
+            : [],
+        );
         setOrderHydrating(false);
       });
     }
@@ -1039,7 +1043,9 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
 
       if (rows.length === 0 && persistedSnap && persistedSnap.length > 0) {
         if (orderRes.data) setCurrentOrder(orderRes.data as Order);
-        if (paymentsRes.data) setPaymentTransactions(paymentsRes.data as any);
+        setPaymentTransactions(
+          Array.isArray(paymentsRes.data) ? (paymentsRes.data as any) : [],
+        );
         return;
       }
       if (rows.length > 0) {
@@ -1073,7 +1079,9 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
         setExistingOrderItems([]);
         setPaymentTransactions([]);
       }
-      if (paymentsRes.data) setPaymentTransactions(paymentsRes.data as any);
+      setPaymentTransactions(
+        Array.isArray(paymentsRes.data) ? (paymentsRes.data as any) : [],
+      );
     } finally {
       setOrderHydrating(false);
     }
@@ -1114,7 +1122,9 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
       setOrderHydrating(false);
     }
     if (bundle?.order) setCurrentOrder(bundle.order as Order);
-    if (bundle?.payments?.length) setPaymentTransactions(bundle.payments as PaymentTransaction[]);
+    setPaymentTransactions(
+      Array.isArray(bundle?.payments) ? (bundle!.payments as PaymentTransaction[]) : [],
+    );
 
     const inflightWarm = getInflightPanelPromise(currentOrderId);
     if (inflightWarm) {
@@ -1138,7 +1148,11 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
       setExistingOrderItems(warmBundle.rows);
       persistOrderItemsSnapshot(currentOrderId, warmBundle.rows);
       setCurrentOrder(warmBundle.order as Order);
-      if (warmBundle.payments?.length) setPaymentTransactions(warmBundle.payments as PaymentTransaction[]);
+      setPaymentTransactions(
+        Array.isArray(warmBundle.payments)
+          ? (warmBundle.payments as PaymentTransaction[])
+          : [],
+      );
       setOrderHydrating(false);
       window.setTimeout(() => {
         if (submittingRef.current || saveItemQuantityTimersRef.current.size > 0) return;
@@ -1748,12 +1762,9 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
       queueMicrotask(() => {
         void (async () => {
           // Mobil/web: kasadaki yazıcı eşlemesini buluttan al (yoksa mutfak fişi düşmez)
+          // Bulut ayar çekmeyi mutfak fişinden önce bekleme — gecikme yaratır
           if (!isElectron()) {
-            try {
-              await fetchPrintSettingsFromCloud();
-            } catch {
-              /* yerel ayar */
-            }
+            void fetchPrintSettingsFromCloud().catch(() => {});
           }
           const printSettings = loadPrintSettings();
           const receiptHeader = resolveReceiptBusinessHeader(printSettings, tenant);
@@ -1766,14 +1777,14 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
               categoryId: item.product.category_id || null,
               productPrinterName: (item.product as any).printer_name || null,
             }));
-            await printKitchenReceipts({
+            void printKitchenReceipts({
               settings: printSettings,
               restaurantName: receiptHeader.restaurantName,
               tableLabel,
               orderNumber: orderNum,
               items: kitchenItems,
               waiterName: profile?.full_name || profile?.email || user.email || undefined,
-            });
+            }).catch((e) => console.warn('[ŞefPOS] mutfak fişi kuyruk:', e?.message || e));
           }
 
           if (isTakeaway && (printSettings as any).autoPrintTakeaway !== false) {
@@ -2011,8 +2022,19 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
       }
     }
 
-    const currentPaid = paymentTransactions.reduce((s, p) => s + Number(p.amount || 0), 0);
-    const { total: orderTotal } = calculateTotal();
+    const currentPaid = paymentTransactions
+      .filter((p) => String(p.order_id) === String(currentOrder.id))
+      .reduce((s, p) => s + Number(p.amount || 0), 0);
+    const { total: calcOrderTotal } = calculateTotal();
+    const orderTotal = Math.max(
+      calcOrderTotal,
+      Number(currentOrder.total_amount) || 0,
+      Number(table.order?.total_amount) || 0,
+    );
+    if (amount <= 0.009 && orderTotal > 0.009) {
+      alert('Ödeme tutarı 0 görünüyor. Masa tutarını kontrol edip tekrar deneyin.');
+      return;
+    }
     const tempId = crypto.randomUUID();
     const newPayment: PaymentTransaction = {
       id: tempId,
@@ -2593,11 +2615,28 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
     return matchCategory && matchSearch;
   }), [products, selectedCategory, searchQuery, searchLower]);
 
-  const { discountAmount, total, subtotal, percentDiscount } = useMemo(
+  const { discountAmount, total: calcTotal, subtotal, percentDiscount } = useMemo(
     () => calculateTotal(),
     [calculateTotal],
   );
-  const totalPaid = useMemo(() => paymentTransactions.reduce((sum, p) => sum + Number(p.amount), 0), [paymentTransactions]);
+  // Hızlı ödemede satırlar henüz hydrate olmadan total=0 olmasın — sipariş tutarını yedekle
+  const total = useMemo(() => {
+    const fromItems = Number(calcTotal) || 0;
+    const fromOrder = Number(currentOrder?.total_amount) || 0;
+    const fromTable = Number(table.order?.total_amount) || 0;
+    if (fromItems > 0.009) return fromItems;
+    return Math.max(fromOrder, fromTable, fromItems);
+  }, [calcTotal, currentOrder?.total_amount, table.order?.total_amount]);
+  // Sadece bu siparişin ödemeleri — başka masadan kalan state 0,00 / yanlış kapanış yapmasın
+  const paymentsForCurrentOrder = useMemo(() => {
+    const oid = currentOrder?.id;
+    if (!oid) return [] as typeof paymentTransactions;
+    return paymentTransactions.filter((p) => String(p.order_id) === String(oid));
+  }, [paymentTransactions, currentOrder?.id]);
+  const totalPaid = useMemo(
+    () => paymentsForCurrentOrder.reduce((sum, p) => sum + Number(p.amount || 0), 0),
+    [paymentsForCurrentOrder],
+  );
   const remainingAmount = useMemo(() => Math.max(0, total - totalPaid), [total, totalPaid]);
 
   // Item-bazlı kısmi ödeme yardımcıları
@@ -2621,6 +2660,23 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
 
   /** Ödeme modalını anında aç; masa kilidi arka planda (önce RPC beklemez). */
   const openPaymentFlow = useCallback(() => {
+    // Satırlar yüklenirken total geçici 0 — ödenmiş sayıp kapatma / 0,00 modal yok
+    const itemsReady =
+      existingOrderItems.length > 0 || cart.length > 0 || Number(currentOrder?.total_amount) > 0.009;
+    if (
+      !partialPayActive &&
+      itemsReady &&
+      !orderHydrating &&
+      remainingAmount <= 0.009 &&
+      total > 0.009 &&
+      paymentsForCurrentOrder.length > 0 &&
+      currentOrder &&
+      !isTempOrderId(currentOrder.id) &&
+      (currentOrder.payment_status === 'paid' || totalPaid >= total - 0.009)
+    ) {
+      void checkAndCompleteOrder(false, paymentsForCurrentOrder);
+      return;
+    }
     if (partialPayActive) {
       partialPaymentItemIdsRef.current = Array.from(selectedItemIds);
       partialPaymentMarkedRef.current = false;
@@ -2632,6 +2688,23 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
     }
     setLoyaltyPayment(null);
     setShowPayment(true);
+    // Modal açılırken ödemeleri sunucudan tazele — ama boş diziyle tutarı 0 yapma
+    if (currentOrder?.id && !isTempOrderId(currentOrder.id)) {
+      const oid = currentOrder.id;
+      void (async () => {
+        try {
+          const { data } = await supabase
+            .from('payment_transactions')
+            .select(PAYMENT_TRANSACTION_SELECT)
+            .eq('order_id', oid)
+            .order('created_at', { ascending: false });
+          if (!Array.isArray(data)) return;
+          setPaymentTransactions(data as any);
+        } catch {
+          /* ignore */
+        }
+      })();
+    }
     if (cart.length > 0) void handleSubmitOrder();
     if (table.table_number === 0 || !table.id) return;
     void lockTableForPayment().then((canPay) => {
@@ -2645,6 +2718,14 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
     table.table_number,
     table.id,
     handleSubmitOrder,
+    remainingAmount,
+    total,
+    totalPaid,
+    paymentsForCurrentOrder,
+    currentOrder,
+    setPaymentTransactions,
+    existingOrderItems.length,
+    orderHydrating,
   ]);
   const toggleItemSelection = useCallback((itemId: string) => {
     setSelectedItemIds((prev) => {
@@ -4069,11 +4150,11 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
                   </div>
                 </div>
 
-                {paymentTransactions.length > 0 && currentOrder && (
+                {paymentsForCurrentOrder.length > 0 && currentOrder && (
                   <div className="pb-2 border-b">
                     <h4 className="text-xs font-bold text-slate-700 mb-1">Ödemeler</h4>
                     <div className="space-y-1 max-h-24 overflow-y-auto">
-                      {paymentTransactions.map((payment) => (
+                      {paymentsForCurrentOrder.map((payment) => (
                         <div key={payment.id} className="bg-green-50 border border-green-200 rounded p-1.5">
                           <div className="flex items-center justify-between">
                             <div className="flex items-center gap-1">
