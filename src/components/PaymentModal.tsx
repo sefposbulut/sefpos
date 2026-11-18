@@ -338,7 +338,9 @@ export function PaymentModal({
     return () => mq.removeEventListener('change', onChange);
   }, []);
 
+  // remainingAmount ara sıra 0'a düşerse (hızlı ödeme / hydrate yarışı) split'leri 0 yapma
   useEffect(() => {
+    if (remainingAmount <= 0.009) return;
     setSplits([{ method: 'cash', amount: remainingAmount.toFixed(2) }]);
   }, [remainingAmount]);
 

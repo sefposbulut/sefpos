@@ -165,6 +165,26 @@ export default function App() {
   }, []);
   const { user, profile, tenant, loading, refreshProfile, activeBranch, signOut, profileLoadFailed } = useAuth();
   const [selectedTable, setSelectedTable] = useState<Table | null>(null);
+  // OrderPanel masa durumu emit eder; selectedTable güncellenmezse boş masada
+  // current_order_id null kalır / eski sipariş sızabilir — senkron tut.
+  useEffect(() => {
+    const onTableState = (ev: Event) => {
+      const detail = (ev as CustomEvent<Partial<Table> & { id: string }>).detail;
+      if (!detail?.id) return;
+      setSelectedTable((prev) => {
+        if (!prev || prev.id !== detail.id) return prev;
+        const next = { ...prev, ...detail } as Table;
+        if ((detail as { order?: unknown }).order === null) {
+          delete (next as { order?: unknown }).order;
+        }
+        return next;
+      });
+    };
+    window.addEventListener('sefpos:table-state-changed', onTableState as EventListener);
+    return () => {
+      window.removeEventListener('sefpos:table-state-changed', onTableState as EventListener);
+    };
+  }, []);
   const [currentPage, setCurrentPage] = useState(() =>
     !!(window as any).electronAPI ? 'desktop-home' : 'tables',
   );

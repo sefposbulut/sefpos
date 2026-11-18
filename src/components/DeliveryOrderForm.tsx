@@ -4,7 +4,7 @@ import { useAuth } from '../contexts/AuthContext';
 import {
   Bike, User, MapPin, FileText, Clock, ChevronLeft, Plus, Minus,
   Search, X, Trash2, Home, ShoppingBag, CreditCard, Banknote, Smartphone,
-  History, RefreshCw, Check, ChevronRight
+  History, RefreshCw, Check, ChevronRight, Receipt
 } from 'lucide-react';
 import { Courier, DeliveryCustomer } from './TakeawayOrders';
 import { loadPrintSettings, printTakeawayReceipt } from '../lib/printService';
@@ -45,8 +45,16 @@ function DeliveryOrderFormInner({ couriers, editOrder, prefillCustomer, onClose 
   const [customerName, setCustomerName] = useState(editOrder?.customer_name || '');
   const [deliveryAddress, setDeliveryAddress] = useState(editOrder?.delivery_address || '');
   const [deliveryNote, setDeliveryNote] = useState(editOrder?.delivery_note || '');
-  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card' | 'online'>(editOrder?.payment_method || 'cash');
-  const [paymentCollected, setPaymentCollected] = useState<boolean>(editOrder?.payment_collected ?? false);
+  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card' | 'online' | 'open_account'>(() => {
+    const m = editOrder?.payment_method;
+    if (m === 'open_account' || m === 'account') return 'open_account';
+    if (m === 'credit_card') return 'card';
+    if (m === 'card' || m === 'online' || m === 'cash') return m;
+    return 'cash';
+  });
+  const [paymentCollected, setPaymentCollected] = useState<boolean>(
+    editOrder?.payment_collected ?? (editOrder?.payment_method === 'open_account' || editOrder?.payment_method === 'account'),
+  );
   const [estimatedMinutes, setEstimatedMinutes] = useState(String(editOrder?.estimated_delivery_minutes || 30));
   const [assignCourierId, setAssignCourierId] = useState(editOrder?.courier_id || '');
 
@@ -277,6 +285,8 @@ function DeliveryOrderFormInner({ couriers, editOrder, prefillCustomer, onClose 
     setDeliveryAddress(cari.address || '');
     setShowSuggestions(false);
     setLoadingCustomer(false);
+    setPaymentMethod('open_account');
+    setPaymentCollected(true);
   };
 
   const selectDeliveryCustomer = async (customer: DeliveryCustomerSearchRow) => {
@@ -355,14 +365,19 @@ function DeliveryOrderFormInner({ couriers, editOrder, prefillCustomer, onClose 
     () => cart.reduce((s, i) => s + i.product.price * i.quantity, 0),
     [cart],
   );
+  const cartQtyById = useMemo(() => {
+    const m: Record<string, number> = {};
+    for (const i of cart) m[i.product.id] = i.quantity;
+    return m;
+  }, [cart]);
 
-  const addToCart = (product: Product) => {
+  const addToCart = useCallback((product: Product) => {
     setCart(prev => {
       const existing = prev.find(i => i.product.id === product.id);
       if (existing) return prev.map(i => i.product.id === product.id ? { ...i, quantity: i.quantity + 1 } : i);
       return [...prev, { product, quantity: 1, note: '' }];
     });
-  };
+  }, []);
 
   const updateQty = (productId: string, delta: number) => {
     setCart(prev => {
@@ -432,6 +447,11 @@ function DeliveryOrderFormInner({ couriers, editOrder, prefillCustomer, onClose 
       showValidationError('name');
       return;
     }
+    if (paymentMethod === 'open_account' && !selectedCariCustomer) {
+      setSubmitError('Açık hesap için cari müşteri seçin (üstten arayın).');
+      setMobileStep(2);
+      return;
+    }
     if (!selectedCariCustomer && !phone) {
       showValidationError('phone');
       return;
@@ -483,8 +503,9 @@ function DeliveryOrderFormInner({ couriers, editOrder, prefillCustomer, onClose 
       delivery_address: address || null,
       delivery_note: deliveryNote.trim() || null,
       payment_method: paymentMethod,
-      payment_collected: paymentCollected,
-      payment_status: paymentCollected ? 'paid' : 'unpaid',
+      payment_collected: paymentMethod === 'open_account' ? true : paymentCollected,
+      payment_status: (paymentMethod === 'open_account' || paymentCollected) ? 'paid' : 'unpaid',
+      ...(selectedCariCustomer ? { customer_id: selectedCariCustomer.id } : {}),
       estimated_delivery_minutes: isDelivery ? parseInt(estimatedMinutes) || 30 : null,
       courier_id: courier?.id || null,
       courier_name: courier?.full_name || null,
@@ -561,10 +582,9 @@ function DeliveryOrderFormInner({ couriers, editOrder, prefillCustomer, onClose 
       estimatedMinutes: isDelivery ? parseInt(estimatedMinutes) || 30 : 0,
     };
 
-    onClose(editOrder ? { reload: true } : { orderId });
-
-    if (paymentCollected) {
-      void recordTakeawayPaymentIfNeeded({
+    const shouldRecordPay = paymentMethod === 'open_account' || paymentCollected;
+    if (shouldRecordPay) {
+      const payResult = await recordTakeawayPaymentIfNeeded({
         tenantId: tenant.id,
         branchId: activeBranch?.id ?? null,
         orderId,
@@ -575,8 +595,16 @@ function DeliveryOrderFormInner({ couriers, editOrder, prefillCustomer, onClose 
         amount: cartTotal,
         createdBy: user.id,
         shouldRecord: true,
+        customerId: selectedCariCustomer?.id ?? null,
       });
+      if (!payResult.ok) {
+        setSubmitError(payResult.error || 'Ödeme kaydı oluşturulamadı (kart/açık hesap).');
+        setSubmitting(false);
+        return;
+      }
     }
+
+    onClose(editOrder ? { reload: true } : { orderId });
 
     if (courier) {
       void supabase.from('couriers').update({ status: 'busy' }).eq('id', courier.id);
@@ -863,10 +891,14 @@ function DeliveryOrderFormInner({ couriers, editOrder, prefillCustomer, onClose 
             <div>
               <label className="text-xs font-bold text-slate-600 mb-1.5 block">Ödeme Yöntemi</label>
               <div className="flex gap-1.5">
-                {([['cash', 'Nakit', Banknote], ['card', 'Kart', CreditCard], ['online', 'Online', Smartphone]] as [string, string, any][]).map(([v, l, Icon]) => (
+                {([['cash', 'Nakit', Banknote], ['card', 'Kart', CreditCard], ['online', 'Online', Smartphone], ['open_account', 'Açık hesap', Receipt]] as [string, string, any][]).map(([v, l, Icon]) => (
                   <button
                     key={v}
-                    onClick={() => setPaymentMethod(v as any)}
+                    type="button"
+                    onClick={() => {
+                      setPaymentMethod(v as 'cash' | 'card' | 'online' | 'open_account');
+                      if (v === 'open_account') setPaymentCollected(true);
+                    }}
                     className={`flex-1 flex flex-col items-center gap-1 py-2 rounded-xl text-xs font-bold transition ${paymentMethod === v ? 'bg-slate-800 text-white' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}
                   >
                     <Icon className="w-3.5 h-3.5" />
@@ -878,22 +910,35 @@ function DeliveryOrderFormInner({ couriers, editOrder, prefillCustomer, onClose 
 
             <div>
               <label className="text-xs font-bold text-slate-600 mb-1.5 block">Ödeme Durumu</label>
-              <div className="flex gap-1.5">
-                <button
-                  onClick={() => setPaymentCollected(false)}
-                  className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-xs font-bold transition ${!paymentCollected ? 'bg-amber-500 text-white' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}
-                >
-                  <Banknote className="w-3.5 h-3.5" />
-                  {paymentMethod === 'cash' ? 'Kapıda Nakit' : paymentMethod === 'card' ? 'Kapıda Kart' : 'Kapıda Ödenecek'}
-                </button>
-                <button
-                  onClick={() => setPaymentCollected(true)}
-                  className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-xs font-bold transition ${paymentCollected ? 'bg-green-500 text-white' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}
-                >
-                  <Check className="w-3.5 h-3.5" />
-                  Ödendi
-                </button>
-              </div>
+              {paymentMethod === 'open_account' ? (
+                <div className="flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-xs font-bold bg-teal-600 text-white">
+                  <Receipt className="w-3.5 h-3.5" />
+                  Cariye yazılacak (açık hesap)
+                </div>
+              ) : (
+                <div className="flex gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setPaymentCollected(false)}
+                    className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-xs font-bold transition ${!paymentCollected ? 'bg-amber-500 text-white' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}
+                  >
+                    <Banknote className="w-3.5 h-3.5" />
+                    {paymentMethod === 'cash'
+                      ? 'Kapıda Nakit'
+                      : paymentMethod === 'card'
+                        ? 'Kapıda Kart'
+                        : 'Kapıda Ödenecek'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPaymentCollected(true)}
+                    className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-xs font-bold transition ${paymentCollected ? 'bg-green-500 text-white' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}
+                  >
+                    <Check className="w-3.5 h-3.5" />
+                    Ödendi
+                  </button>
+                </div>
+              )}
             </div>
 
             {(isDelivery || subtype === 'takeaway') && (
@@ -1024,26 +1069,11 @@ function DeliveryOrderFormInner({ couriers, editOrder, prefillCustomer, onClose 
               ) : filteredProducts.length === 0 ? (
                 <div className="flex items-center justify-center h-32 text-slate-400 text-sm">Ürün bulunamadı</div>
               ) : (
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-2 lg:grid-cols-3 gap-2">
-                  {filteredProducts.map(p => {
-                    const inCart = cart.find(i => i.product.id === p.id);
-                    return (
-                      <button
-                        key={p.id}
-                        onClick={() => addToCart(p)}
-                        className={`relative bg-white border-2 rounded-xl p-3 text-left transition active:scale-95 group ${inCart ? 'border-orange-400 shadow-md' : 'border-slate-200 hover:border-orange-300 hover:shadow'}`}
-                      >
-                        {inCart && (
-                          <div className="absolute -top-2 -right-2 w-5 h-5 bg-orange-500 text-white rounded-full flex items-center justify-center text-xs font-black">
-                            {inCart.quantity}
-                          </div>
-                        )}
-                        <div className="font-bold text-sm text-slate-800 line-clamp-2 group-hover:text-orange-600">{p.name}</div>
-                        <div className="text-orange-600 font-black text-base mt-1">{p.price.toFixed(2)}₺</div>
-                      </button>
-                    );
-                  })}
-                </div>
+                <DeliveryProductGrid
+                  products={filteredProducts}
+                  cartQtyById={cartQtyById}
+                  onAdd={addToCart}
+                />
               )}
             </div>
 
@@ -1222,5 +1252,40 @@ function DeliveryOrderFormInner({ couriers, editOrder, prefillCustomer, onClose 
     </div>
   );
 }
+
+
+const DeliveryProductGrid = memo(function DeliveryProductGrid({
+  products,
+  cartQtyById,
+  onAdd,
+}: {
+  products: Product[];
+  cartQtyById: Record<string, number>;
+  onAdd: (p: Product) => void;
+}) {
+  return (
+    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-2 lg:grid-cols-3 gap-2">
+      {products.map((p) => {
+        const qty = cartQtyById[p.id] || 0;
+        return (
+          <button
+            key={p.id}
+            type="button"
+            onClick={() => onAdd(p)}
+            className={`relative bg-white border-2 rounded-xl p-3 text-left transition active:scale-95 group ${qty > 0 ? 'border-orange-400 shadow-md' : 'border-slate-200 hover:border-orange-300 hover:shadow'}`}
+          >
+            {qty > 0 && (
+              <div className="absolute -top-2 -right-2 w-5 h-5 bg-orange-500 text-white rounded-full flex items-center justify-center text-xs font-black">
+                {qty}
+              </div>
+            )}
+            <div className="font-bold text-sm text-slate-800 line-clamp-2 group-hover:text-orange-600">{p.name}</div>
+            <div className="text-orange-600 font-black text-base mt-1">{p.price.toFixed(2)}₺</div>
+          </button>
+        );
+      })}
+    </div>
+  );
+});
 
 export const DeliveryOrderForm = memo(DeliveryOrderFormInner);

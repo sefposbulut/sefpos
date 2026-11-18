@@ -32,7 +32,10 @@ import {
   HERO_STATS,
   WORKFLOW_STEPS,
 } from '../content/siteContent';
-import { WINDOWS_SETUP_FILENAME, windowsSetupDownloadHref } from '../../../lib/desktopDownload';
+import {
+  onWindowsSetupDownloadClick,
+  windowsSetupDownloadHref,
+} from '../../../lib/desktopDownload';
 import { TURKEY_STATS } from '../content/turkeyLocations.generated';
 import { HeroDashboard } from '../components/HeroDashboard';
 import { IntegrationMarquee } from '../components/IntegrationMarquee';
@@ -216,7 +219,7 @@ export function HomeRichPage({ onLogin, onNavigate }: LandingPageProps) {
                 </button>
                 <a
                   href={windowsSetupDownloadHref()}
-                  download={WINDOWS_SETUP_FILENAME}
+                  onClick={onWindowsSetupDownloadClick}
                   className="landing-btn-outline landing-hero-cta-secondary"
                 >
                   <Download className="w-5 h-5" /> Windows İndir

@@ -20,7 +20,10 @@ import {
   googleMapsEmbedUrl,
   googleMapsSearchUrl,
 } from '../content/siteContent';
-import { WINDOWS_SETUP_FILENAME, windowsSetupDownloadHref } from '../../../lib/desktopDownload';
+import {
+  onWindowsSetupDownloadClick,
+  windowsSetupDownloadHref,
+} from '../../../lib/desktopDownload';
 import { CTABand } from '../components/CTABand';
 import { BrandLogo } from '../components/BrandLogo';
 
@@ -177,7 +180,7 @@ export function ContactPageSection({ onLogin, onNavigate }: LandingPageProps) {
                 </button>
                 <a
                   href={windowsSetupDownloadHref()}
-                  download={WINDOWS_SETUP_FILENAME}
+                  onClick={onWindowsSetupDownloadClick}
                   className="landing-btn-outline border-slate-300 text-slate-800 justify-center py-4 rounded-2xl text-base inline-flex items-center gap-2"
                 >
                   <Download className="w-5 h-5" /> Windows indir

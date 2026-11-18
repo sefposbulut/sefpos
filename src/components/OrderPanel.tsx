@@ -415,11 +415,37 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
   const [scaleWeighingProduct, setScaleWeighingProduct] = useState<Product | null>(null);
 
   const [orderHydrating, setOrderHydrating] = useState(false);
+  /** Masa/sipariş değişince gecikmiş warm/fetch önceki sepeti yazmasın */
+  const hydrateGenRef = useRef(0);
+  const panelTableIdRef = useRef(table.id);
+  const panelOrderIdRef = useRef(table.current_order_id);
+  panelTableIdRef.current = table.id;
+  panelOrderIdRef.current = table.current_order_id;
+
+  const isHydrateStale = useCallback((gen: number, orderId?: string | null) => {
+    if (gen !== hydrateGenRef.current) return true;
+    if (panelTableIdRef.current !== table.id) return true;
+    if (orderId != null && orderId !== '' && panelOrderIdRef.current !== orderId) return true;
+    return false;
+  }, [table.id]);
 
   useLayoutEffect(() => {
+    const gen = ++hydrateGenRef.current;
+    const oid = table.current_order_id;
+    const storeSnap = useOrderSessionStore.getState();
+    // Aynı masa + store zaten bu sipariş: App selectedTable sync / emit sonrası
+    // resetOrderSession sepeti silmesin (ilk Masaya Gönder).
+    if (
+      oid &&
+      storeSnap.currentOrder?.id === oid &&
+      (!storeSnap.currentOrder.table_id ||
+        String(storeSnap.currentOrder.table_id) === String(table.id))
+    ) {
+      setOrderHydrating(false);
+      return;
+    }
     resetOrderSession();
     if (!tenant?.id) return;
-    const oid = table.current_order_id;
     if (!oid) {
       setOrderHydrating(false);
       return;
@@ -432,7 +458,13 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
 
     const embed = table.order?.id === oid ? table.order : undefined;
     if (bundle?.order) {
-      setCurrentOrder(bundle.order as Order);
+      const warmOrd = bundle.order as Order;
+      // Warm başka masanın siparişiyse uygulama
+      if (warmOrd.table_id && String(warmOrd.table_id) !== String(table.id)) {
+        setOrderHydrating(false);
+        return;
+      }
+      setCurrentOrder(warmOrd);
     } else {
       setCurrentOrder(
         buildGridSnapshotPlaceholderOrder({
@@ -446,20 +478,27 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
         })
       );
     }
-    if (bundle?.payments?.length) {
-      setPaymentTransactions(bundle.payments as PaymentTransaction[]);
-    }
+    // Her zaman set et (boş dizi dahil) — eski sipariş ödemeleri state'te kalıp
+    // kalan tutarı 0 göstermesin
+    setPaymentTransactions(
+      Array.isArray(bundle?.payments) ? (bundle!.payments as PaymentTransaction[]) : [],
+    );
     if (hasLocalLines) {
       setExistingOrderItems(earlyLines ?? persisted ?? bundle!.rows);
     } else if (oid) {
       void whenWarmOrderPanelReady(oid).then((warmBundle) => {
+        if (isHydrateStale(gen, oid)) return;
         if (!warmBundle?.rows?.length) return;
+        const warmOrd = warmBundle.order as Order | null;
+        if (warmOrd?.table_id && String(warmOrd.table_id) !== String(table.id)) return;
         setExistingOrderItems(warmBundle.rows);
         persistOrderItemsSnapshot(oid, warmBundle.rows);
         if (warmBundle.order) setCurrentOrder(warmBundle.order as Order);
-        if (warmBundle.payments?.length) {
-          setPaymentTransactions(warmBundle.payments as PaymentTransaction[]);
-        }
+        setPaymentTransactions(
+          Array.isArray(warmBundle.payments)
+            ? (warmBundle.payments as PaymentTransaction[])
+            : [],
+        );
         setOrderHydrating(false);
       });
     }
@@ -477,6 +516,7 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
     table.order?.order_number,
     table.order?.payment_status,
     setExistingOrderItems,
+    isHydrateStale,
   ]);
 
   const changeGridSize = (delta: number) => {
@@ -554,68 +594,71 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
     return () => clearInterval(id);
   }, [showPayment, table.id, table.table_number]);
 
+  /** Sepet kaydet + mutfak fişi (handleSubmitOrder atandıktan sonra doldurulur). */
+  const submitOrderRef = useRef<
+    (opts?: { closeWithoutUi?: boolean; skipKitchenPrint?: boolean }) => Promise<boolean>
+  >(async () => false);
+
   /**
-   * OrderPanel'i kapat. Kapanmadan ONCE masaya en guncel durumu (occupied + total)
-   * optimistik olarak yay; boylece izgaraya donuldugunde masa kutusu **anlik**
-   * yesile doner ve son tutari gosterir, realtime gecikmesini beklemez.
+   * KAPAT / X: paneli HEMEN kapat, masayı KİLİTLEME.
+   * Sepette ürün varsa kaydet+mutfak fişi arka planda (yazıcı beklenmez).
    */
   const handleClose = useCallback(() => {
+    const cartNow = cart;
+    const itemsSnap = existingOrderItems;
+    const orderSnap = currentOrder;
+
+    // 1) Sepet varsa kaydı hemen başlat (cartSnapshot sync alınır), print beklenmez
+    if (cartNow.length > 0) {
+      void submitOrderRef.current({ closeWithoutUi: true });
+    }
+
+    // 2) Masa durumunu yay — kilit yok
     if (table.table_number !== 0 && table.id) {
-      const orderId = currentOrder?.id || table.current_order_id;
-      if (
-        orderId &&
-        existingOrderItems.length === 0 &&
-        cart.length === 0 &&
-        !isTempOrderId(orderId)
-      ) {
+      const orderId = orderSnap?.id || table.current_order_id;
+      if (orderId && itemsSnap.length === 0 && cartNow.length === 0 && !isTempOrderId(orderId)) {
         void releaseEmptyOrderRef.current(orderId, { closePanel: false });
-        void unlockTable();
-        onClose();
-        return;
-      }
-      const existingTotal = existingOrderItems.reduce(
-        (s, i) => s + Number((i as any).total_amount || 0),
-        0
-      );
-      const cartTotal = cart.reduce((s, i) => {
-        if (i.weightedPrice !== undefined) return s + Number(i.weightedPrice || 0);
-        const unit = i.product.price + (i.variant ? i.variant.price_modifier : 0);
-        return s + unit * i.quantity;
-      }, 0);
-      const totalAmount = existingTotal + cartTotal;
-      // En az bir kayitli sipariş satiri varsa masa "occupied"; sadece sepete
-      // eklenip kaydedilmemis ürünler kapanma esnasinda DB'ye gitmediyse masa
-      // bos kalir (zaten dogru davranis).
-      if (orderId && existingOrderItems.length > 0) {
+      } else if (orderId && (itemsSnap.length > 0 || cartNow.length > 0)) {
+        const existingTotal = itemsSnap.reduce(
+          (s, i) => s + Number((i as any).total_amount || 0),
+          0,
+        );
+        const cartTotal = cartNow.reduce((s, i) => {
+          if (i.weightedPrice !== undefined) return s + Number(i.weightedPrice || 0);
+          const unit = i.product.price + (i.variant ? i.variant.price_modifier : 0);
+          return s + unit * i.quantity;
+        }, 0);
         emitTableStateChanged({
           id: table.id,
           status: 'occupied' as any,
           current_order_id: orderId,
-          session_start: ((table as unknown as { session_start?: string | null }).session_start) ||
+          session_start:
+            ((table as unknown as { session_start?: string | null }).session_start) ||
             new Date().toISOString(),
           payment_locked: false,
           order: {
             id: orderId,
-            total_amount: totalAmount,
-            order_number:
-              currentOrder?.order_number || (table.order?.order_number || ''),
+            total_amount: existingTotal + cartTotal,
+            order_number: orderSnap?.order_number || table.order?.order_number || '',
             payment_status:
-              (currentOrder?.payment_status as string | null) ||
+              (orderSnap?.payment_status as string | null) ||
               (table.order?.payment_status as string | null) ||
               'unpaid',
           },
         });
       }
     }
+
+    // 3) Kilit aç + paneli anında kapat
     void unlockTable();
-    onClose();
+    flushSync(() => {
+      onClose();
+    });
   }, [
     table,
-    currentOrder?.id,
-    currentOrder?.order_number,
-    currentOrder?.payment_status,
-    existingOrderItems,
     cart,
+    existingOrderItems,
+    currentOrder,
     emitTableStateChanged,
     onClose,
   ]);
@@ -970,8 +1013,16 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
   });
   useEffect(() => {
     if (!tenant?.id) return;
-    const oid = currentOrder?.id || table.current_order_id;
-    if (!oid) return;
+    // Yalnızca bu masanın siparişi — store'da kalan yabancı id realtime sızıntısı yapmasın
+    const storeOid = currentOrder?.id;
+    const storeOk =
+      !!storeOid &&
+      !isTempOrderId(storeOid) &&
+      (table.table_number === 0 ||
+        !currentOrder?.table_id ||
+        String(currentOrder.table_id) === String(table.id));
+    const oid = table.current_order_id || (storeOk ? storeOid : null);
+    if (!oid || isTempOrderId(oid)) return;
     if (isOfflineMode()) {
       const stopPoll = startAdaptivePoller({
         baseMs: isSqlServerMode() ? 90_000 : 20_000,
@@ -1015,8 +1066,11 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
   }, [tenant?.id, currentOrder?.id, table.current_order_id]);
 
   const loadExistingOrderFromServer = async (currentOrderId: string) => {
+    const gen = hydrateGenRef.current;
+    const tableIdAtStart = table.id;
     try {
       const itemsRows = await fetchOrderPanelItems(currentOrderId);
+      if (isHydrateStale(gen, currentOrderId) || panelTableIdRef.current !== tableIdAtStart) return;
       const rows = (itemsRows || []) as any[];
       const persistedSnap = readPersistedOrderItemsSnapshot(currentOrderId);
       if (rows.length === 0 && persistedSnap && persistedSnap.length > 0) {
@@ -1037,9 +1091,18 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
           .order('created_at', { ascending: false }),
       ]);
 
+      if (isHydrateStale(gen, currentOrderId) || panelTableIdRef.current !== tableIdAtStart) return;
+
+      if (orderRes.data?.table_id && String(orderRes.data.table_id) !== String(tableIdAtStart)) {
+        // Sipariş bu masaya ait değil — sızıntıyı yazma
+        return;
+      }
+
       if (rows.length === 0 && persistedSnap && persistedSnap.length > 0) {
         if (orderRes.data) setCurrentOrder(orderRes.data as Order);
-        if (paymentsRes.data) setPaymentTransactions(paymentsRes.data as any);
+        setPaymentTransactions(
+          Array.isArray(paymentsRes.data) ? (paymentsRes.data as any) : [],
+        );
         return;
       }
       if (rows.length > 0) {
@@ -1073,9 +1136,13 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
         setExistingOrderItems([]);
         setPaymentTransactions([]);
       }
-      if (paymentsRes.data) setPaymentTransactions(paymentsRes.data as any);
+      setPaymentTransactions(
+        Array.isArray(paymentsRes.data) ? (paymentsRes.data as any) : [],
+      );
     } finally {
-      setOrderHydrating(false);
+      if (!isHydrateStale(gen, currentOrderId) && panelTableIdRef.current === tableIdAtStart) {
+        setOrderHydrating(false);
+      }
     }
   };
 
@@ -1093,14 +1160,28 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
 
     const currentOrderId = table.current_order_id;
     if (!currentOrderId) {
-      setCurrentOrder(null);
-      setExistingOrderItems([]);
-      setPaymentTransactions([]);
+      // Boş masa: başka masanın store sızıntısını sil; bu masanın henüz sync
+      // olmamış siparişini (ilk gönderi) koru.
+      const storeOrd = useOrderSessionStore.getState().currentOrder;
+      const keepForThisTable =
+        !!storeOrd?.id &&
+        !isTempOrderId(storeOrd.id) &&
+        (table.table_number === 0 ||
+          (storeOrd.table_id != null && String(storeOrd.table_id) === String(table.id)));
+      if (!keepForThisTable) {
+        setCurrentOrder(null);
+        setExistingOrderItems([]);
+        setPaymentTransactions([]);
+      }
       setOrderHydrating(false);
       return;
     }
 
     const bundle = peekWarmPanelBundle(currentOrderId);
+    if (bundle?.order?.table_id && String(bundle.order.table_id) !== String(table.id)) {
+      setOrderHydrating(false);
+      return;
+    }
     const cachedLines = peekWarmOrderItems(currentOrderId);
     const persisted = readPersistedOrderItemsSnapshot(currentOrderId);
     const localLines =
@@ -1114,7 +1195,9 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
       setOrderHydrating(false);
     }
     if (bundle?.order) setCurrentOrder(bundle.order as Order);
-    if (bundle?.payments?.length) setPaymentTransactions(bundle.payments as PaymentTransaction[]);
+    setPaymentTransactions(
+      Array.isArray(bundle?.payments) ? (bundle!.payments as PaymentTransaction[]) : [],
+    );
 
     const inflightWarm = getInflightPanelPromise(currentOrderId);
     if (inflightWarm) {
@@ -1138,7 +1221,11 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
       setExistingOrderItems(warmBundle.rows);
       persistOrderItemsSnapshot(currentOrderId, warmBundle.rows);
       setCurrentOrder(warmBundle.order as Order);
-      if (warmBundle.payments?.length) setPaymentTransactions(warmBundle.payments as PaymentTransaction[]);
+      setPaymentTransactions(
+        Array.isArray(warmBundle.payments)
+          ? (warmBundle.payments as PaymentTransaction[])
+          : [],
+      );
       setOrderHydrating(false);
       window.setTimeout(() => {
         if (submittingRef.current || saveItemQuantityTimersRef.current.size > 0) return;
@@ -1682,9 +1769,14 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
     return { subtotal, taxAmount, discountAmount, total, percentDiscount, loyaltyDiscount };
   }, [cartSubtotal, existingOrderItems, discount, loyaltyPayment]);
 
-  const handleSubmitOrder = async (opts?: { closeWithoutUi?: boolean }) => {
-    if (cart.length === 0 || !tenant || !user || submittingRef.current) return;
+  const handleSubmitOrder = async (opts?: {
+    closeWithoutUi?: boolean;
+    /** Ödeme akışı: sadece kaydet, mutfak fişi basma (KAPAT / Masaya Gönder basar) */
+    skipKitchenPrint?: boolean;
+  }): Promise<boolean> => {
+    if (cart.length === 0 || !tenant || !user || submittingRef.current) return false;
     const closeWithoutUi = !!opts?.closeWithoutUi;
+    const skipKitchenPrint = !!opts?.skipKitchenPrint;
     submittingRef.current = true;
     if (!closeWithoutUi) setSubmitBusy(true);
 
@@ -1692,7 +1784,11 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
     const snapExisting = useOrderSessionStore.getState().existingOrderItems;
     const snapOrder = useOrderSessionStore.getState().currentOrder;
 
-    const activeOrderId = resolveActiveOrderId(snapOrder, table.current_order_id);
+    const activeOrderId = resolveActiveOrderId(
+      snapOrder,
+      table.current_order_id,
+      table.table_number === 0 ? null : table.id,
+    );
     const hadRealOrder = !!activeOrderId;
 
     if (!closeWithoutUi) {
@@ -1740,74 +1836,75 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
       });
     }
 
-    const runPrints = (activeOrder: Order) => {
+    /** Mutfak fişi: sadece Masaya Gönder / KAPAT. Ödeme yolunda skipKitchenPrint. */
+    const runPrints = async (activeOrder: Order) => {
       const isTakeaway = table.table_number === 0;
       const tableLabel = isTakeaway ? 'Paket' : `Masa ${table.table_number}`;
       const orderNum = activeOrder.order_number;
 
-      queueMicrotask(() => {
-        void (async () => {
-          // Mobil/web: kasadaki yazıcı eşlemesini buluttan al (yoksa mutfak fişi düşmez)
-          if (!isElectron()) {
-            try {
-              await fetchPrintSettingsFromCloud();
-            } catch {
-              /* yerel ayar */
-            }
-          }
-          const printSettings = loadPrintSettings();
-          const receiptHeader = resolveReceiptBusinessHeader(printSettings, tenant);
-          if (printSettings.autoPrintKitchen !== false) {
-            const kitchenItems = cartSnapshot.map((item) => ({
-              productName: item.product.name,
-              variantName: item.variant?.name || null,
-              quantity: item.quantity,
-              notes: (item as any).notes || null,
-              categoryId: item.product.category_id || null,
-              productPrinterName: (item.product as any).printer_name || null,
-            }));
-            await printKitchenReceipts({
-              settings: printSettings,
-              restaurantName: receiptHeader.restaurantName,
-              tableLabel,
-              orderNumber: orderNum,
-              items: kitchenItems,
-              waiterName: profile?.full_name || profile?.email || user.email || undefined,
-            });
-          }
+      if (!isElectron()) {
+        void fetchPrintSettingsFromCloud().catch(() => {});
+      }
+      const printSettings = loadPrintSettings();
+      const receiptHeader = resolveReceiptBusinessHeader(printSettings, tenant);
+      if (!skipKitchenPrint) {
+        const kitchenItems = cartSnapshot.map((item) => ({
+          productName: item.product.name,
+          variantName: item.variant?.name || null,
+          quantity: item.quantity,
+          notes: (item as any).notes || null,
+          categoryId: item.product.category_id || null,
+          productPrinterName: (item.product as any).printer_name || null,
+        }));
+        try {
+          await printKitchenReceipts({
+            settings: { ...printSettings, autoPrintKitchen: true },
+            restaurantName: receiptHeader.restaurantName,
+            tableLabel,
+            orderNumber: orderNum,
+            items: kitchenItems,
+            waiterName: profile?.full_name || profile?.email || user.email || undefined,
+          });
+        } catch (e: any) {
+          console.warn('[ŞefPOS] mutfak fişi kuyruk:', e?.message || e);
+          dispatchPrintToast({
+            kind: 'error',
+            message: 'Mutfak fişi gönderilemedi',
+            detail: e?.message || 'Tekrar gönderin veya yazıcıyı kontrol edin',
+          });
+        }
+      }
 
-          if (isTakeaway && (printSettings as any).autoPrintTakeaway !== false) {
-            const receiptItems = cartSnapshot.map((item) => {
-              const unitPrice = item.product.price + (item.variant?.price_modifier || 0);
-              return {
-                productName: item.product.name,
-                variantName: item.variant?.name || null,
-                quantity: item.quantity,
-                unitPrice,
-                totalAmount: item.weightedPrice ?? unitPrice * item.quantity,
-                notes: (item as any).notes || null,
-              };
-            });
-            const existingTotal = snapExisting.reduce((s, i) => s + Number((i as any).total_amount || 0), 0);
-            const newTotal = receiptItems.reduce((s, i) => s + i.totalAmount, 0);
-            await printTakeawayReceipt({
-              settings: printSettings,
-              tenant,
-              orderType: (activeOrder as any).order_type === 'delivery' ? 'delivery' : 'takeaway',
-              orderNumber: orderNum || '',
-              customerName: (activeOrder as any).customer_name || undefined,
-              customerPhone: (activeOrder as any).customer_phone || undefined,
-              deliveryAddress: (activeOrder as any).delivery_address || undefined,
-              deliveryNote: (activeOrder as any).delivery_note || undefined,
-              courierName: (activeOrder as any).courier_name || undefined,
-              estimatedMinutes: (activeOrder as any).estimated_delivery_minutes || undefined,
-              items: receiptItems,
-              subtotal: newTotal,
-              total: existingTotal + newTotal,
-            });
-          }
-        })();
-      });
+      if (isTakeaway && (printSettings as any).autoPrintTakeaway !== false) {
+        const receiptItems = cartSnapshot.map((item) => {
+          const unitPrice = item.product.price + (item.variant?.price_modifier || 0);
+          return {
+            productName: item.product.name,
+            variantName: item.variant?.name || null,
+            quantity: item.quantity,
+            unitPrice,
+            totalAmount: item.weightedPrice ?? unitPrice * item.quantity,
+            notes: (item as any).notes || null,
+          };
+        });
+        const existingTotal = snapExisting.reduce((s, i) => s + Number((i as any).total_amount || 0), 0);
+        const newTotal = receiptItems.reduce((s, i) => s + i.totalAmount, 0);
+        void printTakeawayReceipt({
+          settings: printSettings,
+          tenant,
+          orderType: (activeOrder as any).order_type === 'delivery' ? 'delivery' : 'takeaway',
+          orderNumber: orderNum || '',
+          customerName: (activeOrder as any).customer_name || undefined,
+          customerPhone: (activeOrder as any).customer_phone || undefined,
+          deliveryAddress: (activeOrder as any).delivery_address || undefined,
+          deliveryNote: (activeOrder as any).delivery_note || undefined,
+          courierName: (activeOrder as any).courier_name || undefined,
+          estimatedMinutes: (activeOrder as any).estimated_delivery_minutes || undefined,
+          items: receiptItems,
+          subtotal: newTotal,
+          total: existingTotal + newTotal,
+        }).catch((e) => console.warn('[ŞefPOS] paket fişi:', e?.message || e));
+      }
     };
 
     let createdOrder: Order | null = null;
@@ -1944,7 +2041,8 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
       warmOrderItemsForPanel(orderId!);
 
       if (closeWithoutUi) {
-        runPrints(orderForTotals);
+        // KAPAT: fiş arka planda — paneli bekletme / kilitleme
+        void runPrints(orderForTotals);
       } else {
         startTransition(() => {
           setCurrentOrder(orderForTotals);
@@ -1952,9 +2050,10 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
           setCart([]);
           recalculateAndSaveTotal(merged, orderForTotals);
         });
-        runPrints(orderForTotals);
+        void runPrints(orderForTotals);
       }
       requestHybridSync();
+      return true;
     } catch (error: any) {
       if (!closeWithoutUi) {
         startTransition(() => {
@@ -1964,11 +2063,18 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
         });
       }
       alert('Sipariş eklenirken hata oluştu: ' + error.message);
+      return false;
     } finally {
       submittingRef.current = false;
       if (!closeWithoutUi) setSubmitBusy(false);
     }
   };
+
+  submitOrderRef.current = handleSubmitOrder;
+
+  const flushCartThenClose = useCallback(async () => {
+    handleClose();
+  }, [handleClose]);
 
   const handleAddPayment = async (
     method: PaymentMethod,
@@ -1994,7 +2100,11 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
         .eq('tenant_id', tenant.id)
         .maybeSingle();
       if (custErr || !cust) {
-        alert('Cari hesap bulunamadı.');
+        alert(
+          custErr?.message
+            ? `Cari hesap okunamadı: ${custErr.message}`
+            : 'Cari hesap bulunamadı. Müşteriler listesinden kaydı kontrol edin.',
+        );
         return;
       }
       if (!cust.is_active) {
@@ -2011,8 +2121,19 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
       }
     }
 
-    const currentPaid = paymentTransactions.reduce((s, p) => s + Number(p.amount || 0), 0);
-    const { total: orderTotal } = calculateTotal();
+    const currentPaid = paymentTransactions
+      .filter((p) => String(p.order_id) === String(currentOrder.id))
+      .reduce((s, p) => s + Number(p.amount || 0), 0);
+    const { total: calcOrderTotal } = calculateTotal();
+    const orderTotal = Math.max(
+      calcOrderTotal,
+      Number(currentOrder.total_amount) || 0,
+      Number(table.order?.total_amount) || 0,
+    );
+    if (amount <= 0.009 && orderTotal > 0.009) {
+      alert('Ödeme tutarı 0 görünüyor. Masa tutarını kontrol edip tekrar deneyin.');
+      return;
+    }
     const tempId = crypto.randomUUID();
     const newPayment: PaymentTransaction = {
       id: tempId,
@@ -2245,7 +2366,46 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
   ) => {
     if (!currentOrder) return;
 
+    const orderId = currentOrder.id;
+    const billTotal = Math.max(
+      Number(total) || 0,
+      Number(currentOrder.total_amount) || 0,
+      Number(table.order?.total_amount) || 0,
+    );
+    const paidAt = new Date().toISOString();
+
+    // Önce sunucuya yaz — iyimser kapatıp arka planda yazmak masayı 3–20 sn sonra geri getiriyordu
+    const { error: orderErr } = await supabase
+      .from('orders')
+      .update({
+        status: 'completed',
+        payment_status: 'paid',
+        paid_at: paidAt,
+        discount_amount: discountAmount,
+        total_amount: billTotal > 0.009 ? billTotal : total,
+      })
+      .eq('id', orderId);
+    if (orderErr) {
+      console.error('Sipariş tamamlama hatası:', orderErr);
+      alert('Ödeme alındı ama sipariş kapatılamadı: ' + (orderErr.message || 'sunucu hatası'));
+      return;
+    }
+
     if (table.table_number !== 0 && table.id) {
+      const { error: tableErr } = await supabase
+        .from('restaurant_tables')
+        .update({
+          status: 'available',
+          current_order_id: null,
+          session_start: null,
+          payment_locked: false,
+        })
+        .eq('id', table.id);
+      if (tableErr) {
+        console.error('Masa boşaltma hatası:', tableErr);
+        alert('Ödeme alındı ama masa boşaltılamadı: ' + (tableErr.message || 'sunucu hatası'));
+        return;
+      }
       markTableOptimisticallyCleared(table.id);
       flushSync(() => {
         emitTableStateChanged({
@@ -2260,7 +2420,7 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
       void clearTablePaymentLock(table.id);
     }
 
-    const stockOrderId = currentOrder.id;
+    const stockOrderId = orderId;
     evictWarmCachesForOrders([stockOrderId]);
     const stockItemsSnapshot = existingOrderItems;
     const orderItemsSnapshot = existingOrderItems;
@@ -2273,7 +2433,7 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
     onClose();
 
     const loyaltySnapshot = loyaltyPayment;
-    const orderIdForLoyalty = currentOrder.id;
+    const orderIdForLoyalty = orderId;
     const { subtotal: orderSubtotalForLoyalty } = calculateTotal();
 
     if (loyaltySnapshot?.customerId && loyaltyModuleOn) {
@@ -2289,26 +2449,6 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
         }
       })();
     }
-
-    void Promise.all([
-      supabase.from('orders').update({
-        status: 'completed',
-        payment_status: 'paid',
-        paid_at: new Date().toISOString(),
-        discount_amount: discountAmount,
-        total_amount: total,
-      }).eq('id', currentOrder.id),
-      table.table_number !== 0
-        ? supabase.from('restaurant_tables').update({
-            status: 'available',
-            current_order_id: null,
-            session_start: null,
-            payment_locked: false,
-          }).eq('id', table.id)
-        : Promise.resolve(),
-    ]).catch((e) => {
-      console.error('Sipariş tamamlama (background):', e);
-    });
 
     requestHybridSync(600);
 
@@ -2363,9 +2503,18 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
     try {
       const payments = allPayments ?? paymentTransactions;
       const totalPaid = payments.reduce((sum, p) => sum + Number(p.amount), 0);
-      const { discountAmount, total } = calculateTotal();
+      const { discountAmount, total: calcTotal } = calculateTotal();
+      const total = Math.max(
+        Number(calcTotal) || 0,
+        Number(currentOrder.total_amount) || 0,
+        Number(table.order?.total_amount) || 0,
+      );
+      if (total <= 0.009) {
+        console.warn('[ödeme] tamamlanamadı: sipariş tutarı 0');
+        return;
+      }
 
-      if (totalPaid >= total) {
+      if (totalPaid >= total - 0.009) {
         const needsHugin = shouldSendHuginForPayments(payments);
         const ctx = {
           shouldPrintReceipt,
@@ -2593,11 +2742,28 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
     return matchCategory && matchSearch;
   }), [products, selectedCategory, searchQuery, searchLower]);
 
-  const { discountAmount, total, subtotal, percentDiscount } = useMemo(
+  const { discountAmount, total: calcTotal, subtotal, percentDiscount } = useMemo(
     () => calculateTotal(),
     [calculateTotal],
   );
-  const totalPaid = useMemo(() => paymentTransactions.reduce((sum, p) => sum + Number(p.amount), 0), [paymentTransactions]);
+  // Hızlı ödemede satırlar henüz hydrate olmadan total=0 olmasın — sipariş tutarını yedekle
+  const total = useMemo(() => {
+    const fromItems = Number(calcTotal) || 0;
+    const fromOrder = Number(currentOrder?.total_amount) || 0;
+    const fromTable = Number(table.order?.total_amount) || 0;
+    if (fromItems > 0.009) return fromItems;
+    return Math.max(fromOrder, fromTable, fromItems);
+  }, [calcTotal, currentOrder?.total_amount, table.order?.total_amount]);
+  // Sadece bu siparişin ödemeleri — başka masadan kalan state 0,00 / yanlış kapanış yapmasın
+  const paymentsForCurrentOrder = useMemo(() => {
+    const oid = currentOrder?.id;
+    if (!oid) return [] as typeof paymentTransactions;
+    return paymentTransactions.filter((p) => String(p.order_id) === String(oid));
+  }, [paymentTransactions, currentOrder?.id]);
+  const totalPaid = useMemo(
+    () => paymentsForCurrentOrder.reduce((sum, p) => sum + Number(p.amount || 0), 0),
+    [paymentsForCurrentOrder],
+  );
   const remainingAmount = useMemo(() => Math.max(0, total - totalPaid), [total, totalPaid]);
 
   // Item-bazlı kısmi ödeme yardımcıları
@@ -2621,6 +2787,23 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
 
   /** Ödeme modalını anında aç; masa kilidi arka planda (önce RPC beklemez). */
   const openPaymentFlow = useCallback(() => {
+    // Satırlar yüklenirken total geçici 0 — ödenmiş sayıp kapatma / 0,00 modal yok
+    const itemsReady =
+      existingOrderItems.length > 0 || cart.length > 0 || Number(currentOrder?.total_amount) > 0.009;
+    if (
+      !partialPayActive &&
+      itemsReady &&
+      !orderHydrating &&
+      remainingAmount <= 0.009 &&
+      total > 0.009 &&
+      paymentsForCurrentOrder.length > 0 &&
+      currentOrder &&
+      !isTempOrderId(currentOrder.id) &&
+      (currentOrder.payment_status === 'paid' || totalPaid >= total - 0.009)
+    ) {
+      void checkAndCompleteOrder(false, paymentsForCurrentOrder);
+      return;
+    }
     if (partialPayActive) {
       partialPaymentItemIdsRef.current = Array.from(selectedItemIds);
       partialPaymentMarkedRef.current = false;
@@ -2632,7 +2815,30 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
     }
     setLoyaltyPayment(null);
     setShowPayment(true);
-    if (cart.length > 0) void handleSubmitOrder();
+    // Modal açılırken ödemeleri sunucudan tazele — ama boş diziyle tutarı 0 yapma
+    if (currentOrder?.id && !isTempOrderId(currentOrder.id)) {
+      const oid = currentOrder.id;
+      void (async () => {
+        try {
+          const { data } = await supabase
+            .from('payment_transactions')
+            .select(PAYMENT_TRANSACTION_SELECT)
+            .eq('order_id', oid)
+            .order('created_at', { ascending: false });
+          if (!Array.isArray(data)) return;
+          setPaymentTransactions(data as any);
+        } catch {
+          /* ignore */
+        }
+      })();
+    }
+    // Sepette ürün varsa sadece kaydet — ÖDE mutfak fişi basmaz (Masaya Gönder / KAPAT basar)
+    if (cart.length > 0) {
+      void (async () => {
+        const ok = await handleSubmitOrder({ skipKitchenPrint: true });
+        if (!ok) setShowPayment(false);
+      })();
+    }
     if (table.table_number === 0 || !table.id) return;
     void lockTableForPayment().then((canPay) => {
       if (!canPay) setShowPayment(false);
@@ -2645,6 +2851,14 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
     table.table_number,
     table.id,
     handleSubmitOrder,
+    remainingAmount,
+    total,
+    totalPaid,
+    paymentsForCurrentOrder,
+    currentOrder,
+    setPaymentTransactions,
+    existingOrderItems.length,
+    orderHydrating,
   ]);
   const toggleItemSelection = useCallback((itemId: string) => {
     setSelectedItemIds((prev) => {
@@ -3644,14 +3858,7 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
                 <div className="flex gap-2 p-2" style={{ paddingBottom: 'calc(0.5rem + env(safe-area-inset-bottom, 0px))' }}>
                   <button
                     type="button"
-                    onClick={() => {
-                      const hasCart = cart.length > 0;
-                      flushSync(() => {
-                        onClose();
-                      });
-                      void unlockTable();
-                      if (hasCart) void handleSubmitOrder({ closeWithoutUi: true });
-                    }}
+                    onClick={() => void flushCartThenClose()}
                     className="flex-1 bg-white/20 text-white font-black py-4 rounded-xl text-base active:scale-95 shadow-lg border border-white/30"
                   >
                     KAPAT
@@ -4069,11 +4276,11 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
                   </div>
                 </div>
 
-                {paymentTransactions.length > 0 && currentOrder && (
+                {paymentsForCurrentOrder.length > 0 && currentOrder && (
                   <div className="pb-2 border-b">
                     <h4 className="text-xs font-bold text-slate-700 mb-1">Ödemeler</h4>
                     <div className="space-y-1 max-h-24 overflow-y-auto">
-                      {paymentTransactions.map((payment) => (
+                      {paymentsForCurrentOrder.map((payment) => (
                         <div key={payment.id} className="bg-green-50 border border-green-200 rounded p-1.5">
                           <div className="flex items-center justify-between">
                             <div className="flex items-center gap-1">
@@ -4108,14 +4315,7 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
                   <>
                     <button
                       type="button"
-                      onClick={() => {
-                        const hasCart = cart.length > 0;
-                        flushSync(() => {
-                          onClose();
-                        });
-                        void unlockTable();
-                        if (hasCart) void handleSubmitOrder({ closeWithoutUi: true });
-                      }}
+                      onClick={() => void flushCartThenClose()}
                       className="flex-1 bg-gradient-to-r from-slate-600 to-slate-700 hover:from-slate-700 hover:to-slate-800 text-white font-bold py-4 rounded-xl transition-colors duration-75 shadow-lg text-base active:scale-95"
                     >
                       KAPAT

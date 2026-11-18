@@ -35,7 +35,10 @@ import { HomeRichPage } from '../sections/HomeRichSections';
 import { FeaturesCatalogPage } from '../sections/FeaturesCatalogPage';
 import { ContactPageSection } from '../sections/ContactPageSection';
 import { APP_VERSION } from '../../../lib/appVersion';
-import { WINDOWS_SETUP_FILENAME, windowsSetupDownloadHref } from '../../../lib/desktopDownload';
+import {
+  onWindowsSetupDownloadClick,
+  windowsSetupDownloadHref,
+} from '../../../lib/desktopDownload';
 
 export type LandingPageProps = {
   onLogin: () => void;
@@ -156,7 +159,7 @@ export function DownloadPage({ onLogin }: LandingPageProps) {
             <p className="text-slate-300 text-lg mb-6">Yazıcı, terazi ve Caller ID için Electron sürümü. Otomatik güncelleme ile her zaman güncel kalın.</p>
             <a
               href={windowsSetupDownloadHref()}
-              download={WINDOWS_SETUP_FILENAME}
+              onClick={onWindowsSetupDownloadClick}
               className="inline-flex items-center gap-2 bg-orange-600 hover:bg-orange-500 text-white font-bold px-8 py-4 rounded-xl"
             >
               <Download className="w-5 h-5" /> Windows kurulumunu indir

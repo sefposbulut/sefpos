@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="tr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ŞefPOS — Windows kurulum indiriliyor…</title>
+    <meta name="robots" content="noindex" />
+    <style>
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-family: Inter, Segoe UI, Arial, sans-serif;
+        background: #0f172a;
+        color: #e2e8f0;
+      }
+      .box { text-align: center; padding: 24px; max-width: 420px; }
+      a { color: #fb923c; }
+    </style>
+  </head>
+  <body>
+    <div class="box">
+      <p><strong>ŞefPOS</strong></p>
+      <p id="msg">Kurulum dosyası hazırlanıyor…</p>
+      <p style="font-size:13px;color:#94a3b8">
+        İndirme başlamazsa
+        <a id="fallback" href="https://github.com/sefposbulut/sefpos-releases/releases/latest">
+          buradan indirin
+        </a>.
+      </p>
+    </div>
+    <script>
+      (async function () {
+        var yml =
+          'https://github.com/sefposbulut/sefpos-releases/releases/latest/download/latest.yml';
+        var base =
+          'https://github.com/sefposbulut/sefpos-releases/releases/latest/download/';
+        var page =
+          'https://github.com/sefposbulut/sefpos-releases/releases/latest';
+        try {
+          var res = await fetch(yml, { cache: 'no-store' });
+          if (!res.ok) throw new Error('yml ' + res.status);
+          var text = await res.text();
+          var m = text.match(/^path:\s*(\S+)\s*$/m);
+          var name = m && m[1] ? m[1].trim() : '';
+          if (!name) throw new Error('path yok');
+          location.replace(base + encodeURIComponent(name));
+        } catch (e) {
+          document.getElementById('msg').textContent =
+            'Otomatik yönlendirme başarısız. Releases sayfasına gidiliyor…';
+          location.replace(page);
+        }
+      })();
+    </script>
+  </body>
+</html>

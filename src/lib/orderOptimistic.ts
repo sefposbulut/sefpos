@@ -18,16 +18,31 @@ export function isTempOrderId(id: string | undefined): boolean {
   return !!id && id.startsWith(TEMP_ORDER_PREFIX);
 }
 
-/** Masa zaten dolu iken ilave urun: store bos olsa bile masadaki siparis id */
+/**
+ * Aktif sipariş id: masa `current_order_id` kaynak doğruluk.
+ * Store yalnızca aynı masaya ait gerçek siparişte yedek (App selectedTable
+ * henüz güncellenmemişken ilk gönderi sonrası). Başka masanın store'da kalan
+ * id'si boş masaya ürün yazmasın.
+ */
 export function resolveActiveOrderId(
-  orderFromStore: { id?: string } | null | undefined,
+  orderFromStore: { id?: string; table_id?: string | null } | null | undefined,
   tableCurrentOrderId: string | null | undefined,
+  tableId?: string | null,
 ): string | undefined {
-  const fromStore = orderFromStore?.id;
-  if (fromStore && !isTempOrderId(fromStore)) return fromStore;
   const fromTable = tableCurrentOrderId ? String(tableCurrentOrderId) : '';
   if (fromTable && !isTempOrderId(fromTable)) return fromTable;
-  return undefined;
+
+  const fromStore = orderFromStore?.id;
+  if (!fromStore || isTempOrderId(fromStore)) return undefined;
+
+  // Boş masa + store'da yabancı sipariş → yok say (önceki panel sızıntısı)
+  if (tableId) {
+    const storeTableId = orderFromStore?.table_id;
+    if (storeTableId == null || String(storeTableId) !== String(tableId)) {
+      return undefined;
+    }
+  }
+  return fromStore;
 }
 
 /** Masa satırlarından sipariş tutarı (SQL'de orders.subtotal bazen 0 kalır). */
