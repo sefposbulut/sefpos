@@ -42,3 +42,8 @@ tmp-vds-dump/
 
 # Bulut / VDS dalı — ana kasa release'ini kirletmesin
 sefposbulut/
+
+# Büyük kurulum EXE — VDS'e WinRM ile yüklenir, git'e girmez
+public/download/Sefpos-Setup.exe
+dist/download/Sefpos-Setup.exe
+
