@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Download, Loader2, RefreshCw, Sparkles, AlertTriangle } from 'lucide-react';
-import { githubDirectSetupDownloadUrl } from '../../lib/desktopDownload';
+import { windowsSetupDownloadHref } from '../../lib/desktopDownload';
 
 type UpdateUiState =
   | { kind: 'idle' }
@@ -88,7 +88,7 @@ export function ElectronLoginUpdatePanel() {
   }, [api, syncPending]);
 
   const openDownloadPage = () => {
-    const url = githubDirectSetupDownloadUrl();
+    const url = windowsSetupDownloadHref();
     if (api?.openExternalUrl) void api.openExternalUrl(url);
     else window.open(url, '_blank', 'noopener');
   };
