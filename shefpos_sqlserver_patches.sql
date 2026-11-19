@@ -708,5 +708,79 @@ WHERE
   AND created_at >= DATEADD(day, -14, GETUTCDATE());
 GO
 
+-- Cari / sadakat: uygulama current_balance, credit_limit, is_active, loyalty_points bekler
+IF COL_LENGTH('dbo.customers', 'current_balance') IS NULL
+  ALTER TABLE dbo.customers ADD current_balance DECIMAL(12,2) NOT NULL CONSTRAINT DF_customers_current_balance DEFAULT 0;
+GO
+IF COL_LENGTH('dbo.customers', 'credit_limit') IS NULL
+  ALTER TABLE dbo.customers ADD credit_limit DECIMAL(12,2) NOT NULL CONSTRAINT DF_customers_credit_limit DEFAULT 0;
+GO
+IF COL_LENGTH('dbo.customers', 'is_active') IS NULL
+  ALTER TABLE dbo.customers ADD is_active BIT NOT NULL CONSTRAINT DF_customers_is_active DEFAULT 1;
+GO
+IF COL_LENGTH('dbo.customers', 'loyalty_points') IS NULL
+  ALTER TABLE dbo.customers ADD loyalty_points INT NOT NULL CONSTRAINT DF_customers_loyalty_points DEFAULT 0;
+GO
+IF COL_LENGTH('dbo.customers', 'balance') IS NOT NULL AND COL_LENGTH('dbo.customers', 'current_balance') IS NOT NULL
+  UPDATE dbo.customers SET current_balance = ISNULL(balance, 0) WHERE ISNULL(current_balance, 0) = 0 AND ISNULL(balance, 0) <> 0;
+GO
+
+-- HemenYolda entegrasyon (SQL Server / VDS) — tablo yoksa «Kurulum gerekli» kalır
+IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='henemyolda_integrations' AND xtype='U')
+CREATE TABLE henemyolda_integrations (
+    id UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+    tenant_id UNIQUEIDENTIFIER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    branch_id UNIQUEIDENTIFIER NULL REFERENCES branches(id) ON DELETE NO ACTION,
+    app_name NVARCHAR(255) NOT NULL DEFAULT N'test-pos',
+    access_token NVARCHAR(MAX) NOT NULL,
+    is_active BIT NOT NULL DEFAULT 0,
+    is_test_mode BIT NOT NULL DEFAULT 1,
+    base_url NVARCHAR(500) NOT NULL DEFAULT N'https://hemenyolda.com',
+    last_push_at DATETIME2 NULL,
+    created_at DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
+    updated_at DATETIME2 NOT NULL DEFAULT GETUTCDATE()
+);
+GO
+
+IF NOT EXISTS (
+  SELECT 1 FROM sys.indexes
+  WHERE name = N'idx_henemyolda_integrations_tenant'
+    AND object_id = OBJECT_ID(N'henemyolda_integrations')
+)
+  CREATE INDEX idx_henemyolda_integrations_tenant ON henemyolda_integrations(tenant_id);
+GO
+
+IF NOT EXISTS (
+  SELECT 1 FROM sys.indexes
+  WHERE name = N'uq_henemyolda_integrations_tenant_branch'
+    AND object_id = OBJECT_ID(N'henemyolda_integrations')
+)
+  CREATE UNIQUE INDEX uq_henemyolda_integrations_tenant_branch
+    ON henemyolda_integrations(tenant_id, branch_id);
+GO
+
+IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='henemyolda_webhook_log' AND xtype='U')
+CREATE TABLE henemyolda_webhook_log (
+    id UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+    integration_id UNIQUEIDENTIFIER NOT NULL REFERENCES henemyolda_integrations(id) ON DELETE CASCADE,
+    order_id NVARCHAR(100) NOT NULL,
+    action NVARCHAR(20) NOT NULL,
+    http_status INT NULL,
+    success BIT NOT NULL DEFAULT 0,
+    error_message NVARCHAR(MAX) NULL,
+    request_url NVARCHAR(1000) NULL,
+    created_at DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
+    CONSTRAINT CK_henemyolda_webhook_log_action CHECK (action IN (N'new', N'update', N'cancel'))
+);
+GO
+
+IF NOT EXISTS (
+  SELECT 1 FROM sys.indexes
+  WHERE name = N'idx_henemyolda_webhook_log_order'
+    AND object_id = OBJECT_ID(N'henemyolda_webhook_log')
+)
+  CREATE INDEX idx_henemyolda_webhook_log_order ON henemyolda_webhook_log(order_id);
+GO
+
 PRINT N'SefPOS SQL patches applied (tam offline POS).';
 GO
