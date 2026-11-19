@@ -3045,16 +3045,22 @@ ipcMain.handle('sql-apply-schema-patches', async (_, config) => {
   try {
     const norm = normalizeSqlServerConfig(config || loadSettings().sqlServerConfig);
     if (!getMssql() && !getTedious()) {
-      return { success: false, error: 'SQL kutuphanesi yuklenemedi' };
+      return { success: false, error: 'SQL kutuphanesi yuklenemedi', soft: true };
     }
     const patch = await applySqlSchemaPatches(norm);
+    // Dosya yok / bazi batch hatalari POS'u bozmaz; executed=0 + "already exists"
+    // filtrelenince errors bos kalir → success. Gercek hatalar soft sayilir.
+    const fileMissing = patch.errors.some((e) => /bulunamadi/i.test(e));
+    const ok = !fileMissing && (patch.executed > 0 || patch.errors.length === 0);
     return {
-      success: patch.executed > 0 || patch.errors.length === 0,
+      success: ok,
+      soft: !ok,
       output: `${patch.executed} patch batch (waiter_calls, print_settings).`,
       errors: patch.errors,
     };
   } catch (err) {
-    return { success: false, error: err.message || String(err) };
+    // Baglanti anlik hatasi bile alert ile siparis ekranini kilitlemesin
+    return { success: false, soft: true, error: err.message || String(err) };
   }
 });
 

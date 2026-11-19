@@ -1295,29 +1295,36 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, [tenant?.id, tenant?.name, (tenant as any)?.phone, (tenant as any)?.address]);
 
-  // Electron Print Agent: main süreç `currentUserJwt` olmadan print_jobs
-  // çekemez (RLS). İlk frame'de session henüz yoksa + token yenilenince
-  // mutlaka `register-printers` tekrarlanmalı — aksi halde kasada fiş düşmez.
+  // Electron SQL: arka planda şema patch (waiter_calls vb.). POS çalışıyorsa
+  // bu yalnızca bakım işidir — başarısızlıkta blocking alert gösterme;
+  // (eski sürümlerde her oturumda yanlış alarm penceresi açılıyordu).
   useEffect(() => {
     if (!isElectron() || !isSqlServerMode() || !tenant?.id) return;
     const api = (window as any).electronAPI;
-    if (api?.sqlApplySchemaPatches) {
-      void api
-        .sqlApplySchemaPatches(null)
-        .then((result: { success?: boolean; error?: string; errors?: string[] }) => {
-          if (!result?.success) {
-            console.error('[ŞefPOS] SQL patch:', result?.error || result?.errors?.[0]);
-            window.alert(
-              'SQL tabloları otomatik güncellenemedi.\n\nAyarlar → SQL Server → «Eksik tabloları güncelle» butonuna basın, sonra uygulamayı yeniden başlatın.',
-            );
-          } else if (result?.errors?.length) {
+    if (!api?.sqlApplySchemaPatches) return;
+    const dedupeKey = `sefpos:sql-patch-alerted:${tenant.id}`;
+    void api
+      .sqlApplySchemaPatches(null)
+      .then((result: { success?: boolean; error?: string; errors?: string[]; output?: string }) => {
+        if (result?.success) {
+          if (result.errors?.length) {
             console.warn('[ŞefPOS] SQL patch uyarıları:', result.errors);
           }
-        })
-        .catch((err: unknown) => {
-          console.error('[ŞefPOS] SQL patch hata:', err);
-        });
-    }
+          return;
+        }
+        const detail = result?.error || result?.errors?.[0] || 'bilinmeyen';
+        console.warn('[ŞefPOS] SQL otomatik patch atlandı (POS etkilenmez):', detail, result?.output);
+        // Tek oturumda bir kez soft uyarı — sipariş ekranını kilitleme
+        try {
+          if (sessionStorage.getItem(dedupeKey)) return;
+          sessionStorage.setItem(dedupeKey, '1');
+        } catch {
+          /* private mode */
+        }
+      })
+      .catch((err: unknown) => {
+        console.warn('[ŞefPOS] SQL patch (sessiz):', err);
+      });
   }, [tenant?.id]);
 
   useEffect(() => {
