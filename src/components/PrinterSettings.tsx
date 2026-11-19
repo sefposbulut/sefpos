@@ -1,16 +1,17 @@
-import { useState, useEffect, useRef, type ReactNode } from 'react';
+import { useState, useEffect, useRef, useMemo, type ReactNode } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import {
   Printer, Plus, Trash2, Save, RefreshCw, CheckCircle, XCircle,
   ToggleLeft, ToggleRight, Settings2, AlertCircle, X, ChevronDown, Wifi, WifiOff,
-  ArrowLeft, ChefHat, Receipt, ShoppingBag, LayoutGrid, Link2, Globe,
+  ArrowLeft, ChefHat, Receipt, ShoppingBag, LayoutGrid, Link2, Globe, Download,
 } from 'lucide-react';
 import {
   PrinterDevice, PrinterConfig, PrintSettings, PrintStyleSettings, PrintAgentStatus,
   loadPrintSettings, savePrintSettings, getAvailablePrinters,
   isElectron, checkPrintAgent, checkPrintAgentDetailed, printHtml,
   getKitchenRoutePrinters, resolveCategoryPrinter, assignCategoryToKitchenPrinter,
+  sanitizePrintSettingsPrinterNames,
   PRINT_SETTINGS_CONTEXT_EVENT,
   PRINT_SETTINGS_REMOTE_UPDATED_EVENT,
 } from '../lib/printService';
@@ -19,6 +20,11 @@ import { ReceiptHubCard } from './print/ReceiptHubCard';
 import { ReceiptEdgeAlignPanel } from './print/ReceiptEdgeAlignPanel';
 import { ReceiptLiveStylePanel, type ReceiptEditorKind } from './print/ReceiptLiveStylePanel';
 import { previewAdisyonHtml, previewKitchenHtml, previewPaketHtml } from './print/receiptPreviewUtils';
+import {
+  PRINT_AGENT_FILENAME,
+  PRINT_AGENT_PRODUCT_NAME,
+  printAgentDownloadHref,
+} from '../lib/desktopDownload';
 
 type PrinterSettingsView =
   | 'hub'
@@ -146,11 +152,15 @@ export function PrinterSettings() {
     setLoadingPrinters(true);
     const list = await getAvailablePrinters();
     setAvailablePrinters(list);
+    // Eski Electron'dan kalan "80mm Series Printer" → POS-80C
+    setSettings((prev) => sanitizePrintSettingsPrinterNames(prev, list));
     setLoadingPrinters(false);
   };
 
   const handleSave = () => {
-    savePrintSettings(settings);
+    const cleaned = sanitizePrintSettingsPrinterNames(settings, availablePrinters);
+    setSettings(cleaned);
+    savePrintSettings(cleaned);
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
   };
@@ -269,6 +279,11 @@ export function PrinterSettings() {
 
   const typeInfo = (type: string) => PRINTER_TYPES.find(t => t.value === type) || PRINTER_TYPES[3];
 
+  // Her render'da yeni HTML string → ResizeObserver yeniden ölçüm + titreme
+  const hubKitchenHtml = useMemo(() => previewKitchenHtml(settings), [settings]);
+  const hubAdisyonHtml = useMemo(() => previewAdisyonHtml(settings), [settings]);
+  const hubPaketHtml = useMemo(() => previewPaketHtml(settings), [settings]);
+
   return (
     <div className="space-y-5">
       <div className="bg-gradient-to-r from-orange-500 to-red-600 rounded-xl p-4 md:p-6 text-white">
@@ -296,56 +311,97 @@ export function PrinterSettings() {
         </p>
       </div>
 
-      {!isElectron() && agentConnected === true && (
-        <div className="bg-green-50 border border-green-200 rounded-xl p-4 flex items-start gap-3">
-          <Wifi className="w-5 h-5 text-green-600 flex-shrink-0 mt-0.5" />
-          <div>
-            <p className="font-bold text-green-800">Print Agent Bağlı</p>
-            <p className="text-sm text-green-700">
-              {agentDetail?.includes('Supabase')
-                ? 'Yazma işleri Supabase Realtime kanalı üzerinden masaüstü uygulamaya iletilecek. HTTPS ortamında sorunsuz çalışır.'
-                : 'ŞefPOS masaüstü uygulaması arka planda çalışıyor. Web üzerinden yazıcılar kullanılabilir durumda.'
-              }
-            </p>
-          </div>
-        </div>
-      )}
-      {!isElectron() && agentConnected === false && agentStatus !== null && (
-        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 space-y-3">
+      {/* Web-only: Electron zaten yazdırır; bu blok yalnızca tarayıcı müşterileri için */}
+      {!isElectron() && (
+        <div
+          className={`rounded-xl p-4 space-y-3 border ${
+            agentConnected === true
+              ? 'bg-green-50 border-green-200'
+              : 'bg-amber-50 border-amber-200'
+          }`}
+        >
           <div className="flex items-start gap-3">
-            <WifiOff className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
-            <div className="flex-1">
-              <p className="font-bold text-amber-800">Print Agent Bağlı Değil</p>
-              {agentStatus === 'blocked_mixed_content' ? (
-                <div className="mt-1 space-y-2">
-                  <p className="text-sm text-amber-700 font-semibold">Tarayıcı güvenlik politikası HTTP isteğini engelliyor (Mixed Content).</p>
-                  <p className="text-sm text-amber-700">Bu sayfa HTTPS üzerinden açıldığı için tarayıcı, HTTP üzerindeki Print Agent'a bağlanmayı reddediyor.</p>
-                  <div className="bg-amber-100 rounded-lg p-3 text-xs text-amber-800 space-y-1.5">
-                    <p className="font-bold">Çözüm seçenekleri:</p>
-                    <p>1. Chrome adres çubuğuna <code className="bg-amber-200 px-1 rounded">chrome://flags/#unsafely-treat-insecure-origin-as-secure</code> yaz, <code className="bg-amber-200 px-1 rounded">http://127.0.0.1:7878</code> ekle ve Chrome'u yeniden başlat.</p>
-                    <p>2. Siteyi HTTP üzerinden aç: <code className="bg-amber-200 px-1 rounded">http://</code> ile başlayan adresi kullan.</p>
-                    <p>3. ŞefPOS masaüstü uygulamasını kullan (HTTPS sorunu olmaz).</p>
-                  </div>
-                </div>
-              ) : agentStatus === 'not_running' ? (
-                <div className="text-sm text-amber-700 mt-1 space-y-1.5">
-                  <p>
-                    <strong className="text-amber-900">Getir / Yemeksepeti / Trendyol</strong> gibi online sipariş fişleri bu
-                    bilgisayarda <strong className="text-amber-900">tarayıcı yazdırma penceresi</strong> ile çıkabilir (Electron
-                    kurmadan, Getir paneli gibi). Masa ve mutfak fişleri kasadaki ŞefPOS veya Print Agent üzerinden basılır.
-                  </p>
-                  <p className="text-xs text-amber-600">
-                    Uzaktan (telefon) sipariş alıyorsanız ve fiş başka kasada basılacaksa bu PC’de ŞefPOS masaüstü veya{' '}
-                    <code className="bg-amber-200 px-1 rounded">npm run print-agent</code> açık olmalıdır.
-                  </p>
-                </div>
-              ) : (
-                <p className="text-sm text-amber-700 mt-1">Bağlantı kurulamadı. {agentDetail && <span className="font-mono text-xs">({agentDetail})</span>}</p>
-              )}
+            {agentConnected === true ? (
+              <Wifi className="w-5 h-5 text-green-600 flex-shrink-0 mt-0.5" />
+            ) : (
+              <WifiOff className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+            )}
+            <div className="flex-1 min-w-0">
+              <p className={`font-bold ${agentConnected === true ? 'text-green-800' : 'text-amber-800'}`}>
+                {PRINT_AGENT_PRODUCT_NAME}
+                {agentConnected === true ? ' — bağlı' : ' — web için yerel yazıcı'}
+              </p>
+              <p className={`text-sm mt-1 ${agentConnected === true ? 'text-green-700' : 'text-amber-800'}`}>
+                Masaüstü ŞefPOS (Electron) için gerekmez. Yalnızca siteyi <strong>tarayıcıdan</strong> açan kasalar
+                içindir. <strong>Bir kez kurun</strong> — her PC / tarayıcı açılışında yeniden indirme yok; Windows
+                açılınca arka planda kendisi çalışır.
+              </p>
+              {agentConnected === true && agentDetail ? (
+                <p className="text-xs text-green-700 mt-1">{agentDetail}</p>
+              ) : null}
+              {agentConnected !== true ? (
+                <ol className="mt-2 text-sm text-amber-900 list-decimal list-inside space-y-1">
+                  <li>
+                    <strong>{PRINT_AGENT_PRODUCT_NAME} kur</strong> dosyasını indirip bir kez çalıştırın (otomatik
+                    kurulum + Windows başlangıcı).
+                  </li>
+                  <li>
+                    Bu tarayıcıda bir kez <strong>Yazıcı ajanını bağla</strong> deyin — sonra hep hazır kalır.
+                  </li>
+                </ol>
+              ) : null}
             </div>
           </div>
-          <div className="flex items-center gap-3 pl-8">
+          <div className="flex flex-wrap items-center gap-2 sm:gap-3 pl-0 sm:pl-8">
+            <a
+              href={printAgentDownloadHref()}
+              download={PRINT_AGENT_FILENAME}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-xs font-semibold transition"
+            >
+              <Download className="w-3.5 h-3.5" />
+              {PRINT_AGENT_PRODUCT_NAME} kur (bir kez)
+            </a>
             <button
+              type="button"
+              onClick={async () => {
+                try {
+                  const { data } = await supabase.auth.getSession();
+                  const token = data?.session?.access_token;
+                  if (!token || !tenant?.id) {
+                    alert('Önce giriş yapın, sonra ajanı bağlayın.');
+                    return;
+                  }
+                  try {
+                    localStorage.setItem('shefpos_use_external_print_agent', '1');
+                  } catch {
+                    /* ignore */
+                  }
+                  const vds = encodeURIComponent(
+                    (import.meta.env.VITE_VDS_API_BASE as string) || 'https://sefpos.com.tr',
+                  );
+                  const branch = activeBranch?.id ? `&branch=${encodeURIComponent(activeBranch.id)}` : '';
+                  window.open(
+                    `http://127.0.0.1:7878/pair?jwt=${encodeURIComponent(token)}&tenant=${encodeURIComponent(tenant.id)}${branch}&vds=${vds}`,
+                    'sefpos-print-agent-pair',
+                    'width=480,height=360',
+                  );
+                  setTimeout(() => {
+                    void fetchPrinters();
+                  }, 2500);
+                } catch (err: any) {
+                  alert(
+                    err?.message ||
+                      `Ajan bağlanamadı — ${PRINT_AGENT_PRODUCT_NAME} (${PRINT_AGENT_FILENAME}) çalışıyor mu?`,
+                  );
+                }
+              }}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-orange-600 hover:bg-orange-700 text-white rounded-lg text-xs font-semibold transition"
+            >
+              <Link2 className="w-3.5 h-3.5" />
+              Yazıcı ajanını bağla
+            </button>
+            <button
+              type="button"
               onClick={async () => {
                 setCheckingAgent(true);
                 const result = await checkPrintAgentDetailed();
@@ -356,19 +412,11 @@ export function PrinterSettings() {
                 setCheckingAgent(false);
               }}
               disabled={checkingAgent}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white rounded-lg text-xs font-semibold transition"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white rounded-lg text-xs font-semibold transition"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${checkingAgent ? 'animate-spin' : ''}`} />
-              {checkingAgent ? 'Kontrol ediliyor...' : 'Tekrar Dene'}
+              {checkingAgent ? 'Kontrol…' : 'Durumu yenile'}
             </button>
-            <a
-              href="http://127.0.0.1:7878/status"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-xs text-amber-700 underline hover:text-amber-900"
-            >
-              Tarayıcıda test et
-            </a>
           </div>
         </div>
       )}
@@ -390,13 +438,13 @@ export function PrinterSettings() {
             Bir fiş türüne tıklayın — büyük önizleme ve canlı ayarlar açılır. Aşağıdaki küçük önizlemeler kaydırılabilir.
           </p>
 
-          <div className="grid grid-cols-1 xl:grid-cols-3 gap-5 2xl:gap-6 items-stretch">
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 2xl:gap-5 items-start">
             <ReceiptHubCard
               title="Mutfak fişi"
               subtitle="Sipariş gönderince mutfağa"
               icon={<ChefHat className="w-5 h-5 text-white" />}
               accent="orange"
-              html={previewKitchenHtml(settings)}
+              html={hubKitchenHtml}
               onClick={() => setView('kitchen')}
             />
             <ReceiptHubCard
@@ -404,7 +452,7 @@ export function PrinterSettings() {
               subtitle="Ödeme ve müşteri fişi"
               icon={<Receipt className="w-5 h-5 text-white" />}
               accent="emerald"
-              html={previewAdisyonHtml(settings)}
+              html={hubAdisyonHtml}
               onClick={() => setView('adisyon')}
             />
             <ReceiptHubCard
@@ -412,7 +460,7 @@ export function PrinterSettings() {
               subtitle="Paket servis ve teslimat"
               icon={<ShoppingBag className="w-5 h-5 text-white" />}
               accent="amber"
-              html={previewPaketHtml(settings)}
+              html={hubPaketHtml}
               onClick={() => setView('paket')}
             />
           </div>

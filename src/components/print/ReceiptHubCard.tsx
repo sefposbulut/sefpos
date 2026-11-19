@@ -40,7 +40,7 @@ type Props = {
   onClick: () => void;
 };
 
-/** Ana menü — kareye yakın kart, fiş tam ve okunaklı önizleme */
+/** Ana menü — eski düzen: 72mm fiş önizlemesi, okunaklı */
 export function ReceiptHubCard({ title, subtitle, icon, accent, html, onClick }: Props) {
   const s = ACCENT_STYLES[accent];
 
@@ -60,15 +60,16 @@ export function ReceiptHubCard({ title, subtitle, icon, accent, html, onClick }:
         </div>
       </div>
 
-      <div className="flex-1 min-h-[380px] max-h-[min(56vh,560px)] bg-gradient-to-b from-slate-100 via-slate-50 to-slate-100 overflow-y-auto overflow-x-hidden">
-        <ReceiptScaledPreview html={html} variant="thumb" />
+      <div
+        className="flex-1 min-h-[320px] max-h-[min(52vh,520px)] bg-gradient-to-b from-slate-100 via-slate-50 to-slate-100 overflow-y-auto overflow-x-hidden"
+        style={{ scrollbarGutter: 'stable' }}
+      >
+        <ReceiptScaledPreview html={html} variant="thumb" paperMm={72} />
       </div>
 
       <div className="flex items-center justify-between gap-2 px-4 py-3.5 border-t border-slate-100 bg-white">
         <span className="text-xs text-slate-500">Tıklayın: büyük önizleme + canlı ayar</span>
-        <span
-          className={`inline-flex items-center gap-1 text-sm font-bold shrink-0 ${s.cta}`}
-        >
+        <span className={`inline-flex items-center gap-1 text-sm font-bold shrink-0 ${s.cta}`}>
           Düzenle
           <ChevronRight className="w-4 h-4 transition-transform group-hover:translate-x-0.5" />
         </span>
