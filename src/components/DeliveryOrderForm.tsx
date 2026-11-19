@@ -800,6 +800,13 @@ function DeliveryOrderFormInner({ couriers, editOrder, prefillCustomer, onClose 
                       );
                     }
                     const c = s.row;
+                    const bal = Number(c.current_balance ?? 0);
+                    const balLabel =
+                      bal > 0.009
+                        ? `${bal.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺ borç`
+                        : bal < -0.009
+                          ? `${Math.abs(bal).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺ alacak`
+                          : null;
                     return (
                       <button
                         key={key}
@@ -821,6 +828,11 @@ function DeliveryOrderFormInner({ couriers, editOrder, prefillCustomer, onClose 
                               </div>
                             )}
                           </div>
+                          {balLabel && (
+                            <div className={`text-xs font-bold shrink-0 ${bal > 0 ? 'text-red-600' : 'text-emerald-600'}`}>
+                              {balLabel}
+                            </div>
+                          )}
                         </div>
                       </button>
                     );

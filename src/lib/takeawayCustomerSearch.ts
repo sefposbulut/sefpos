@@ -3,7 +3,7 @@ import { supabase } from './supabase';
 const DELIVERY_FIELDS =
   'id, tenant_id, branch_id, full_name, phone, address, notes, last_order_at, order_count, created_at';
 
-const CARI_FIELDS = 'id, name, phone, email, address, notes, is_active';
+const CARI_FIELDS = 'id, name, phone, email, address, notes, is_active, current_balance';
 
 export type DeliveryCustomerHit = {
   id: string;
@@ -26,6 +26,7 @@ export type CariCustomerHit = {
   address: string | null;
   notes: string | null;
   is_active: boolean;
+  current_balance?: number | null;
 };
 
 export type TakeawayCustomerSuggestion =
