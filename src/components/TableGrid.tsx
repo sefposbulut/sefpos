@@ -475,10 +475,17 @@ export function TableGrid({
 
     let fetchedCount: number | null = null;
     try {
-      const { tables: tableRows, groups: groupRows } = await fetchCloudTableGridSnapshot(
-        tenant.id,
-        activeBranch.id,
-      );
+      const snapFetch = fetchCloudTableGridSnapshot(tenant.id, activeBranch.id);
+      const timed = await Promise.race([
+        snapFetch.then((r) => ({ ok: true as const, r })),
+        new Promise<{ ok: false }>((resolve) => {
+          window.setTimeout(() => resolve({ ok: false }), 15_000);
+        }),
+      ]);
+      if (!timed.ok) {
+        throw new Error('Masa listesi zaman aşımı');
+      }
+      const { tables: tableRows, groups: groupRows } = timed.r;
 
       const mapped: TableWithOrder[] =
         tableRows.length > 0
@@ -867,10 +874,15 @@ export function TableGrid({
     if (!tenant || !activeBranch || !isActive) {
       channelsRef.current.forEach((ch) => supabase.removeChannel(ch));
       channelsRef.current = [];
-      // Şube henüz yokken sonsuz skeleton kalmasın — şube gelince effect tekrar çalışır
-      if (!activeBranch && tenant && isActive) {
+      // Şube henüz yok: skeleton göster ama gridFetchDone'u sonsuza kilitleme —
+      // soft refresh / SW yarışında masalar bir daha hiç çizilmiyordu.
+      if (!activeBranch && tenant && isActive && tablesRef.current.length === 0) {
         setLoading(true);
-        setGridFetchDone(false);
+        const t = window.setTimeout(() => {
+          setLoading(false);
+          setGridFetchDone(true);
+        }, 12_000);
+        return () => clearTimeout(t);
       }
       return;
     }
@@ -891,11 +903,11 @@ export function TableGrid({
         if (updateTimerRef.current) clearTimeout(updateTimerRef.current);
       };
     }
-    // VDS / SQL: Realtime yok — mobil/web sipariş masaya anında yansıması için sık poll.
+    // VDS / SQL: Realtime yok — mobil sipariş masaya anında yansıması (≈1 sn).
     if (isSqlServerMode()) {
       timer = setInterval(() => {
         if (document.visibilityState === 'visible') void loadAll(false, { silent: true });
-      }, 3_000);
+      }, 1_200);
       return () => {
         if (timer) clearInterval(timer);
         if (updateTimerRef.current) clearTimeout(updateTimerRef.current);
@@ -1165,6 +1177,17 @@ export function TableGrid({
   }, [tables, tableGroups, selectedGroup]);
 
   const showGridSkeleton = (loading || !gridFetchDone) && tables.length === 0;
+
+  // Soft refresh / SW / ağ yarışında skeleton sonsuza kalmasın
+  useEffect(() => {
+    if (!showGridSkeleton) return;
+    const t = window.setTimeout(() => {
+      setLoading(false);
+      setGridFetchDone(true);
+    }, 10_000);
+    return () => clearTimeout(t);
+  }, [showGridSkeleton]);
+
   if (showGridSkeleton) {
     const skeletonCount = Math.min(12, Math.max(6, desktopTableCols * 2));
     return (
@@ -1194,9 +1217,31 @@ export function TableGrid({
 
   if (!activeBranch) {
     return (
-      <div className="flex flex-col items-center justify-center h-64 gap-3">
-        <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-orange-500"></div>
-        <p className="text-gray-500 text-sm">Sube hazirlaniyor...</p>
+      <div className="flex flex-col items-center justify-center h-64 gap-3 px-4">
+        <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-orange-500" />
+        <p className="text-gray-500 text-sm">Şube hazırlanıyor…</p>
+        <button
+          type="button"
+          onClick={() => window.location.reload()}
+          className="mt-2 text-sm font-semibold text-orange-600 underline"
+        >
+          Sayfayı yenile
+        </button>
+      </div>
+    );
+  }
+
+  if (gridFetchDone && tables.length === 0 && !serverEmptyConfirmed) {
+    return (
+      <div className="flex flex-col items-center justify-center h-64 gap-3 px-4">
+        <p className="text-gray-600 text-sm text-center">Masalar yüklenemedi. Bağlantıyı kontrol edin.</p>
+        <button
+          type="button"
+          onClick={() => void loadAll(true)}
+          className="bg-orange-600 hover:bg-orange-700 text-white px-5 py-2.5 rounded-lg text-sm font-bold"
+        >
+          Tekrar dene
+        </button>
       </div>
     );
   }

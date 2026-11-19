@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { IncomingMessage } from 'node:http';
 import { fileURLToPath } from 'node:url';
@@ -261,6 +261,8 @@ export default defineConfig(({ mode, command }) => {
     define['import.meta.env.VITE_VDS_SELFHOST'] = JSON.stringify('true');
     define['import.meta.env.VITE_SUPABASE_URL'] = JSON.stringify('');
     define['import.meta.env.VITE_SUPABASE_ANON_KEY'] = JSON.stringify('');
+    // Shell/.env'deki VITE_VDS_API_BASE self-host'ta apex'e sabitleyip www CSP'yi kırıyordu.
+    define['import.meta.env.VITE_VDS_API_BASE'] = JSON.stringify('');
   }
 
   if (forceDevSupabaseFromPortJson) {
@@ -310,6 +312,32 @@ export default defineConfig(({ mode, command }) => {
   }
 
   if (command === 'build') {
+    // Fail hard if any .ts/.tsx lands in dist/assets (IIS serves .ts as video/mp2t → login breaks).
+    plugins.push({
+      name: 'sefpos-forbid-ts-assets',
+      enforce: 'post',
+      generateBundle(_opts, bundle) {
+        const bad = Object.keys(bundle).filter((n) => /\.tsx?$/.test(n));
+        if (bad.length) {
+          throw new Error(
+            `[ŞefPOS] Build emitted TypeScript assets (must be .js): ${bad.slice(0, 15).join(', ')}. ` +
+              'Likely cause: new URL(`../${x}`, import.meta.url) without /* @vite-ignore */ (see src/lib/assetUrl.ts).',
+          );
+        }
+      },
+      writeBundle(outputOpts) {
+        const dir = outputOpts.dir || join(__root, 'dist');
+        try {
+          const assetsDir = join(dir, 'assets');
+          const bad = readdirSync(assetsDir).filter((f) => /\.tsx?$/.test(f));
+          if (bad.length) {
+            throw new Error(`[ŞefPOS] dist/assets still has .ts/.tsx: ${bad.slice(0, 15).join(', ')}`);
+          }
+        } catch (e) {
+          if (e instanceof Error && e.message.startsWith('[ŞefPOS]')) throw e;
+        }
+      },
+    });
     const cspMeta = buildContentSecurityPolicyMetaContent();
     plugins.push({
       name: 'sefpos-electron-csp-meta',
@@ -426,6 +454,9 @@ export default defineConfig(({ mode, command }) => {
     build: {
       rollupOptions: {
         output: {
+          entryFileNames: 'assets/[name]-[hash].js',
+          chunkFileNames: 'assets/[name]-[hash].js',
+          assetFileNames: 'assets/[name]-[hash][extname]',
           manualChunks(id) {
             if (!id.includes('node_modules')) {
               if (id.includes('/components/landing/')) return 'landing';

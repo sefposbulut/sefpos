@@ -1,7 +1,8 @@
 /** Ödeme sonrası realtime gecikmesiyle masanın tekrar kırmızı/yeşil görünmesini engeller. */
 const clearedUntilByTableId = new Map<string, number>();
 
-const DEFAULT_MS = 3500;
+/** Sunucu yazımı + poll gecikmesi; kısa tutmak masayı tekrar dolduruyordu. */
+const DEFAULT_MS = 20000;
 
 export function markTableOptimisticallyCleared(tableId: string, holdMs = DEFAULT_MS): void {
   if (!tableId) return;

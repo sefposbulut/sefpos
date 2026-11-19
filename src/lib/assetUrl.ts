@@ -22,8 +22,11 @@ export function publicAsset(name: string): string {
   }
 
   // Electron production (file://…/dist/assets/index-xxx.js) → dist/logo.png
+  // CRITICAL: do not use new URL(`../${clean}`, import.meta.url) without @vite-ignore.
+  // Vite analyzes that template as "emit every file under src/" as static assets;
+  // .ts then gets MIME video/mp2t and the web build breaks login (Failed to fetch).
   try {
-    return new URL(`../${clean}`, import.meta.url).href;
+    return new URL(/* @vite-ignore */ `../${clean}`, import.meta.url).href;
   } catch {
     return `./${clean}`;
   }

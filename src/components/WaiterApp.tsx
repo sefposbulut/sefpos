@@ -417,24 +417,26 @@ export function WaiterApp({ onLogout }: { onLogout: () => void }) {
         console.warn('[WaiterApp] masa güncelleme:', tableErr.message);
       }
 
-      // Mutfak fişi — kasa yazıcı ajanı print_jobs kuyruğundan basar
+      // Mutfak fişi ZORUNLU — her üründe kuyruğa; ayar kapalı olsa bile bas
       const printSettings = loadPrintSettings();
-      if (printSettings.autoPrintKitchen !== false) {
-        const kitchenItems = cartSnapshot.map((item) => ({
-          productName: item.product.name,
-          quantity: item.quantity,
-          notes: item.notes || null,
-          categoryId: item.product.category_id || null,
-          productPrinterName: item.product.printer_name || null,
-        }));
-        void printKitchenReceipts({
-          settings: printSettings,
+      const kitchenItems = cartSnapshot.map((item) => ({
+        productName: item.product.name,
+        quantity: item.quantity,
+        notes: item.notes || null,
+        categoryId: item.product.category_id || null,
+        productPrinterName: item.product.printer_name || null,
+      }));
+      try {
+        await printKitchenReceipts({
+          settings: { ...printSettings, autoPrintKitchen: true },
           restaurantName: printSettings.restaurantName || 'ŞefPOS',
           tableLabel: `Masa ${selectedTable.table_number}`,
           orderNumber: orderNumber || orderId.slice(0, 8),
           items: kitchenItems,
           waiterName: session.name,
         });
+      } catch (e: any) {
+        console.warn('[WaiterApp] mutfak fişi kuyruk:', e?.message || e);
       }
 
       setCart([]);

@@ -8,9 +8,14 @@ const path = require('path');
 
 const DEFAULT_VDS_ORIGIN = 'https://sefpos.com.tr';
 const PRINT_JOB_MAX_AGE_MINUTES = 30;
-const PRINT_MIN_INTERVAL_MS = 2000;
-const POLL_MS = 2500;
+/** Aynı yazıcıya ardışık baskı arası (donanım) */
+const PRINT_MIN_INTERVAL_MS = 60;
+/** Yeni işleri agresif tara — 100 garson kuyruğu birikmesin */
+const POLL_MS = 80;
 const REGISTER_MS = 60_000;
+const STALE_PROCESSING_MS = 90_000;
+const RECLAIM_EVERY_MS = 25_000;
+const FETCH_BATCH = 40;
 
 function getSessionPath() {
   const appData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
@@ -68,7 +73,7 @@ function vdsFetch(session, apiPath, body) {
           'Content-Type': 'application/json',
           ...(payload ? { 'Content-Length': Buffer.byteLength(payload) } : {}),
         },
-        timeout: 20000,
+        timeout: 15000,
       },
       (res) => {
         let data = '';
@@ -111,24 +116,43 @@ function isVirtualPrinterName(name) {
   );
 }
 
+function isPos80FamilyName(name) {
+  const k = String(name || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '');
+  return k.includes('pos80c') || k === 'pos80' || /^pos80/.test(k);
+}
+
 function pickDefaultKitchenPrinter(printers) {
-  const kw = ['80mm', 'pos-80', 'pos80', 'mutfak', 'kitchen', 'thermal', 'fis', 'fiş', 'kasa', 'bar', 'grill'];
+  const kw = ['pos-80c', 'pos80c', 'pos-80', 'pos80', '80mm', 'mutfak', 'kitchen', 'thermal', 'fis', 'fiş', 'kasa', 'bar', 'grill'];
   const named = printers
     .map((p) => (typeof p === 'string' ? p : p?.name || ''))
     .filter((n) => n && !isVirtualPrinterName(n));
+  const pos = named.find((n) => isPos80FamilyName(n));
+  if (pos) return pos;
   for (const k of kw) {
-    const hit = named.find((n) => n.toLowerCase().includes(k));
+    const hit = named.find((n) => {
+      const nl = n.toLowerCase();
+      if (!nl.includes(k)) return false;
+      if (k === '80mm' && nl.includes('80mm') && !isPos80FamilyName(n) && named.some(isPos80FamilyName)) {
+        return false;
+      }
+      return true;
+    });
     if (hit) return hit;
   }
   return named[0] || '';
 }
 
 function printJobIsExpired(job) {
-  const raw = job?.created_at;
+  const raw = job?.created_at || job?.updated_at;
   if (!raw) return false;
   const t = new Date(raw).getTime();
   if (Number.isNaN(t)) return false;
-  return Date.now() - t > PRINT_JOB_MAX_AGE_MINUTES * 60 * 1000;
+  // created_at TR saati Z ile gelirse gelecekte görünür — negatif farkı yok say
+  const age = Date.now() - t;
+  if (age < 0) return false;
+  return age > PRINT_JOB_MAX_AGE_MINUTES * 60 * 1000;
 }
 
 /**
@@ -139,50 +163,42 @@ function printJobIsExpired(job) {
  */
 function startQueuePoller(opts) {
   const processingJobIds = new Set();
-  let lastDoPrintAt = 0;
   let lastRegisterAt = 0;
+  let lastReclaimAt = 0;
+  let fetchLock = false;
+  const lastPrintAtByPrinter = new Map();
+  /** @type {Map<string, { busy: boolean, list: any[] }>} */
+  const printerQueues = new Map();
 
   async function updatePrintJobStatus(session, jobId, status, error) {
+    const data = {
+      status,
+      updated_at: new Date().toISOString(),
+      ...(error !== undefined ? { error: error == null ? '' : String(error) } : {}),
+    };
     try {
-      await vdsFetch(session, '/vds-api/query', {
+      const res = await vdsFetch(session, '/vds-api/query', {
         table: 'print_jobs',
         operation: 'update',
-        data: {
-          status,
-          updated_at: new Date().toISOString(),
-          ...(error !== undefined ? { error: error || null } : {}),
-          ...(status === 'done' ? { printed_at: new Date().toISOString() } : {}),
-        },
+        data,
         filters: [{ col: 'id', op: 'eq', val: jobId }],
       });
+      if (!res.ok) {
+        console.warn('[print-agent] job durumu güncellenemedi:', res.data?.error || res.status);
+        return false;
+      }
+      return true;
     } catch (err) {
       console.warn('[print-agent] job durumu güncellenemedi:', err.message);
+      return false;
     }
   }
 
   async function processPrintJob(session, job) {
-    if (processingJobIds.has(job.id)) return;
-    processingJobIds.add(job.id);
-
     try {
       if (printJobIsExpired(job)) {
         await updatePrintJobStatus(session, job.id, 'failed', 'Süresi doldu (otomatik iptal)');
         return;
-      }
-
-      const claim = await vdsFetch(session, '/vds-api/query', {
-        table: 'print_jobs',
-        operation: 'update',
-        data: { status: 'processing', updated_at: new Date().toISOString() },
-        filters: [
-          { col: 'id', op: 'eq', val: job.id },
-          { col: 'status', op: 'eq', val: 'pending' },
-        ],
-      });
-      if (!claim.ok) return;
-      const claimedRows = Array.isArray(claim.data?.data) ? claim.data.data : [];
-      if (claimedRows.length === 0 && claim.data?.data == null) {
-        // update may return empty array depending on driver — continue if no hard error
       }
 
       let targetPrinter = String(job.printer_name || '').trim();
@@ -190,7 +206,9 @@ function startQueuePoller(opts) {
         targetPrinter = pickDefaultKitchenPrinter(session.printers);
       }
 
-      const waitMs = PRINT_MIN_INTERVAL_MS - (Date.now() - lastDoPrintAt);
+      const paceKey = (targetPrinter || '__default__').toLowerCase();
+      const lastAt = lastPrintAtByPrinter.get(paceKey) || 0;
+      const waitMs = PRINT_MIN_INTERVAL_MS - (Date.now() - lastAt);
       if (waitMs > 0) await new Promise((r) => setTimeout(r, waitMs));
 
       const html = job.html || job.payload?.html || '';
@@ -199,11 +217,28 @@ function startQueuePoller(opts) {
         return;
       }
 
-      const result = await opts.handlePrint(html, targetPrinter);
-      lastDoPrintAt = Date.now();
+      let heartAlive = true;
+      const heartbeat = setInterval(() => {
+        if (!heartAlive) return;
+        updatePrintJobStatus(session, job.id, 'processing', '').catch(() => {});
+      }, 25_000);
+
+      let result;
+      try {
+        result = await opts.handlePrint(html, targetPrinter);
+      } finally {
+        heartAlive = false;
+        clearInterval(heartbeat);
+      }
+
+      lastPrintAtByPrinter.set(paceKey, Date.now());
 
       if (result.success) {
-        await updatePrintJobStatus(session, job.id, 'done', '');
+        const ok = await updatePrintJobStatus(session, job.id, 'done', '');
+        if (!ok) {
+          await new Promise((r) => setTimeout(r, 250));
+          await updatePrintJobStatus(session, job.id, 'done', '');
+        }
         console.log(`[print-agent] Kuyruk fişi basıldı: ${job.id} → ${targetPrinter || '(varsayılan)'}`);
       } else {
         await updatePrintJobStatus(session, job.id, 'failed', result.error || 'Bilinmeyen hata');
@@ -215,25 +250,58 @@ function startQueuePoller(opts) {
     }
   }
 
+  function enqueueClaimed(session, job) {
+    const key = String(
+      job.printer_name || pickDefaultKitchenPrinter(session.printers) || '__default__',
+    ).toLowerCase();
+    let q = printerQueues.get(key);
+    if (!q) {
+      q = { busy: false, list: [] };
+      printerQueues.set(key, q);
+    }
+    q.list.push(job);
+    void drainPrinter(session, key);
+  }
+
+  async function drainPrinter(session, key) {
+    const q = printerQueues.get(key);
+    if (!q || q.busy) return;
+    q.busy = true;
+    try {
+      while (q.list.length > 0) {
+        const job = q.list.shift();
+        await processPrintJob(session, job);
+      }
+    } finally {
+      q.busy = false;
+      if (q.list.length > 0) void drainPrinter(session, key);
+    }
+  }
+
   async function reclaimStaleProcessing(session) {
     try {
       const result = await vdsFetch(session, '/vds-api/query', {
         table: 'print_jobs',
         operation: 'select',
-        select: 'id,status,updated_at,created_at',
+        select: 'id,status,updated_at,created_at,printer_name',
         filters: [
           { col: 'tenant_id', op: 'eq', val: session.tenantId },
           { col: 'status', op: 'eq', val: 'processing' },
         ],
         orderBy: [{ col: 'created_at', asc: true }],
-        limitVal: 20,
+        limitVal: 50,
       });
       const rows = Array.isArray(result.data?.data) ? result.data.data : [];
-      const cutoff = Date.now() - 90_000;
+      const cutoff = Date.now() - STALE_PROCESSING_MS;
       for (const job of rows) {
+        if (processingJobIds.has(job.id)) continue;
         const t = new Date(job.updated_at || job.created_at).getTime();
-        if (!Number.isNaN(t) && t < cutoff) {
-          await updatePrintJobStatus(session, job.id, 'failed', 'Takılı kaldı (ajan yeniden başlatıldı)');
+        if (Number.isNaN(t) || t >= cutoff) continue;
+        const ok = await updatePrintJobStatus(session, job.id, 'pending', 'Yeniden kuyruğa alındı');
+        if (!ok) {
+          await updatePrintJobStatus(session, job.id, 'failed', 'Takılı kaldı (ajan yanıt vermedi)');
+        } else {
+          console.warn(`[print-agent] takılı iş yeniden kuyruk: ${job.id}`);
         }
       }
     } catch {
@@ -241,34 +309,56 @@ function startQueuePoller(opts) {
     }
   }
 
-  let printBusy = false;
-
   async function fetchPendingJobs(session) {
-    if (printBusy) return;
-    printBusy = true;
+    if (fetchLock) return;
+    fetchLock = true;
     try {
-      await reclaimStaleProcessing(session);
-      const filters = [
-        { col: 'tenant_id', op: 'eq', val: session.tenantId },
-        { col: 'status', op: 'eq', val: 'pending' },
-      ];
+      if (Date.now() - lastReclaimAt > RECLAIM_EVERY_MS) {
+        lastReclaimAt = Date.now();
+        await reclaimStaleProcessing(session);
+      }
+
       const result = await vdsFetch(session, '/vds-api/query', {
         table: 'print_jobs',
         operation: 'select',
         select: 'id,tenant_id,branch_id,html,printer_name,status,created_at',
-        filters,
+        filters: [
+          { col: 'tenant_id', op: 'eq', val: session.tenantId },
+          { col: 'status', op: 'eq', val: 'pending' },
+        ],
         orderBy: [{ col: 'created_at', asc: true }],
-        limitVal: 8, // birden fazla yazıcıya giden siparişler aynı turda
+        limitVal: FETCH_BATCH,
       });
       const rows = Array.isArray(result.data?.data) ? result.data.data : [];
-      for (const job of rows) {
+      const jobs = rows.filter((job) => {
+        if (processingJobIds.has(job.id)) return false;
         if (session.branchId && job.branch_id && String(job.branch_id) !== String(session.branchId)) {
+          return false;
+        }
+        return true;
+      });
+
+      // Claim hemen — poll tekrar aynı işi almasın; yazıcı kuyrukları paralel aksın
+      for (const job of jobs) {
+        if (processingJobIds.has(job.id)) continue;
+        processingJobIds.add(job.id);
+        const claim = await vdsFetch(session, '/vds-api/query', {
+          table: 'print_jobs',
+          operation: 'update',
+          data: { status: 'processing', updated_at: new Date().toISOString(), error: '' },
+          filters: [
+            { col: 'id', op: 'eq', val: job.id },
+            { col: 'status', op: 'eq', val: 'pending' },
+          ],
+        });
+        if (!claim.ok) {
+          processingJobIds.delete(job.id);
           continue;
         }
-        await processPrintJob(session, job);
+        enqueueClaimed(session, job);
       }
     } finally {
-      printBusy = false;
+      fetchLock = false;
     }
   }
 

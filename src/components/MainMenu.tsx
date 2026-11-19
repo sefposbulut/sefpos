@@ -84,9 +84,10 @@ export function MainMenu({ onNavigate, currentPage, onOpenSettings, onLockScreen
         {!headerHidden && (
           <button
             onClick={() => setMenuOpen(!menuOpen)}
-            className="fixed top-3 left-3 md:top-4 md:left-4 z-50 p-2 md:p-3 bg-gradient-to-br from-orange-500 to-red-600 text-white rounded-lg md:rounded-xl shadow-lg hover:shadow-xl transition-all active:scale-95"
+            className="fixed top-2.5 left-3 z-50 inline-flex items-center justify-center h-9 w-9 p-0 bg-gradient-to-br from-orange-500 to-red-600 text-white rounded-lg shadow-md hover:shadow-lg transition-all active:scale-95"
+            aria-label={menuOpen ? 'Menüyü kapat' : 'Menüyü aç'}
           >
-            {menuOpen ? <X size={20} className="md:w-6 md:h-6" /> : <Menu size={20} className="md:w-6 md:h-6" />}
+            {menuOpen ? <X size={18} /> : <Menu size={18} />}
           </button>
         )}
 
@@ -98,7 +99,7 @@ export function MainMenu({ onNavigate, currentPage, onOpenSettings, onLockScreen
         )}
 
         <div className={`fixed top-0 left-0 h-full w-64 md:w-80 bg-gradient-to-b from-orange-600 via-orange-700 to-red-700 shadow-2xl z-40 transform transition-transform duration-300 flex flex-col ${menuOpen ? 'translate-x-0' : '-translate-x-full'}`}>
-          <div className="p-4 md:p-6 pt-16 md:pt-20 flex-1 overflow-y-auto">
+          <div className="p-4 md:p-6 pt-14 flex-1 overflow-y-auto">
             <h2 className="text-xl md:text-2xl font-bold text-white mb-6 md:mb-8">ŞEFPOS</h2>
 
             <div className="space-y-1.5 md:space-y-2">

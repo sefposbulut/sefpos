@@ -320,24 +320,11 @@ input[type="range"]::-moz-range-thumb {
   min-height: 100mm;
 }
 
-.receipt-preview-paper .sefpos-receipt-scope,
-.receipt-preview-paper .sefpos-kitchen-scope {
+/* Hub önizleme: kayma ekranda kenarı kesmesin */
+.receipt-preview-paper--thumb .sefpos-receipt-scope,
+.receipt-preview-paper--thumb .sefpos-kitchen-scope {
   margin-left: 0 !important;
   margin-right: 0 !important;
-  padding: 2mm 2.5mm 3mm;
-  line-height: 1.4 !important;
-}
-
-.receipt-preview-paper .line {
-  margin: 5px 0 !important;
-}
-
-.receipt-preview-paper .row,
-.receipt-preview-paper .item-row,
-.receipt-preview-paper .cust-row,
-.receipt-preview-paper .total-row {
-  gap: 6px;
-  margin-bottom: 3px;
 }
 
 .receipt-preview-paper .cust-section {
@@ -347,7 +334,6 @@ input[type="range"]::-moz-range-thumb {
 
 .receipt-preview-paper .addr-text {
   overflow-wrap: break-word;
-  line-height: 1.45 !important;
 }
 
 .landing-pricing-badge {
