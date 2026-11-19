@@ -740,8 +740,8 @@ function DeliveryOrderFormInner({ couriers, editOrder, prefillCustomer, onClose 
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                 <input
                   ref={phoneInputRef}
-                  type="tel"
-                  inputMode="tel"
+                  type="text"
+                  inputMode="search"
                   value={customerPhone}
                   onChange={(e) => handleCustomerSearchChange(e.target.value)}
                   onFocus={() => customerSuggestions.length > 0 && setShowSuggestions(true)}

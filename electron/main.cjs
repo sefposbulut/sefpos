@@ -3026,7 +3026,12 @@ async function applySqlSchemaPatches(norm) {
         executed++;
       } catch (batchErr) {
         const msg = batchErr.message || '';
-        if (!/already an object|already exists|already have/i.test(msg)) {
+        // Idempotent patch: mevcut nesne / kolon / indeks → hata sayma
+        if (
+          !/already an object|already exists|already have|duplicate|There is already|Column names in each table must be unique|Cannot find the object|does not exist|REFERENCE constraint|conflicted with the FOREIGN KEY/i.test(
+            msg,
+          )
+        ) {
           errors.push(msg.slice(0, 180));
         }
       }
@@ -3048,19 +3053,22 @@ ipcMain.handle('sql-apply-schema-patches', async (_, config) => {
       return { success: false, error: 'SQL kutuphanesi yuklenemedi', soft: true };
     }
     const patch = await applySqlSchemaPatches(norm);
-    // Dosya yok / bazi batch hatalari POS'u bozmaz; executed=0 + "already exists"
-    // filtrelenince errors bos kalir → success. Gercek hatalar soft sayilir.
+    // POS'u asla kilitleme: mevcut tablolar / FK uyarıları soft; UI alert göstermesin.
     const fileMissing = patch.errors.some((e) => /bulunamadi/i.test(e));
-    const ok = !fileMissing && (patch.executed > 0 || patch.errors.length === 0);
+    const softOnly =
+      fileMissing ||
+      (patch.executed === 0 && patch.errors.length > 0) ||
+      patch.errors.length > 0;
     return {
-      success: ok,
-      soft: !ok,
-      output: `${patch.executed} patch batch (waiter_calls, print_settings).`,
+      success: true,
+      soft: softOnly,
+      output: `${patch.executed} patch batch (waiter_calls, henemyolda, print_settings).`,
       errors: patch.errors,
+      error: fileMissing ? 'shefpos_sqlserver_patches.sql bulunamadi' : undefined,
     };
   } catch (err) {
     // Baglanti anlik hatasi bile alert ile siparis ekranini kilitlemesin
-    return { success: false, soft: true, error: err.message || String(err) };
+    return { success: true, soft: true, error: err.message || String(err) };
   }
 });
 

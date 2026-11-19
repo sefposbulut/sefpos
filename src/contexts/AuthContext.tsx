@@ -1295,32 +1295,29 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, [tenant?.id, tenant?.name, (tenant as any)?.phone, (tenant as any)?.address]);
 
-  // Electron SQL: arka planda şema patch (waiter_calls vb.). POS çalışıyorsa
-  // bu yalnızca bakım işidir — başarısızlıkta blocking alert gösterme;
-  // (eski sürümlerde her oturumda yanlış alarm penceresi açılıyordu).
+  // Electron yerel SQL: arka planda şema patch. Cloud/VDS şeması sunucuda yönetilir —
+  // orada yerel patch denemesi «SQL tabloları güncellenemedi» yanlış alarmı üretir.
+  // Başarısızlıkta asla window.alert yok; POS kilitlenmesin.
   useEffect(() => {
-    if (!isElectron() || !isSqlServerMode() || !tenant?.id) return;
+    if (!isElectron() || !tenant?.id) return;
+    if (isElectronCloudMode() || isVdsSelfHost()) return;
+    if (!isSqlServerMode()) return;
     const api = (window as any).electronAPI;
     if (!api?.sqlApplySchemaPatches) return;
-    const dedupeKey = `sefpos:sql-patch-alerted:${tenant.id}`;
     void api
       .sqlApplySchemaPatches(null)
-      .then((result: { success?: boolean; error?: string; errors?: string[]; output?: string }) => {
+      .then((result: { success?: boolean; soft?: boolean; error?: string; errors?: string[]; output?: string }) => {
         if (result?.success) {
           if (result.errors?.length) {
             console.warn('[ŞefPOS] SQL patch uyarıları:', result.errors);
           }
           return;
         }
-        const detail = result?.error || result?.errors?.[0] || 'bilinmeyen';
-        console.warn('[ŞefPOS] SQL otomatik patch atlandı (POS etkilenmez):', detail, result?.output);
-        // Tek oturumda bir kez soft uyarı — sipariş ekranını kilitleme
-        try {
-          if (sessionStorage.getItem(dedupeKey)) return;
-          sessionStorage.setItem(dedupeKey, '1');
-        } catch {
-          /* private mode */
-        }
+        console.warn(
+          '[ŞefPOS] SQL otomatik patch atlandı (POS etkilenmez):',
+          result?.error || result?.errors?.[0] || 'bilinmeyen',
+          result?.output,
+        );
       })
       .catch((err: unknown) => {
         console.warn('[ŞefPOS] SQL patch (sessiz):', err);

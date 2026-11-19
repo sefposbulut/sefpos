@@ -138,6 +138,25 @@ export function isOfflineMode(): boolean {
 
 type FilterOp = 'eq' | 'neq' | 'gt' | 'gte' | 'lt' | 'lte' | 'is_null' | 'is_not_null' | 'like' | 'ilike' | 'in' | 'not_in' | 'or';
 
+/** PostgREST `.or('col.op.val,col2.op2.val2')` — ilike/like dahil (eski kod hepsini eq yapıyordu). */
+function parsePostgrestFilter(part: string): { col: string; op: FilterOp; val?: any } {
+  const p = String(part || '').trim();
+  const dotIdx = p.indexOf('.');
+  if (dotIdx < 0) return { col: p, op: 'eq' };
+  const col = p.substring(0, dotIdx);
+  const rest = p.substring(dotIdx + 1);
+  const opEnd = rest.indexOf('.');
+  const opRaw = opEnd >= 0 ? rest.substring(0, opEnd) : rest;
+  const val = opEnd >= 0 ? rest.substring(opEnd + 1) : undefined;
+  if (opRaw === 'is' && (val === 'null' || val === undefined)) return { col, op: 'is_null' };
+  if (opRaw === 'is' && val === 'not_null') return { col, op: 'is_not_null' };
+  const known: FilterOp[] = ['eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'like', 'ilike', 'in', 'not_in'];
+  if (known.includes(opRaw as FilterOp)) {
+    return { col, op: opRaw as FilterOp, val };
+  }
+  return { col, op: 'eq', val: rest };
+}
+
 interface Filter {
   col: string;
   op: FilterOp;
@@ -291,18 +310,8 @@ class SqlQueryBuilder {
   }
 
   or(expr: string) {
-    const parts = expr.split(',').map(p => p.trim());
-    const orFilters = parts.map(p => {
-      const dotIdx = p.indexOf('.');
-      const col = p.substring(0, dotIdx);
-      const rest = p.substring(dotIdx + 1);
-      const opEnd = rest.indexOf('.');
-      const op = opEnd >= 0 ? rest.substring(0, opEnd) : rest;
-      const val = opEnd >= 0 ? rest.substring(opEnd + 1) : undefined;
-      if (op === 'eq') return { col, op: 'eq' as FilterOp, val };
-      if (op === 'is' && val === 'null') return { col, op: 'is_null' as FilterOp };
-      return { col, op: 'eq' as FilterOp, val };
-    });
+    const parts = expr.split(',').map((p) => p.trim()).filter(Boolean);
+    const orFilters = parts.map((p) => parsePostgrestFilter(p));
     this.state.filters.push({ col: '', op: 'or', val: orFilters });
     return this;
   }
@@ -490,16 +499,10 @@ class LocalQueryBuilder {
   ilike(col: string, pattern: string) { this.filters.push({ col, op: 'ilike', val: pattern }); return this; }
   like(col: string, pattern: string) { this.filters.push({ col, op: 'like', val: pattern }); return this; }
   or(expr: string) {
-    const parts = expr.split(',').map(p => p.trim());
-    const orFilters: LocalFilter[] = parts.map(p => {
-      const dotIdx = p.indexOf('.');
-      const col = p.substring(0, dotIdx);
-      const rest = p.substring(dotIdx + 1);
-      const opEnd = rest.indexOf('.');
-      const op = opEnd >= 0 ? rest.substring(0, opEnd) : rest;
-      const val = opEnd >= 0 ? rest.substring(opEnd + 1) : undefined;
-      if (op === 'is' && val === 'null') return { col, op: 'is_null' as LocalFilterOp };
-      return { col, op: 'eq' as LocalFilterOp, val };
+    const parts = expr.split(',').map((p) => p.trim()).filter(Boolean);
+    const orFilters: LocalFilter[] = parts.map((p) => {
+      const f = parsePostgrestFilter(p);
+      return { col: f.col, op: f.op as LocalFilterOp, val: f.val };
     });
     this.filters.push({ col: '', op: 'or', val: orFilters });
     return this;
