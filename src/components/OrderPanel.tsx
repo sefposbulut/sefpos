@@ -253,6 +253,8 @@ function TableGroupPickerChips({
 
 export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelProps) {
   const { tenant, user, profile, permissions, activeBranch } = useAuth();
+  /** payment_transactions.created_by → profiles.id (auth user_id değil) */
+  const actorProfileId = profile?.id || user?.id || null;
   const { formatInt: fmtInt, format: fmtMoney } = useCurrency();
   const detectMobileViewport = useCallback(() => {
     if (typeof window === 'undefined') return false;
@@ -2082,9 +2084,14 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
     printReceiptOnComplete = false,
     customerId?: string,
   ) => {
-    if (!currentOrder || !tenant || !user) return;
+    if (!currentOrder || !tenant || !user || !actorProfileId) return;
     if (isTempOrderId(currentOrder.id)) {
       alert('Sipariş sunucuya yazılıyor; birkaç saniye sonra tekrar deneyin.');
+      return;
+    }
+    const payAmount = Number(amount);
+    if (!Number.isFinite(payAmount) || payAmount <= 0.009) {
+      alert('Ödeme tutarı geçersiz. Tutarı kontrol edip tekrar deneyin.');
       return;
     }
 
@@ -2113,7 +2120,7 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
       }
       const bal = Number(cust.current_balance) || 0;
       const limit = Number(cust.credit_limit) || 0;
-      if (limit > 0 && bal + amount > limit) {
+      if (limit > 0 && bal + Number(amount) > limit) {
         const ok = window.confirm(
           `Kredi limiti (${fmtMoney(limit)}) aşılacak. Yine de cari hesaba yazılsın mı?`,
         );
@@ -2130,7 +2137,7 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
       Number(currentOrder.total_amount) || 0,
       Number(table.order?.total_amount) || 0,
     );
-    if (amount <= 0.009 && orderTotal > 0.009) {
+    if (payAmount <= 0.009 && orderTotal > 0.009) {
       alert('Ödeme tutarı 0 görünüyor. Masa tutarını kontrol edip tekrar deneyin.');
       return;
     }
@@ -2140,8 +2147,8 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
       tenant_id: tenant.id,
       order_id: currentOrder.id,
       payment_method: method,
-      amount,
-      created_by: user.id,
+      amount: payAmount,
+      created_by: actorProfileId,
       created_at: new Date().toISOString(),
       ...(method === 'open_account' && customerId ? { customer_id: customerId } : {}),
     };
@@ -2158,8 +2165,8 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
           tenant_id: tenant.id,
           order_id: currentOrder.id,
           payment_method: method,
-          amount,
-          created_by: user.id,
+          amount: payAmount,
+          created_by: actorProfileId,
           ...(method === 'open_account' && customerId ? { customer_id: customerId } : {}),
         })
         .select()
@@ -2167,6 +2174,9 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
 
       if (error) throw error;
       insertedPaymentId = insertedPayment?.id || null;
+      if (!insertedPaymentId) {
+        throw new Error('Ödeme kaydı oluştu ama kimlik dönmedi. Tekrar deneyin.');
+      }
 
       {
         const tableLabelForCash =
@@ -2183,8 +2193,8 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
           paymentId: insertedPaymentId,
           orderId: currentOrder.id,
           paymentMethod: method,
-          amount,
-          createdBy: user.id,
+          amount: payAmount,
+          createdBy: actorProfileId,
           tableLabel: tableLabelForCash,
           orderNumber: currentOrder.order_number,
         });
@@ -2202,9 +2212,9 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
             customer_id: customerId,
             order_id: currentOrder.id,
             type: 'debt',
-            amount,
+            amount: payAmount,
             note,
-            created_by: user.id,
+            created_by: actorProfileId,
           })
           .select('id')
           .single();
@@ -2217,7 +2227,7 @@ export function OrderPanel({ table, onClose, onAfterMergeNavigate }: OrderPanelP
           .select('current_balance')
           .eq('id', customerId)
           .maybeSingle();
-        const newBal = (Number(custFresh?.current_balance) || 0) + amount;
+        const newBal = (Number(custFresh?.current_balance) || 0) + payAmount;
         const { error: upErr } = await supabase
           .from('customers')
           .update({ current_balance: newBal })

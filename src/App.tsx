@@ -807,7 +807,7 @@ export default function App() {
 
       {/* Header gizliyken geri acma — Electron masalar vb.; ana sayfada ElectronDesktopHome kendi barini kullanir */}
       {headerHidden && !onElectronHome && (
-        <div className="fixed bottom-3 right-3 z-[60] flex items-center gap-2">
+        <div className="fixed bottom-3 right-3 z-40 flex items-center gap-2">
           {isElectron ? (
             <button
               type="button"
