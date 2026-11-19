@@ -37,13 +37,18 @@ function sanitizePattern(raw: string): string {
   return `%${safe}%`;
 }
 
+function isActiveCari(row: CariCustomerHit): boolean {
+  const v = row.is_active as unknown;
+  return v === true || v === 1 || v === '1' || v == null;
+}
+
 /** Tek aramada teslimat + cari (2 sorgu, dar alanlar). */
 export async function searchTakeawayCustomers(
   tenantId: string,
   raw: string,
 ): Promise<TakeawayCustomerSuggestion[]> {
   const q = raw.trim();
-  if (q.length < 3) return [];
+  if (q.length < 2) return [];
 
   const pattern = sanitizePattern(q);
   const digits = q.replace(/\D/g, '');
@@ -53,16 +58,17 @@ export async function searchTakeawayCustomers(
     .from('delivery_customers')
     .select(DELIVERY_FIELDS)
     .eq('tenant_id', tenantId)
-    .order('last_order_at', { ascending: false, nullsFirst: false })
+    .order('last_order_at', { ascending: false })
     .limit(8);
 
+  // is_active filtresini SQL'de sıkı tutma — BIT/null farkları boş sonuç üretmesin;
+  // istemci tarafında süz.
   const cariQ = supabase
     .from('customers')
     .select(CARI_FIELDS)
     .eq('tenant_id', tenantId)
-    .eq('is_active', true)
     .order('name', { ascending: true })
-    .limit(8);
+    .limit(12);
 
   if (phoneFocused) {
     deliveryQ.ilike('phone', pattern);
@@ -74,11 +80,9 @@ export async function searchTakeawayCustomers(
 
   const [deliveryRes, cariRes] = await Promise.all([deliveryQ, cariQ]);
 
-  const err = deliveryRes.error || cariRes.error;
-  if (err) {
-    console.warn('[takeawayCustomerSearch]', err.message);
-    return [];
-  }
+  if (deliveryRes.error) console.warn('[takeawayCustomerSearch] delivery:', deliveryRes.error.message);
+  if (cariRes.error) console.warn('[takeawayCustomerSearch] cari:', cariRes.error.message);
+  if (deliveryRes.error && cariRes.error) return [];
 
   const merged: TakeawayCustomerSuggestion[] = [];
   const seenDel = new Set<string>();
@@ -92,6 +96,7 @@ export async function searchTakeawayCustomers(
   }
   for (const row of cariRes.data || []) {
     const r = row as CariCustomerHit;
+    if (!isActiveCari(r)) continue;
     if (seenCari.has(r.id)) continue;
     seenCari.add(r.id);
     merged.push({ kind: 'cari', row: r });

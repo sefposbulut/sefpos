@@ -88,23 +88,49 @@ function trimHemenyoldaTimers(): void {
   }
 }
 
+function truthySqlBit(v: unknown): boolean {
+  return v === true || v === 1 || v === '1' || String(v).toLowerCase() === 'true';
+}
+
 async function isHemenYoldaPushEnabled(tenantId: string): Promise<boolean> {
   const hit = hemenyoldaEnabledCache.get(tenantId);
   if (hit && Date.now() < hit.until) return hit.enabled;
   try {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('henemyolda_integrations')
       .select('is_active, access_token')
       .eq('tenant_id', tenantId)
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();
-    const enabled = !!data?.is_active && !!String(data?.access_token || '').trim();
+    if (error) {
+      console.warn('[HemenYolda] entegrasyon okunamadı:', error.message);
+      hemenyoldaEnabledCache.set(tenantId, { until: Date.now() + 30_000, enabled: false });
+      return false;
+    }
+    const enabled = truthySqlBit(data?.is_active) && !!String(data?.access_token || '').trim();
     hemenyoldaEnabledCache.set(tenantId, { until: Date.now() + HEMENYOLDA_ENABLED_CACHE_MS, enabled });
     return enabled;
-  } catch {
+  } catch (e) {
+    console.warn('[HemenYolda] entegrasyon kontrolü:', e);
     hemenyoldaEnabledCache.set(tenantId, { until: Date.now() + 60_000, enabled: false });
     return false;
+  }
+}
+
+function resolveNotifyTenantId(): string | null {
+  const fromPrint = getPrintSettingsContext().tenantId;
+  if (fromPrint) return fromPrint;
+  try {
+    const raw = localStorage.getItem('shefpos_sql_session');
+    const session = raw ? JSON.parse(raw) : null;
+    const tid =
+      session?._sqlRecord?.tenant_id ||
+      session?.user?.user_metadata?.tenant_id ||
+      null;
+    return tid ? String(tid) : null;
+  } catch {
+    return null;
   }
 }
 
@@ -114,9 +140,15 @@ function flushHemenYoldaPush(
   branchId?: string | null,
 ): void {
   void (async () => {
-    const { tenantId } = getPrintSettingsContext();
-    if (!tenantId) return;
-    if (!(await isHemenYoldaPushEnabled(tenantId))) return;
+    const tenantId = resolveNotifyTenantId();
+    if (!tenantId) {
+      console.warn('[HemenYolda] tenant yok — push atlandı', orderId);
+      return;
+    }
+    if (!(await isHemenYoldaPushEnabled(tenantId))) {
+      console.warn('[HemenYolda] entegrasyon kapalı/yok — push atlandı', tenantId);
+      return;
+    }
     const res = await pushHemenYoldaOrder(orderId, action, branchId);
     if (res.ok || res.skipped) return;
     const err = `${res.error || ''} ${res.message || ''}`.toLowerCase();

@@ -201,7 +201,7 @@ function DeliveryOrderFormInner({ couriers, editOrder, prefillCustomer, onClose 
     setCustomerPhone(val);
     if (phoneDebounce.current) clearTimeout(phoneDebounce.current);
     const q = val.trim();
-    if (q.length < 3) {
+    if (q.length < 2) {
       startTransition(() => {
         setCustomerSuggestions([]);
         setShowSuggestions(false);
