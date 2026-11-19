@@ -234,6 +234,10 @@ CREATE TABLE customers (
     address NVARCHAR(500),
     tax_number NVARCHAR(50),
     balance DECIMAL(10,2) DEFAULT 0,
+    current_balance DECIMAL(12,2) NOT NULL DEFAULT 0,
+    credit_limit DECIMAL(12,2) NOT NULL DEFAULT 0,
+    is_active BIT NOT NULL DEFAULT 1,
+    loyalty_points INT NOT NULL DEFAULT 0,
     notes NVARCHAR(MAX),
     created_at DATETIME2 DEFAULT GETDATE(),
     updated_at DATETIME2 DEFAULT GETDATE()

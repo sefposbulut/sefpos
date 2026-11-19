@@ -4,6 +4,7 @@
  */
 const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
+const { createHemenyoldaPush } = require('./hemenyoldaPush.cjs');
 
 const GETIR_DEV = 'https://food-external-api-gateway.development.getirapi.com';
 const GETIR_PROD = 'https://food-external-api-gateway.getirapi.com';
@@ -119,6 +120,7 @@ async function postOztekSms(cfg, phone, message, contextLabel = 'SMS') {
 
 function createVdsFunctions({ runSql, cfg }) {
   const otpSecret = String((cfg && cfg.otpSigningSecret) || process.env.OTP_SIGNING_SECRET || 'sefpos-otp-secret');
+  const hemenyoldaPush = createHemenyoldaPush({ runSql });
   async function callerProfile(userId) {
     const rows = await runSql(
       `SELECT TOP 1 id, tenant_id, branch_id, role, is_super_admin, role_id FROM profiles WHERE id = @id`,
@@ -537,7 +539,7 @@ function createVdsFunctions({ runSql, cfg }) {
     if (n === 'yemeksepeti-callback') return handleYsCallback(body || {});
     if (n === 'online-order-reprint') return handleReprint(body || {});
     if (n === 'sync-online-orders') return { ok: true, newOrders: 0, message: 'Senkron VDS webhook/poll ile' };
-    if (n === 'hemenyolda-webhook-push') return { ok: true, skipped: true, reason: 'vds-local' };
+    if (n === 'hemenyolda-webhook-push') return hemenyoldaPush.handle(body || {}, auth);
     if (n === 'send-sms-otp') {
       const purpose = body?.purpose || 'signup';
       const phone = normalizeOtpPhone(body?.phone || '');

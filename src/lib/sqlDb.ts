@@ -9,12 +9,28 @@ export function isVdsSelfHost(): boolean {
 /** Uzak VDS API kökü (Cloudflare www / Electron cloud). Boş = same-origin `/vds-api`. */
 export const DEFAULT_REMOTE_VDS_ORIGIN = 'https://sefpos.com.tr';
 
+function isSefposWebHost(): boolean {
+  try {
+    if (typeof window === 'undefined') return false;
+    const h = String(window.location.hostname || '')
+      .trim()
+      .toLowerCase()
+      .replace(/^www\./, '');
+    return h === 'sefpos.com.tr';
+  } catch {
+    return false;
+  }
+}
+
 export function getVdsApiOrigin(): string {
+  // VDS self-host ve canlı sefpos.com.tr / www → her zaman same-origin.
+  // Aksi halde VITE_VDS_API_BASE=apex iken www'de CSP connect-src 'self' login'i keser.
+  if (isVdsSelfHost() || isSefposWebHost()) return '';
+
   const fromEnv = String(import.meta.env.VITE_VDS_API_BASE || '')
     .trim()
     .replace(/\/$/, '');
   if (fromEnv) return fromEnv;
-  if (isVdsSelfHost()) return '';
   try {
     // Electron "cloud" artık Supabase değil — VDS
     if (eApi()?.isElectron && localStorage.getItem('dbMode') === 'cloud') {
@@ -26,9 +42,11 @@ export function getVdsApiOrigin(): string {
   return '';
 }
 
-/** VDS SQL API kullanılsın mı (self-host veya uzak). */
+/** VDS SQL API kullanılsın mı (self-host, canlı domain veya uzak). */
 export function isVdsBackend(): boolean {
   if (isVdsSelfHost()) return true;
+  // Yanlışlıkla build:vds olmadan deploy edilse bile sefpos.com.tr → VDS
+  if (isSefposWebHost()) return true;
   if (String(import.meta.env.VITE_VDS_API_BASE || '').trim()) return true;
   try {
     if (eApi()?.isElectron && localStorage.getItem('dbMode') === 'cloud') return true;
@@ -38,7 +56,10 @@ export function isVdsBackend(): boolean {
   return false;
 }
 
-if (typeof window !== 'undefined' && (isVdsSelfHost() || String(import.meta.env.VITE_VDS_API_BASE || '').trim())) {
+if (
+  typeof window !== 'undefined' &&
+  (isVdsSelfHost() || isSefposWebHost() || String(import.meta.env.VITE_VDS_API_BASE || '').trim())
+) {
   try {
     localStorage.setItem('dbMode', 'sqlserver');
   } catch {

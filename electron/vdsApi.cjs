@@ -88,14 +88,28 @@ const SQL_ROW_ALLOWLIST = {
   tenants: ['id', 'name', 'slug', 'address', 'phone', 'email', 'logo_url', 'subscription_status', 'subscription_plan', 'subscription_expires_at', 'max_branches', 'notes', 'onboarding_completed', 'deployment_mode', 'printer_settings', 'require_cancel_reason', 'lock_pin', 'ip_lock_enabled', 'disabled_modules', 'created_at'],
   branches: ['id', 'tenant_id', 'name', 'address', 'phone', 'is_active', 'is_main', 'use_central_products', 'menu_enabled', 'qr_menu_settings', 'default_discount_percent', 'default_discount_active', 'created_at'],
   orders: ['id', 'tenant_id', 'branch_id', 'table_id', 'order_number', 'order_type', 'order_subtype', 'status', 'payment_status', 'payment_method', 'subtotal', 'tax_amount', 'discount_amount', 'total_amount', 'notes', 'waiter_id', 'waiter_name', 'created_by', 'created_at', 'updated_at', 'completed_at', 'paid_at', 'session_id', 'customer_id', 'customer_name', 'customer_phone', 'customer_address', 'delivery_address', 'delivery_note', 'courier_id', 'courier_name', 'estimated_delivery_minutes', 'delivery_status', 'payment_collected', 'delivery_customer_id', 'assigned_at', 'picked_up_at', 'delivered_at'],
-  payment_transactions: ['id', 'tenant_id', 'order_id', 'payment_method', 'amount', 'notes', 'created_at', 'created_by'],
+  payment_transactions: ['id', 'tenant_id', 'order_id', 'payment_method', 'amount', 'notes', 'created_at', 'created_by', 'customer_id'],
   customer_transactions: ['id', 'tenant_id', 'customer_id', 'order_id', 'type', 'amount', 'description', 'created_by', 'created_at'],
   customers: ['id', 'tenant_id', 'name', 'phone', 'email', 'address', 'tax_number', 'credit_limit', 'current_balance', 'is_active', 'notes', 'created_at', 'updated_at'],
   cash_register_transactions: ['id', 'tenant_id', 'branch_id', 'transaction_type', 'payment_method', 'amount', 'reference_id', 'reference_type', 'description', 'order_number', 'table_name', 'notes', 'created_at', 'created_by', 'shift_id'],
   restaurant_tables: ['id', 'tenant_id', 'branch_id', 'table_number', 'status', 'capacity', 'size', 'group_id', 'current_order_id', 'session_start', 'payment_locked', 'payment_locked_at', 'payment_locked_by_session', 'payment_lock_expires_at', 'created_at'],
   table_groups: ['id', 'tenant_id', 'branch_id', 'name', 'prefix', 'color', 'created_at'],
   print_settings: ['id', 'tenant_id', 'branch_id', 'settings', 'updated_by', 'updated_at', 'created_at'],
-  print_jobs: ['id', 'tenant_id', 'branch_id', 'job_type', 'payload', 'status', 'created_at', 'printed_at'],
+  print_jobs: [
+    'id',
+    'tenant_id',
+    'branch_id',
+    'job_type',
+    'payload',
+    'html',
+    'printer_name',
+    'status',
+    'error',
+    'created_at',
+    'updated_at',
+    'printed_at',
+  ],
+  printer_registrations: ['id', 'tenant_id', 'branch_id', 'printers', 'last_seen_at', 'created_at'],
   branch_product_stocks: ['id', 'tenant_id', 'branch_id', 'product_id', 'quantity', 'updated_at'],
   stock_movements: ['id', 'tenant_id', 'product_id', 'movement_type', 'quantity', 'unit_cost', 'total_cost', 'supplier_name', 'note', 'created_by', 'source_branch_id', 'target_branch_id', 'reference_type', 'reference_no', 'created_at'],
   order_cancel_logs: ['id', 'tenant_id', 'branch_id', 'order_id', 'order_item_id', 'order_number', 'product_name', 'quantity', 'unit_price', 'cancel_reason', 'cancelled_by', 'cancelled_by_name', 'created_at'],
@@ -130,6 +144,30 @@ const SQL_ROW_ALLOWLIST = {
   partner_api_order_acks: ['id', 'client_id', 'order_id', 'acked_at', 'ack_source'],
   platform_release_policy: ['id', 'min_required_version', 'force_update', 'message', 'updated_at', 'updated_by'],
   admin_tenant_impersonation: ['id', 'user_id', 'target_tenant_id', 'updated_at'],
+  henemyolda_integrations: [
+    'id',
+    'tenant_id',
+    'branch_id',
+    'app_name',
+    'access_token',
+    'is_active',
+    'is_test_mode',
+    'base_url',
+    'last_push_at',
+    'created_at',
+    'updated_at',
+  ],
+  henemyolda_webhook_log: [
+    'id',
+    'integration_id',
+    'order_id',
+    'action',
+    'http_status',
+    'success',
+    'error_message',
+    'request_url',
+    'created_at',
+  ],
 };
 
 function pickSqlRow(table, row) {
@@ -205,6 +243,7 @@ const JSON_TEXT_COLUMNS = new Set([
   'settings',
   'payload',
   'allowed_ips',
+  'printers',
 ]);
 
 function hydrateSqlRow(row) {
@@ -571,80 +610,85 @@ function verifyToken(header) {
 }
 
 async function handleQuery(body) {
-  const { table, operation, select, filters, orderBy, limitVal, data, countOnly, headOnly } = body || {};
-  const safeTable = safeId(table);
-  if (!safeTable) return { data: null, error: 'tablo gerekli' };
+  try {
+    const { table, operation, select, filters, orderBy, limitVal, data, countOnly, headOnly } = body || {};
+    const safeTable = safeId(table);
+    if (!safeTable) return { data: null, error: 'tablo gerekli' };
 
-  if (operation === 'select') {
-    if (countOnly) {
+    if (operation === 'select') {
+      if (countOnly) {
+        const params = {};
+        const where = buildWhere(filters, params, 'w');
+        const rows = await runSql(`SELECT COUNT(*) AS cnt FROM ${safeTable} ${where}`.trim(), params);
+        const cnt = rows && rows[0] ? Number(rows[0].cnt ?? rows[0].CNT ?? 0) : 0;
+        return { data: headOnly ? null : [], count: cnt, error: null };
+      }
+      const hasJoin = select && /\w+\s*\(/.test(select);
+      if (hasJoin) {
+        const rows = await execSelectWithJoins(safeTable, select, filters, orderBy, limitVal);
+        return { data: rows, error: null };
+      }
       const params = {};
       const where = buildWhere(filters, params, 'w');
-      const rows = await runSql(`SELECT COUNT(*) AS cnt FROM ${safeTable} ${where}`.trim(), params);
-      const cnt = rows && rows[0] ? Number(rows[0].cnt ?? rows[0].CNT ?? 0) : 0;
-      return { data: headOnly ? null : [], count: cnt, error: null };
-    }
-    const hasJoin = select && /\w+\s*\(/.test(select);
-    if (hasJoin) {
-      const rows = await execSelectWithJoins(safeTable, select, filters, orderBy, limitVal);
+      const cols = !select || select === '*'
+        ? '*'
+        : String(select).split(',').map((c) => {
+          const t = c.trim();
+          return t === '*' ? '*' : safeId(t);
+        }).filter(Boolean).join(', ') || '*';
+      const order = orderBy && orderBy.length > 0
+        ? `ORDER BY ${orderBy.map((o) => `${safeId(o.col)} ${o.asc ? 'ASC' : 'DESC'}`).join(', ')}`
+        : '';
+      const top = limitVal ? `TOP ${parseInt(limitVal, 10)}` : '';
+      const q = ['SELECT', top, cols, 'FROM', safeTable, where, order].filter(Boolean).join(' ').trim();
+      const rows = await runSql(q, params);
       return { data: rows, error: null };
     }
-    const params = {};
-    const where = buildWhere(filters, params, 'w');
-    const cols = !select || select === '*'
-      ? '*'
-      : String(select).split(',').map((c) => {
-        const t = c.trim();
-        return t === '*' ? '*' : safeId(t);
-      }).filter(Boolean).join(', ') || '*';
-    const order = orderBy && orderBy.length > 0
-      ? `ORDER BY ${orderBy.map((o) => `${safeId(o.col)} ${o.asc ? 'ASC' : 'DESC'}`).join(', ')}`
-      : '';
-    const top = limitVal ? `TOP ${parseInt(limitVal, 10)}` : '';
-    const q = ['SELECT', top, cols, 'FROM', safeTable, where, order].filter(Boolean).join(' ').trim();
-    const rows = await runSql(q, params);
-    return { data: rows, error: null };
-  }
 
-  if (operation === 'insert') {
-    const rowArr = Array.isArray(data) ? data : [data];
-    const results = [];
-    for (const row of rowArr) {
-      const filteredRow = pickSqlRow(safeTable, row) || {};
-      if (!filteredRow.id) filteredRow.id = crypto.randomUUID();
-      const inserted = await sqlInsertRowSafe(safeTable, filteredRow);
-      // PostgREST uyumu: insert her zaman dizi döner (.select() sonrası)
-      results.push(inserted || filteredRow);
-    }
-    return { data: results, error: null };
-  }
-
-  if (operation === 'update') {
-    const picked = pickSqlRow(safeTable, data) || {};
-    const rows = await sqlUpdateRowsSafe(safeTable, picked, filters);
-    return { data: rows || [], error: null };
-  }
-
-  if (operation === 'delete') {
-    const rows = await sqlDeleteRowsSafe(safeTable, filters);
-    return { data: rows || [], error: null };
-  }
-
-  if (operation === 'upsert') {
-    const rowArr = Array.isArray(data) ? data : [data];
-    const results = [];
-    for (const row of rowArr) {
-      const clean = pickSqlRow(safeTable, row) || {};
-      if (safeTable === 'admin_tenant_impersonation' && clean.user_id) {
-        clean.id = clean.user_id;
+    if (operation === 'insert') {
+      const rowArr = Array.isArray(data) ? data : [data];
+      const results = [];
+      for (const row of rowArr) {
+        const filteredRow = pickSqlRow(safeTable, row) || {};
+        if (!filteredRow.id) filteredRow.id = crypto.randomUUID();
+        const inserted = await sqlInsertRowSafe(safeTable, filteredRow);
+        // PostgREST uyumu: insert her zaman dizi döner (.select() sonrası)
+        results.push(inserted || filteredRow);
       }
-      if (!clean.id) clean.id = crypto.randomUUID();
-      const upserted = await sqlUpsertRowSafe(safeTable, clean);
-      if (upserted) results.push(upserted);
+      return { data: results, error: null };
     }
-    return { data: rowArr.length === 1 ? results[0] || null : results, error: null };
-  }
 
-  return { data: null, error: 'Bilinmeyen operasyon: ' + operation };
+    if (operation === 'update') {
+      const picked = pickSqlRow(safeTable, data) || {};
+      const rows = await sqlUpdateRowsSafe(safeTable, picked, filters);
+      return { data: rows || [], error: null };
+    }
+
+    if (operation === 'delete') {
+      const rows = await sqlDeleteRowsSafe(safeTable, filters);
+      return { data: rows || [], error: null };
+    }
+
+    if (operation === 'upsert') {
+      const rowArr = Array.isArray(data) ? data : [data];
+      const results = [];
+      for (const row of rowArr) {
+        const clean = pickSqlRow(safeTable, row) || {};
+        if (safeTable === 'admin_tenant_impersonation' && clean.user_id) {
+          clean.id = clean.user_id;
+        }
+        if (!clean.id) clean.id = crypto.randomUUID();
+        const upserted = await sqlUpsertRowSafe(safeTable, clean);
+        if (upserted) results.push(upserted);
+      }
+      return { data: rowArr.length === 1 ? results[0] || null : results, error: null };
+    }
+
+    return { data: null, error: 'Bilinmeyen operasyon: ' + operation };
+  } catch (err) {
+    console.error('[vds-api] query', (body && body.table) || '?', (body && body.operation) || '?', err && err.message ? err.message : err);
+    return { data: null, error: (err && err.message) || String(err) };
+  }
 }
 
 async function handleLogin(email, password) {
