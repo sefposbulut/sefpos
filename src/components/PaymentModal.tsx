@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import {
   X, Banknote, CreditCard, Receipt, Percent, Printer,
   Plus, Trash2, Users, Search, Phone, ChevronRight,
@@ -428,11 +429,17 @@ export function PaymentModal({
     setSplits(prev => prev.map((s, i) => i === idx ? { ...s, amount: fill.toFixed(2) } : s));
   };
 
+  const parseAmount = (raw: string) => {
+    const normalized = String(raw || '').trim().replace(/\s/g, '').replace(',', '.');
+    const amt = Number(normalized);
+    return Number.isFinite(amt) ? amt : NaN;
+  };
+
   const handleSubmit = () => {
     if (submitting) return;
 
     for (const split of splits) {
-      const amt = parseFloat(split.amount);
+      const amt = parseAmount(split.amount);
       if (isNaN(amt) || amt <= 0) {
         alert('Tüm ödeme tutarlarını doğru girin');
         return;
@@ -443,8 +450,8 @@ export function PaymentModal({
       }
     }
 
-    // UI'ı anında kapat. DB yazımı arka planda tek tek (sıralı, paymentTransactions
-    // state yarışı olmaması için) — hata olursa OrderPanel.handleAddPayment alert atar.
+    // DB yazımı sıralı (paymentTransactions state yarışı olmasın).
+    // Modal kapanışı tam ödemede OrderPanel.finalizeCompletedOrder ile yapılır.
     const splitsSnapshot = splits.slice();
     const printOnComplete = printReceipt;
     setSubmitting(true);
@@ -452,10 +459,12 @@ export function PaymentModal({
       try {
         for (let i = 0; i < splitsSnapshot.length; i++) {
           const split = splitsSnapshot[i];
-          const amt = parseFloat(split.amount);
+          const amt = parseAmount(split.amount);
           const isLast = i === splitsSnapshot.length - 1;
           await onPayment(split.method, amt, isLast ? printOnComplete : false, split.customerId);
         }
+      } catch (err: any) {
+        alert('Ödeme tamamlanamadı: ' + (err?.message || String(err)));
       } finally {
         setSubmitting(false);
       }
@@ -467,8 +476,11 @@ export function PaymentModal({
     && splits.every(s => parseFloat(s.amount) > 0)
     && !hasInvalidOpenAccount;
 
-  return (
-    <div className="fixed inset-0 bg-black/75 z-[60] flex items-end sm:items-center justify-center sm:p-3">
+  // document.body portal + yüksek z-index: OrderPanel (z-50) içinde kalırsa
+  // App'teki ANA SAYFA FAB (eski z-60) "Ödemeyi Tamamla" tıklamasını çalıyordu;
+  // masa ödenmeden açık kalıyordu.
+  const modal = (
+    <div className="fixed inset-0 bg-black/75 z-[110] flex items-end sm:items-center justify-center sm:p-3">
       {/* Mobil: bottom sheet (tam genişlik, üstten kavisli). Tablet+: ortalanmış kart. */}
       <div
         className={
@@ -666,6 +678,7 @@ export function PaymentModal({
             İptal
           </button>
           <button
+            type="button"
             onClick={handleSubmit}
             disabled={loading || submitting || !isValid || disableDismiss || !!huginGate}
             className={`flex-[2] font-bold py-3 px-4 sm:px-6 rounded-xl transition-all disabled:opacity-50 shadow-lg active:scale-95 ${
@@ -680,4 +693,7 @@ export function PaymentModal({
       </div>
     </div>
   );
+
+  if (typeof document === 'undefined') return modal;
+  return createPortal(modal, document.body);
 }
