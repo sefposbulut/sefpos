@@ -736,8 +736,8 @@ function DeliveryOrderFormInner({ couriers, editOrder, prefillCustomer, onClose 
               <p className="text-[11px] text-slate-500 mb-1.5 hidden lg:block">
                 Üst kutu arama içindir. Müşteri adını <strong>aşağıdaki «Ad Soyad»</strong> alanına yazın.
               </p>
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                  <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
                 <input
                   ref={phoneInputRef}
                   type="text"
@@ -748,9 +748,11 @@ function DeliveryOrderFormInner({ couriers, editOrder, prefillCustomer, onClose 
                   placeholder="Cari adı, isim veya 05XX…"
                   autoComplete="off"
                   spellCheck={false}
-                  className={`w-full pl-9 pr-8 py-2.5 border rounded-xl text-sm focus:ring-2 focus:ring-orange-400 focus:border-transparent ${
+                  readOnly={false}
+                  className={`w-full pl-9 pr-8 py-2.5 border rounded-xl text-sm focus:ring-2 focus:ring-orange-400 focus:border-transparent relative z-[1] ${
                     fieldError === 'phone' ? 'border-red-400 bg-red-50/50' : 'border-slate-300'
                   }`}
+                  style={{ userSelect: 'text', WebkitUserSelect: 'text', pointerEvents: 'auto' }}
                 />
                 {loadingCustomer && <div className="absolute right-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 border-2 border-orange-400 border-t-transparent rounded-full animate-spin" />}
                 {(selectedDeliveryCustomer || selectedCariCustomer) && (

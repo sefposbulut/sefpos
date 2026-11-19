@@ -759,7 +759,23 @@ function CariStatementModal({
         .lte('created_at', endISO)
         .order('created_at', { ascending: true });
       if (typeFilter !== 'all') q = q.eq('type', typeFilter);
-      const txRes = await q;
+      let txRes = await q;
+      if (txRes.error && /note|column/i.test(txRes.error.message || '')) {
+        let q2 = supabase
+          .from('customer_transactions')
+          .select('id, order_id, type, amount, description, created_at')
+          .eq('customer_id', customer.id)
+          .gte('created_at', startISO)
+          .lte('created_at', endISO)
+          .order('created_at', { ascending: true });
+        if (typeFilter !== 'all') q2 = q2.eq('type', typeFilter);
+        const r2 = await q2;
+        if (r2.error) throw r2.error;
+        txRes = {
+          ...r2,
+          data: (r2.data || []).map((r: any) => ({ ...r, note: r.description ?? null })),
+        } as typeof txRes;
+      }
       if (txRes.error) throw txRes.error;
       const txs = (txRes.data || []) as Array<{
         id: string;
@@ -1062,11 +1078,21 @@ function CustomerDetail({
     setTxLoadError(null);
     // NOT: customer_transactions.order_id icin DB'de FK yoksa PostgREST "order:orders" embed'i
     // PGRST200 ile patlar; tum liste bos gorunur. Once duz select, siparis etiketleri ayri yuklenir.
-    const { data: rows, error } = await supabase
+    // VDS SQL kolonu `description`; Supabase/UI `note`. VDS API note→description map eder.
+    let { data: rows, error } = await supabase
       .from('customer_transactions')
       .select('id, tenant_id, customer_id, order_id, type, amount, note, created_by, created_at')
       .eq('customer_id', customer.id)
       .order('created_at', { ascending: false });
+    if (error && /note|column/i.test(error.message || '')) {
+      const retry = await supabase
+        .from('customer_transactions')
+        .select('id, tenant_id, customer_id, order_id, type, amount, description, created_by, created_at')
+        .eq('customer_id', customer.id)
+        .order('created_at', { ascending: false });
+      rows = (retry.data || []).map((r: any) => ({ ...r, note: r.description ?? null }));
+      error = retry.error;
+    }
     if (error) {
       console.error('[Cari] tx load:', error);
       setTxLoadError(error.message || 'Hareketler yüklenemedi.');
@@ -1074,7 +1100,10 @@ function CustomerDetail({
       setTxLoading(false);
       return;
     }
-    const list = (rows || []) as CustomerTransaction[];
+    const list = ((rows || []) as Array<CustomerTransaction & { description?: string | null }>).map((r) => ({
+      ...r,
+      note: r.note ?? r.description ?? null,
+    }));
     const orderIds = [...new Set(list.map((r) => r.order_id).filter((id): id is string => !!id))];
     const orderMap = new Map<string, { order_number: string | null; total_amount: number | null }>();
     if (orderIds.length > 0) {

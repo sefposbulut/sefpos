@@ -290,6 +290,38 @@ function safeId(c) {
   return String(c).replace(/[^a-zA-Z0-9_]/g, '');
 }
 
+/** UI/PostgREST `note` → SQL Server `description` (customer_transactions). */
+function mapSelectColumns(table, select) {
+  if (!select || select === '*') {
+    if (table === 'customer_transactions') {
+      return 'id, tenant_id, customer_id, order_id, type, amount, description AS note, created_by, created_at';
+    }
+    return '*';
+  }
+  return (
+    String(select)
+      .split(',')
+      .map((c) => {
+        const t = c.trim();
+        if (t === '*') return '*';
+        if (table === 'customer_transactions' && t === 'note') return 'description AS note';
+        return safeId(t);
+      })
+      .filter(Boolean)
+      .join(', ') || '*'
+  );
+}
+
+function aliasSqlRows(table, rows) {
+  if (!rows || table !== 'customer_transactions') return rows;
+  return rows.map((r) => {
+    if (!r || typeof r !== 'object') return r;
+    const out = { ...r };
+    if (out.note == null && out.description != null) out.note = out.description;
+    return out;
+  });
+}
+
 function buildWhere(filters, params, prefix) {
   if (!filters || filters.length === 0) return '';
   let pi = Object.keys(params).length;
@@ -630,19 +662,14 @@ async function handleQuery(body) {
       }
       const params = {};
       const where = buildWhere(filters, params, 'w');
-      const cols = !select || select === '*'
-        ? '*'
-        : String(select).split(',').map((c) => {
-          const t = c.trim();
-          return t === '*' ? '*' : safeId(t);
-        }).filter(Boolean).join(', ') || '*';
+      const cols = mapSelectColumns(safeTable, select);
       const order = orderBy && orderBy.length > 0
         ? `ORDER BY ${orderBy.map((o) => `${safeId(o.col)} ${o.asc ? 'ASC' : 'DESC'}`).join(', ')}`
         : '';
       const top = limitVal ? `TOP ${parseInt(limitVal, 10)}` : '';
       const q = ['SELECT', top, cols, 'FROM', safeTable, where, order].filter(Boolean).join(' ').trim();
       const rows = await runSql(q, params);
-      return { data: rows, error: null };
+      return { data: aliasSqlRows(safeTable, rows), error: null };
     }
 
     if (operation === 'insert') {

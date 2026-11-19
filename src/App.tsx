@@ -121,7 +121,7 @@ export default function App() {
   });
 
   const isElectron = useMemo(() => !!(window as any).electronAPI, []);
-  const headerTopOffset = isElectron ? 'top-14' : 'top-14 md:top-20';
+  const headerTopOffset = 'top-14';
   const uiPrefs = useUiPrefs();
   // POS modu (Tam Ekran / Header gizle) sadece masaustu (md+) icin etkin.
   // Mobilde zaten alan dar ve farkli optimizasyonlar var; orada Header
@@ -899,9 +899,12 @@ export default function App() {
       )}
 
       {shouldRenderPage('products') && (
-        <div className={`fixed inset-0 ${headerTopOffset} overflow-hidden`}>
+        <div
+          style={{ display: show('products') ? undefined : 'none' }}
+          className={`fixed inset-0 ${headerTopOffset} overflow-hidden`}
+        >
           <PosPageSuspense>
-            <LazyProducts isActive />
+            <LazyProducts isActive={currentPage === 'products'} />
           </PosPageSuspense>
         </div>
       )}
@@ -918,7 +921,10 @@ export default function App() {
       )}
 
       {shouldRenderPage('users') && (
-        <div className={`fixed inset-0 ${headerTopOffset} bg-gradient-to-br from-slate-50 to-slate-100 overflow-auto`}>
+        <div
+          style={{ display: show('users') ? undefined : 'none' }}
+          className={`fixed inset-0 ${headerTopOffset} bg-gradient-to-br from-slate-50 to-slate-100 overflow-auto`}
+        >
           <div className="p-3 md:p-6 max-w-7xl mx-auto">
             <PosPageSuspense>
               <LazyUserManagement />
@@ -988,9 +994,12 @@ export default function App() {
       )}
 
       {shouldRenderPage('quick-sale') && (
-        <div className={`fixed inset-0 ${headerTopOffset} bg-gradient-to-br from-slate-50 to-slate-100 overflow-hidden`}>
+        <div
+          style={{ display: show('quick-sale') ? undefined : 'none' }}
+          className={`fixed inset-0 ${headerTopOffset} bg-gradient-to-br from-slate-50 to-slate-100 overflow-hidden`}
+        >
           <PosPageSuspense>
-            <LazyQuickSale isActive />
+            <LazyQuickSale isActive={currentPage === 'quick-sale'} />
           </PosPageSuspense>
         </div>
       )}
