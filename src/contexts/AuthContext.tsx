@@ -840,6 +840,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       const tenantRow = tenantData as unknown as Tenant;
       setTenant(tenantRow);
+      try {
+        if (tenantRow?.name && (window as any).electronAPI) {
+          localStorage.setItem('shefpos_pos_restaurant', String(tenantRow.name));
+        }
+      } catch { /* yoksay */ }
       setBranches(branchList);
       setActiveBranchState(activeBranch);
       if (activeBranch?.id) {

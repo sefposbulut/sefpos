@@ -35,7 +35,7 @@ function NumpadKey({ label, sub, onPress }: { label: string; sub?: string; onPre
       type="button"
       onPointerDown={(e) => { e.preventDefault(); onPress(); }}
       className="flex flex-col items-center justify-center rounded-2xl bg-white/10 hover:bg-white/20 active:bg-white/30 transition-all select-none"
-      style={{ minHeight: 72, touchAction: 'manipulation' }}
+      style={{ minHeight: 56, touchAction: 'manipulation' }}
     >
       <span className="text-white text-2xl font-semibold leading-none">{label}</span>
       {sub && <span className="text-white/50 text-xs mt-0.5 tracking-widest">{sub}</span>}
@@ -49,7 +49,7 @@ function NumpadBackspace({ onPress }: { onPress: () => void }) {
       type="button"
       onPointerDown={(e) => { e.preventDefault(); onPress(); }}
       className="flex items-center justify-center rounded-2xl bg-white/10 hover:bg-white/20 active:bg-white/30 transition-all select-none"
-      style={{ minHeight: 72, touchAction: 'manipulation' }}
+      style={{ minHeight: 56, touchAction: 'manipulation' }}
     >
       <Delete className="w-6 h-6 text-white/80" />
     </button>
@@ -136,7 +136,7 @@ export function ElectronAuth({ onCourierMode, onSwitchMode, currentDbMode }: Ele
         }
       }
       if (savedLogin) { setLoginValue(savedLogin); setRemember(true); }
-      if (savedPassword) setPassword(savedPassword);
+      try { localStorage.removeItem(REMEMBER_PASSWORD_KEY); } catch { /* sifre saklanmaz */ }
     })();
   }, []);
 
@@ -274,11 +274,10 @@ export function ElectronAuth({ onCourierMode, onSwitchMode, currentDbMode }: Ele
       }
       if (remember) {
         localStorage.setItem(REMEMBER_KEY, loginValue);
-        localStorage.setItem(REMEMBER_PASSWORD_KEY, password);
       } else {
         localStorage.removeItem(REMEMBER_KEY);
-        localStorage.removeItem(REMEMBER_PASSWORD_KEY);
       }
+      try { localStorage.removeItem(REMEMBER_PASSWORD_KEY); } catch { /* yoksay */ }
     } catch (err: any) {
       const msg = err.message || '';
       if (msg.includes('Invalid login credentials')) setError('Kullanıcı adı/telefon veya şifre hatalı');
@@ -334,8 +333,12 @@ export function ElectronAuth({ onCourierMode, onSwitchMode, currentDbMode }: Ele
     else if (numpadTarget === 'tenantName') setTenantName(p => p.slice(0, -1));
   }, [numpadTarget]);
 
+  const shortScreen = () =>
+    typeof window !== 'undefined' && window.innerHeight < 860 && window.innerWidth < 1280;
+
   const openNumpad = (target: typeof numpadTarget) => {
     setNumpadTarget(target);
+    if (shortScreen()) return;
     setShowNumpad(true);
   };
 
@@ -358,8 +361,22 @@ export function ElectronAuth({ onCourierMode, onSwitchMode, currentDbMode }: Ele
     }
   };
 
-  const bg = 'linear-gradient(160deg, #0f172a 0%, #1e3a5f 55%, #0f2744 100%)';
-  const primaryGrad = 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)';
+  const bg = 'linear-gradient(165deg, #0f172a 0%, #1c1917 48%, #7c2d12 160%)';
+  const primaryGrad = 'linear-gradient(135deg, #ea580c 0%, #c2410c 100%)';
+  const rememberedRestaurant = (() => {
+    try { return localStorage.getItem('shefpos_pos_restaurant') || ''; } catch { return ''; }
+  })();
+  const [linkOnline, setLinkOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true);
+  useEffect(() => {
+    const on = () => setLinkOnline(true);
+    const off = () => setLinkOnline(false);
+    window.addEventListener('online', on);
+    window.addEventListener('offline', off);
+    return () => {
+      window.removeEventListener('online', on);
+      window.removeEventListener('offline', off);
+    };
+  }, []);
 
   const inputBase = "w-full flex-1 bg-transparent text-white text-xl outline-none placeholder-white/30 tracking-wider";
   const fieldBox = (active: boolean) =>
@@ -461,7 +478,7 @@ export function ElectronAuth({ onCourierMode, onSwitchMode, currentDbMode }: Ele
               onClick={handleRegister}
               disabled={loading}
               className="w-full py-5 rounded-2xl text-white text-lg font-bold disabled:opacity-50 transition active:scale-[0.98] mt-2"
-              style={{ background: primaryGrad, boxShadow: '0 8px 32px rgba(37,99,235,0.4)' }}
+                style={{ background: primaryGrad, boxShadow: '0 8px 24px rgba(234,88,12,0.35)' }}
             >
               {loading ? 'Kaydediliyor...' : 'İşletmeyi Kaydet'}
             </button>
@@ -501,23 +518,31 @@ export function ElectronAuth({ onCourierMode, onSwitchMode, currentDbMode }: Ele
   const hybridMode = sqlMode && (currentDbMode === 'hybrid' || isHybridMode());
 
   return (
-    <div className="min-h-screen flex" style={{ background: bg }}>
-      <div className="flex-1 flex flex-col items-center justify-center px-10 py-12">
-
-        {onSwitchMode && step === 'phone' && (
-          <div className="absolute top-6 right-6">
-            <button
-              type="button"
-              onClick={onSwitchMode}
-              className="flex items-center gap-2 px-4 py-2 rounded-lg border border-white/15 bg-white/10 hover:bg-white/15 transition text-white/70 hover:text-white text-xs font-semibold"
-            >
-              <Settings className="w-3.5 h-3.5" />
-              Bağlantı ayarı
-            </button>
-          </div>
+    <div className="h-screen max-h-screen overflow-hidden flex flex-col" style={{ background: bg }}>
+      <div className="flex items-center justify-between gap-3 px-4 py-2 shrink-0 border-b border-white/10">
+        <div className="min-w-0">
+          <p className="text-white font-bold leading-none">ŞefPOS</p>
+          <p className="text-white/60 text-xs truncate mt-1">
+            {rememberedRestaurant ? `Bu kasa: ${rememberedRestaurant}` : 'Kasa girişi'}
+            {' · '}
+            {linkOnline ? 'Bağlantı var' : 'Çevrimdışı'}
+          </p>
+        </div>
+        {onSwitchMode && (
+          <button
+            type="button"
+            onClick={onSwitchMode}
+            className="shrink-0 flex items-center gap-2 min-h-11 px-3 rounded-xl border border-white/15 bg-white/10 text-white text-sm font-semibold"
+          >
+            <Settings className="w-4 h-4" />
+            Bağlantı
+          </button>
         )}
+      </div>
+      <div className="flex-1 min-h-0 flex flex-col xl:flex-row">
+      <div className="flex-1 min-h-0 overflow-y-auto flex flex-col items-center justify-start xl:justify-center px-4 py-3">
 
-        <img src={logoSrc} alt="ŞefPOS" className="h-16 w-auto mb-6 brightness-0 invert drop-shadow-2xl" />
+        <img src={logoSrc} alt="ŞefPOS" className="h-12 w-12 mb-2 rounded-xl object-cover" />
 
         {step === 'phone' && (
           <div className="flex items-center gap-2 mb-8">
@@ -539,8 +564,8 @@ export function ElectronAuth({ onCourierMode, onSwitchMode, currentDbMode }: Ele
 
         {step === 'phone' ? (
           <>
-            <h1 className="text-white text-4xl font-bold mb-2 text-center">Hoş Geldiniz</h1>
-            <p className="text-white/50 text-lg mb-10 text-center">
+            <h1 className="text-white text-2xl font-bold mb-1 text-center">Hoş Geldiniz</h1>
+            <p className="text-white/50 text-sm mb-4 text-center">
               {offlineMode ? 'Kullanıcı adınızı girin' : 'Telefon numaranızı girin'}
             </p>
 
@@ -606,7 +631,15 @@ export function ElectronAuth({ onCourierMode, onSwitchMode, currentDbMode }: Ele
                 </label>
               )}
 
-              <div className="flex items-center gap-3 mb-10 px-1">
+              <button
+                type="button"
+                onClick={() => { setNumpadTarget('login'); setShowNumpad((v) => !v); }}
+                className="xl:hidden w-full min-h-12 mb-3 rounded-2xl border border-white/15 text-white/80 text-sm font-semibold"
+              >
+                {showNumpad ? 'Tuş takımını gizle' : 'Tuş takımı'}
+              </button>
+
+              <div className="flex items-center gap-3 mb-4 px-1">
                 <button
                   type="button"
                   onClick={() => setRemember(r => !r)}
@@ -633,8 +666,8 @@ export function ElectronAuth({ onCourierMode, onSwitchMode, currentDbMode }: Ele
                 type="button"
                 onClick={handleLogin}
                 disabled={loading || !loginValue.trim()}
-                className="w-full py-6 rounded-3xl text-white text-xl font-bold disabled:opacity-40 transition active:scale-[0.98] mb-4"
-                style={{ background: primaryGrad, boxShadow: '0 8px 32px rgba(37,99,235,0.4)' }}
+                className="w-full min-h-14 py-3 rounded-2xl text-white text-lg font-bold disabled:opacity-40 transition active:scale-[0.98] mb-2"
+                style={{ background: primaryGrad, boxShadow: '0 8px 24px rgba(234,88,12,0.35)' }}
               >
                 Devam Et
               </button>
@@ -658,6 +691,19 @@ export function ElectronAuth({ onCourierMode, onSwitchMode, currentDbMode }: Ele
               <button
                 type="button"
                 onClick={() => {
+                  const url = new URL(window.location.href);
+                  url.searchParams.set('waiter', '1');
+                  window.location.href = url.toString();
+                }}
+                className="w-full min-h-14 py-3 rounded-2xl border-2 border-orange-400/40 bg-orange-500/10 hover:bg-orange-500/20 text-orange-100 font-semibold text-base flex items-center justify-center gap-3 transition mb-2"
+              >
+                <User className="w-5 h-5" />
+                Garson girişi (PIN)
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
                   if (onCourierMode) {
                     onCourierMode();
                   } else {
@@ -666,7 +712,7 @@ export function ElectronAuth({ onCourierMode, onSwitchMode, currentDbMode }: Ele
                     window.location.href = url.toString();
                   }
                 }}
-                className="w-full py-5 rounded-3xl border-2 border-blue-500/30 bg-blue-500/10 hover:bg-blue-500/20 text-blue-300 font-semibold text-base flex items-center justify-center gap-3 transition"
+                className="w-full min-h-12 py-3 rounded-2xl border border-white/15 bg-white/5 hover:bg-white/10 text-white/80 font-semibold text-base flex items-center justify-center gap-3 transition"
               >
                 <Bike className="w-5 h-5" />
                 Kurye Girişi
@@ -686,7 +732,7 @@ export function ElectronAuth({ onCourierMode, onSwitchMode, currentDbMode }: Ele
               Geri
             </button>
 
-            <h1 className="text-white text-4xl font-bold mb-2 text-center">Şifre</h1>
+            <h1 className="text-white text-2xl font-bold mb-1 text-center">Şifre</h1>
             <p className="text-white/50 text-lg mb-3 text-center">{loginValue}</p>
             <p className="text-white/30 text-sm mb-10 text-center">Şifrenizi girin</p>
 
@@ -764,8 +810,8 @@ export function ElectronAuth({ onCourierMode, onSwitchMode, currentDbMode }: Ele
                 type="button"
                 onClick={handleLogin}
                 disabled={loading || !password}
-                className="w-full py-6 rounded-3xl text-white text-xl font-bold disabled:opacity-40 transition active:scale-[0.98]"
-                style={{ background: primaryGrad, boxShadow: '0 8px 32px rgba(37,99,235,0.4)' }}
+                className="w-full min-h-14 py-3 rounded-2xl text-white text-lg font-bold disabled:opacity-40 transition active:scale-[0.98]"
+                style={{ background: primaryGrad, boxShadow: '0 8px 24px rgba(234,88,12,0.35)' }}
               >
                 {loading ? 'Giriş yapılıyor...' : 'Giriş Yap'}
               </button>
@@ -775,7 +821,7 @@ export function ElectronAuth({ onCourierMode, onSwitchMode, currentDbMode }: Ele
       </div>
 
       {showNumpad && (
-        <div className="w-80 flex flex-col justify-center px-6 py-10 border-l border-white/10">
+        <div className="w-full xl:w-72 shrink-0 overflow-y-auto flex flex-col justify-center px-4 py-3 border-t xl:border-t-0 xl:border-l border-white/10">
           <p className="text-white/40 text-sm text-center mb-6 uppercase tracking-widest font-medium">
             {numpadTarget === 'password' ? 'Şifre' : 'Numara'}
           </p>
@@ -799,12 +845,13 @@ export function ElectronAuth({ onCourierMode, onSwitchMode, currentDbMode }: Ele
                 setStep('password');
               }
             }}
-            className="mt-6 w-full py-5 rounded-2xl text-white text-base font-semibold transition border border-white/10 hover:border-white/20 hover:bg-white/5"
+            className="mt-3 w-full min-h-12 py-3 rounded-2xl text-white text-base font-semibold transition border border-white/10 hover:border-white/20 hover:bg-white/5"
           >
             Tamam
           </button>
         </div>
       )}
+      </div>
     </div>
   );
 }

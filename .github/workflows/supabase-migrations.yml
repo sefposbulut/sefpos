@@ -1,11 +1,9 @@
 name: Supabase Migrations
 
+# Arşiv. Üretim Supabase kullanmıyor. Otomatik push kapalı.
+# SUPABASE_ACCESS_TOKEN geçersizse (Invalid access token) elle de çalışmaz;
+# secret'ı yenilemeden çalıştırmayın.
 on:
-  push:
-    branches: ["main", "master"]
-    paths:
-      - "supabase/migrations/**"
-      - "supabase/config.toml"
   workflow_dispatch:
 
 jobs:

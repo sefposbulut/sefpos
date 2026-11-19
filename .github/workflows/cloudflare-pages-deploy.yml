@@ -1,6 +1,11 @@
-# www.sefpos.com.tr (Cloudflare Pages) — master'a her push'ta dist + wrangler deploy.
-# Electron release'ten bağımsızdır; web arayüzü güncellenmezse bu workflow tetiklenmiyor
-# veya aşağıdaki GitHub secret'ları eksiktir.
+# www.sefpos.com.tr (Cloudflare Pages).
+# Otomatik push KAPALI: canlı VDS API henüz yeni sürüme geçmedi.
+# Yeni web build'i (kiracı kilidi, yeni health) ancak API güncellendikten sonra
+# Actions → "Run workflow" ile elle yayınlayın.
+#
+# Eksik GitHub secrets (19 Kas 2026 koşusu bu yüzden fail):
+#   CLOUDFLARE_API_TOKEN
+#   CLOUDFLARE_ACCOUNT_ID
 #
 # Gerekli repository secrets (Settings → Secrets and variables → Actions):
 #   CLOUDFLARE_API_TOKEN   — API Token: Account > Cloudflare Pages > Edit (veya Workers Pages deploy)
@@ -16,8 +21,6 @@
 name: Deploy Cloudflare Pages (web)
 
 on:
-  push:
-    branches: [master, main]
   workflow_dispatch:
 
 concurrency:

@@ -263,8 +263,8 @@ export const ELECTRON_HUB_PREMOUNT_PAGES = [
 ] as const;
 
 /** Hub modül kartı — hafif yatay, orantılı genişlik. */
-export const POS_HUB_TILE_CARD_WIDTH = 'clamp(12.5rem, 28vw, 17.5rem)';
-export const POS_HUB_TILE_CARD_MIN_HEIGHT = '6.75rem';
+export const POS_HUB_TILE_CARD_WIDTH = 'clamp(10.25rem, 22vw, 16rem)';
+export const POS_HUB_TILE_CARD_MIN_HEIGHT = '5.75rem';
 
 /** @deprecated Kare düzen; yatay kart için POS_HUB_TILE_CARD_WIDTH kullanın. */
 export const POS_HUB_TILE_SIZE_CLAMP = POS_HUB_TILE_CARD_WIDTH;

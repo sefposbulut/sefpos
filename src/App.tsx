@@ -644,8 +644,14 @@ export default function App() {
     );
   }
 
+  const posPreview =
+    typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('posPreview') === '1';
+
   if (!user && !profile) {
-    if (isElectron) {
+    if ((isElectron || posPreview) && (isWaiterAppRoute() || new URLSearchParams(window.location.search).has('waiter'))) {
+      return <Auth />;
+    }
+    if (isElectron || posPreview) {
       return (
         <ElectronAuth
           onSwitchMode={() => {

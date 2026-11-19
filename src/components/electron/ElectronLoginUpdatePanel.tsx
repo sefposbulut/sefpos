@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Download, Loader2, RefreshCw, Sparkles, AlertTriangle } from 'lucide-react';
+import { Download, Loader2, RefreshCw, AlertTriangle } from 'lucide-react';
 import { windowsSetupDownloadHref } from '../../lib/desktopDownload';
 
 type UpdateUiState =
@@ -97,18 +97,20 @@ export function ElectronLoginUpdatePanel() {
     void api?.installUpdate?.();
   };
 
-  if (!api) return null;
+  if (!api && !appVersion) {
+    return (
+      <p className="mt-3 text-center text-[11px] text-white/40">Sürüm bilgisi kasa uygulamasında görünür.</p>
+    );
+  }
 
   return (
-    <div className="w-full max-w-sm mt-8 rounded-2xl border border-white/15 bg-white/5 backdrop-blur-sm p-4 text-left">
-      <div className="flex items-center gap-2 mb-2">
-        <Sparkles className="w-4 h-4 text-amber-300" />
-        <span className="text-white/90 text-sm font-bold">Yazılım güncellemesi</span>
-      </div>
-      <p className="text-white/45 text-xs mb-3 leading-relaxed">
-        Kurulu sürüm: <span className="text-white/70 font-mono">{appVersion || '—'}</span>
-        {' · '}
-        Giriş yapmadan da güncelleyebilirsiniz.
+    <div className="w-full max-w-sm mt-3 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-left">
+      <p className="text-white/55 text-[11px] leading-snug">
+        Sürüm <span className="font-mono text-white/80">{appVersion || '—'}</span>
+        {updateState.kind === 'ready' ? ` · güncelleme hazır (${updateState.version})` : ''}
+        {updateState.kind === 'available' || updateState.kind === 'progress' ? ' · indiriliyor' : ''}
+        {updateState.kind === 'checking' ? ' · kontrol ediliyor' : ''}
+        {updateState.kind === 'not_available' ? ' · güncel' : ''}
       </p>
 
       <div className="flex flex-wrap gap-2">

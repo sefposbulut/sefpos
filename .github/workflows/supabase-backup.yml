@@ -1,10 +1,8 @@
 name: Weekly Supabase Backup
 
-# Her Pazartesi 01:00 UTC = 04:00 Türkiye saati otomatik çalışır.
-# Manuel tetikleme: Actions sekmesinden "Run workflow".
+# Haftalık otomatik Supabase yedeği kapatıldı. Üretim verisi MSSQL.
+# Elle tetik yalnız eski projeyi arşivlerken.
 on:
-  schedule:
-    - cron: "0 1 * * 1"
   workflow_dispatch:
     inputs:
       reason:

@@ -2717,11 +2717,15 @@ function createWindow() {
   clearMainWindowRevealTimer();
   const settings = loadSettings();
   let mainLoadRetried = false;
+  const { screen } = require('electron');
+  const area = screen.getPrimaryDisplay().workAreaSize;
+  const width = Math.min(1920, Math.max(1024, area.width));
+  const height = Math.min(1080, Math.max(Math.min(768, area.height), Math.min(area.height, 900)));
   mainWindow = new BrowserWindow({
-    width: 1400,
-    height: 900,
-    minWidth: 1024,
-    minHeight: 600,
+    width,
+    height,
+    minWidth: Math.min(1024, area.width),
+    minHeight: Math.min(720, area.height),
     autoHideMenuBar: true,
     webPreferences: {
       nodeIntegration: false,

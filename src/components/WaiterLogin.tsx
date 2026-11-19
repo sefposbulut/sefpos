@@ -678,10 +678,29 @@ export function WaiterLogin({ onLoginSuccess, onBack }: { onLoginSuccess: (waite
               </div>
             )}
 
+            {(typeof window !== 'undefined' && ((window as any).electronAPI || new URLSearchParams(window.location.search).get('posPreview') === '1')) && (
+              <div className="grid grid-cols-3 gap-2">
+                {['1','2','3','4','5','6','7','8','9','','0','⌫'].map((key) => (
+                  <button
+                    key={key || 'blank'}
+                    type="button"
+                    disabled={!key}
+                    onClick={() => {
+                      if (key === '⌫') setPin((p) => p.slice(0, -1));
+                      else if (key) setPin((p) => (p + key).replace(/\D/g, '').slice(0, 4));
+                    }}
+                    className="min-h-14 rounded-xl bg-slate-800 border border-slate-600 text-white text-xl font-bold active:scale-95 disabled:opacity-0"
+                  >
+                    {key}
+                  </button>
+                ))}
+              </div>
+            )}
+
             <button
               type="submit"
               disabled={loading || pin.length !== 4}
-              className="w-full bg-gradient-to-r from-orange-600 to-orange-500 hover:from-orange-700 hover:to-orange-600 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold py-3 rounded-lg text-sm transition-all duration-200 flex items-center justify-center gap-2 mt-6"
+              className="w-full min-h-14 bg-gradient-to-r from-orange-600 to-orange-500 hover:from-orange-700 hover:to-orange-600 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold py-3 rounded-lg text-base transition-all duration-200 flex items-center justify-center gap-2 mt-2"
             >
               {loading ? (
                 <>
