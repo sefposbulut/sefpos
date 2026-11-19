@@ -5,10 +5,8 @@
  * scripts/electron-dev-wait.mjs yalnızca dev sürecinde ELECTRON_DISABLE_SECURITY_WARNINGS kullanır.
  */
 
-const PRIMARY_SUPABASE_URL = (
-  process.env.VITE_SUPABASE_URL || 'https://xdfnozfuuzctubijbnds.supabase.co'
-).replace(/\/$/, '');
-const PRIMARY_SUPABASE_WS = PRIMARY_SUPABASE_URL.replace(/^https:/, 'wss:');
+const PRIMARY_SUPABASE_URL = '';
+const PRIMARY_SUPABASE_WS = '';
 
 /**
  * @param {{ forMeta?: boolean; includeCloudflareInsights?: boolean }} [opts]
@@ -16,7 +14,7 @@ const PRIMARY_SUPABASE_WS = PRIMARY_SUPABASE_URL.replace(/^https:/, 'wss:');
  */
 function buildProductionContentSecurityPolicy(opts = {}) {
   const { forMeta = false, includeCloudflareInsights = false } = opts;
-  const scriptSrc = ["'self'", 'https://unpkg.com'];
+  const scriptSrc = ["'self'"];
   if (includeCloudflareInsights) {
     scriptSrc.push('https://static.cloudflareinsights.com');
   }

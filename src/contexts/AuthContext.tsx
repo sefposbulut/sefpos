@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useRef, useState } from 'react';
-import { User, Session } from '@supabase/supabase-js';
+import type { User, Session } from '../lib/sefposTypes';
 import { supabase, getRealSupabaseClient, consumeInvalidRefreshHandled } from '../lib/supabase';
 import { Database } from '../lib/supabase';
 import { isSqlServerMode, isLocalMode, isElectronCloudMode, sqlDb, isVdsSelfHost, sqlTruth, patchSqlSessionRecord } from '../lib/sqlDb';

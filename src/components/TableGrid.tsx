@@ -903,12 +903,22 @@ export function TableGrid({
         if (updateTimerRef.current) clearTimeout(updateTimerRef.current);
       };
     }
-    // VDS / SQL: Realtime yok — mobil sipariş masaya anında yansıması (≈1 sn).
+    // VDS / SQL: canlı akış (SSE) + 20 sn yedek tarama.
     if (isSqlServerMode()) {
       timer = setInterval(() => {
         if (document.visibilityState === 'visible') void loadAll(false, { silent: true });
-      }, 1_200);
+      }, 20_000);
+      let stopped = false;
+      let stopLive = () => {};
+      import('../lib/vdsLive').then(({ subscribeVdsLive }) => {
+        if (stopped) return;
+        stopLive = subscribeVdsLive(() => {
+          if (document.visibilityState === 'visible') void loadAll(false, { silent: true });
+        });
+      }).catch(() => {});
       return () => {
+        stopped = true;
+        stopLive();
         if (timer) clearInterval(timer);
         if (updateTimerRef.current) clearTimeout(updateTimerRef.current);
       };

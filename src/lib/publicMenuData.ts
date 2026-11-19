@@ -1,62 +1,6 @@
-import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import { isVdsBackend, getVdsApiOrigin } from './sqlDb';
+import { getVdsApiOrigin } from './sqlDb';
 
-/**
- * Public/QR menu için **ayrı** bir Supabase client.
- *
- * NEDEN: `./supabase`'deki global client, POS oturumuna login olmuş bir kullanıcının
- * JWT'sini localStorage'dan okuyup `Authorization` header'ı olarak ekler. Bu, QR menü
- * isteklerinin `authenticated` rolüyle gitmesine neden olur ve `waiter_calls` için
- * yalnızca `anon`'a tanımlı INSERT RLS policy'si fail eder (403).
- *
- * Bu client `persistSession:false` + **bellek içi auth storage** ile POS ile
- * aynı origin'de asla localStorage oturumu paylaşmaz; böylece QR istekleri
- * yanlışlıkla `authenticated` rolüyle gitmez (`waiter_calls` anon INSERT 403).
- *
- * Ayrı `storageKey` yedek olarak kalır; asıl izolasyon `storage` ile sağlanır.
- */
-const memoryAuthStorage = {
-  getItem: (_key: string) => null as string | null,
-  setItem: (_key: string, _value: string) => {},
-  removeItem: (_key: string) => {},
-};
-
-let publicClient: SupabaseClient | null = null;
-function getPublicClient(): SupabaseClient {
-  if (publicClient) return publicClient;
-  const url = String(import.meta.env.VITE_SUPABASE_URL || '').trim()
-    || (typeof (globalThis as any).__SEFPOS_DEV_SUPABASE_URL__ === 'string'
-        ? (globalThis as any).__SEFPOS_DEV_SUPABASE_URL__.trim() : '');
-  const anon = String(import.meta.env.VITE_SUPABASE_ANON_KEY || '').trim()
-    || (typeof (globalThis as any).__SEFPOS_DEV_SUPABASE_ANON_KEY__ === 'string'
-        ? (globalThis as any).__SEFPOS_DEV_SUPABASE_ANON_KEY__.trim() : '');
-  if (!url || !anon) {
-    throw new Error('Supabase yapılandırması eksik (URL/ANON_KEY).');
-  }
-  publicClient = createClient(url, anon, {
-    auth: {
-      persistSession: false,
-      autoRefreshToken: false,
-      detectSessionInUrl: false,
-      storage: memoryAuthStorage,
-      storageKey: 'sefpos-public-menu-anon',
-    },
-    global: {
-      headers: {
-        'X-Client-Info': 'sefpos-public-menu',
-      },
-    },
-  });
-  return publicClient;
-}
-
-// publicMenuData içinde 'supabase' adıyla import edilen yerleri tek yerden yöneliyoruz.
-// Aşağıdaki tüm sorgular anon client üzerinden gider — JWT eklenmez.
-const supabase = new Proxy({} as SupabaseClient, {
-  get(_t, prop, receiver) {
-    return Reflect.get(getPublicClient(), prop, receiver);
-  },
-});
+/** QR menü VDS `/public-menu` üzerinden okunur. Oturum jetonu gönderilmez. */
 
 export type ThemeMode = 'light' | 'dark';
 export type FontStyle = 'modern' | 'elegant' | 'casual';
@@ -131,134 +75,33 @@ export class PublicMenuError extends Error {
   }
 }
 
-/**
- * Anonim olarak (oturum açmadan) bir şubenin QR menüsü için gerekli tüm
- * verileri çeker. RLS policy'leri yalnızca aktif + menüde görünür kayıtları döner.
- */
 export async function loadPublicMenu(branchId: string): Promise<PublicMenuData> {
-  if (isVdsBackend()) {
-    const origin = getVdsApiOrigin();
-    const res = await fetch(
-      `${origin}/vds-api/public-menu?branchId=${encodeURIComponent(branchId)}`,
-      { credentials: origin ? 'omit' : 'same-origin' },
-    );
-    const data = await res.json().catch(() => null);
-    if (!res.ok || data?.error || !data?.branch || !data?.tenant) {
-      throw new PublicMenuError('NOT_FOUND', data?.error || 'Menü yüklenemedi');
-    }
-    const productIds = (data.products || []).map((p: { id: string }) => p.id);
-    let variants: PublicVariant[] = [];
-    if (productIds.length) {
-      /* varyantlar public-menu yanıtında yoksa boş */
-    }
-    const products: PublicProduct[] = (data.products || []).map((p: any) => ({
-      id: p.id,
-      category_id: p.category_id,
-      name: p.name,
-      description: p.description,
-      price: Number(p.price) || 0,
-      image_url: p.image_url,
-      variants: variants,
-    }));
-    return {
-      tenant: { ...data.tenant, menu_theme: data.menu_theme || null },
-      branch: data.branch,
-      categories: data.categories || [],
-      products,
-    };
+  const origin = getVdsApiOrigin();
+  const res = await fetch(
+    `${origin}/vds-api/public-menu?branchId=${encodeURIComponent(branchId)}`,
+    { credentials: origin ? 'omit' : 'same-origin' },
+  );
+  const data = await res.json().catch(() => null);
+  if (!res.ok || data?.error || !data?.branch || !data?.tenant) {
+    throw new PublicMenuError('NOT_FOUND', data?.error || 'Menü yüklenemedi');
   }
-  const branchRes = await supabase
-    .from('branches')
-    .select('id, tenant_id, name, address, phone')
-    .eq('id', branchId)
-    .maybeSingle();
-
-  if (branchRes.error) {
-    throw new PublicMenuError('NETWORK', branchRes.error.message);
-  }
-  if (!branchRes.data) {
-    throw new PublicMenuError('NOT_FOUND', 'Şube bulunamadı veya menü kapalı');
-  }
-
-  const branch = branchRes.data as PublicBranch;
-  const tenantId = branch.tenant_id;
-
-  const tenantRes = await supabase
-    .from('tenants')
-    .select('id, name, logo_url, phone, address, menu_theme')
-    .eq('id', tenantId)
-    .maybeSingle();
-
-  if (tenantRes.error || !tenantRes.data) {
-    throw new PublicMenuError('NOT_FOUND', 'Restoran bulunamadı');
-  }
-  const tenant = tenantRes.data as PublicTenant;
-
-  // Kategoriler — image_url kolonu yoksa düşmesin
-  let catsRes = await supabase
-    .from('categories')
-    .select('id, name, color, display_order, sort_order, image_url')
-    .eq('tenant_id', tenantId)
-    .order('sort_order', { ascending: true })
-    .order('name', { ascending: true });
-  if (catsRes.error && /image_url/i.test(catsRes.error.message || '')) {
-    catsRes = await supabase
-      .from('categories')
-      .select('id, name, color, display_order, sort_order')
-      .eq('tenant_id', tenantId)
-      .order('sort_order', { ascending: true })
-      .order('name', { ascending: true });
-  }
-  const prodsRes = await supabase
-    .from('products')
-    .select('id, category_id, name, description, price, image_url')
-    .eq('tenant_id', tenantId)
-    .order('name', { ascending: true });
-
-  if (catsRes.error) throw new PublicMenuError('NETWORK', catsRes.error.message);
-  if (prodsRes.error) throw new PublicMenuError('NETWORK', prodsRes.error.message);
-
-  const productIds = (prodsRes.data || []).map((p: { id: string }) => p.id);
-  let variants: PublicVariant[] = [];
-  if (productIds.length > 0) {
-    const variantsRes = await supabase
-      .from('product_variants')
-      .select('id, product_id, name, price_modifier, sort_order')
-      .in('product_id', productIds)
-      .order('sort_order', { ascending: true });
-    if (variantsRes.error) throw new PublicMenuError('NETWORK', variantsRes.error.message);
-    variants = (variantsRes.data || []) as PublicVariant[];
-  }
-
-  const variantsByProduct = new Map<string, PublicVariant[]>();
-  for (const v of variants) {
-    const list = variantsByProduct.get(v.product_id) || [];
-    list.push(v);
-    variantsByProduct.set(v.product_id, list);
-  }
-
-  const products: PublicProduct[] = (prodsRes.data || []).map((p: any) => ({
+  const products: PublicProduct[] = (data.products || []).map((p: any) => ({
     id: p.id,
     category_id: p.category_id,
     name: p.name,
     description: p.description,
     price: Number(p.price) || 0,
     image_url: p.image_url,
-    variants: variantsByProduct.get(p.id) || [],
+    variants: Array.isArray(p.variants) ? p.variants : [],
   }));
-
   return {
-    tenant,
-    branch,
-    categories: (catsRes.data || []) as PublicCategory[],
+    tenant: { ...data.tenant, menu_theme: data.menu_theme || null },
+    branch: data.branch,
+    categories: data.categories || [],
     products,
   };
 }
 
-/**
- * URL üretici — `?menu=BRANCH_UUID` (+ isteğe bağlı `masa=` / `table=`).
- * Masa etiketi QR'da sabitlenirse müşteri "Garson çağır"da tekrar yazmak zorunda kalmaz.
- */
 export function buildMenuUrl(branchId: string, origin?: string, tableHint?: string): string {
   const base = (origin || (typeof window !== 'undefined' ? window.location.origin : '')).replace(/\/$/, '');
   const hint = (tableHint || '').trim();
@@ -267,7 +110,6 @@ export function buildMenuUrl(branchId: string, origin?: string, tableHint?: stri
   return `${base}/?${q.toString()}`;
 }
 
-/** Ürün görseli yokken QR menüde gösterilecek yapay görsel (Pollinations; API anahtarı gerekmez). */
 export function buildQrMenuPlaceholderImageUrl(productName: string, shortDescription?: string | null): string {
   const name = (productName || 'Yemek').slice(0, 80).replace(/["<>]/g, '');
   const desc = (shortDescription || '').slice(0, 80).replace(/["<>]/g, '');
@@ -287,14 +129,6 @@ export function isQrMenuAiPlaceholderEnabled(): boolean {
   return true;
 }
 
-/**
- * Garson çağırma — anon role INSERT yetkisi ile public.waiter_calls'a yazar.
- * RLS policy şube → tenant tutarlılığını ve menu_enabled'ı doğrular.
- *
- * NOT: `.select()` çağrılmıyor. Anon role'ün SELECT policy'si yok (mahremiyet:
- * müşteri başka masaların çağrılarını okuyamaz). RETURNING istenirse RLS hatası
- * döner. Sadece "INSERT ok" ile başarı kontrolü yapıyoruz.
- */
 export async function createWaiterCall(input: {
   tenantId: string;
   branchId: string;
@@ -302,33 +136,19 @@ export async function createWaiterCall(input: {
   callType: 'service' | 'bill' | 'water' | 'help';
   message?: string;
 }): Promise<void> {
-  if (isVdsBackend()) {
-    const origin = getVdsApiOrigin();
-    const res = await fetch(`${origin}/vds-api/public-waiter-call`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: origin ? 'omit' : 'same-origin',
-      body: JSON.stringify(input),
-    });
-    const data = await res.json().catch(() => null);
-    if (!res.ok || data?.error) throw new Error(data?.error || 'Garson çağrısı gönderilemedi');
-    return;
-  }
-  const { error } = await supabase
-    .from('waiter_calls')
-    .insert({
-      tenant_id: input.tenantId,
-      branch_id: input.branchId,
-      table_label: input.tableLabel.trim().slice(0, 60) || '-',
-      call_type: input.callType,
-      message: input.message?.trim().slice(0, 280) || null,
-      status: 'pending',
-    });
-  if (error) {
-    // Anti-spam tetikleyici hata kodu (40001) için TR mesaj
-    if ((error as any).code === '40001' || /cok hizli|spam/i.test(error.message)) {
+  const origin = getVdsApiOrigin();
+  const res = await fetch(`${origin}/vds-api/public-waiter-call`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: origin ? 'omit' : 'same-origin',
+    body: JSON.stringify(input),
+  });
+  const data = await res.json().catch(() => null);
+  if (!res.ok || data?.error) {
+    const msg = String(data?.error || 'Garson çağrısı gönderilemedi');
+    if (/cok hizli|spam/i.test(msg)) {
       throw new Error('Çok hızlı peşi sıra çağırdınız. Lütfen birkaç saniye bekleyip tekrar deneyin.');
     }
-    throw new Error(error.message);
+    throw new Error(msg);
   }
 }

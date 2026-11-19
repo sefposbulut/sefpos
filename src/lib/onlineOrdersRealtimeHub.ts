@@ -1,4 +1,4 @@
-import type { RealtimeChannel } from '@supabase/supabase-js';
+import type { RealtimeChannel } from './sefposTypes';
 import { supabase } from './supabase';
 
 export type OnlineOrderRealtimeEvent = {

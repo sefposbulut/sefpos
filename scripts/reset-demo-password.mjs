@@ -16,7 +16,7 @@ for (const line of fs.readFileSync(path.join(root, '.env'), 'utf8').split(/\r?\n
 }
 
 const email = process.env.DEMO_EMAIL || 'info@sefpos.com.tr';
-const newPwd = process.env.DEMO_PASSWORD || '2128948++';
+const newPwd = process.env.DEMO_PASSWORD || 'CHANGE_ME';
 
 const hash = bcrypt.hashSync(newPwd, 10);
 console.log('Yeni hash prefiks:', hash.slice(0, 7));

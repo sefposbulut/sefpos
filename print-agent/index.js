@@ -9,6 +9,7 @@
  */
 
 const http = require('http');
+const crypto = require('crypto');
 const { exec } = require('child_process');
 const os = require('os');
 const fs = require('fs');
@@ -20,6 +21,7 @@ const {
   readSession,
   getSessionPath,
   DEFAULT_VDS_ORIGIN,
+  allowedVdsOrigin,
 } = require('./queuePoller');
 const {
   PRODUCT,
@@ -93,13 +95,39 @@ function handleProtocolUrl(rawUrl) {
   }
 }
 
+let _req = null;
+
 function corsHeaders(extra = {}) {
-  return {
-    'Access-Control-Allow-Origin': '*',
+  const origin = String(_req?.headers?.origin || '');
+  const allow =
+    !origin ||
+    origin === 'https://sefpos.com.tr' ||
+    origin === 'https://www.sefpos.com.tr' ||
+    origin === 'http://localhost:5180' ||
+    origin === 'http://127.0.0.1:5180' ||
+    /^https:\/\/([a-z0-9-]+\.)?sefpos\.com\.tr$/i.test(origin);
+  const headers = {
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Allow-Headers': 'Content-Type, X-Sefpos-Agent-Token',
+    Vary: 'Origin',
     ...extra,
   };
+  if (allow) headers['Access-Control-Allow-Origin'] = origin || 'https://sefpos.com.tr';
+  return headers;
+}
+
+function ensureAgentToken() {
+  const session = readSession();
+  if (session?.agentToken) return session.agentToken;
+  const token = crypto.randomBytes(24).toString('hex');
+  writeSession({ agentToken: token });
+  return token;
+}
+
+function agentTokenOk(req) {
+  const session = readSession();
+  const presented = String(req.headers['x-sefpos-agent-token'] || '');
+  return !!(session?.agentToken && presented && presented === session.agentToken);
 }
 
 function sendJson(res, statusCode, obj) {
@@ -519,6 +547,7 @@ function parseUrl(req) {
 }
 
 const server = http.createServer(async (req, res) => {
+  _req = req;
   if (req.method === 'OPTIONS') {
     res.writeHead(200, corsHeaders());
     res.end();
@@ -536,15 +565,17 @@ const server = http.createServer(async (req, res) => {
       app: PRODUCT,
       platform: os.platform(),
       paired: !!session,
+      agentToken: session ? ensureAgentToken() : null,
       installed: isInstalled(),
-      installDir: getInstallDir(),
-      tenantId: session?.tenantId || null,
-      sessionPath: getSessionPath(),
     });
     return;
   }
 
   if (pathname === '/printers' && req.method === 'GET') {
+    if (!agentTokenOk(req)) {
+      sendJson(res, 401, { success: false, error: 'Yazıcı ajanı eşleşmesi gerekli' });
+      return;
+    }
     const printers = await getWindowsPrinters();
     sendJson(res, 200, { success: true, printers });
     return;
@@ -563,7 +594,7 @@ const server = http.createServer(async (req, res) => {
           userJwt: jwt,
           tenantId,
           branchId: branchId || null,
-          vdsOrigin: String(vdsOrigin).replace(/\/$/, ''),
+          vdsOrigin: allowedVdsOrigin(vdsOrigin),
           printers: printers.map((p) => ({ name: p.name, isDefault: !!p.isDefault })),
         });
         console.log(`[print-agent] eşlendi tenant=${tenantId} yazıcı=${printers.length}`);
@@ -599,7 +630,7 @@ const server = http.createServer(async (req, res) => {
         userJwt: body.userJwt,
         tenantId: body.tenantId,
         branchId: body.branchId || null,
-        vdsOrigin: (body.vdsOrigin || DEFAULT_VDS_ORIGIN).replace(/\/$/, ''),
+        vdsOrigin: allowedVdsOrigin(body.vdsOrigin || DEFAULT_VDS_ORIGIN),
         printers: printers.map((p) => ({ name: p.name, isDefault: !!p.isDefault })),
       });
       sendJson(res, 200, { success: true, printers: printers.length });
@@ -610,6 +641,10 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (pathname === '/print' && req.method === 'POST') {
+    if (!agentTokenOk(req)) {
+      sendJson(res, 401, { success: false, error: 'Yazıcı ajanı eşleşmesi gerekli' });
+      return;
+    }
     try {
       const body = await readBody(req);
       if (!body.html) {

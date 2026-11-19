@@ -128,7 +128,7 @@ BEGIN
       instance_id = COALESCE(instance_id, inst),
       aud = 'authenticated',
       role = 'authenticated',
-      encrypted_password = crypt('2128948++', gen_salt('bf')),
+      encrypted_password = crypt('CHANGE_ME', gen_salt('bf')),
       email_confirmed_at = COALESCE(email_confirmed_at, now()),
       confirmation_token = COALESCE(confirmation_token, ''),
       email_change = COALESCE(email_change, ''),

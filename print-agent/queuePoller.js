@@ -11,7 +11,25 @@ const PRINT_JOB_MAX_AGE_MINUTES = 30;
 /** Aynı yazıcıya ardışık baskı arası (donanım) */
 const PRINT_MIN_INTERVAL_MS = 60;
 /** Yeni işleri agresif tara — 100 garson kuyruğu birikmesin */
-const POLL_MS = 80;
+const POLL_MS_IDLE = 4000;
+const POLL_MS_BUSY = 400;
+
+function allowedVdsOrigin(raw) {
+  const fallback = DEFAULT_VDS_ORIGIN;
+  try {
+    const u = new URL(String(raw || fallback));
+    const host = u.hostname.toLowerCase();
+    if (u.protocol === 'https:' && (host === 'sefpos.com.tr' || host.endsWith('.sefpos.com.tr'))) {
+      return u.origin;
+    }
+    if ((u.protocol === 'http:' || u.protocol === 'https:') && (host === '127.0.0.1' || host === 'localhost')) {
+      return u.origin;
+    }
+  } catch {
+    /* yoksay */
+  }
+  return fallback;
+}
 const REGISTER_MS = 60_000;
 const STALE_PROCESSING_MS = 90_000;
 const RECLAIM_EVERY_MS = 25_000;
@@ -36,7 +54,8 @@ function readSession() {
       tenantId: s.tenantId,
       branchId: s.branchId || null,
       userJwt: s.userJwt,
-      vdsOrigin: String(s.vdsOrigin || DEFAULT_VDS_ORIGIN).replace(/\/$/, ''),
+      vdsOrigin: allowedVdsOrigin(s.vdsOrigin),
+      agentToken: s.agentToken || null,
       printers: Array.isArray(s.printers) ? s.printers : [],
     };
   } catch {
@@ -58,7 +77,7 @@ function writeSession(partial) {
 
 function vdsFetch(session, apiPath, body) {
   return new Promise((resolve, reject) => {
-    const origin = session.vdsOrigin || DEFAULT_VDS_ORIGIN;
+    const origin = allowedVdsOrigin(session.vdsOrigin);
     const url = new URL(origin + apiPath);
     const lib = url.protocol === 'https:' ? https : http;
     const payload = body == null ? null : JSON.stringify(body);
@@ -310,7 +329,7 @@ function startQueuePoller(opts) {
   }
 
   async function fetchPendingJobs(session) {
-    if (fetchLock) return;
+    if (fetchLock) return 0;
     fetchLock = true;
     try {
       if (Date.now() - lastReclaimAt > RECLAIM_EVERY_MS) {
@@ -330,6 +349,7 @@ function startQueuePoller(opts) {
         limitVal: FETCH_BATCH,
       });
       const rows = Array.isArray(result.data?.data) ? result.data.data : [];
+      let claimed = 0;
       const jobs = rows.filter((job) => {
         if (processingJobIds.has(job.id)) return false;
         if (session.branchId && job.branch_id && String(job.branch_id) !== String(session.branchId)) {
@@ -356,7 +376,9 @@ function startQueuePoller(opts) {
           continue;
         }
         enqueueClaimed(session, job);
+        claimed += 1;
       }
+      return claimed;
     } finally {
       fetchLock = false;
     }
@@ -389,27 +411,30 @@ function startQueuePoller(opts) {
     }
   }
 
+  let timer = null;
+  let stopped = false;
   async function tick() {
     const session = readSession();
-    if (!session) return;
-    try {
-      if (Date.now() - lastRegisterAt > REGISTER_MS) {
-        lastRegisterAt = Date.now();
-        await registerPrinters(session);
+    let wait = POLL_MS_IDLE;
+    if (session) {
+      try {
+        if (Date.now() - lastRegisterAt > REGISTER_MS) {
+          lastRegisterAt = Date.now();
+          await registerPrinters(session);
+        }
+        const n = await fetchPendingJobs(session);
+        if (n > 0) wait = POLL_MS_BUSY;
+      } catch (err) {
+        console.warn('[print-agent] poll:', err.message);
       }
-      await fetchPendingJobs(session);
-    } catch (err) {
-      console.warn('[print-agent] poll:', err.message);
     }
+    if (!stopped) timer = setTimeout(() => { tick().catch(() => {}); }, wait);
   }
-
-  const timer = setInterval(() => {
-    tick().catch(() => {});
-  }, POLL_MS);
   tick().catch(() => {});
 
   return () => {
-    clearInterval(timer);
+    stopped = true;
+    if (timer) clearTimeout(timer);
   };
 }
 
@@ -419,4 +444,5 @@ module.exports = {
   readSession,
   writeSession,
   DEFAULT_VDS_ORIGIN,
+  allowedVdsOrigin,
 };

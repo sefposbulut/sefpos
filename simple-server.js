@@ -83,7 +83,7 @@ server.listen(port, '0.0.0.0', () => {
   console.log(``);
   console.log(`📱 Demo credentials:`);
   console.log(`   Email: info@sefpos.com.tr`);
-  console.log(`   Password: 2128948++`);
+  console.log(`   Password: CHANGE_ME`);
 });
 
 server.on('error', (err) => {

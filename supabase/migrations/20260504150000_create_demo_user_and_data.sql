@@ -1,6 +1,6 @@
 -- ============================================================
 -- DEMO KULLANICI VE VERİLERİ
--- info@sefpos.com.tr / 2128948++
+-- info@sefpos.com.tr / CHANGE_ME
 -- ============================================================
 
 -- Demo tenant oluştur (eğer yoksa)
@@ -238,14 +238,14 @@ BEGIN
   END IF;
 END $$;
 
--- Demo kullanıcı için şifre hash (2128948++ için)
+-- Demo kullanıcı için şifre hash (CHANGE_ME için)
 -- Bu hash değerini Supabase auth.users tablosunda manuel olarak güncellemeniz gerekebilir
 -- Çünkü auth.users tablosu Supabase tarafından yönetilir
 
 DO $notice$ BEGIN
   RAISE NOTICE 'Demo veriler başarıyla oluşturuldu!';
   RAISE NOTICE 'Kullanıcı: info@sefpos.com.tr';
-  RAISE NOTICE 'Şifre: 2128948++';
+  RAISE NOTICE 'Şifre: CHANGE_ME';
   RAISE NOTICE 'Toplam 20 masa (10 Salon + 10 Bahçe)';
   RAISE NOTICE '10 kategori ve 20 ürün eklendi.';
 END $notice$;

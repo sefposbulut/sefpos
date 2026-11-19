@@ -121,6 +121,38 @@ const PRINT_SETTINGS_LASTMOD_PREFIX = 'shefpos_print_settings_lastmod';
 /** Buluta yazılamadıysa JSON; çevrimiçi olunca veya sonraki fetch’te tekrar deneriz. */
 const PRINT_SETTINGS_PENDING_PUSH_KEY = 'shefpos_print_settings_pending_push';
 const PRINT_AGENT_URL = 'http://127.0.0.1:7878';
+const PRINT_AGENT_TOKEN_KEY = 'sefpos_print_agent_token';
+let printAgentTokenMem = '';
+
+async function printAgentAuthHeaders(json = false): Promise<Record<string, string>> {
+  if (!printAgentTokenMem) {
+    try {
+      printAgentTokenMem = sessionStorage.getItem(PRINT_AGENT_TOKEN_KEY) || '';
+    } catch {
+      /* yoksay */
+    }
+  }
+  if (!printAgentTokenMem) {
+    try {
+      const res = await fetch(`${PRINT_AGENT_URL}/status`, { signal: AbortSignal.timeout(1500) });
+      const data = await res.json();
+      if (data?.agentToken) {
+        printAgentTokenMem = String(data.agentToken);
+        try {
+          sessionStorage.setItem(PRINT_AGENT_TOKEN_KEY, printAgentTokenMem);
+        } catch {
+          /* yoksay */
+        }
+      }
+    } catch {
+      /* ajan kapalı */
+    }
+  }
+  const headers: Record<string, string> = {};
+  if (json) headers['Content-Type'] = 'application/json';
+  if (printAgentTokenMem) headers['X-Sefpos-Agent-Token'] = printAgentTokenMem;
+  return headers;
+}
 /** Web dev: 7878 yok → konsolda ERR_CONNECTION_REFUSED spam olmasın */
 let printAgentBackoffUntil = 0;
 const PRINT_AGENT_BACKOFF_MS = 120_000;
@@ -998,7 +1030,10 @@ export async function getAvailablePrinters(): Promise<PrinterDevice[]> {
 
   if (window.location.protocol !== 'https:') {
     try {
-      const res = await fetch(`${PRINT_AGENT_URL}/printers`, { signal: AbortSignal.timeout(2000) });
+      const res = await fetch(`${PRINT_AGENT_URL}/printers`, {
+        signal: AbortSignal.timeout(2000),
+        headers: await printAgentAuthHeaders(false),
+      });
       const data = await res.json();
       if (data.success && Array.isArray(data.printers)) return data.printers;
     } catch {}
@@ -1320,6 +1355,7 @@ export function buildReceiptHtml(opts: {
     html += `<div class="extra-line">${st.receiptFooterExtra}</div>`;
   }
   html += `<div class="footer">${opts.footer || 'Teşekkür ederiz, iyi günler!'}</div>`;
+  html += `<div class="footer">Bu fiş mali belge değildir. Mali değeri yoktur.</div>`;
   html += `<div class="line" style="margin-top:6px"></div>`;
   html += `<div class="center" style="font-size:${Math.max(st.receiptBodyPx - 2, 9)}px; margin-top:4px">Bilgi fişidir. Mali değeri yoktur.</div>`;
   html += `<br><br><br>`;
@@ -1528,7 +1564,7 @@ async function tryLocalPrintAgent(
   try {
     const res = await fetch(`${PRINT_AGENT_URL}/print`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: await printAgentAuthHeaders(true),
       body: JSON.stringify({ html, printerName: printerName || undefined, silent: true }),
       signal: AbortSignal.timeout(3500),
     });

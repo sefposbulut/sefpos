@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import type { RealtimeChannel } from '@supabase/supabase-js';
+import type { RealtimeChannel } from '../lib/sefposTypes';
 import {
   flushHybridSyncOnReconnect,
   isHybridCloudLinked,

@@ -69,7 +69,7 @@ console.table(visible);
 console.log('\n=== Owner (info@sefpos.com.tr) olarak signin ===');
 const ownerSi = await anon.auth.signInWithPassword({
   email: 'info@sefpos.com.tr',
-  password: '2128948++',
+  password: 'CHANGE_ME',
 });
 if (ownerSi.error) {
   console.error('Owner login HATA (sifre yanlis olabilir):', ownerSi.error.message);

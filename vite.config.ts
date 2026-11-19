@@ -136,9 +136,8 @@ function supabaseFunctionsDevProxy(supabaseOrigin: string): Plugin {
         }
         try {
           const local = new URL(raw, 'http://127.0.0.1');
-          const upstreamPath =
-            local.pathname.replace(/^\/__supabase-functions/, '/functions/v1') + local.search;
-          const dest = `${origin}${upstreamPath}`;
+          const fnPath = local.pathname.replace(/^\/__supabase-functions\/?/, '');
+          const dest = `https://sefpos.com.tr/vds-api/fn/${fnPath}${local.search}`;
 
           const bodyBuf = await readRequestBody(req);
 
@@ -442,7 +441,6 @@ export default defineConfig(({ mode, command }) => {
         'lucide-react',
         'xlsx',
         'zustand',
-        '@supabase/supabase-js',
         'react',
         'react-dom',
         'react/jsx-runtime',
@@ -467,7 +465,6 @@ export default defineConfig(({ mode, command }) => {
               return undefined;
             }
             if (id.includes('lucide-react')) return 'lucide';
-            if (id.includes('@supabase')) return 'supabase';
             if (id.includes('xlsx')) return 'xlsx';
             if (id.includes('html2canvas')) return 'html2canvas';
             if (id.includes('jspdf')) return 'pdf';

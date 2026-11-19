@@ -36,7 +36,7 @@ console.log('hata:', e1?.message || 'yok', '| code:', e1?.code, '| details:', e1
 
 console.log('\n=== Test 2: Login (ayka super-admin) + RPC ===');
 const ADMIN_EMAIL = 'info@aykasoft.com.tr';
-const ADMIN_PWD = '2128948++';
+const ADMIN_PWD = 'CHANGE_ME';
 const { data: si, error: siErr } = await anon.auth.signInWithPassword({ email: ADMIN_EMAIL, password: ADMIN_PWD });
 if (siErr) {
   console.error('Admin login HATA:', siErr.message);

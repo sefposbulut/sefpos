@@ -183,16 +183,36 @@ export function QrMenuManager() {
     }
     setLogoUploading(true);
     try {
-      const ext = (file.name.split('.').pop() || 'png').toLowerCase();
-      const path = `${tenant.id}/logo-${Date.now()}.${ext}`;
-      const up = await supabase.storage.from('tenant-assets').upload(path, file, {
-        cacheControl: '3600',
-        upsert: false,
-        contentType: file.type,
+      const ext = (file.name.split('.').pop() || 'png').toLowerCase().replace(/[^a-z0-9]/g, '') || 'png';
+      const dataBase64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const raw = String(reader.result || '');
+          resolve(raw.includes(',') ? raw.split(',')[1] : raw);
+        };
+        reader.onerror = () => reject(new Error('Dosya okunamadı'));
+        reader.readAsDataURL(file);
       });
-      if (up.error) throw new Error(up.error.message);
-      const { data: pub } = supabase.storage.from('tenant-assets').getPublicUrl(path);
-      const newUrl = pub.publicUrl;
+      const token = (() => {
+        try {
+          return JSON.parse(localStorage.getItem('shefpos_sql_session') || '{}')?.access_token || '';
+        } catch {
+          return '';
+        }
+      })();
+      const upRes = await fetch('/vds-api/upload', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ ext, dataBase64 }),
+      });
+      const upJson = await upRes.json().catch(() => null);
+      if (!upRes.ok || !upJson?.url) throw new Error(upJson?.error || 'Logo yüklenemedi');
+      const newUrl = String(upJson.url).startsWith('http')
+        ? upJson.url
+        : `${window.location.origin}${upJson.url}`;
       const { error } = await supabase
         .from('tenants')
         .update({ logo_url: newUrl })

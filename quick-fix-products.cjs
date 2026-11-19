@@ -203,7 +203,7 @@ async function quickFixProducts() {
     console.log(`🍽️ Ürünler: ${createdProducts.length}`);
     
     console.log('\n🔐 Giriş Bilgileri:');
-    console.log(`📧 Demo: info@sefpos.com.tr / 2128948++`);
+    console.log(`📧 Demo: info@sefpos.com.tr / CHANGE_ME`);
     
     console.log('\n🌐 Sepet içeriği görünür olmalı!');
     console.log('📱 URL: http://localhost:5180');
