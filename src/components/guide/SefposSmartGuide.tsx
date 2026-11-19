@@ -91,8 +91,7 @@ export function SefposSmartGuide({
     };
     const onOpen = (e: Event) => {
       const d = (e as CustomEvent).detail as { tab?: TabId } | undefined;
-      setFabHidden(false);
-      setGuideFabHidden(false);
+      // Yüzen FAB kapalı kalsın; panel üst menüden açılır
       setOpen(true);
       setMinimized(false);
       if (d?.tab) setTab(d.tab);
@@ -254,16 +253,12 @@ export function SefposSmartGuide({
             </div>
             <button
               type="button"
-              onClick={() => setMinimized(true)}
-              className="p-1.5 rounded-lg hover:bg-white/15"
-              title="Küçült"
-              aria-label="Küçült"
-            >
-              <Minimize2 className="w-4 h-4" />
-            </button>
-            <button
-              type="button"
-              onClick={() => setOpen(false)}
+              onClick={() => {
+                setOpen(false);
+                setMinimized(false);
+                setGuideFabHidden(true);
+                setFabHidden(true);
+              }}
               className="p-1.5 rounded-lg hover:bg-white/15"
               title="Kapat"
               aria-label="Kapat"

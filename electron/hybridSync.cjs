@@ -3,8 +3,8 @@
  * Mobil garson / bulut siparişleri cloud tenant'ta kalır; kasa SQL'de çalışır, online olunca eşitlenir.
  */
 
-const DEFAULT_SUPABASE_URL = 'https://xdfnozfuuzctubijbnds.supabase.co';
-const DEFAULT_SUPABASE_ANON_KEY = 'sb_publishable_wrSHY5Kzkw-bx0XzYM5VFA_FK3BFF_x';
+const DEFAULT_SUPABASE_URL = '';
+const DEFAULT_SUPABASE_ANON_KEY = '';
 /** Rutin sync dongusunde masa/grup dedupe en fazla bu aralikta bir calisir. */
 const HYBRID_DEDUPE_MIN_MS = 30 * 60 * 1000;
 let lastRoutineHybridDedupeAt = 0;

@@ -1,6 +1,6 @@
 -- ============================================================
 -- ŞEFPOS DEMO VERİLERİ
--- info@sefpos.com.tr / 2128948++
+-- info@sefpos.com.tr / CHANGE_ME
 -- ============================================================
 
 -- Demo tenant ve kullanıcı oluştur
@@ -107,6 +107,6 @@ INSERT INTO products (id, tenant_id, name, price, cost, category_id, is_active, 
 
 PRINT 'Demo veriler başarıyla oluşturuldu!';
 PRINT 'Kullanıcı: info@sefpos.com.tr';
-PRINT 'Şifre: 2128948++';
+PRINT 'Şifre: CHANGE_ME';
 PRINT 'Toplam 20 masa (10 Salon + 10 Bahçe)';
 PRINT '10 kategori ve 20 ürün eklendi.';

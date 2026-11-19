@@ -3,6 +3,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePersonalActiveShift } from '../contexts/ActiveShiftContext';
 import { LogOut, User, Settings, ChevronDown, MapPin, Check, Building2, Zap, ZoomIn, ZoomOut, Bell, Headphones as HeadphonesIcon, X, Send, Sparkles, Phone, Mail, ArrowLeft, LayoutGrid, PlayCircle, Lock, Minimize2, UserCheck, Trash2, Home, ChevronRight, Key, BookOpen } from 'lucide-react';
 import { WaiterCallBell } from './WaiterCallBell';
+import { PrintStatusChip } from './PrintStatusChip';
 import { supabase } from '../lib/supabase';
 import { getTrialInfo, formatTrialRemaining } from '../lib/tenantTrial';
 import { getLicenseInfo } from '../lib/licenseDisplay';
@@ -45,6 +46,8 @@ import {
   ELECTRON_HEADER_PADDING,
   ELECTRON_HEADER_TOOL_H,
   ELECTRON_HEADER_LOGOUT_CLASS,
+  HEADER_TOOL_STRIP,
+  HEADER_CONTEXT_CHIP,
 } from '../lib/electronLayout';
 
 const isElectron = !!(window as any).electronAPI;
@@ -337,12 +340,12 @@ function HeaderInner({ onOpenSettings, onOpenOnboarding, currentPage, onBackToTa
       <header
         className={
           isElectron
-            ? `fixed top-0 left-0 right-0 z-30 ${ELECTRON_HEADER_BAR_CLASS}`
-            : 'fixed top-0 left-0 right-0 bg-white shadow-sm border-b border-slate-200 z-30'
+            ? `fixed top-0 left-0 right-0 z-50 overflow-visible ${ELECTRON_HEADER_BAR_CLASS}`
+            : 'fixed top-0 left-0 right-0 bg-white/95 backdrop-blur-sm shadow-[0_1px_2px_rgba(15,23,42,0.05)] border-b border-slate-200/80 z-50 overflow-visible'
         }
       >
-        <div className={isElectron ? `${ELECTRON_HEADER_PADDING} overflow-hidden` : 'px-3 md:px-6'}>
-          <div className={isElectron ? ELECTRON_HEADER_ROW_CLASS : 'flex justify-between items-center h-14 md:h-20 w-full'}>
+        <div className={isElectron ? `${ELECTRON_HEADER_PADDING} overflow-visible` : 'px-3 md:px-5 overflow-visible'}>
+          <div className={isElectron ? ELECTRON_HEADER_ROW_CLASS : 'flex justify-between items-center h-14 w-full min-h-14 max-h-14 overflow-visible'}>
             <div
               className={`flex items-center gap-2 min-w-0 flex-1 ${isElectron ? '' : 'ml-12 md:ml-16'}`}
             >
@@ -489,11 +492,7 @@ function HeaderInner({ onOpenSettings, onOpenOnboarding, currentPage, onBackToTa
 
             </div>
 
-            <div
-              className={`flex items-center gap-1 md:gap-1.5 shrink-0 ${
-                isElectron ? 'md:gap-1.5' : 'space-x-1.5 md:space-x-2'
-              }`}
-            >
+            <div className="flex items-center gap-1.5 md:gap-2 shrink-0 min-w-0">
               {impersonationTenantId && (
                 <div
                   className="flex items-center gap-1.5 max-w-[min(100%,16rem)] sm:max-w-sm rounded-lg border border-amber-200 bg-amber-50 px-2 py-1 text-[10px] sm:text-xs font-bold text-amber-950"
@@ -512,336 +511,275 @@ function HeaderInner({ onOpenSettings, onOpenOnboarding, currentPage, onBackToTa
                   </button>
                 </div>
               )}
-              {showTrialBadge && !isElectron && (
-                <button
-                  type="button"
-                  onClick={() => setShowTrialInfo(true)}
-                  title={
-                    trialInfo.expired
-                      ? 'Deneme süreniz sona erdi — detay için tıklayın'
-                      : `${formatTrialRemaining(trialInfo)} kaldı — detay için tıklayın`
-                  }
-                  className={`hidden sm:inline-flex items-center gap-2 pl-1 pr-3 py-1 rounded-full transition active:scale-95 bg-transparent hover:bg-slate-100/70`}
-                >
-                  <span
-                    className={`w-7 h-7 rounded-full flex items-center justify-center shadow-inner ${
+
+              {/* Bağlam: lisans · şube · kullanıcı — sessiz, kenarlıksız */}
+              <div className="hidden sm:flex items-center gap-0.5 min-w-0">
+                {showTrialBadge && !isElectron && (
+                  <button
+                    type="button"
+                    onClick={() => setShowTrialInfo(true)}
+                    title={
                       trialInfo.expired
-                        ? 'bg-gradient-to-br from-red-500 to-rose-600'
-                        : 'bg-gradient-to-br from-amber-400 via-orange-500 to-rose-500'
-                    }`}
+                        ? 'Deneme süreniz sona erdi — detay için tıklayın'
+                        : `${formatTrialRemaining(trialInfo)} kaldı — detay için tıklayın`
+                    }
+                    className={HEADER_CONTEXT_CHIP}
                   >
-                    <Sparkles className="w-3.5 h-3.5 text-white" />
-                  </span>
-                  <span className="flex items-baseline gap-1.5 leading-none">
-                    <span
-                      className={`text-[9px] md:text-[10px] uppercase tracking-[0.12em] font-bold ${
-                        trialInfo.expired ? 'text-red-600' : 'text-slate-500'
+                    <Sparkles
+                      className={`w-3.5 h-3.5 shrink-0 ${
+                        trialInfo.expired ? 'text-red-500' : 'text-amber-500'
                       }`}
-                    >
-                      Deneme
-                    </span>
+                    />
                     <span
-                      className={`text-sm md:text-base font-extrabold whitespace-nowrap ${
+                      className={`text-xs font-semibold tabular-nums whitespace-nowrap ${
                         trialInfo.expired
                           ? 'text-red-700'
                           : trialUrgent
                             ? 'text-orange-700'
-                            : 'text-slate-800'
+                            : 'text-slate-600'
                       }`}
                     >
                       {trialInfo.expired ? 'Süre bitti' : formatTrialRemaining(trialInfo)}
                     </span>
-                  </span>
-                </button>
-              )}
+                  </button>
+                )}
 
-              {showLicenseBadge && !isElectron && (
-                <button
-                  type="button"
-                  onClick={() => setShowLicenseInfo(true)}
-                  title={
-                    licenseInfo.expired
-                      ? 'Lisans süresi doldu — detay için tıklayın'
-                      : `${licenseInfo.planLabel} · ${licenseInfo.remainingText} — detay için tıklayın`
-                  }
-                  className={`hidden sm:inline-flex items-center gap-2 pl-1 pr-3 py-1 rounded-full transition active:scale-95 bg-transparent hover:bg-slate-100/70`}
-                >
-                  <span
-                    className={
-                      isElectron
-                        ? ''
-                        : `w-7 h-7 rounded-full flex items-center justify-center shadow-inner ${
-                            licenseInfo.expired
-                              ? 'bg-gradient-to-br from-red-500 to-rose-600'
-                              : licenseUrgent
-                                ? 'bg-gradient-to-br from-amber-400 to-orange-500'
-                                : 'bg-gradient-to-br from-emerald-400 to-teal-600'
-                          }`
+                {showLicenseBadge && !isElectron && (
+                  <button
+                    type="button"
+                    onClick={() => setShowLicenseInfo(true)}
+                    title={
+                      licenseInfo.expired
+                        ? 'Lisans süresi doldu — detay için tıklayın'
+                        : `${licenseInfo.planLabel} · ${licenseInfo.remainingText} — detay için tıklayın`
                     }
+                    className={HEADER_CONTEXT_CHIP}
                   >
                     <Key
-                      className={`${isElectron ? 'w-3.5 h-3.5' : 'w-3.5 h-3.5 text-white'} ${
-                        isElectron
-                          ? licenseInfo.expired
-                            ? 'text-red-600'
-                            : licenseUrgent
-                              ? 'text-orange-600'
-                              : 'text-emerald-600'
-                          : ''
+                      className={`w-3.5 h-3.5 shrink-0 ${
+                        licenseInfo.expired
+                          ? 'text-red-500'
+                          : licenseUrgent
+                            ? 'text-orange-500'
+                            : 'text-teal-600'
                       }`}
                     />
-                  </span>
-                  {isElectron ? (
                     <span
-                      className={`text-xs font-bold tabular-nums whitespace-nowrap ${
+                      className={`text-xs font-semibold tabular-nums whitespace-nowrap ${
                         licenseInfo.expired
                           ? 'text-red-700'
                           : licenseUrgent
                             ? 'text-orange-700'
-                            : 'text-slate-700'
+                            : 'text-slate-600'
                       }`}
                     >
                       {licenseInfo.expired ? 'Süre bitti' : licenseInfo.remainingText}
                     </span>
-                  ) : (
-                    <span className="flex items-baseline gap-1.5 leading-none">
-                      <span
-                        className={`text-[9px] md:text-[10px] uppercase tracking-[0.12em] font-bold ${
-                          licenseInfo.expired ? 'text-red-600' : 'text-slate-500'
-                        }`}
-                      >
-                        Lisans
-                      </span>
-                      <span
-                        className={`text-sm md:text-base font-extrabold whitespace-nowrap ${
-                          licenseInfo.expired
-                            ? 'text-red-700'
-                            : licenseUrgent
-                              ? 'text-orange-700'
-                              : 'text-slate-800'
-                        }`}
-                      >
-                        {licenseInfo.expired ? 'Süre bitti' : licenseInfo.remainingText}
-                      </span>
-                    </span>
-                  )}
-                </button>
-              )}
-
-              {tenant && shiftsEnabled && canUseShifts && (
-                <ShiftBadge
-                  activeShift={activeShift}
-                  dayLocked={!!todayClosure}
-                  onClick={onOpenShifts}
-                />
-              )}
-
-              {branches.length > 0 && (
-                <div className="relative ml-1 md:ml-0">
-                  <button
-                    onClick={() => setShowBranchMenu(!showBranchMenu)}
-                    className={`flex items-center gap-1.5 px-2.5 rounded-lg transition-all active:scale-95 max-w-[7.5rem] md:max-w-[9rem] ${ELECTRON_HEADER_ACCENT_CHIP_CLASS}`}
-                  >
-                    <MapPin className="w-3 h-3 md:w-4 md:h-4 flex-shrink-0 text-orange-600" />
-                    <span className="text-[10px] md:text-sm font-semibold truncate leading-tight text-orange-700">
-                      {activeBranch?.name || 'Şube Seç'}
-                    </span>
-                    {branches.length > 1 && (
-                      <ChevronDown
-                        className={`w-2.5 h-2.5 md:w-3.5 md:h-3.5 flex-shrink-0 transition-transform text-orange-500 ${showBranchMenu ? 'rotate-180' : ''}`}
-                      />
-                    )}
                   </button>
-
-                  {showBranchMenu && branches.length > 1 && (
-                    <>
-                      <div className="fixed inset-0 z-40" onClick={() => setShowBranchMenu(false)} />
-                      <div className="absolute right-0 top-full mt-2 w-64 bg-white rounded-xl shadow-xl border border-gray-200 z-50 overflow-hidden">
-                        <div className="px-4 py-3 bg-gray-50 border-b border-gray-200">
-                          <div className="flex items-center gap-2">
-                            <Building2 className="w-4 h-4 text-gray-500" />
-                            <span className="text-sm font-semibold text-gray-700">Şube Seçin</span>
-                          </div>
-                          <p className="text-xs text-gray-500 mt-0.5">{tenant?.name}</p>
-                        </div>
-                        <div className="py-1 max-h-64 overflow-y-auto">
-                          {branches.map((branch) => (
-                            <button
-                              key={branch.id}
-                              onClick={() => {
-                                setActiveBranch(branch);
-                                setShowBranchMenu(false);
-                              }}
-                              className={`w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-gray-50 transition ${
-                                activeBranch?.id === branch.id ? 'bg-orange-50' : ''
-                              }`}
-                            >
-                              <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${
-                                activeBranch?.id === branch.id ? 'bg-orange-100' : 'bg-gray-100'
-                              }`}>
-                                <MapPin className={`w-4 h-4 ${activeBranch?.id === branch.id ? 'text-orange-600' : 'text-gray-500'}`} />
-                              </div>
-                              <div className="flex-1 min-w-0">
-                                <p className={`text-sm font-semibold truncate ${activeBranch?.id === branch.id ? 'text-orange-700' : 'text-gray-800'}`}>
-                                  {branch.name}
-                                </p>
-                                {branch.address && (
-                                  <p className="text-xs text-gray-500 truncate">{branch.address}</p>
-                                )}
-                                {branch.is_main && (
-                                  <span className="text-xs text-orange-500 font-medium">Ana Şube</span>
-                                )}
-                              </div>
-                              {activeBranch?.id === branch.id && (
-                                <Check className="w-4 h-4 text-orange-600 flex-shrink-0" />
-                              )}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    </>
-                  )}
-                </div>
-              )}
-
-              <div
-                className={`flex items-center gap-1.5 px-2 rounded-lg min-w-0 flex-shrink overflow-hidden ${ELECTRON_HEADER_CHIP_CLASS} ${
-                  isElectron ? 'w-10 md:w-auto max-w-none' : 'max-w-[44px] sm:max-w-[160px] md:max-w-[11rem]'
-                }`}
-                title={`${userLabel} — ${roleLabels[profile?.role || ''] || profile?.role}`}
-              >
-                <User className="w-[18px] h-[18px] flex-shrink-0 text-slate-500" />
-                <div className="min-w-0 hidden md:block leading-tight">
-                  <p className="text-xs font-bold truncate text-slate-700">
-                    {profile?.full_name?.split(' ')[0] || userLabel.split(':').pop()?.trim() || 'Kullanıcı'}
-                  </p>
-                  <p className="text-[10px] truncate text-slate-500">
-                    {roleLabels[profile?.role || ''] || profile?.role}
-                  </p>
-                </div>
-              </div>
-
-              {(profile?.role === 'owner' || profile?.role === 'admin') && onOpenOnboarding && !onTablesHub && (
-                <button
-                  onClick={onOpenOnboarding}
-                  className={`hidden md:inline-flex ${ELECTRON_HEADER_ACCENT_CHIP_CLASS} px-3 text-xs font-semibold`}
-                  title="Hızlı Kurulum"
-                >
-                  <Zap className="w-3.5 h-3.5" />
-                  <span>Kurulum</span>
-                </button>
-              )}
-
-              <button
-                type="button"
-                onClick={() => requestOpenGuide('manual')}
-                className={`hidden sm:inline-flex ${isElectron ? ELECTRON_HEADER_CHIP_CLASS : 'items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50'} text-xs font-semibold`}
-                title="Kullanım kılavuzu ve rehber"
-              >
-                <BookOpen className="w-3.5 h-3.5" />
-                <span>Kılavuz</span>
-              </button>
-
-              <div className={isElectron ? ELECTRON_HEADER_TOOLBAR_GROUP : 'hidden sm:contents'}>
-              <WaiterCallBell headerVariant={isElectron ? 'electron-bar' : 'default'} />
-
-              <button
-                onClick={() => {
-                  const next = !showNotifications;
-                  setShowNotifications(next);
-                  setShowSupport(false);
-                  if (next && tenant) {
-                    void (async () => {
-                      const rows = await fetchSupportNotifications(tenant.id);
-                      setSystemNotifs(rows);
-                      await loadTickets();
-                      await markSupportNotificationsRead(rows, tenant.id);
-                      const refreshed = await fetchSupportNotifications(tenant.id);
-                      setSystemNotifs(refreshed);
-                      setSystemUnreadCount(countUnreadNotifications(refreshed, tenant.id));
-                    })();
-                  }
-                }}
-                className={`relative rounded-lg transition-all active:scale-95 ${
-                  isElectron ? 'p-2 hover:bg-white text-slate-600' : ELECTRON_HEADER_ICON_BTN_CLASS
-                }`}
-                title="Bildirimler"
-              >
-                <Bell className="w-[18px] h-[18px]" strokeWidth={2} />
-                {totalUnread > 0 && (
-                  <span
-                    className="absolute -top-0.5 -right-0.5 w-4 h-4 text-[10px] font-bold rounded-full flex items-center justify-center bg-red-500 text-white"
-                  >
-                    {totalUnread > 9 ? '9+' : totalUnread}
-                  </span>
                 )}
-              </button>
 
-              <button
-                onClick={() => { setShowSupport(!showSupport); setShowNotifications(false); }}
-                className={`hidden sm:inline-flex rounded-lg transition-all active:scale-95 ${
-                  isElectron ? 'p-2 hover:bg-white text-slate-600' : ELECTRON_HEADER_ICON_BTN_CLASS
-                }`}
-                title="Destek"
-              >
-                <HeadphonesIcon className="w-[18px] h-[18px]" strokeWidth={2} />
-              </button>
+                {tenant && shiftsEnabled && canUseShifts && (
+                  <ShiftBadge
+                    activeShift={activeShift}
+                    dayLocked={!!todayClosure}
+                    onClick={onOpenShifts}
+                  />
+                )}
 
-              <button
-                onClick={onOpenSettings}
-                className={`hidden sm:inline-flex rounded-lg transition-all active:scale-95 ${
-                  isElectron ? 'p-2 hover:bg-white text-slate-600' : ELECTRON_HEADER_ICON_BTN_CLASS
-                }`}
-                title="Ayarlar"
-              >
-                <Settings className="w-[18px] h-[18px]" strokeWidth={2} />
-              </button>
+                {branches.length > 0 && (
+                  <div className="relative z-[60]">
+                    <button
+                      type="button"
+                      onClick={() => setShowBranchMenu((v) => !v)}
+                      className={`${HEADER_CONTEXT_CHIP} max-w-[8.5rem] md:max-w-[10rem]`}
+                      title="Şube seç"
+                    >
+                      <MapPin className="w-3.5 h-3.5 flex-shrink-0 text-orange-500" />
+                      <span className="text-xs md:text-sm font-semibold truncate text-slate-700">
+                        {activeBranch?.name || 'Şube Seç'}
+                      </span>
+                      <ChevronDown
+                        className={`w-3 h-3 flex-shrink-0 text-slate-400 transition-transform ${showBranchMenu ? 'rotate-180' : ''}`}
+                      />
+                    </button>
 
-              <span className={isElectron ? 'hidden md:block w-px h-6 bg-slate-200 mx-0.5' : 'hidden'} aria-hidden />
+                    {showBranchMenu && (
+                      <>
+                        <div className="fixed inset-0 z-[70]" onClick={() => setShowBranchMenu(false)} />
+                        <div className="absolute right-0 top-full mt-2 w-64 bg-white rounded-xl shadow-xl border border-gray-200 z-[80] overflow-hidden">
+                          <div className="px-4 py-3 bg-gray-50 border-b border-gray-200">
+                            <div className="flex items-center gap-2">
+                              <Building2 className="w-4 h-4 text-gray-500" />
+                              <span className="text-sm font-semibold text-gray-700">Şube Seçin</span>
+                            </div>
+                            <p className="text-xs text-gray-500 mt-0.5">{tenant?.name}</p>
+                          </div>
+                          <div className="py-1 max-h-64 overflow-y-auto">
+                            {branches.map((branch) => (
+                              <button
+                                key={branch.id}
+                                onClick={() => {
+                                  setActiveBranch(branch);
+                                  setShowBranchMenu(false);
+                                }}
+                                className={`w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-gray-50 transition ${
+                                  activeBranch?.id === branch.id ? 'bg-orange-50' : ''
+                                }`}
+                              >
+                                <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${
+                                  activeBranch?.id === branch.id ? 'bg-orange-100' : 'bg-gray-100'
+                                }`}>
+                                  <MapPin className={`w-4 h-4 ${activeBranch?.id === branch.id ? 'text-orange-600' : 'text-gray-500'}`} />
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                  <p className={`text-sm font-semibold truncate ${activeBranch?.id === branch.id ? 'text-orange-700' : 'text-gray-800'}`}>
+                                    {branch.name}
+                                  </p>
+                                  {branch.address && (
+                                    <p className="text-xs text-gray-500 truncate">{branch.address}</p>
+                                  )}
+                                  {branch.is_main && (
+                                    <span className="text-xs text-orange-500 font-medium">Ana Şube</span>
+                                  )}
+                                </div>
+                                {activeBranch?.id === branch.id && (
+                                  <Check className="w-4 h-4 text-orange-600 flex-shrink-0" />
+                                )}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
 
-              {/* Arayuz olcegi (her ortamda calisir, kalicidir). */}
-              <div
-                className={
-                  isElectron
-                    ? 'hidden md:flex items-center gap-0.5 px-0.5'
-                    : `hidden md:flex items-center gap-0.5 rounded-lg px-1 ${ELECTRON_HEADER_CHIP_CLASS} w-auto px-1.5`
-                }
-              >
-                <button
-                  onClick={() => changeZoom(-UI_SCALE_STEP)}
-                  disabled={zoom <= UI_SCALE_MIN + 0.001}
-                  className="p-1.5 rounded transition-all active:scale-95 disabled:opacity-40 hover:bg-slate-200 text-slate-600"
-                  title="Arayüzü küçült"
+                <div
+                  className={`${HEADER_CONTEXT_CHIP} min-w-0 max-w-[9rem] ${
+                    isElectron ? 'w-10 md:w-auto max-w-none' : ''
+                  }`}
+                  title={`${userLabel} — ${roleLabels[profile?.role || ''] || profile?.role}`}
                 >
-                  <ZoomOut className="w-4 h-4" />
-                </button>
-                <button
-                  onClick={() => resetUiScale()}
-                  className="text-xs font-bold w-12 text-center rounded py-1 active:scale-95 text-slate-600 hover:bg-slate-200"
-                  title="%100'e döndür"
-                >
-                  {Math.round(zoom * 100)}%
-                </button>
-                <button
-                  onClick={() => changeZoom(UI_SCALE_STEP)}
-                  disabled={zoom >= UI_SCALE_MAX - 0.001}
-                  className="p-1.5 rounded transition-all active:scale-95 disabled:opacity-40 hover:bg-slate-200 text-slate-600"
-                  title="Arayüzü büyüt"
-                >
-                  <ZoomIn className="w-4 h-4" />
-                </button>
+                  <User className="w-4 h-4 flex-shrink-0 text-slate-400" />
+                  <div className="min-w-0 hidden md:block leading-tight text-left">
+                    <p className="text-xs font-semibold truncate text-slate-700">
+                      {profile?.full_name?.split(' ')[0] || userLabel.split(':').pop()?.trim() || 'Kullanıcı'}
+                    </p>
+                    <p className="text-[10px] truncate text-slate-400">
+                      {roleLabels[profile?.role || ''] || profile?.role}
+                    </p>
+                  </div>
+                </div>
               </div>
 
-              {/* Tam Ekran POS — ust meunyu gizler, kalicidir. Sadece masaustu. */}
-              <button
-                onClick={() => setHeaderHidden(true)}
-                className={`hidden md:inline-flex rounded-lg transition-all active:scale-95 ${
-                  isElectron ? 'p-2 hover:bg-white text-slate-600' : ELECTRON_HEADER_ICON_BTN_CLASS
-                }`}
-                title="Tam Ekran POS modu (üst menüyü gizle)"
-              >
-                <Minimize2 className="w-[18px] h-[18px]" strokeWidth={2} />
-              </button>
+              <span className="hidden md:block w-px h-6 bg-slate-200 shrink-0" aria-hidden />
+
+              {/* Araçlar: tek şerit — kurulum, kılavuz, yazıcı, bildirim, destek, ayar, zoom */}
+              <div className={isElectron ? ELECTRON_HEADER_TOOLBAR_GROUP : HEADER_TOOL_STRIP}>
+                {(profile?.role === 'owner' || profile?.role === 'admin') && onOpenOnboarding && !onTablesHub && (
+                  <button
+                    onClick={onOpenOnboarding}
+                    className={`hidden md:inline-flex ${ELECTRON_HEADER_ICON_BTN_CLASS}`}
+                    title="Hızlı Kurulum"
+                  >
+                    <Zap className="w-[18px] h-[18px] text-orange-500" />
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => requestOpenGuide('manual')}
+                  className={`hidden sm:inline-flex ${ELECTRON_HEADER_ICON_BTN_CLASS}`}
+                  title="Kullanım kılavuzu ve rehber"
+                >
+                  <BookOpen className="w-[18px] h-[18px]" />
+                </button>
+
+                <PrintStatusChip />
+
+                <WaiterCallBell headerVariant={isElectron ? 'electron-bar' : 'default'} />
+
+                <button
+                  onClick={() => {
+                    const next = !showNotifications;
+                    setShowNotifications(next);
+                    setShowSupport(false);
+                    if (next && tenant) {
+                      void (async () => {
+                        const rows = await fetchSupportNotifications(tenant.id);
+                        setSystemNotifs(rows);
+                        await loadTickets();
+                        await markSupportNotificationsRead(rows, tenant.id);
+                        const refreshed = await fetchSupportNotifications(tenant.id);
+                        setSystemNotifs(refreshed);
+                        setSystemUnreadCount(countUnreadNotifications(refreshed, tenant.id));
+                      })();
+                    }
+                  }}
+                  className={`relative ${ELECTRON_HEADER_ICON_BTN_CLASS}`}
+                  title="Bildirimler"
+                >
+                  <Bell className="w-[18px] h-[18px]" strokeWidth={2} />
+                  {totalUnread > 0 && (
+                    <span
+                      className="absolute -top-0.5 -right-0.5 w-4 h-4 text-[10px] font-bold rounded-full flex items-center justify-center bg-red-500 text-white"
+                    >
+                      {totalUnread > 9 ? '9+' : totalUnread}
+                    </span>
+                  )}
+                </button>
+
+                <button
+                  onClick={() => { setShowSupport(!showSupport); setShowNotifications(false); }}
+                  className={`hidden sm:inline-flex ${ELECTRON_HEADER_ICON_BTN_CLASS}`}
+                  title="Destek"
+                >
+                  <HeadphonesIcon className="w-[18px] h-[18px]" strokeWidth={2} />
+                </button>
+
+                <button
+                  onClick={onOpenSettings}
+                  className={`hidden sm:inline-flex ${ELECTRON_HEADER_ICON_BTN_CLASS}`}
+                  title="Ayarlar"
+                >
+                  <Settings className="w-[18px] h-[18px]" strokeWidth={2} />
+                </button>
+
+                <span className="hidden md:block w-px h-5 bg-slate-200 mx-0.5" aria-hidden />
+
+                <div className="hidden md:flex items-center gap-0">
+                  <button
+                    onClick={() => changeZoom(-UI_SCALE_STEP)}
+                    disabled={zoom <= UI_SCALE_MIN + 0.001}
+                    className="p-1.5 rounded-md transition-all active:scale-95 disabled:opacity-40 hover:bg-white text-slate-500"
+                    title="Arayüzü küçült"
+                  >
+                    <ZoomOut className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={() => resetUiScale()}
+                    className="text-[11px] font-semibold w-9 text-center rounded-md py-1 active:scale-95 text-slate-500 hover:bg-white tabular-nums"
+                    title="%100'e döndür"
+                  >
+                    {Math.round(zoom * 100)}%
+                  </button>
+                  <button
+                    onClick={() => changeZoom(UI_SCALE_STEP)}
+                    disabled={zoom >= UI_SCALE_MAX - 0.001}
+                    className="p-1.5 rounded-md transition-all active:scale-95 disabled:opacity-40 hover:bg-white text-slate-500"
+                    title="Arayüzü büyüt"
+                  >
+                    <ZoomIn className="w-4 h-4" />
+                  </button>
+                </div>
+
+                <button
+                  onClick={() => setHeaderHidden(true)}
+                  className={`hidden md:inline-flex ${ELECTRON_HEADER_ICON_BTN_CLASS}`}
+                  title="Tam Ekran POS modu (üst menüyü gizle)"
+                >
+                  <Minimize2 className="w-[18px] h-[18px]" strokeWidth={2} />
+                </button>
               </div>
 
               <button
@@ -857,8 +795,8 @@ function HeaderInner({ onOpenSettings, onOpenOnboarding, currentPage, onBackToTa
                   }
                   signOut();
                 }}
-                className={`flex items-center gap-1.5 px-3 rounded-lg transition-all active:scale-95 flex-shrink-0 ${
-                  isElectron ? ELECTRON_HEADER_LOGOUT_CLASS : `${ELECTRON_HEADER_TOOL_H} text-white bg-gradient-to-r from-red-600 to-red-700 hover:shadow-lg`
+                className={`flex items-center gap-1.5 px-2.5 md:px-3 rounded-lg transition-all active:scale-95 flex-shrink-0 ${
+                  isElectron ? ELECTRON_HEADER_LOGOUT_CLASS : `${ELECTRON_HEADER_TOOL_H} text-white bg-red-600 hover:bg-red-700`
                 }`}
                 title="Çıkış"
               >
@@ -1096,7 +1034,7 @@ function HeaderInner({ onOpenSettings, onOpenOnboarding, currentPage, onBackToTa
       {showNotifications && (
         <>
           <div className="fixed inset-0 z-40" onClick={() => setShowNotifications(false)} />
-          <div className="fixed top-14 md:top-20 right-3 md:right-6 z-50 w-80 md:w-96 bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden">
+          <div className="fixed top-14 right-3 md:right-6 z-50 w-80 md:w-96 bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden">
             <div className="flex items-center justify-between px-4 py-3 bg-slate-50 border-b border-slate-200">
               <div className="flex items-center gap-2">
                 <Bell className="w-4 h-4 text-slate-600" />
@@ -1215,7 +1153,7 @@ function HeaderInner({ onOpenSettings, onOpenOnboarding, currentPage, onBackToTa
       {showSupport && (
         <>
           <div className="fixed inset-0 z-40" onClick={() => setShowSupport(false)} />
-          <div className="fixed top-14 md:top-20 right-3 md:right-6 z-50 w-80 md:w-96 bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden">
+          <div className="fixed top-14 right-3 md:right-6 z-50 w-80 md:w-96 bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden">
             <div className="flex items-center justify-between px-4 py-3 bg-slate-50 border-b border-slate-200">
               <div className="flex items-center gap-2">
                 <HeadphonesIcon className="w-4 h-4 text-slate-600" />

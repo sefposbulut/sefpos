@@ -22,7 +22,13 @@ dist-ssr
 *.sln
 *.sw?
 .env
+.env.*
+!.env.example
 release/
+release*/
+tmp-*
+*.db
+*.zip
 release-new/
 release-build/
 release-eb-*/

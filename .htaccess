@@ -1,5 +1,8 @@
-# Enable CORS
-Header always set Access-Control-Allow-Origin "*"
+# CORS — yalnızca ŞefPOS alanları (Apache 2.4)
+SetEnvIf Origin "^https://([a-z0-9-]+\.)?sefpos\.com\.tr$" CORS_ORIGIN=$0
+SetEnvIf Origin "^http://(localhost|127\.0\.0\.1):5180$" CORS_ORIGIN=$0
+Header always set Access-Control-Allow-Origin %{CORS_ORIGIN}e env=CORS_ORIGIN
+Header always set Vary "Origin"
 Header always set Access-Control-Allow-Methods "GET, POST, PUT, DELETE, OPTIONS"
 Header always set Access-Control-Allow-Headers "Content-Type, Authorization, X-Requested-With"
 

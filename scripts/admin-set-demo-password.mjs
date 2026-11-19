@@ -37,7 +37,7 @@ if (!serviceKey) {
 }
 
 const email = process.env.DEMO_EMAIL || 'info@sefpos.com.tr';
-const password = process.env.DEMO_PASSWORD || '2128948++';
+const password = process.env.DEMO_PASSWORD || 'CHANGE_ME';
 
 const sb = createClient(url, serviceKey, { auth: { persistSession: false } });
 

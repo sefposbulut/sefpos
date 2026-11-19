@@ -57,7 +57,10 @@ Deno.serve(async (req: Request) => {
     const exp = Date.now() + 4 * 60 * 1000;
     const payload = JSON.stringify({ phone, purpose, codeHash: await sha256(code), exp });
     const payloadB64 = b64urlEncode(payload);
-    const signingSecret = Deno.env.get('OTP_SIGNING_SECRET') || 'sefpos-otp-secret';
+    const signingSecret = Deno.env.get('OTP_SIGNING_SECRET') || '';
+    if (signingSecret.length < 16) {
+      return new Response(JSON.stringify({ success: false, error: 'OTP_SIGNING_SECRET eksik' }), { status: 503 });
+    }
     const sig = await hmacSign(payloadB64, signingSecret);
     const otpToken = `${payloadB64}.${sig}`;
 

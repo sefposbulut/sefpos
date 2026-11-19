@@ -2,7 +2,7 @@
  * info@aykasoft.com.tr ayka super-admin durumunu kontrol et:
  *  - auth.users'da var mı?
  *  - profiles.is_super_admin doğru mu?
- *  - 2128948++ ile signInWithPassword çalışıyor mu?
+ *  - CHANGE_ME ile signInWithPassword çalışıyor mu?
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -24,7 +24,7 @@ function loadEnv() {
 loadEnv();
 
 const EMAIL = 'info@aykasoft.com.tr';
-const PASSWORD = '2128948++';
+const PASSWORD = 'CHANGE_ME';
 
 const c = new pg.Client({ connectionString: process.env.DATABASE_URL });
 await c.connect();

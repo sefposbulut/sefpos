@@ -5,10 +5,8 @@
  * scripts/electron-dev-wait.mjs yalnızca dev sürecinde ELECTRON_DISABLE_SECURITY_WARNINGS kullanır.
  */
 
-const PRIMARY_SUPABASE_URL = (
-  process.env.VITE_SUPABASE_URL || 'https://xdfnozfuuzctubijbnds.supabase.co'
-).replace(/\/$/, '');
-const PRIMARY_SUPABASE_WS = PRIMARY_SUPABASE_URL.replace(/^https:/, 'wss:');
+const PRIMARY_SUPABASE_URL = '';
+const PRIMARY_SUPABASE_WS = '';
 
 /**
  * @param {{ forMeta?: boolean; includeCloudflareInsights?: boolean }} [opts]
@@ -16,10 +14,29 @@ const PRIMARY_SUPABASE_WS = PRIMARY_SUPABASE_URL.replace(/^https:/, 'wss:');
  */
 function buildProductionContentSecurityPolicy(opts = {}) {
   const { forMeta = false, includeCloudflareInsights = false } = opts;
-  const scriptSrc = ["'self'", 'https://unpkg.com'];
+  const scriptSrc = ["'self'"];
   if (includeCloudflareInsights) {
     scriptSrc.push('https://static.cloudflareinsights.com');
   }
+
+  // Apex + www: tarayıcıda www↔apex absolute fetch CSP'yi kırabilir; ikisini de izinli tut.
+  // Yerel Yazıcı Ajanı (7878): kasadaki web POS fiş/mutfak için zorunlu.
+  const connectSrc = [
+    "'self'",
+    'https://sefpos.com.tr',
+    'https://www.sefpos.com.tr',
+    'wss://sefpos.com.tr',
+    'wss://www.sefpos.com.tr',
+    PRIMARY_SUPABASE_URL,
+    PRIMARY_SUPABASE_WS,
+    'http://127.0.0.1:7878',
+    'http://localhost:7878',
+    'ws://127.0.0.1:7878',
+    'ws://localhost:7878',
+  ].filter(Boolean);
+
+  // Fiş önizleme HTML'inde eski onclick vb. olabilir — unsafe-hashes ile event handler'a izin.
+  scriptSrc.push("'unsafe-hashes'");
 
   const directives = [
     "default-src 'self'",
@@ -27,7 +44,7 @@ function buildProductionContentSecurityPolicy(opts = {}) {
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
     "font-src 'self' https://fonts.gstatic.com data:",
     "img-src 'self' data: blob: file: https:",
-    "connect-src 'self'",
+    `connect-src ${connectSrc.join(' ')}`,
     "media-src 'self' blob:",
     "worker-src 'self' blob:",
     "object-src 'none'",

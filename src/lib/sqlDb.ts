@@ -965,12 +965,32 @@ export const sqlDb = {
     },
 
     async signOut() {
+      try {
+        if (isVdsBackend()) {
+          await fetch(vdsApiUrl('/logout'), { method: 'POST', headers: vdsAuthHeaders() });
+        }
+      } catch {
+        /* çıkış yerelde yine silinir */
+      }
       setSqlSession(null);
     },
 
     async refreshSession() {
       const session = getSqlSession();
-      return { data: { session }, error: session ? null : new Error('Oturum yok') };
+      if (!session) return { data: { session: null }, error: new Error('Oturum yok') };
+      if (isVdsBackend() && session.access_token && !String(session.access_token).startsWith('sqlserver-')) {
+        try {
+          const res = await fetch(vdsApiUrl('/refresh'), { method: 'POST', headers: vdsAuthHeaders() });
+          const data = await res.json().catch(() => null);
+          if (res.ok && data?.token) {
+            session.access_token = data.token;
+            setSqlSession(session);
+          }
+        } catch {
+          /* ağ yoksa mevcut jetonla devam */
+        }
+      }
+      return { data: { session: getSqlSession() }, error: null };
     },
 
     async getUser() {
@@ -980,3 +1000,10 @@ export const sqlDb = {
     },
   },
 };
+
+if (typeof window !== 'undefined') {
+  window.setInterval(() => {
+    if (!isVdsBackend()) return;
+    void sqlDb.auth.refreshSession();
+  }, 30 * 60 * 1000);
+}

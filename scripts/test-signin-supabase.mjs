@@ -18,7 +18,7 @@ const url = process.env.VITE_SUPABASE_URL;
 const anon = process.env.VITE_SUPABASE_ANON_KEY;
 const sb = createClient(url, anon, { auth: { persistSession: false } });
 
-const r = await sb.auth.signInWithPassword({ email: 'info@sefpos.com.tr', password: '2128948++' });
+const r = await sb.auth.signInWithPassword({ email: 'info@sefpos.com.tr', password: 'CHANGE_ME' });
 if (r.error) {
   console.error('signin hata:', r.error);
   process.exit(1);

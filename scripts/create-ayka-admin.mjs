@@ -24,7 +24,7 @@ function loadEnv() {
 loadEnv();
 
 const EMAIL = 'info@aykasoft.com.tr';
-const PASSWORD = '2128948++';
+const PASSWORD = 'CHANGE_ME';
 
 const admin = createClient(process.env.VITE_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, {
   auth: { autoRefreshToken: false, persistSession: false },
@@ -91,4 +91,4 @@ if (siErr) {
   process.exit(1);
 }
 console.log(`   LOGIN OK. user.id=${si.user.id}`);
-console.log('\nTAMAM. /ayka panelinden info@aykasoft.com.tr / 2128948++ ile giriş yapabilirsiniz.');
+console.log('\nTAMAM. /ayka panelinden info@aykasoft.com.tr / CHANGE_ME ile giriş yapabilirsiniz.');

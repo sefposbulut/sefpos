@@ -229,7 +229,7 @@ async function createDemoData() {
     console.log('\n📝 7. Demo kullanıcı oluşturuluyor...');
     const { data: user, error: userError } = await supabase.auth.signUp({
       email: 'info@sefpos.com.tr',
-      password: '2128948++',
+      password: 'CHANGE_ME',
       options: {
         data: {
           full_name: 'Demo Admin',
@@ -278,7 +278,7 @@ async function createDemoData() {
     console.log(`👥 Kullanıcılar: 2 (Demo + Ayka)`);
     
     console.log('\n🔐 Giriş Bilgileri:');
-    console.log(`📧 Demo: info@sefpos.com.tr / 2128948++`);
+    console.log(`📧 Demo: info@sefpos.com.tr / CHANGE_ME`);
     console.log(`🔑 Ayka: ayka@sefpos.com / ayka123`);
     
     console.log('\n🌐 Sistem kullanıma hazır!');

@@ -7,7 +7,7 @@
 // Kullanim:
 //   const res = await callGetir({ platformId, action: 'pos-status-set', status: 100 });
 
-import { supabase } from './supabase';
+import { getEdgeFunctionInvokeUrl, supabase } from './supabase';
 import { isSqlServerMode, isVdsSelfHost } from './sqlDb';
 import {
   GETIR_NUMERIC_STATUS_MAP,
@@ -203,12 +203,10 @@ export async function callGetir(payload: GetirActionPayload): Promise<GetirActio
       let session = await ensureFreshSession();
       if (!session) return { ok: false, error: 'Oturum bulunamadi' };
 
-      const baseUrl = (import.meta.env.VITE_SUPABASE_URL || 'https://xdfnozfuuzctubijbnds.supabase.co').replace(/\/$/, '');
-      const url = `${baseUrl}/functions/v1/getir-api`;
+      const url = getEdgeFunctionInvokeUrl('getir-api');
       const buildHeaders = (tok: string): Record<string, string> => ({
         'Authorization': `Bearer ${tok}`,
         'Content-Type': 'application/json',
-        'apikey': (import.meta.env.VITE_SUPABASE_ANON_KEY as string) || '',
       });
 
       const maxAttempts = 3;

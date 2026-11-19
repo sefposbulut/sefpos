@@ -3,8 +3,13 @@
  * Yapay zeka değil; son 5 dk sayaçları + kural tabanlı öneriler (destek / sahip).
  */
 
-import type { SupabaseClient, RealtimeChannel } from '@supabase/supabase-js';
 import { getActivePosPage } from './pageActivity';
+
+type RealtimeChannel = { on: (...args: any[]) => any; subscribe: (...args: any[]) => any };
+type SupabaseClient = {
+  channel: (name: string, opts?: any) => RealtimeChannel;
+  removeChannel: (channel: RealtimeChannel) => any;
+};
 
 const WINDOW_MS = 5 * 60 * 1000;
 const PRUNE_EVERY_MS = 30_000;

@@ -376,18 +376,20 @@ export const GUIDE_ARTICLES: GuideArticle[] = [
 const GUIDE_HIDDEN_KEY = 'shefpos_guide_hidden';
 const GUIDE_OPEN_EVENT = 'sefpos-open-guide';
 
+/** Varsayılan: yüzen Rehber FAB gizli (POS’u engellemesin). Üst menü Kılavuz ile açılır. */
 export function isGuideFabHidden(): boolean {
   try {
-    return localStorage.getItem(GUIDE_HIDDEN_KEY) === '1';
+    const v = localStorage.getItem(GUIDE_HIDDEN_KEY);
+    if (v === '0') return false;
+    return true;
   } catch {
-    return false;
+    return true;
   }
 }
 
 export function setGuideFabHidden(hidden: boolean): void {
   try {
-    if (hidden) localStorage.setItem(GUIDE_HIDDEN_KEY, '1');
-    else localStorage.removeItem(GUIDE_HIDDEN_KEY);
+    localStorage.setItem(GUIDE_HIDDEN_KEY, hidden ? '1' : '0');
   } catch {
     /* ignore */
   }
@@ -397,11 +399,7 @@ export function setGuideFabHidden(hidden: boolean): void {
 }
 
 export function requestOpenGuide(tab?: 'assistant' | 'manual'): void {
-  try {
-    setGuideFabHidden(false);
-  } catch {
-    /* ignore */
-  }
+  // FAB’ı geri getirme — sadece paneli aç (üst menü Kılavuz)
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent(GUIDE_OPEN_EVENT, { detail: { tab: tab || 'manual' } }));
   }

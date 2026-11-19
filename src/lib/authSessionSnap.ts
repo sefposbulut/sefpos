@@ -1,4 +1,4 @@
-import type { User } from '@supabase/supabase-js';
+import type { User } from './sefposTypes';
 import type { Branch, UserPermissions } from '../contexts/AuthContext';
 import type { Database } from './supabase';
 

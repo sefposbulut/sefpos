@@ -1,6 +1,6 @@
 /** Electron ust bar — acik kurumsal tema (masaustu ana sayfa ile ayni yukseklik). */
 export const ELECTRON_HEADER_BAR_CLASS =
-  'flex-shrink-0 bg-white text-slate-800 shadow-[0_1px_3px_rgba(15,23,42,0.06)] border-b border-slate-200 border-t-[3px] border-t-orange-500';
+  'flex-shrink-0 bg-white text-slate-800 shadow-[0_1px_3px_rgba(15,23,42,0.06)] border-b border-slate-200';
 
 /** Ust barda tum aksiyonlar ayni yukseklik (40px). */
 export const ELECTRON_HEADER_TOOL_H = 'h-10 min-h-10';
@@ -24,7 +24,7 @@ export const ELECTRON_HEADER_PADDING = 'px-4 md:px-5';
 
 /** Masaustu POS — tek satir, marka blogu sigacak yukseklik */
 export const ELECTRON_HEADER_ROW_CLASS =
-  'flex items-center justify-between gap-2 md:gap-3 h-14 w-full min-h-14 max-h-14 overflow-hidden';
+  'flex items-center justify-between gap-2 md:gap-3 h-14 w-full min-h-14 max-h-14 overflow-visible';
 
 export const ELECTRON_HEADER_LOGO_CLASS =
   'h-9 w-9 md:h-10 md:w-10 rounded-full object-cover bg-white ring-2 ring-orange-200 shadow-sm shrink-0 select-none';
@@ -62,6 +62,16 @@ export const ELECTRON_HEADER_SUBTITLE =
 /** Sag ikon grubu — bildirim, ayar, zoom */
 export const ELECTRON_HEADER_TOOLBAR_GROUP =
   'hidden sm:flex items-center gap-0.5 rounded-lg border border-slate-200 bg-slate-50/90 p-0.5 shrink-0';
+
+/**
+ * Web/Electron sağ araç şeridi — ayrı ayrı hap buton kalabalığını azaltır.
+ */
+export const HEADER_TOOL_STRIP =
+  'flex items-center gap-0.5 shrink-0 rounded-xl border border-slate-200/80 bg-slate-50/80 p-0.5';
+
+/** Sessiz bağlam (lisans / şube / kullanıcı) — dolgu ve kenarlık yok */
+export const HEADER_CONTEXT_CHIP =
+  `inline-flex items-center justify-center gap-1.5 ${ELECTRON_HEADER_TOOL_H} px-2.5 rounded-lg text-slate-600 hover:bg-slate-100 transition active:scale-[0.98]`;
 
 /** @deprecated ELECTRON_HEADER_SLOGAN_BLOCK kullanin */
 export const ELECTRON_HEADER_SLOGAN_CLASS = ELECTRON_HEADER_SLOGAN_BLOCK;

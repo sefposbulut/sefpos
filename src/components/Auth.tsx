@@ -25,7 +25,6 @@ const ADMIN_LOGIN_EMAIL = 'info@aykasoft.com.tr';
 const ADMIN_LOGIN_EMAIL_LEGACY = 'infop@aykasoft.com.tr';
 const TEST_LOGIN_EMAIL = 'info@sefpos.com.tr';
 const TEST_LOGIN_PHONE = '02363131818';
-const ADMIN_DEFAULT_PASSWORD = '2128948++';
 const AYKA_AUTH_KEY = 'shefpos_ayka_auth';
 
 const FEATURE_ICON_GRADIENTS = [
@@ -296,19 +295,19 @@ export function Auth({ onBackToLanding }: AuthProps = {}) {
     if (!isAykaPath) return;
     setIsLogin(true);
     setLoginValue(ADMIN_LOGIN_EMAIL);
-    if (!password) setPassword(ADMIN_DEFAULT_PASSWORD);
-  }, [isAykaPath, password]);
+  }, [isAykaPath]);
 
   useEffect(() => {
     if (isAykaPath) return;
+    try {
+      localStorage.removeItem(REMEMBER_PASSWORD_KEY);
+    } catch {
+      /* yoksay */
+    }
     const savedLogin = localStorage.getItem(REMEMBER_KEY);
-    const savedPassword = localStorage.getItem(REMEMBER_PASSWORD_KEY);
     if (savedLogin) {
       setLoginValue(savedLogin);
       setRemember(true);
-    }
-    if (savedPassword) {
-      setPassword(savedPassword);
     }
   }, [isAykaPath]);
 
@@ -374,27 +373,6 @@ export function Auth({ onBackToLanding }: AuthProps = {}) {
               const { data: authData } = await supabase.auth.getUser();
               uid = authData?.user?.id ?? null;
             }
-            let promoteError: any = null;
-            if (uid) {
-              const res = await supabase
-                .from('profiles')
-                .update({ is_super_admin: true })
-                .eq('id', uid);
-              promoteError = res.error || null;
-            }
-            if (promoteError) {
-              const fallback = await supabase
-                .from('profiles')
-                .update({ is_super_admin: true })
-                .eq('email', trimmed);
-              promoteError = fallback.error || null;
-            }
-            if (promoteError) {
-              setError('Lisans paneli yetkisi verilemedi. Lütfen admin profil yetkisini kontrol edin.');
-              setLoading(false);
-              return;
-            }
-
             if (uid) {
               const check = await supabase
                 .from('profiles')
@@ -485,11 +463,7 @@ export function Auth({ onBackToLanding }: AuthProps = {}) {
         } else {
           try { localStorage.removeItem(REMEMBER_KEY); } catch {}
         }
-        if (remember) {
-          try { localStorage.setItem(REMEMBER_PASSWORD_KEY, password); } catch {}
-        } else {
-          try { localStorage.removeItem(REMEMBER_PASSWORD_KEY); } catch {}
-        }
+        try { localStorage.removeItem(REMEMBER_PASSWORD_KEY); } catch {}
       } else {
         setRegisterErrors({});
         const nextErr: Partial<Record<RegisterFieldKey, string>> = {};
@@ -547,8 +521,8 @@ export function Auth({ onBackToLanding }: AuthProps = {}) {
         }
         if (remember) {
           localStorage.setItem(REMEMBER_KEY, loginValue);
-          localStorage.setItem(REMEMBER_PASSWORD_KEY, password);
         }
+        try { localStorage.removeItem(REMEMBER_PASSWORD_KEY); } catch {}
         setInfo('Hesabınız oluşturuldu. Yönlendiriliyorsunuz…');
         // VDS oturum localStorage'a yazıldı; sayfayı yenile ki AuthContext oturumu alsın
         if (import.meta.env.VITE_VDS_SELFHOST === 'true') {
@@ -1252,6 +1226,11 @@ export function Auth({ onBackToLanding }: AuthProps = {}) {
                 >
                   Giriş yapın
                 </button>
+              </p>
+              <p className="text-center text-[11px] text-slate-500 mt-3">
+                <a className="underline hover:text-slate-300" href="/kvkk.html">KVKK aydınlatma</a>
+                {' · '}
+                <a className="underline hover:text-slate-300" href="/kullanim-kosullari.html">Kullanım koşulları</a>
               </p>
             </div>
           )}

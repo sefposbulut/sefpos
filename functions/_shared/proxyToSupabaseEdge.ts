@@ -1,7 +1,7 @@
 /**
  * Cloudflare Pages → Supabase Edge Function proxy (Getir webhook vb.)
  */
-const DEFAULT_UPSTREAM = 'https://xdfnozfuuzctubijbnds.supabase.co';
+const DEFAULT_UPSTREAM = 'https://sefpos.com.tr';
 
 const HOP_BY_HOP = new Set([
   'connection',
@@ -23,12 +23,15 @@ export async function proxyToSupabaseEdge(
   /** Function adından sonra yol, örn. `/v1/orders` */
   subPath = '',
 ): Promise<Response> {
-  const upstream = String(env?.SEFPOS_SUPABASE_URL || DEFAULT_UPSTREAM).replace(/\/$/, '');
+  const configured = String(env?.SEFPOS_SUPABASE_URL || '').replace(/\/$/, '');
+  const upstream = configured.includes('sefpos.com.tr') ? configured : DEFAULT_UPSTREAM;
   const url = new URL(request.url);
   const pathSuffix = subPath
     ? (subPath.startsWith('/') ? subPath : `/${subPath}`)
     : '';
-  const dest = `${upstream}/functions/v1/${edgeFunctionName}${pathSuffix}${url.search}`;
+  const dest = edgeFunctionName === 'partner-orders-api'
+    ? `${upstream}/vds-api/integrations/partner${pathSuffix}${url.search}`
+    : `${upstream}/vds-api/fn/${edgeFunctionName}${pathSuffix}${url.search}`;
 
   const out = new Headers();
   for (const [k, v] of request.headers) {

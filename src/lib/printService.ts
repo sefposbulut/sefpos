@@ -121,12 +121,50 @@ const PRINT_SETTINGS_LASTMOD_PREFIX = 'shefpos_print_settings_lastmod';
 /** Buluta yazılamadıysa JSON; çevrimiçi olunca veya sonraki fetch’te tekrar deneriz. */
 const PRINT_SETTINGS_PENDING_PUSH_KEY = 'shefpos_print_settings_pending_push';
 const PRINT_AGENT_URL = 'http://127.0.0.1:7878';
+const PRINT_AGENT_TOKEN_KEY = 'sefpos_print_agent_token';
+let printAgentTokenMem = '';
+
+async function printAgentAuthHeaders(json = false): Promise<Record<string, string>> {
+  if (!printAgentTokenMem) {
+    try {
+      printAgentTokenMem = sessionStorage.getItem(PRINT_AGENT_TOKEN_KEY) || '';
+    } catch {
+      /* yoksay */
+    }
+  }
+  if (!printAgentTokenMem) {
+    try {
+      const res = await fetch(`${PRINT_AGENT_URL}/status`, { signal: AbortSignal.timeout(1500) });
+      const data = await res.json();
+      if (data?.agentToken) {
+        printAgentTokenMem = String(data.agentToken);
+        try {
+          sessionStorage.setItem(PRINT_AGENT_TOKEN_KEY, printAgentTokenMem);
+        } catch {
+          /* yoksay */
+        }
+      }
+    } catch {
+      /* ajan kapalı */
+    }
+  }
+  const headers: Record<string, string> = {};
+  if (json) headers['Content-Type'] = 'application/json';
+  if (printAgentTokenMem) headers['X-Sefpos-Agent-Token'] = printAgentTokenMem;
+  return headers;
+}
 /** Web dev: 7878 yok → konsolda ERR_CONNECTION_REFUSED spam olmasın */
 let printAgentBackoffUntil = 0;
 const PRINT_AGENT_BACKOFF_MS = 120_000;
 
 function shouldTryExternalPrintAgent(): boolean {
-  if (isElectron()) return Date.now() >= printAgentBackoffUntil;
+  if (Date.now() < printAgentBackoffUntil) return false;
+  // HTTPS www: doğrudan 7878 CSP ile engellenip hata/spam + çift yol riski.
+  // Ajan print_jobs kuyruğunu dinler — web HTTPS'te sadece kuyruk.
+  if (typeof window !== 'undefined' && window.location.protocol === 'https:') {
+    return false;
+  }
+  if (isElectron()) return true;
   try {
     return localStorage.getItem('shefpos_use_external_print_agent') === '1';
   } catch {
@@ -356,13 +394,16 @@ export function loadPrintSettings(): PrintSettings {
   try {
     const key = getPrintSettingsKey();
     const raw = localStorage.getItem(key);
-    if (raw) return normalizePrintSettings(JSON.parse(raw));
+    if (raw) {
+      // available list yok — sadece ad bazlı; ajan da stale 80mm→POS-80C yapar
+      return sanitizePrintSettingsPrinterNames(normalizePrintSettings(JSON.parse(raw)));
+    }
   } catch {}
   return normalizePrintSettings({});
 }
 
 export function savePrintSettings(settings: PrintSettings) {
-  const normalized = normalizePrintSettings(settings);
+  const normalized = sanitizePrintSettingsPrinterNames(normalizePrintSettings(settings));
   const key = getPrintSettingsKey();
   __printSettingsSaveGen++;
   try {
@@ -774,12 +815,71 @@ export function getOnlinePlatformPrinterName(settings?: PrintSettings): string {
   return (s.defaultOnlinePlatformPrinter || s.defaultKitchenPrinter || '').trim();
 }
 
+/** Eski Electron / sürücü adı: "80mm Series Printer" — POS-80C varken onu kullan. */
+export function isGeneric80mmPrinterName(name: string): boolean {
+  const n = String(name || '').toLowerCase();
+  if (!n.includes('80mm')) return false;
+  const key = n.replace(/[^a-z0-9]/g, '');
+  return !(key.includes('pos80c') || key === 'pos80' || key.startsWith('pos80'));
+}
+
+export function isPos80PrinterName(name: string): boolean {
+  const key = String(name || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '');
+  return key.includes('pos80c') || key === 'pos80' || key.startsWith('pos80');
+}
+
+/**
+ * Yerel/cache'te kalan "80mm Series Printer" → POS-80C.
+ * Liste varsa listedeki gerçek POS-80* adı; yoksa kanonik `POS-80C`
+ * (eski Electron ayarı web'de adisyonu yanlış kuyruğa yazmasın).
+ */
+export function remapStaleThermalPrinterName(
+  name: string,
+  available?: Array<string | { name?: string }>,
+): string {
+  const t = String(name || '').trim();
+  if (!t || !isGeneric80mmPrinterName(t)) return t;
+  const names = (available || [])
+    .map((d) => (typeof d === 'string' ? d : d?.name || ''))
+    .filter(Boolean);
+  const pos = names.find((n) => isPos80PrinterName(n));
+  return pos || 'POS-80C';
+}
+
+/** Ayarlardaki varsayılan / satır yazıcı adlarını stale 80mm'den arındır. */
+export function sanitizePrintSettingsPrinterNames(
+  settings: PrintSettings,
+  available?: Array<string | { name?: string }>,
+): PrintSettings {
+  const map = (s: string) => remapStaleThermalPrinterName(s, available);
+  return {
+    ...settings,
+    defaultReceiptPrinter: map(settings.defaultReceiptPrinter || ''),
+    defaultKitchenPrinter: map(settings.defaultKitchenPrinter || ''),
+    defaultTakeawayPrinter: map(settings.defaultTakeawayPrinter || ''),
+    defaultOnlinePlatformPrinter: map(settings.defaultOnlinePlatformPrinter || ''),
+    printers: (settings.printers || []).map((p) => ({
+      ...p,
+      printerName: map(p.printerName || ''),
+    })),
+  };
+}
+
 export function pickKitchenPrinterFromDevices(devices: PrinterDevice[]): string {
   if (!Array.isArray(devices) || devices.length === 0) return '';
   const names = devices.map((d) => (typeof d === 'string' ? d : d?.name || '')).filter(Boolean);
-  const kw = ['mutfak', 'kitchen', 'mutfa', 'bar', 'grill', 'thermal', 'fis', 'fiş'];
+  const pos = names.find((n) => isPos80PrinterName(n));
+  if (pos) return pos;
+  // POS-80C önce; genel "80mm Series" yanlış varsayılan olmasın
+  const kw = ['pos-80c', 'pos80c', 'pos-80', 'pos80', '80mm', 'mutfak', 'kitchen', 'mutfa', 'bar', 'grill', 'thermal', 'fis', 'fiş'];
   for (const k of kw) {
-    const hit = names.find((n) => n.toLowerCase().includes(k));
+    const hit = names.find((n) => {
+      if (!n.toLowerCase().includes(k)) return false;
+      if (k === '80mm' && isGeneric80mmPrinterName(n) && names.some(isPos80PrinterName)) return false;
+      return true;
+    });
     if (hit) return hit;
   }
   return names[0] || '';
@@ -930,7 +1030,10 @@ export async function getAvailablePrinters(): Promise<PrinterDevice[]> {
 
   if (window.location.protocol !== 'https:') {
     try {
-      const res = await fetch(`${PRINT_AGENT_URL}/printers`, { signal: AbortSignal.timeout(2000) });
+      const res = await fetch(`${PRINT_AGENT_URL}/printers`, {
+        signal: AbortSignal.timeout(2000),
+        headers: await printAgentAuthHeaders(false),
+      });
       const data = await res.json();
       if (data.success && Array.isArray(data.printers)) return data.printers;
     } catch {}
@@ -1022,21 +1125,28 @@ function kitchenStyleBlock(st: PrintStyleSettings): string {
   // Bu yüzden notlar artık BEYAZ arka plan + KALIN SİYAH ÇERÇEVE + SİYAH YAZI
   // olarak basılır. Hem net okunur hem termal şerit ekonomik kullanılır.
   return `<style>
-  ${scope} { font-family: Arial, Helvetica, "Segoe UI", sans-serif; font-size: ${st.kitchenBodyPx}px !important; line-height: 1.3; color:#000; -webkit-print-color-adjust: exact; print-color-adjust: exact; margin-left: ${off}mm; margin-right: ${-off}mm; }
+  ${scope} { font-family: Arial, Helvetica, "Segoe UI", sans-serif !important; font-size: ${st.kitchenBodyPx}px !important; line-height: 1.4; color:#000 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; margin-left: ${off}mm; margin-right: ${-off}mm; padding: 2mm 2.5mm 3mm; box-sizing: border-box; width: 100%; max-width: 72mm; }
   ${scope} .xlarge { font-size: ${st.kitchenTitlePx}px !important; font-weight: ${wTitle} !important; }
   ${scope} .large { font-size: ${Math.max(st.kitchenBodyPx + 1, 13)}px !important; font-weight: ${wTitle} !important; }
+  ${scope} .bold { font-weight: ${wProduct} !important; }
+  ${scope} .line { border-top: 1px dashed #000 !important; margin: 5px 0 !important; width: 100% !important; height: 0 !important; }
+  ${scope} .row, ${scope} .item-row, ${scope} .total-row { display: table !important; width: 100% !important; table-layout: fixed !important; margin: 0 0 3px 0 !important; }
+  ${scope} .row > span, ${scope} .item-row > span, ${scope} .total-row > span { display: table-cell !important; vertical-align: top; }
   ${scope} .row.bold.xlarge { font-size: ${st.kitchenItemPx}px !important; font-weight: ${wTitle} !important; }
   ${scope} .subtitle { font-size: ${Math.max(st.kitchenBodyPx - 1, 10)}px !important; text-align: center; margin: 2px 0; }
   ${scope} .header-meta { font-size: ${Math.max(st.kitchenBodyPx - 1, 10)}px !important; }
+  ${scope} .cols-head .name { width: 80% !important; font-size: ${Math.max(st.kitchenBodyPx - 1, 10)}px !important; font-weight: 700 !important; text-align: left !important; }
+  ${scope} .cols-head .qty { width: 20% !important; font-size: ${Math.max(st.kitchenBodyPx - 1, 10)}px !important; font-weight: 700 !important; text-align: right !important; }
   ${scope} .item-block { padding: 4px 0 6px 0; }
-  ${scope} .item-row .name { width: 80% !important; font-size: ${st.kitchenItemPx}px !important; font-weight: ${wProduct} !important; color:#000 !important; }
+  ${scope} .item-row .name { width: 80% !important; font-size: ${st.kitchenItemPx}px !important; font-weight: ${wProduct} !important; color:#000 !important; text-align: left !important; }
   ${scope} .item-row .qty  { width: 20% !important; text-align: right !important; font-size: ${st.kitchenItemPx}px !important; font-weight: ${printWeight(st.kitchenProductBold)} !important; color:#000 !important; }
-  ${scope} .opt-line { font-size: ${optFs}px !important; font-weight: 800; color:#000; padding: 3px 0 3px 10px; border-left: 4px solid #000; margin: 4px 0 4px 6px; }
-  ${scope} .note-line { font-size: ${noteFs}px !important; font-weight: 900 !important; color:#000 !important; background:#fff; border: 2px solid #000; padding: 5px 7px; margin: 5px 0 5px 4px; border-radius: 2px; letter-spacing: 0.3px; }
-  ${scope} .item-sep { border: 0; border-top: 1px dashed #000; margin: 4px 0 0 0; }
-  ${scope} .general-note { font-size: ${noteFs}px !important; font-weight: 900 !important; color:#000 !important; background:#fff; border: 3px solid #000; padding: 6px 8px; margin: 6px 0; border-radius: 2px; text-align: center; letter-spacing: 0.4px; }
-  ${scope} .footer { font-size: ${Math.max(st.kitchenBodyPx - 2, 9)}px !important; }
+  ${scope} .opt-line { font-size: ${optFs}px !important; font-weight: 800 !important; color:#000 !important; padding: 3px 0 3px 10px !important; border-left: 4px solid #000 !important; margin: 4px 0 4px 6px !important; background: transparent !important; }
+  ${scope} .note-line { font-size: ${noteFs}px !important; font-weight: 900 !important; color:#000 !important; background:#fff !important; border: 2px solid #000 !important; padding: 5px 7px !important; margin: 5px 0 5px 4px !important; border-radius: 2px; letter-spacing: 0.3px; display: block !important; }
+  ${scope} .item-sep { border: 0 !important; border-top: 1px dashed #000 !important; margin: 4px 0 0 0 !important; width: 100% !important; }
+  ${scope} .general-note { font-size: ${noteFs}px !important; font-weight: 900 !important; color:#000 !important; background:#fff !important; border: 3px solid #000 !important; padding: 6px 8px !important; margin: 6px 0 !important; border-radius: 2px; text-align: center !important; letter-spacing: 0.4px; display: block !important; }
+  ${scope} .footer { font-size: ${Math.max(st.kitchenBodyPx - 2, 9)}px !important; text-align: center !important; width: 100% !important; display: block !important; margin-top: 2px; }
   ${scope} .extra-line { font-size: ${Math.max(st.kitchenBodyPx - 1, 10)}px !important; text-align: center; margin: 4px 0; }
+  ${scope} .center { text-align: center !important; width: 100% !important; display: block !important; }
 </style>`;
 }
 
@@ -1047,18 +1157,26 @@ function receiptStyleBlock(st: PrintStyleSettings): string {
   const wBody = printWeight(st.receiptProductBold);
   const wTotal = printWeight(st.receiptTotalBold, true);
   return `<style>
-  ${scope} { font-family: Arial, Helvetica, "Segoe UI", sans-serif; font-size: ${st.receiptBodyPx}px !important; line-height: 1.3; color:#000; margin-left: ${off}mm; margin-right: ${-off}mm; }
+  ${scope} { font-family: Arial, Helvetica, "Segoe UI", sans-serif !important; font-size: ${st.receiptBodyPx}px !important; line-height: 1.45; color:#000 !important; margin-left: ${off}mm; margin-right: ${-off}mm; padding: 3mm 3.5mm 4mm; box-sizing: border-box; width: 100%; max-width: 72mm; }
   ${scope} .xlarge { font-size: ${st.receiptTitlePx}px !important; font-weight: ${wTitle} !important; }
   ${scope} .large { font-size: ${Math.max(st.receiptBodyPx + 2, 13)}px !important; font-weight: ${wTitle} !important; }
   ${scope} .bold { font-weight: ${wBody} !important; }
-  ${scope} .subtitle { font-size: ${Math.max(st.receiptBodyPx - 1, 10)}px !important; text-align: center; margin: 2px 0; }
-  ${scope} .row { display: flex; justify-content: space-between; width: 100%; }
-  ${scope} .total-row { display: flex; justify-content: space-between; width: 100%; }
-  ${scope} .note { font-size: ${Math.max(st.receiptBodyPx, 11)}px !important; font-weight: 700; color:#000; }
-  ${scope} .footer { font-size: ${Math.max(st.receiptBodyPx - 2, 9)}px !important; }
-  ${scope} .extra-line { font-size: ${Math.max(st.receiptBodyPx - 1, 10)}px !important; text-align: center; margin: 4px 0; }
+  ${scope} .subtitle { font-size: ${Math.max(st.receiptBodyPx - 1, 10)}px !important; text-align: center !important; margin: 2px 0; }
+  ${scope} .line { border-top: 1px dashed #000 !important; margin: 5px 0 !important; width: 100% !important; height: 0 !important; }
+  ${scope} .row, ${scope} .total-row { display: table !important; width: 100% !important; table-layout: fixed !important; margin: 0 0 3px 0 !important; }
+  ${scope} .row > span, ${scope} .total-row > span { display: table-cell !important; vertical-align: top; word-break: normal; overflow-wrap: break-word; }
+  ${scope} .row .name { width: 52% !important; padding-right: 1.5mm !important; text-align: left !important; }
+  ${scope} .row .qty { width: 16% !important; text-align: center !important; white-space: nowrap !important; }
+  ${scope} .row .price { width: 32% !important; text-align: right !important; padding-left: 1mm !important; white-space: nowrap !important; }
+  ${scope} .row > span:first-child:not(.name):not(.qty):not(.price) { width: 48% !important; text-align: left !important; }
+  ${scope} .row > span:last-child:not(.name):not(.qty):not(.price) { width: 52% !important; text-align: right !important; white-space: nowrap !important; }
+  ${scope} .note { font-size: ${Math.max(st.receiptBodyPx, 11)}px !important; font-weight: 700 !important; color:#000 !important; }
+  ${scope} .footer { font-size: ${Math.max(st.receiptBodyPx - 2, 9)}px !important; text-align: center !important; margin-top: 4px; display: block !important; width: 100% !important; }
+  ${scope} .extra-line { font-size: ${Math.max(st.receiptBodyPx - 1, 10)}px !important; text-align: center !important; margin: 4px 0; }
   ${scope} .total-row { font-size: ${Math.max(st.receiptBodyPx + 2, 14)}px !important; font-weight: ${wTotal} !important; }
   ${scope} .total-row span { font-weight: ${wTotal} !important; }
+  ${scope} .total-row span:last-child { text-align: right !important; white-space: nowrap !important; }
+  ${scope} .center { text-align: center !important; width: 100% !important; display: block !important; }
 </style>`;
 }
 
@@ -1121,8 +1239,8 @@ export function buildKitchenHtml(opts: {
     ${st.showKitchenOrderNumber && opts.orderNumber ? `<div class="center header-meta">Sipariş: ${escHtml(opts.orderNumber)}</div>` : ''}
     ${opts.waiterName ? `<div class="center header-meta bold">Garson: ${escHtml(opts.waiterName)}</div>` : ''}
     <div class="line"></div>
-    <div class="row bold">
-      <span class="name">URUN</span><span class="qty">ADT</span><span class="price"></span>
+    <div class="row cols-head bold">
+      <span class="name">URUN</span><span class="qty">ADT</span>
     </div>
     <div class="line"></div>
   `;
@@ -1237,6 +1355,7 @@ export function buildReceiptHtml(opts: {
     html += `<div class="extra-line">${st.receiptFooterExtra}</div>`;
   }
   html += `<div class="footer">${opts.footer || 'Teşekkür ederiz, iyi günler!'}</div>`;
+  html += `<div class="footer">Bu fiş mali belge değildir. Mali değeri yoktur.</div>`;
   html += `<div class="line" style="margin-top:6px"></div>`;
   html += `<div class="center" style="font-size:${Math.max(st.receiptBodyPx - 2, 9)}px; margin-top:4px">Bilgi fişidir. Mali değeri yoktur.</div>`;
   html += `<br><br><br>`;
@@ -1305,14 +1424,14 @@ function buildBrowserThermalDocument(bodyHtml: string, title = 'ŞefPOS Fiş'): 
 <meta charset="utf-8" />
 <title>${safeTitle}</title>
 <style>
-  /* Electron doPrint ile aynı: 72mm içerik, margin 0 (80mm rulo yazıcı) */
-  @page { size: 72mm auto; margin: 0; }
+  /* Electron doPrint ile aynı: 80mm içerik, margin 0 (80mm rulo yazıcı) */
+  @page { size: 80mm auto; margin: 0; }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body {
     font-family: Arial, Helvetica, "Segoe UI", sans-serif;
     font-size: 12px;
-    width: 72mm;
-    max-width: 72mm;
+    width: 80mm;
+    max-width: 80mm;
     padding: 0 1mm;
     margin: 0;
     margin-left: ${off}mm;
@@ -1336,7 +1455,7 @@ function buildBrowserThermalDocument(bodyHtml: string, title = 'ŞefPOS Fiş'): 
   .total-row { display: table; width: 100%; table-layout: fixed; font-weight: bold; margin: 2px 0; font-size: 14px; }
   .total-row span { display: table-cell; vertical-align: top; }
   .total-row span:last-child { text-align: right; }
-  @media print { html, body { width: 72mm; } }
+  @media print { html, body { width: 80mm; } }
 </style>
 </head>
 <body>
@@ -1348,7 +1467,7 @@ ${bodyHtml}
       var hPx = Math.max(document.body.scrollHeight || 0, document.documentElement.scrollHeight || 0);
       var mm = Math.min(400, Math.max(20, Math.ceil(hPx * 0.264583) + 2));
       var st = document.createElement('style');
-      st.textContent = '@page { size: 72mm ' + mm + 'mm !important; margin: 0 !important; }';
+      st.textContent = '@page { size: 80mm ' + mm + 'mm !important; margin: 0 !important; }';
       document.head.appendChild(st);
     } catch (e) {}
   }
@@ -1445,9 +1564,9 @@ async function tryLocalPrintAgent(
   try {
     const res = await fetch(`${PRINT_AGENT_URL}/print`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: await printAgentAuthHeaders(true),
       body: JSON.stringify({ html, printerName: printerName || undefined, silent: true }),
-      signal: AbortSignal.timeout(15000),
+      signal: AbortSignal.timeout(3500),
     });
     const data = await res.json();
     if (data?.success) return { success: true };
@@ -1517,7 +1636,21 @@ export async function printHtml(
   const silent = toastOpts?.silent === true;
   const title = toastOpts?.title;
 
-  // 1) Electron — yerel yazıcı (OS adı çözümle + varsayılan yazıcı yedek).
+  // 1) Yerel Print Agent (7878) — aynı PC'de en hızlı yol; kuyruk/çift baskı yok.
+  const agentHit = await tryLocalPrintAgent(html, printerName);
+  if (agentHit?.success) {
+    notifyPrintResult({
+      success: true,
+      printerName,
+      channel: 'agent',
+      toastTitle: title,
+      silent,
+    });
+    return { success: true };
+  }
+
+  // 2) Electron — yerel yazıcı. Başarısız olsa bile print_jobs'a düşme:
+  //    aynı makinede ajan + Electron kuyruk dinleyicisi çift fiş basıyordu.
   if (w.electronAPI?.printReceipt) {
     const resolved = await resolveTargetThermalPrinterName(printerName);
     const tryNames = [resolved, ''].filter((n, i, a) => a.indexOf(n) === i);
@@ -1540,7 +1673,7 @@ export async function printHtml(
           return { success: true };
         }
         lastErr = result.errorType || result.error || undefined;
-    } catch (err: any) {
+      } catch (err: any) {
         lastErr = err?.message;
       }
     }
@@ -1552,20 +1685,7 @@ export async function printHtml(
       toastTitle: title,
       silent,
     });
-    // Electron aynı makinede print_jobs kuyruğunu da dinler — aşağıdaki adımlara düş.
-  }
-
-  // 2) Yerel Print Agent — www veya Electron UI kapalı olsa da (aynı PC).
-  const agentHit = await tryLocalPrintAgent(html, printerName);
-  if (agentHit?.success) {
-    notifyPrintResult({
-      success: true,
-      printerName,
-      channel: 'agent',
-      toastTitle: title,
-      silent,
-    });
-    return { success: true };
+    return { success: false, error: lastErr || 'Electron yazdırma başarısız' };
   }
 
   // 3) Web — tarayıcı yazdırma (yalnızca online platform siparişleri; masa/mutfak değil).
@@ -1599,13 +1719,22 @@ export async function printHtml(
   // Electron Print Agent kuyruğu Realtime ile dinler ve basar.
   if (_currentTenantId || _currentBranchId) {
     try {
+      // Hızlı kuyruk: HTTPS mobilde printer_registrations bekleme — ayar adı yeter
+      const settingsSnap = loadPrintSettings();
+      const queuedPrinter = remapStaleThermalPrinterName(
+        (printerName || '').trim() ||
+          (settingsSnap.defaultKitchenPrinter || '').trim() ||
+          (settingsSnap.defaultReceiptPrinter || '').trim() ||
+          'POS-80C',
+        [],
+      );
       const { data, error } = await supabase
         .from('print_jobs')
         .insert({
         tenant_id: _currentTenantId || null,
         branch_id: _currentBranchId || null,
         html,
-        printer_name: printerName || '',
+        printer_name: queuedPrinter,
         status: 'pending',
         })
         .select('id')
@@ -1616,11 +1745,11 @@ export async function printHtml(
         // kontrol et (açık mı, login mi, agent_status connected mi).
         posDebugLog('[ŞefPOS] print job kuyruğa eklendi:', {
           id: data?.id,
-          printer: printerName || '(boş — varsayılan)',
+          printer: queuedPrinter || '(boş — varsayılan)',
           tenant: _currentTenantId,
           branch: _currentBranchId,
         });
-        notifyPrintResult({ success: true, printerName, channel: 'queue', toastTitle: title, silent });
+        notifyPrintResult({ success: true, printerName: queuedPrinter || printerName, channel: 'queue', toastTitle: title, silent });
         return { success: true };
       }
       // Insert başarısız (RLS / network). Kullanıcıya "yazıcıya ulaşılamadı"
@@ -1692,31 +1821,23 @@ export async function printToAdisyonPrinter(
   html: string,
   toastOpts?: { title?: string; silent?: boolean }
 ): Promise<{ success: boolean; error?: string }> {
-  // Mobil / web fast path — yazıcı çözümlemesi yok, direkt kuyruğa.
-  // Electron Print Agent kuyruktan alır almaz kasanın varsayılan adisyon
-  // yazıcısına basar (printer_name boş → pickDefaultKitchenPrinter fallback).
-  if (!isElectron()) {
-    const title = toastOpts?.title || 'Adisyon kasaya gönderildi';
-    posDebugLog('[ŞefPOS] Adisyon: mobil/web tarafından kuyruğa eklendi.');
-    return printHtml(html, '', { title, silent: toastOpts?.silent });
-  }
-
   const devices = await getAvailablePrinters();
+  const safe = sanitizePrintSettingsPrinterNames(settings, devices);
   const tryNames: string[] = [];
   const push = (s: string | null | undefined) => {
-    const t = (s || '').trim();
+    const t = remapStaleThermalPrinterName((s || '').trim(), devices);
     if (t && !tryNames.includes(t)) tryNames.push(t);
   };
-  push(getAdisyonPrinterName(settings));
-  push(settings.defaultKitchenPrinter);
-  for (const p of settings.printers) {
+  push(getAdisyonPrinterName(safe));
+  push(safe.defaultKitchenPrinter);
+  for (const p of safe.printers) {
     if (p?.enabled && p.type === 'receipt' && p.printerName) push(p.printerName);
   }
 
   let resolved = '';
   for (const c of tryNames) {
     const n = await resolveThermalDeviceName(c, devices);
-    const use = ((n || '').trim() || c).trim();
+    const use = remapStaleThermalPrinterName(((n || '').trim() || c).trim(), devices);
     if (use) {
       resolved = use;
       break;
@@ -1727,10 +1848,13 @@ export async function printToAdisyonPrinter(
     resolved = pickKitchenPrinterFromDevices(devices);
   }
 
+  // Web/mobil: seçilen adisyon yazıcısı print_jobs.printer_name olarak gider (boş bırakma —
+  // ajan eski "80mm Series" fallback'ine düşmesin).
   const title =
     toastOpts?.title ||
-    (resolved ? 'Adisyon yazdırıldı' : 'Adisyon kasaya gönderildi');
+    (resolved ? (isElectron() ? 'Adisyon yazdırıldı' : 'Adisyon kasaya gönderildi') : 'Adisyon kasaya gönderildi');
 
+  posDebugLog('[ŞefPOS] Adisyon yazıcı:', resolved || '(ajan varsayılan)');
   return printHtml(html, resolved, { title, silent: toastOpts?.silent });
 }
 
@@ -1918,6 +2042,16 @@ export async function printTakeawayReceipt(opts: {
   await printHtml(html, printerName, { title: 'Paket fişi gönderildi' });
 }
 
+/** Aynı sipariş+ürün seti 4 sn içinde 2 kez basılmasın (çift tık / çift yol). */
+const recentKitchenPrintAt = new Map<string, number>();
+function kitchenPrintDedupeKey(orderNumber: string, items: KitchenPrintItem[]): string {
+  const body = items
+    .map((i) => `${i.productName}|${i.quantity}|${i.variantName || ''}|${i.notes || ''}`)
+    .sort()
+    .join(';');
+  return `${orderNumber}::${body}`;
+}
+
 export async function printKitchenReceipts(opts: {
   settings: PrintSettings;
   restaurantName: string;
@@ -1940,7 +2074,22 @@ export async function printKitchenReceipts(opts: {
     if (!i.categoryId) return true;
     return !disabled.has(i.categoryId);
   });
-  if (filtered.length === 0) return;
+  if (filtered.length === 0) {
+    dispatchPrintToast({
+      kind: 'error',
+      message: 'Mutfak fişi basılmadı',
+      detail: 'Tüm ürünler yazdırma dışı kategoride (Ayarlar → Yazıcı).',
+    });
+    return;
+  }
+
+  const dedupeKey = kitchenPrintDedupeKey(opts.orderNumber || '', filtered);
+  const lastAt = recentKitchenPrintAt.get(dedupeKey) || 0;
+  if (Date.now() - lastAt < 4000) {
+    console.warn('[ŞefPOS] Mutfak fişi tekrarlandı — atlandı (çift baskı koruması)');
+    return;
+  }
+  recentKitchenPrintAt.set(dedupeKey, Date.now());
 
   const { groups: logicalGroups, unresolved } = partitionKitchenItemsByLogicalPrinter(
     settings,
@@ -1960,6 +2109,16 @@ export async function printKitchenReceipts(opts: {
       unresolved.map((u) => u.productName).join(', '),
     );
   }
+
+  /** Aynı fiziksel yazıcıya giden mantıksal grupları birleştir — çift fiş engeli. */
+  const mergeByResolvedPrinter = (
+    resolvedName: string,
+    batchItems: KitchenPrintItem[],
+    into: Record<string, KitchenPrintItem[]>,
+  ) => {
+    const key = (resolvedName || '__default__').trim() || '__default__';
+    (into[key] ||= []).push(...batchItems);
+  };
 
   const printOneKitchenBatch = async (printerName: string, batchItems: KitchenPrintItem[]) => {
     if (batchItems.length === 0) return;
@@ -1981,11 +2140,24 @@ export async function printKitchenReceipts(opts: {
     });
   };
 
-  // Mobil / web: her mantıksal yazıcı için ayrı print_jobs → kasa ajanı basar (kaç yazıcı varsa).
+  // Mobil / web: önce 7878 ajan (hızlı), yoksa tek print_jobs — aynı yazıcıya 2 iş yok.
   if (!isElectron()) {
+    const webDevices: PrinterDevice[] = [];
+    const fallback =
+      remapStaleThermalPrinterName((settings.defaultKitchenPrinter || '').trim(), webDevices) ||
+      (settings.defaultKitchenPrinter || '').trim() ||
+      'POS-80C';
+    const merged: Record<string, KitchenPrintItem[]> = {};
     for (const logical of Object.keys(logicalGroups).sort()) {
-      await printOneKitchenBatch(logical, logicalGroups[logical]);
+      const raw = logical === '__default__' ? fallback : logical;
+      const mapped = remapStaleThermalPrinterName(raw, webDevices) || raw || fallback;
+      mergeByResolvedPrinter(mapped, logicalGroups[logical], merged);
     }
+    await Promise.all(
+      Object.keys(merged)
+        .sort()
+        .map((printer) => printOneKitchenBatch(printer === '__default__' ? fallback : printer, merged[printer])),
+    );
     return;
   }
 

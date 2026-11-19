@@ -9,6 +9,7 @@
  */
 
 const http = require('http');
+const crypto = require('crypto');
 const { exec } = require('child_process');
 const os = require('os');
 const fs = require('fs');
@@ -20,6 +21,7 @@ const {
   readSession,
   getSessionPath,
   DEFAULT_VDS_ORIGIN,
+  allowedVdsOrigin,
 } = require('./queuePoller');
 const {
   PRODUCT,
@@ -36,7 +38,7 @@ const {
 
 const execAsync = promisify(exec);
 const PORT = 7878;
-const AGENT_VERSION = '1.2.6';
+const AGENT_VERSION = '1.3.9';
 
 function showMsg(text) {
   try {
@@ -93,13 +95,39 @@ function handleProtocolUrl(rawUrl) {
   }
 }
 
+let _req = null;
+
 function corsHeaders(extra = {}) {
-  return {
-    'Access-Control-Allow-Origin': '*',
+  const origin = String(_req?.headers?.origin || '');
+  const allow =
+    !origin ||
+    origin === 'https://sefpos.com.tr' ||
+    origin === 'https://www.sefpos.com.tr' ||
+    origin === 'http://localhost:5180' ||
+    origin === 'http://127.0.0.1:5180' ||
+    /^https:\/\/([a-z0-9-]+\.)?sefpos\.com\.tr$/i.test(origin);
+  const headers = {
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Allow-Headers': 'Content-Type, X-Sefpos-Agent-Token',
+    Vary: 'Origin',
     ...extra,
   };
+  if (allow) headers['Access-Control-Allow-Origin'] = origin || 'https://sefpos.com.tr';
+  return headers;
+}
+
+function ensureAgentToken() {
+  const session = readSession();
+  if (session?.agentToken) return session.agentToken;
+  const token = crypto.randomBytes(24).toString('hex');
+  writeSession({ agentToken: token });
+  return token;
+}
+
+function agentTokenOk(req) {
+  const session = readSession();
+  const presented = String(req.headers['x-sefpos-agent-token'] || '');
+  return !!(session?.agentToken && presented && presented === session.agentToken);
 }
 
 function sendJson(res, statusCode, obj) {
@@ -177,93 +205,39 @@ function findBrowserExe() {
 }
 
 /**
- * Electron main.cjs `buildFullHtml` ile aynı sarmalayıcı (72mm, margin 0).
- * Alt boşluk: yazdırmadan önce içerik yüksekliğini ölçüp @page height kilitle.
+ * Önizleme = baskı: uygulama HTML + <style> aynen korunur.
+ * Ajan sadece kağıt genişliği / @page ayarlar — mutfak/adisyon CSS'ini EZMEZ.
  */
 function wrapReceiptHtml(html) {
-  const body = String(html || '');
-  const isPartner =
-    body.includes('GETİR YEMEK') ||
-    body.includes('class="dh-r"') ||
-    body.includes('SİPARİŞ DOĞRULAMA KODU');
-
-  // 80mm rulo yazıcıların basılabilir alanı ~72mm (POS-80C MediaSizeWidth≈72mm).
-  // Kenar kesilmesin diye içerik 64mm; IE margin 0 (printSilentWebBrowser).
-  const W = '64mm';
-  const partnerCss = `
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  html, body { width: ${W}; max-width: ${W}; background: #fff; color: #000; font-size: 10pt; overflow-x: hidden; }
-  @page { margin: 0; size: 72mm auto; }
-  @media print {
-    html, body { width: ${W} !important; max-width: ${W} !important; margin: 0 !important; }
-    * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-  }`;
-
-  const receiptCss = `
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  html, body {
-    font-family: Arial, Helvetica, sans-serif;
-    font-size: 10pt;
-    width: ${W};
-    max-width: ${W};
-    color: #000;
-    background: #fff;
-    overflow-x: hidden;
-  }
-  .receipt, .sefpos-kitchen-scope, .sefpos-receipt-scope {
-    width: ${W} !important;
-    max-width: ${W} !important;
-    margin-left: 0 !important;
-    margin-right: 0 !important;
-    padding: 0 1mm !important;
-    overflow-x: hidden;
-    word-wrap: break-word;
-    word-break: break-word;
-  }
-  .center { text-align: center; width: 100%; display: block; }
-  .bold { font-weight: bold; }
-  .large { font-size: 11pt; }
-  .xlarge { font-size: 13pt; font-weight: bold; }
-  .line { border-top: 1px dashed #000; margin: 3px 0; width: 100%; }
-  .row {
-    display: table;
-    width: 100%;
-    table-layout: fixed;
-    margin: 1px 0;
-  }
-  .row span { display: table-cell; vertical-align: top; overflow: hidden; word-break: break-word; }
-  .row .name { width: 55%; }
-  .row .qty { width: 15%; text-align: center; }
-  .row .price { width: 30%; text-align: right; }
-  .total-row {
-    display: table;
-    width: 100%;
-    table-layout: fixed;
-    font-weight: bold;
-    margin: 2px 0;
-    font-size: 11pt;
-  }
-  .total-row span { display: table-cell; vertical-align: top; }
-  .total-row span:last-child { text-align: right; }
-  .note { font-size: 9pt; padding-left: 2px; font-style: italic; }
-  .footer { text-align: center; font-size: 8pt; margin-top: 4px; word-break: break-word; }
-  @page { margin: 0; size: 72mm auto; }
-  @media print {
-    html, body, .receipt, .sefpos-kitchen-scope, .sefpos-receipt-scope {
-      width: ${W} !important;
-      max-width: ${W} !important;
-      margin: 0 !important;
-    }
-  }`;
-
-  // paperOffsetMm / negatif margin kenarı keser — ajan baskısında sıfırla
-  let cleaned = body
+  const raw = String(html || '');
+  const styleChunks = [];
+  let bodyHtml = raw.replace(/<style[^>]*>([\s\S]*?)<\/style>/gi, (_, css) => {
+    styleChunks.push(String(css || ''));
+    return '';
+  });
+  bodyHtml = bodyHtml
     .replace(/margin-left\s*:\s*[-.\d]+\s*mm/gi, 'margin-left:0')
     .replace(/margin-right\s*:\s*[-.\d]+\s*mm/gi, 'margin-right:0');
 
-  const inner = isPartner ? cleaned : `<div class="receipt">${cleaned}</div>`;
+  const W = '72mm';
+  const shellCss = `
+  * { box-sizing: border-box; }
+  html, body {
+    width: ${W} !important;
+    max-width: ${W} !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #fff !important;
+    color: #000 !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  @page { size: 80mm auto; margin: 0; }
+  @media print {
+    html, body { width: ${W} !important; max-width: ${W} !important; margin: 0 !important; padding: 0 !important; }
+  }
+`;
 
-  // window.print() YOK — ajan WebBrowser ExecWB ile diyalogsuz basar (Edge Yazdır penceresi açılmaz)
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -271,19 +245,16 @@ function wrapReceiptHtml(html) {
 <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
 <title>ŞefPOS Fiş</title>
 <style>
-${isPartner ? partnerCss : receiptCss}
+${shellCss}
+${styleChunks.join('\n')}
 </style>
 </head>
 <body>
-${inner}
+${bodyHtml}
 </body>
 </html>`;
 }
 
-/**
- * Gerçek sessiz baskı: System.Windows.Forms.WebBrowser + ExecWB(PRINT, DONTPROMPTUSER).
- * Edge/Chrome açılmaz → "Yazdır" diyaloğu çıkmaz. Varsayılan yazıcıya basar.
- */
 async function printSilentWebBrowser(html, printerName) {
   if (printerName && isVirtualOrCloudPrinter(printerName)) {
     return {
@@ -313,7 +284,7 @@ async function printSilentWebBrowser(html, printerName) {
     '  # IE yazdırma: sığdırma kapat + kenar boşluğu 0 (72mm fiş A4’e küçülmesin)',
     "  $ieMain = 'HKCU:\\Software\\Microsoft\\Internet Explorer\\Main'",
     '  New-Item -Path $ieMain -Force | Out-Null',
-    "  Set-ItemProperty -Path $ieMain -Name 'Print_Shrink_To_Fit' -Value 'yes' -Force",
+    "  Set-ItemProperty -Path $ieMain -Name 'Print_Shrink_To_Fit' -Value 'no' -Force",
     "  $iePage = 'HKCU:\\Software\\Microsoft\\Internet Explorer\\PageSetup'",
     '  New-Item -Path $iePage -Force | Out-Null',
     "  Set-ItemProperty -Path $iePage -Name 'margin_left' -Value '0.00000' -Force",
@@ -325,10 +296,12 @@ async function printSilentWebBrowser(html, printerName) {
     '  if ($printerName) {',
     '    $prevObj = Get-CimInstance -ClassName Win32_Printer -ErrorAction SilentlyContinue | Where-Object { $_.Default -eq $true } | Select-Object -First 1',
     '    if ($prevObj) { $prev = $prevObj.Name }',
-    '    $target = Get-CimInstance -ClassName Win32_Printer -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq $printerName } | Select-Object -First 1',
-    "    if (-not $target) { throw ('Yazici bulunamadi: ' + $printerName) }",
-    '    $null = Invoke-CimMethod -InputObject $target -MethodName SetDefaultPrinter',
-    '    Start-Sleep -Milliseconds 350',
+    '    if ($prev -ne $printerName) {',
+    '      $target = Get-CimInstance -ClassName Win32_Printer -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq $printerName } | Select-Object -First 1',
+    "      if (-not $target) { throw ('Yazici bulunamadi: ' + $printerName) }",
+    '      $null = Invoke-CimMethod -InputObject $target -MethodName SetDefaultPrinter',
+    '      Start-Sleep -Milliseconds 120',
+    '    }',
     '  }',
     '  $form = New-Object System.Windows.Forms.Form',
     '  $form.Width = 2',
@@ -340,7 +313,7 @@ async function printSilentWebBrowser(html, printerName) {
     '  $form.Location = New-Object System.Drawing.Point(-4000, -4000)',
     '  $wb = New-Object System.Windows.Forms.WebBrowser',
     '  $wb.ScriptErrorsSuppressed = $true',
-    '  $wb.Width = 280',
+    '  $wb.Width = 272',
     '  $wb.Height = 900',
     '  $form.Controls.Add($wb)',
     '  $form.Show()',
@@ -354,18 +327,30 @@ async function printSilentWebBrowser(html, printerName) {
     '  if ($wb.ReadyState -ne [System.Windows.Forms.WebBrowserReadyState]::Complete) {',
     "    throw 'HTML yuklenemedi'",
     '  }',
-    '  Start-Sleep -Milliseconds 350',
+    '  Start-Sleep -Milliseconds 80',
     '  [System.Windows.Forms.Application]::DoEvents()',
     '  $ax = $wb.ActiveXInstance',
     '  if (-not $ax) { throw "ActiveXInstance yok" }',
-    '  # OLECMDID_PRINT=6, OLECMDEXECOPT_DONTPROMPTUSER=2 — Yazdır penceresi YOK',
+    '  # OLECMDID_PRINT=6, OLECMDEXECOPT_DONTPROMPTUSER=2',
+    '  if ($printerName) {',
+    '    $defNow = Get-CimInstance -ClassName Win32_Printer -ErrorAction SilentlyContinue | Where-Object { $_.Default -eq $true } | Select-Object -First 1',
+    '    if (-not $defNow -or $defNow.Name -ne $printerName) {',
+    '      $target2 = Get-CimInstance -ClassName Win32_Printer -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq $printerName } | Select-Object -First 1',
+    '      if ($target2) { $null = Invoke-CimMethod -InputObject $target2 -MethodName SetDefaultPrinter; Start-Sleep -Milliseconds 200 }',
+    '    }',
+    '  }',
     '  $ax.ExecWB(6, 2)',
-    '  Start-Sleep -Milliseconds 2200',
-    '  [System.Windows.Forms.Application]::DoEvents()',
+    '  # Spooler: do not dispose / restore default too early',
+    '  $sw2 = [System.Diagnostics.Stopwatch]::StartNew()',
+    '  while ($sw2.ElapsedMilliseconds -lt 900) {',
+    '    [System.Windows.Forms.Application]::DoEvents()',
+    '    Start-Sleep -Milliseconds 80',
+    '  }',
     '} finally {',
     '  try { if ($form) { $form.Close() } } catch {}',
     '  try { if ($wb) { $wb.Dispose() } } catch {}',
     '  try { if ($form) { $form.Dispose() } } catch {}',
+    '  Start-Sleep -Milliseconds 200',
     '  if ($printerName -and $prev -and $prev -ne $printerName) {',
     '    $old = Get-CimInstance -ClassName Win32_Printer -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq $prev } | Select-Object -First 1',
     '    if ($old) { $null = Invoke-CimMethod -InputObject $old -MethodName SetDefaultPrinter -ErrorAction SilentlyContinue }',
@@ -380,7 +365,7 @@ async function printSilentWebBrowser(html, printerName) {
     // STA + gizli pencere (CMD/PowerShell ön plana gelmesin)
     await execAsync(
       `powershell -NoProfile -STA -WindowStyle Hidden -ExecutionPolicy Bypass -File "${tmpPs1}"`,
-      { timeout: 45000, windowsHide: true },
+      { timeout: 60000, windowsHide: true },
     );
     return { success: true };
   } catch (err) {
@@ -395,39 +380,94 @@ async function printSilentWebBrowser(html, printerName) {
   }
 }
 
-/** Ayarlardaki mantıksal ad (Mutfak) → Windows yazıcı (POS-80C / 80mm…). */
+/** Tercih sırası: POS-80C önce; genel "80mm Series" en sonda. */
+const THERMAL_PRINTER_KW = ['pos-80c', 'pos80c', 'pos-80', 'pos80', '80mm', 'thermal', 'mutfak', 'kitchen', 'fis', 'fiş'];
+
+function normalizePrinterKey(name) {
+  return String(name || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '');
+}
+
+/** POS-80C ailesi — "80mm Series Printer" ile karıştırma. */
+function isPos80Family(name) {
+  const k = normalizePrinterKey(name);
+  return k.includes('pos80c') || k === 'pos80' || /^pos80/.test(k);
+}
+
+function isGeneric80mmSeries(name) {
+  const n = String(name || '').toLowerCase();
+  return n.includes('80mm') && !isPos80Family(n);
+}
+
+function pickPreferredThermal(names) {
+  const list = (names || []).filter(Boolean);
+  const pos = list.find((n) => isPos80Family(n));
+  if (pos) return pos;
+  for (const k of THERMAL_PRINTER_KW) {
+    const hit = list.find((n) => {
+      const nl = n.toLowerCase();
+      if (!nl.includes(k)) return false;
+      // "80mm" anahtarı: POS-80 varken generic Series'i atla
+      if (k === '80mm' && isGeneric80mmSeries(n) && list.some(isPos80Family)) return false;
+      return true;
+    });
+    if (hit) return hit;
+  }
+  return list[0] || '';
+}
+
+/** Ayarlardaki mantıksal ad (Mutfak) → Windows yazıcı. İstek varsa birebir eşle. */
 function resolveWindowsPrinterName(requested, printerList) {
   const names = (printerList || [])
     .map((p) => (typeof p === 'string' ? p : p?.name || ''))
     .filter((n) => n && !isVirtualOrCloudPrinter(n));
   const t = String(requested || '').trim();
   if (!t) {
-    const kw = ['80mm', 'pos-80', 'pos80', 'pos-80c', 'thermal', 'mutfak', 'kitchen', 'fis', 'fiş'];
-    for (const k of kw) {
-      const hit = names.find((n) => n.toLowerCase().includes(k));
-      if (hit) return hit;
-    }
-    return names[0] || '';
+    return pickPreferredThermal(names);
   }
+  // Eski Electron / web ayarı: "80mm Series Printer" seçili ama POS-80C varken oraya bas
+  if (isGeneric80mmSeries(t) && names.some(isPos80Family)) {
+    const pos = names.find((n) => isPos80Family(n));
+    if (pos) {
+      console.log(`[print-agent] stale yazıcı "${t}" → ${pos}`);
+      return pos;
+    }
+  }
+  // 1) Tam eşleşme (büyük/küçük harf)
   if (names.includes(t)) return t;
   const tl = t.toLowerCase();
   const exactCi = names.find((n) => n.toLowerCase() === tl);
   if (exactCi) return exactCi;
+  // 1b) pos80c / POS-80C / pos-80c aynı aile
+  const reqKey = normalizePrinterKey(t);
+  if (reqKey.includes('pos80')) {
+    const posHit = names.find((n) => isPos80Family(n));
+    if (posHit) return posHit;
+  }
+  // 2) İstek adını içeren / istekte geçen en uzun cihaz adı
+  //    NOT: kısa yanlış eşleşmeyi engelle (min 4 karakter); generic 80mm'i POS isteğinde ele
   const partial = names
     .filter((n) => {
       const nl = n.toLowerCase();
-      return nl.includes(tl) || tl.includes(nl);
+      if (nl === tl) return true;
+      if (nl.includes(tl) && tl.length >= 4) return true;
+      if (tl.includes(nl) && nl.length >= 4) return true;
+      if (normalizePrinterKey(n) === reqKey) return true;
+      return false;
+    })
+    .filter((n) => {
+      if (reqKey.includes('pos80') && isGeneric80mmSeries(n)) return false;
+      return true;
     })
     .sort((a, b) => b.length - a.length);
   if (partial[0]) return partial[0];
-  // Mantıksal "Mutfak/Bar" → termal fiziksel yazıcı
-  const kw = ['80mm', 'pos-80', 'pos80', 'thermal', 'fis', 'fiş'];
-  for (const k of kw) {
-    const hit = names.find((n) => n.toLowerCase().includes(k));
-    if (hit) return hit;
-  }
-  return names[0] || t;
+  // 3) Mantıksal "Mutfak" vb. → POS-80C tercih
+  return pickPreferredThermal(names) || t;
 }
+
+/** Aynı yazıcıda SetDefaultPrinter yarışı olmasın; farklı yazıcılar paralel basabilir */
+const printChainsByPrinter = new Map();
 
 async function handlePrint(html, printerName) {
   let list = [];
@@ -437,10 +477,23 @@ async function handlePrint(html, printerName) {
     list = [];
   }
   const target = resolveWindowsPrinterName(printerName, list);
-  console.log(
-    `[print-agent] sessiz baskı (ExecWB) → ${target || '(varsayılan)'} (istek: ${printerName || '-'})`,
+  const lockKey = (target || '__default__').toLowerCase();
+  const prev = printChainsByPrinter.get(lockKey) || Promise.resolve();
+  const run = async () => {
+    console.log(
+      `[print-agent] sessiz baskı (ExecWB) → ${target || '(varsayılan)'} (istek: ${printerName || '-'})`,
+    );
+    return printSilentWebBrowser(html, target);
+  };
+  const done = prev.then(run, run);
+  printChainsByPrinter.set(
+    lockKey,
+    done.then(
+      () => undefined,
+      () => undefined,
+    ),
   );
-  return printSilentWebBrowser(html, target);
+  return done;
 }
 
 async function readBody(req) {
@@ -494,6 +547,7 @@ function parseUrl(req) {
 }
 
 const server = http.createServer(async (req, res) => {
+  _req = req;
   if (req.method === 'OPTIONS') {
     res.writeHead(200, corsHeaders());
     res.end();
@@ -511,15 +565,17 @@ const server = http.createServer(async (req, res) => {
       app: PRODUCT,
       platform: os.platform(),
       paired: !!session,
+      agentToken: session ? ensureAgentToken() : null,
       installed: isInstalled(),
-      installDir: getInstallDir(),
-      tenantId: session?.tenantId || null,
-      sessionPath: getSessionPath(),
     });
     return;
   }
 
   if (pathname === '/printers' && req.method === 'GET') {
+    if (!agentTokenOk(req)) {
+      sendJson(res, 401, { success: false, error: 'Yazıcı ajanı eşleşmesi gerekli' });
+      return;
+    }
     const printers = await getWindowsPrinters();
     sendJson(res, 200, { success: true, printers });
     return;
@@ -538,7 +594,7 @@ const server = http.createServer(async (req, res) => {
           userJwt: jwt,
           tenantId,
           branchId: branchId || null,
-          vdsOrigin: String(vdsOrigin).replace(/\/$/, ''),
+          vdsOrigin: allowedVdsOrigin(vdsOrigin),
           printers: printers.map((p) => ({ name: p.name, isDefault: !!p.isDefault })),
         });
         console.log(`[print-agent] eşlendi tenant=${tenantId} yazıcı=${printers.length}`);
@@ -574,7 +630,7 @@ const server = http.createServer(async (req, res) => {
         userJwt: body.userJwt,
         tenantId: body.tenantId,
         branchId: body.branchId || null,
-        vdsOrigin: (body.vdsOrigin || DEFAULT_VDS_ORIGIN).replace(/\/$/, ''),
+        vdsOrigin: allowedVdsOrigin(body.vdsOrigin || DEFAULT_VDS_ORIGIN),
         printers: printers.map((p) => ({ name: p.name, isDefault: !!p.isDefault })),
       });
       sendJson(res, 200, { success: true, printers: printers.length });
@@ -585,6 +641,10 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (pathname === '/print' && req.method === 'POST') {
+    if (!agentTokenOk(req)) {
+      sendJson(res, 401, { success: false, error: 'Yazıcı ajanı eşleşmesi gerekli' });
+      return;
+    }
     try {
       const body = await readBody(req);
       if (!body.html) {

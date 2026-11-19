@@ -22,7 +22,7 @@
 - **Ürün Sayısı:** 0 ❌
 
 ### 4. 🔐 Kullanıcı Bilgileri
-- **Demo:** `info@sefpos.com.tr` / `2128948++` ✅
+- **Demo:** `info@sefpos.com.tr` / `CHANGE_ME` ✅
 - **Ayka:** `ayka@sefpos.com` / `ayka123` ✅
 
 ## ❌ ÇÖZÜLMESİ GEREKEN SORUNLAR
@@ -63,7 +63,7 @@ node create-demo-data.cjs
 
 ### Adım 3: Sistemi Test Et
 1. **URL:** `http://localhost:5180`
-2. **Giriş:** `info@sefpos.com.tr` / `2128948++`
+2. **Giriş:** `info@sefpos.com.tr` / `CHANGE_ME`
 3. **Ayka Panel:** `http://localhost:5180/ayka`
 
 ## 📈 BEKLENEN SONUÇ

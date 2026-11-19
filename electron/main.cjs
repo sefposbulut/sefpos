@@ -1,4 +1,55 @@
 const { app, BrowserWindow, shell, ipcMain, net, dialog, Menu } = require('electron');
+
+function isTrustedIpcSender(event) {
+  try {
+    const frameUrl = event?.senderFrame?.url || '';
+    const pageUrl = event?.sender?.getURL?.() || '';
+    const url = frameUrl || pageUrl;
+    if (!url || url === 'about:blank') return false;
+    if (url.startsWith('devtools://')) return false;
+    if (url.startsWith('file://')) return true;
+    const u = new URL(url);
+    const host = u.hostname.toLowerCase();
+    if ((u.protocol === 'http:' || u.protocol === 'https:') && (host === 'localhost' || host === '127.0.0.1')) return true;
+    if (u.protocol === 'https:' && (host === 'sefpos.com.tr' || host.endsWith('.sefpos.com.tr'))) return true;
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+function isAllowedExternalUrl(url) {
+  try {
+    const u = new URL(String(url || ''));
+    const host = u.hostname.toLowerCase();
+    if (u.protocol === 'https:') return true;
+    if (u.protocol === 'http:' && (host === 'localhost' || host === '127.0.0.1')) return true;
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+function isPrivateDeviceHost(hostname) {
+  const host = String(hostname || '').toLowerCase().replace(/^\[|\]$/g, '');
+  if (host === 'localhost' || host.endsWith('.local')) return true;
+  const m = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (!m) return false;
+  const [a, b] = [Number(m[1]), Number(m[2])];
+  if (a === 10 || a === 127) return true;
+  if (a === 192 && b === 168) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  return false;
+}
+
+const _ipcHandle = ipcMain.handle.bind(ipcMain);
+ipcMain.handle = (channel, listener) => _ipcHandle(channel, async (event, ...args) => {
+  if (!isTrustedIpcSender(event)) {
+    console.error('[ipc] reddedildi', channel);
+    throw new Error('IPC reddedildi');
+  }
+  return listener(event, ...args);
+});
 const { writeSecureJson, readSecureJson } = require('./secureLocalStore.cjs');
 const {
   acquireMainInstanceFileLock,
@@ -1397,27 +1448,8 @@ function readSefposDevSupabaseFromJson() {
   return { url: '', anon: '' };
 }
 
-const DEFAULT_PRIMARY_SUPABASE_URL = 'https://xdfnozfuuzctubijbnds.supabase.co';
-// Public anon key — RLS politikaları ile korunur (AGENTS.md: primary ref
-// xdfnozfuuzctubijbnds). Electron production build'de `process.env.VITE_*`
-// görünmediği ve `sefpos-dev-port.json` asar paketinin dışında kaldığı için
-// son çare olarak bu constant kullanılır. Anon key'i değiştirmek istersen
-// VITE_SUPABASE_ANON_KEY env veya sefpos-dev-port.json ile override edebilirsin.
-const FALLBACK_PRIMARY_SUPABASE_ANON_KEY = 'sb_publishable_wrSHY5Kzkw-bx0XzYM5VFA_FK3BFF_x';
-
-const _fromPort = readSefposDevSupabaseFromJson();
-const SUPABASE_URL =
-  String(process.env.VITE_SUPABASE_URL || '')
-    .trim()
-    .replace(/\/$/, '') || _fromPort.url || DEFAULT_PRIMARY_SUPABASE_URL;
-const SUPABASE_ANON_KEY =
-  String(process.env.VITE_SUPABASE_ANON_KEY || '').trim()
-  || _fromPort.anon
-  || FALLBACK_PRIMARY_SUPABASE_ANON_KEY;
-
-if (!app.isPackaged) {
-  console.log(`[print-agent] Supabase: url=${SUPABASE_URL}, anonKey=***${SUPABASE_ANON_KEY.slice(-8)}`);
-}
+const SUPABASE_URL = '';
+const SUPABASE_ANON_KEY = '';
 
 const isDev = !app.isPackaged;
 /** Üretimde F12 kapalı; destek: SEFPOS_SUPPORT_DEVTOOLS=1 veya Ctrl+Shift+Alt+S */
@@ -1879,7 +1911,8 @@ async function getSystemPrinters() {
   }
 }
 
-function supabaseFetch(endpoint, options = {}) {
+function supabaseFetch(_endpoint, _options = {}) {
+  return Promise.resolve({ ok: false, status: 0, data: null });
   if (!isDev) {
     return Promise.resolve({ ok: false, status: 0, data: null });
   }
@@ -2247,6 +2280,7 @@ function resetRealtimeReconnectState() {
 }
 
 function shouldAttemptRealtimeConnect() {
+  return false;
   if (isElectronSqlServerMode()) return false;
   if (!currentTenantId || !currentUserJwt) return false;
   if (realtimeReconnectSuspended) return false;
@@ -2692,7 +2726,7 @@ function createWindow() {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
-      sandbox: false,
+      sandbox: true,
       preload: path.join(__dirname, 'preload.cjs'),
       partition: 'persist:shefpos',
       backgroundThrottling: process.env.SEFPOS_FULL_SPEED_BACKGROUND === '1' ? false : true,
@@ -2726,18 +2760,11 @@ function createWindow() {
   // (barkod tarayıcı, gelecekte sesli not vb. için gerekli)
   try {
     const ses = mainWindow.webContents.session;
+    const allowPerm = new Set(['media', 'geolocation', 'notifications', 'fullscreen', 'clipboard-sanitized-write']);
     ses.setPermissionRequestHandler((_wc, permission, callback) => {
-      if (permission === 'media' || permission === 'mediaKeySystem' || permission === 'display-capture') {
-        return callback(true);
-      }
-      callback(true);
+      callback(allowPerm.has(permission));
     });
-    ses.setPermissionCheckHandler((_wc, permission) => {
-      if (permission === 'media' || permission === 'mediaKeySystem' || permission === 'display-capture') {
-        return true;
-      }
-      return true;
-    });
+    ses.setPermissionCheckHandler((_wc, permission) => allowPerm.has(permission));
   } catch (e) {
     console.warn('[permissions] handler set failed:', e?.message || e);
   }
@@ -2792,7 +2819,12 @@ function createWindow() {
     mainWindow.loadURL(`http://localhost:${readSefposDevServerPort()}`);
     mainWindow.webContents.openDevTools();
   } else {
-    const vdsWeb = String((loadSettings().vdsWebUrl || process.env.SEFPOS_VDS_WEB_URL || 'http://45.195.231.185')).replace(/\/$/, '');
+    const vdsWeb = String((loadSettings().vdsWebUrl || process.env.SEFPOS_VDS_WEB_URL || 'https://sefpos.com.tr')).replace(/\/$/, '');
+    if (!/^https:\/\//i.test(vdsWeb) && !/^http:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/i.test(vdsWeb)) {
+      paLog('error', 'VDS arayüz adresi yalnızca https olabilir');
+      const indexPath = path.join(app.getAppPath(), 'dist', 'index.html');
+      mainWindow.loadFile(indexPath);
+    } else
     mainWindow.loadURL(vdsWeb).catch((err) => {
       paLog('error', 'VDS arayüz yüklenemedi: ' + (err?.message || err));
       const indexPath = path.join(app.getAppPath(), 'dist', 'index.html');
@@ -2852,8 +2884,34 @@ function createWindow() {
     }
   });
 
+  const blockOffsite = (event, url) => {
+    if (!isAllowedExternalUrl(url) && !isTrustedIpcSender({ sender: mainWindow.webContents, senderFrame: { url } })) {
+      try {
+        const u = new URL(url);
+        const host = u.hostname.toLowerCase();
+        const sameApp = u.protocol === 'https:' && (host === 'sefpos.com.tr' || host.endsWith('.sefpos.com.tr'));
+        const localDev = (u.protocol === 'http:' || u.protocol === 'https:') && (host === 'localhost' || host === '127.0.0.1');
+        if (!sameApp && !localDev && !url.startsWith('file://')) event.preventDefault();
+      } catch {
+        event.preventDefault();
+      }
+    }
+  };
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    try {
+      const u = new URL(url);
+      const host = u.hostname.toLowerCase();
+      const ok = url.startsWith('file://')
+        || ((u.protocol === 'http:' || u.protocol === 'https:') && (host === 'localhost' || host === '127.0.0.1'))
+        || (u.protocol === 'https:' && (host === 'sefpos.com.tr' || host.endsWith('.sefpos.com.tr')));
+      if (!ok) event.preventDefault();
+    } catch {
+      event.preventDefault();
+    }
+  });
+  mainWindow.webContents.on('will-redirect', (event, url) => blockOffsite(event, url));
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url);
+    if (isAllowedExternalUrl(url)) shell.openExternal(url);
     return { action: 'deny' };
   });
 
@@ -4379,7 +4437,7 @@ ipcMain.handle('check-for-updates', async () => {
 ipcMain.handle('open-external-url', async (_evt, url) => {
   try {
     const u = String(url || '').trim();
-    if (!/^https?:\/\//i.test(u)) return { ok: false };
+    if (!isAllowedExternalUrl(u)) return { ok: false };
     await shell.openExternal(u);
     return { ok: true };
   } catch (err) {
@@ -4536,6 +4594,9 @@ ipcMain.handle('hugin-request', async (_, opts = {}) => {
     return { ok: false, status: 0, body: '', error: `Gecersiz URL: ${e?.message || e}` };
   }
 
+  if (!isPrivateDeviceHost(parsed.hostname)) {
+    return { ok: false, status: 0, body: '', error: 'ÖKC adresi yalnızca yerel ağ olabilir' };
+  }
   const isHttps = parsed.protocol === 'https:';
   const lib = isHttps ? https : http;
   const bodyStr =

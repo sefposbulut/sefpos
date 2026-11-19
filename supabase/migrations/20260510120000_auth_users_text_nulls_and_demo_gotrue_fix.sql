@@ -1,6 +1,6 @@
 -- GoTrue "Database error querying schema" / sql.Scan NULL string:
 -- Yeni sürümlerde auth.users içinde ek text sütunları NULL kalabiliyor.
--- Demo: info@sefpos.com.tr / 2128948++ — şifre + identities garanti.
+-- Demo: info@sefpos.com.tr / CHANGE_ME — şifre + identities garanti.
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
@@ -59,7 +59,7 @@ BEGIN
       instance_id = COALESCE(instance_id, inst),
       aud = 'authenticated',
       role = 'authenticated',
-      encrypted_password = crypt('2128948++', gen_salt('bf')),
+      encrypted_password = crypt('CHANGE_ME', gen_salt('bf')),
       email_confirmed_at = COALESCE(email_confirmed_at, now()),
       confirmation_token = COALESCE(confirmation_token, ''),
       email_change = COALESCE(email_change, ''),

@@ -3,7 +3,7 @@
  * /api/* → Supabase Edge; diğer istekler → statik SPA.
  * Ortam: SEFPOS_SUPABASE_URL (Cloudflare Pages → Production).
  */
-const DEFAULT_UPSTREAM = 'https://xdfnozfuuzctubijbnds.supabase.co';
+const DEFAULT_UPSTREAM = 'https://sefpos.com.tr';
 
 const HOP_BY_HOP = new Set([
   'connection',
@@ -19,9 +19,10 @@ const HOP_BY_HOP = new Set([
 ]);
 
 async function proxyToSupabaseEdge(request, edgeFunctionName, env) {
-  const upstream = String(env?.SEFPOS_SUPABASE_URL || DEFAULT_UPSTREAM).replace(/\/$/, '');
+  const configured = String(env?.SEFPOS_SUPABASE_URL || '').replace(/\/$/, '');
+  const upstream = configured.includes('sefpos.com.tr') ? configured : DEFAULT_UPSTREAM;
   const url = new URL(request.url);
-  const dest = `${upstream}/functions/v1/${edgeFunctionName}${url.search}`;
+  const dest = `${upstream}/vds-api/fn/${edgeFunctionName}${url.search}`;
 
   const out = new Headers();
   for (const [k, v] of request.headers) {
@@ -133,8 +134,9 @@ export default {
       const sub = path.startsWith(partnerApiPrefix)
         ? path.slice(partnerApiPrefix.length)
         : path.slice(legacyPartnerPrefix.length);
-      const upstream = String(env?.SEFPOS_SUPABASE_URL || DEFAULT_UPSTREAM).replace(/\/$/, '');
-      const dest = `${upstream}/functions/v1/partner-orders-api${sub || ''}${url.search}`;
+      const configured = String(env?.SEFPOS_SUPABASE_URL || '').replace(/\/$/, '');
+      const upstream = configured.includes('sefpos.com.tr') ? configured : DEFAULT_UPSTREAM;
+      const dest = `${upstream}/vds-api/integrations/partner${sub || ''}${url.search}`;
       const out = new Headers();
       for (const [k, v] of request.headers) {
         const lk = k.toLowerCase();

@@ -118,7 +118,7 @@ function createVdsPartnerApi({ runSql }) {
   async function handle(req, res, path, method, sendJson, readBody) {
     const rid = requestId(req);
     const cors = {
-      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Origin': 'https://sefpos.com.tr',
       'Access-Control-Allow-Methods': 'GET, POST, PATCH, OPTIONS',
       'Access-Control-Allow-Headers': 'Authorization, Content-Type, X-Api-Key, X-Request-Id',
       'X-Request-Id': rid,

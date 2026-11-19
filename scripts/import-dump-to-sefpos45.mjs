@@ -23,13 +23,18 @@ const ORDER = [
   'order_daily_counters', 'branch_product_stocks', 'device_bindings',
 ];
 
+if (!process.env.MSSQL_PASSWORD || !process.env.MSSQL_USER) {
+  console.error('MSSQL_USER ve MSSQL_PASSWORD ortam değişkeni zorunlu');
+  process.exit(1);
+}
+
 const config = {
-  server: '45.195.231.185',
-  port: 1433,
-  database: 'sefpos45',
-  user: 'sefpos',
-  password: 'SefPos#Db2026!Vds',
-  options: { encrypt: false, trustServerCertificate: true },
+  server: process.env.MSSQL_HOST || '127.0.0.1',
+  port: Number(process.env.MSSQL_PORT || 1433),
+  database: process.env.MSSQL_DATABASE || 'sefpos45',
+  user: process.env.MSSQL_USER || '',
+  password: process.env.MSSQL_PASSWORD || '',
+  options: { encrypt: process.env.MSSQL_ENCRYPT === 'true', trustServerCertificate: true },
   requestTimeout: 120000,
   connectionTimeout: 15000,
 };

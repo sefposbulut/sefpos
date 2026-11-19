@@ -58,7 +58,7 @@ node create-demo-data.cjs
 - ✅ 20 masa (10 Salon + 10 Bahçe)
 - ✅ 10 kategori (Çorbalar, Salatalar, vb.)
 - ✅ 20+ ürün (Fiyatlandırılmış)
-- ✅ Demo kullanıcı: `info@sefpos.com.tr` / `2128948++`
+- ✅ Demo kullanıcı: `info@sefpos.com.tr` / `CHANGE_ME`
 
 ## ⚠️ Güvenlik Notu
 Bu sadece demo/test ortamı içindir. Production'da RLS aktif olmalıdır.
