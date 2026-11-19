@@ -1,5 +1,0 @@
-import{aW as h,f as b}from"./admin-DX5C93c7.js";import"./react-vendor-CcHjbMRY.js";import"./landing-x4lwZ-IS.js";import"./lucide-C8EDTTDL.js";function T(w){if(!h()||typeof window>"u")return()=>{};const l=b();let i=!1,t=0;const a=new AbortController;return(async()=>{var c;for(;!i;)try{const n=localStorage.getItem("shefpos_sql_session"),d=n?(c=JSON.parse(n))==null?void 0:c.access_token:"";if(!d){await new Promise(o=>{t=window.setTimeout(o,5e3)});continue}const r=await fetch(`${l}/vds-api/events`,{headers:{Authorization:`Bearer ${d}`,Accept:"text/event-stream"},signal:a.signal});if(!r.ok||!r.body){await new Promise(o=>{t=window.setTimeout(o,8e3)});continue}const f=r.body.getReader(),m=new TextDecoder;let e="";for(;!i;){const{value:o,done:u}=await f.read();if(u)break;e+=m.decode(o,{stream:!0});let s=e.indexOf(`
-
-`);for(;s>=0;){const p=e.slice(0,s);e=e.slice(s+2),p.startsWith("data:")&&w(),s=e.indexOf(`
-
-`)}}}catch{if(i)return;await new Promise(n=>{t=window.setTimeout(n,8e3)})}})(),()=>{i=!0,a.abort(),t&&window.clearTimeout(t)}}export{T as subscribeVdsLive};

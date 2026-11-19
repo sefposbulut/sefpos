@@ -1,4 +1,4 @@
-import{r as o,j as e}from"./react-vendor-CcHjbMRY.js";import{u as qe,s as u,g as Me,F as ze}from"./admin-DX5C93c7.js";import{p as We,a as Be}from"./settings-D17scoOz.js";import{U as je,n as H,P as $e,i as ve,X as q,b1 as z,bJ as ne,bH as re,S as le,k as _e,T as we,B as Ge,p as Ye,q as He,b2 as Ee,aO as Se,aP as Ce,A as Re,a2 as Ve,aC as Qe,I as Je,V as Ze,aL as ea}from"./lucide-C8EDTTDL.js";import"./landing-x4lwZ-IS.js";import"./pdf-B-FjwMUM.js";const aa=`/*
+import{r as o,j as e}from"./react-vendor-CcHjbMRY.js";import{u as qe,s as u,g as Me,F as ze}from"./admin-a2HPALwc.js";import{p as We,a as Be}from"./settings-B3ZQKON3.js";import{U as je,n as H,P as $e,i as ve,X as q,b1 as z,bJ as ne,bH as re,S as le,k as _e,T as we,B as Ge,p as Ye,q as He,b2 as Ee,aO as Se,aP as Ce,A as Re,a2 as Ve,aC as Qe,I as Je,V as Ze,aL as ea}from"./lucide-C8EDTTDL.js";import"./landing-CE9ZGzsy.js";import"./pdf-Di8sVrwQ.js";const aa=`/*
   # profiles DELETE: match Turkish roles.name + can_manage_users
 
   Default tenant roles use Turkish names (Yönetici, Şube Müdürü, …), not

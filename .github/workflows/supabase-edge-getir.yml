@@ -1,13 +1,7 @@
 name: Supabase Edge (Getir)
 
+# Arşiv. Getir webhook artık VDS API'de. Otomatik push kapalı.
 on:
-  push:
-    branches: ["main", "master"]
-    paths:
-      - "supabase/functions/getir-api/**"
-      - "supabase/functions/getir-webhook/**"
-      - "supabase/config.toml"
-      - ".github/workflows/supabase-edge-getir.yml"
   workflow_dispatch:
 
 env:
