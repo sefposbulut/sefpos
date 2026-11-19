@@ -5,6 +5,7 @@
 const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const { createHemenyoldaPush } = require('./hemenyoldaPush.cjs');
+const authz = require('./vdsAuthz.cjs');
 
 const GETIR_DEV = 'https://food-external-api-gateway.development.getirapi.com';
 const GETIR_PROD = 'https://food-external-api-gateway.getirapi.com';
@@ -119,7 +120,14 @@ async function postOztekSms(cfg, phone, message, contextLabel = 'SMS') {
 }
 
 function createVdsFunctions({ runSql, cfg }) {
-  const otpSecret = String((cfg && cfg.otpSigningSecret) || process.env.OTP_SIGNING_SECRET || 'sefpos-otp-secret');
+  const otpPepper = String((cfg && (cfg.otpSigningSecret || cfg.otpPepper)) || process.env.OTP_SIGNING_SECRET || '').trim();
+  let otpStore = null;
+  function getOtpStore() {
+    if (!otpPepper || otpPepper.length < 16) return null;
+    if (!otpStore) otpStore = authz.createOtpStore({ pepper: otpPepper });
+    return otpStore;
+  }
+  const smsLimiter = authz.createRateLimiter();
   const hemenyoldaPush = createHemenyoldaPush({ runSql });
   async function callerProfile(userId) {
     const rows = await runSql(
@@ -366,26 +374,9 @@ function createVdsFunctions({ runSql, cfg }) {
     const phone = normalizeOtpPhone(body?.phone || '');
     const code = String(body?.code || '').replace(/\D/g, '');
     if (!phone || !code) return { ok: false, error: 'Telefon ve kod zorunludur' };
-    const otpToken = String(body?.otpToken || '');
-    if (!otpToken.includes('.')) return { ok: false, error: 'OTP token eksik' };
-    const [payloadB64, sig] = otpToken.split('.');
-    const expectedSig = hmacSignB64url(payloadB64, otpSecret);
-    if (sig !== expectedSig) return { ok: false, error: 'OTP token gecersiz' };
-    let payload;
-    try {
-      payload = JSON.parse(b64urlDecodeToString(payloadB64));
-    } catch {
-      return { ok: false, error: 'OTP token bozuk' };
-    }
-    if (!payload?.phone || !payload?.purpose || !payload?.codeHash || !payload?.exp) {
-      return { ok: false, error: 'OTP token bozuk' };
-    }
-    if (payload.phone !== phone || payload.purpose !== purpose) {
-      return { ok: false, error: 'OTP token telefon ile eslesmiyor' };
-    }
-    if (Date.now() > Number(payload.exp)) return { ok: false, error: 'Kodun suresi doldu' };
-    if (sha256Hex(code) !== payload.codeHash) return { ok: false, error: 'OTP kodu gecersiz' };
-    return { ok: true, phone, purpose };
+    const store = getOtpStore();
+    if (!store) return { ok: false, error: 'SMS doğrulama sunucuda kapalı' };
+    return store.verify(body?.otpToken, phone, purpose, code);
   }
 
   async function handleResetPasswordSms(body) {
@@ -431,6 +422,8 @@ function createVdsFunctions({ runSql, cfg }) {
     const name = String(body.name || body.full_name || 'Garson').trim();
     if (phone.length < 10 || pin.length !== 4) return { success: false, error: 'Telefon ve 4 haneli PIN gerekli' };
     const email = `m${phone}@sefpos.com.tr`;
+    // PIN türevi parola mevcut garson girişiyle uyumludur (telefon + 4 hane).
+    // Kaba kuvvet /login hız sınırı ile kesilir. Yeni garsonlar da aynı sözleşmeyi kullanır.
     const password = `sefp_${(pin + pin + pin + pin).slice(0, 8)}`;
     const created = await handleCreateUser({
       email,
@@ -458,13 +451,16 @@ function createVdsFunctions({ runSql, cfg }) {
     return { success: true, user: created.user, waiter_id: wid };
   }
 
-  async function handleYsCallback(body) {
+  async function handleYsCallback(body, actor) {
     const orderId = String(body.orderId || '');
     const action = String(body.action || '');
     if (!orderId) return { error: 'orderId zorunlu' };
     const orders = await runSql(`SELECT TOP 1 * FROM online_orders WHERE id = @id`, { id: { value: orderId } });
     const order = orders && orders[0];
     if (!order) return { error: 'Sipariş bulunamadı' };
+    if (actor && !actor.isSuperAdmin && String(order.tenant_id) !== String(actor.tenantId)) {
+      return { error: 'Sipariş bulunamadı' };
+    }
     const plats = await runSql(`SELECT TOP 1 * FROM online_order_platforms WHERE id = @id`, { id: { value: order.platform_id } });
     const platform = plats && plats[0];
     const statusMap = { accept: 'accepted', reject: 'cancelled', prepared: 'ready', picked_up: 'delivered' };
@@ -516,28 +512,96 @@ function createVdsFunctions({ runSql, cfg }) {
     return { ok: true, html };
   }
 
-  async function handleIncomingWebhook(body) {
+  async function lookupPlatform(sql, params) {
+    try {
+      const rows = await runSql(sql, params);
+      if (rows && rows.length === 1) return rows[0];
+      if (rows && rows.length > 1) return { ambiguous: true };
+    } catch (e) {
+      console.error('[vds-fn] platform lookup', (e && e.message) || e);
+    }
+    return null;
+  }
+
+  async function resolveWebhookPlatform(body, ctx) {
+    const q = ctx && ctx.query;
+    const headers = (ctx && ctx.headers) || {};
+    const apiKey = String(headers['x-api-key'] || headers['x-webhook-token'] || (q && q.get('token')) || '').trim();
+    const platformId = String((q && (q.get('platformId') || q.get('platform'))) || body?.platformId || '').trim();
+    const remoteId = String((q && q.get('remoteId')) || body?.remoteId || '').trim();
+    const restaurantId = String(
+      body?.restaurant?.id || body?.restaurantId || body?.foodOrder?.restaurant?.id || '',
+    ).trim();
+    const cols = 'id, tenant_id, is_active, api_key, webhook_secret, getir_x_api_key, getir_restaurant_id, remote_id';
+    let row = null;
+    if (apiKey) {
+      row = await lookupPlatform(
+        `SELECT TOP 2 ${cols} FROM online_order_platforms WHERE is_active = 1 AND (getir_x_api_key = @k OR webhook_secret = @k OR api_key = @k)`,
+        { k: { value: apiKey } },
+      );
+    }
+    if (!row && platformId) {
+      row = await lookupPlatform(
+        `SELECT TOP 2 ${cols} FROM online_order_platforms WHERE is_active = 1 AND id = @id`,
+        { id: { value: platformId } },
+      );
+    }
+    if (!row && remoteId) {
+      row = await lookupPlatform(
+        `SELECT TOP 2 ${cols} FROM online_order_platforms WHERE is_active = 1 AND remote_id = @rid`,
+        { rid: { value: remoteId } },
+      );
+    }
+    if (!row && restaurantId) {
+      row = await lookupPlatform(
+        `SELECT TOP 2 ${cols} FROM online_order_platforms WHERE is_active = 1 AND getir_restaurant_id = @gid`,
+        { gid: { value: restaurantId } },
+      );
+    }
+    if (!row || row.ambiguous) return { error: 'Platform eşleşmedi' };
+    const secret = String(row.webhook_secret || row.getir_x_api_key || row.api_key || '');
+    const authedByKey = apiKey && secret && authz.timingEqualStr(apiKey, secret);
+    const authed = authedByKey || authz.verifyWebhookRequest({
+      presentedToken: apiKey,
+      signature: headers['x-sefpos-signature'] || headers['x-signature'] || '',
+      authorization: headers.authorization || headers.Authorization || '',
+      rawBody: (ctx && ctx.raw) || JSON.stringify(body || {}),
+      secret,
+    });
+    if (!authed) return { error: 'İmza doğrulanamadı' };
+    return { platform: row };
+  }
+
+  async function handleIncomingWebhook(body, ctx) {
     const ord = body.foodOrder || body.order || body.data || body;
-    const platformOrderId = String(ord.id || ord.orderId || ord.token || '');
+    const platformOrderId = String(ord.id || ord.orderId || ord.token || ord.code || '');
     if (!platformOrderId) return { ok: false, error: 'sipariş id yok' };
-    const plats = await runSql(
-      `SELECT TOP 1 id, tenant_id FROM online_order_platforms WHERE is_active = 1 ORDER BY created_at`,
-      {},
-    );
-    const platform = plats && plats[0];
-    if (!platform) return { ok: false, error: 'aktif platform yok' };
-    await upsertGetirOrder(platform, ord);
+    const resolved = await resolveWebhookPlatform(body, ctx);
+    if (resolved.error) return { ok: false, error: resolved.error };
+    await upsertGetirOrder(resolved.platform, ord);
     return { ok: true };
   }
 
-  async function handleFn(name, body, auth) {
+  async function handleFn(name, body, auth, ctx) {
     const n = String(name || '').toLowerCase();
     if (n === 'getir-api') return handleGetirApi(body || {});
     if (n === 'create-user') return handleCreateUser(body || {}, auth);
     if (n === 'update-user') return handleUpdateUser(body || {}, auth);
     if (n === 'create-waiter-auth') return handleCreateWaiter(body || {}, auth);
-    if (n === 'yemeksepeti-callback') return handleYsCallback(body || {});
-    if (n === 'online-order-reprint') return handleReprint(body || {});
+    if (n === 'yemeksepeti-callback') return handleYsCallback(body || {}, ctx && ctx.actor);
+    if (n === 'online-order-reprint') {
+      const printed = await handleReprint(body || {});
+      const actor = ctx && ctx.actor;
+      if (printed && printed.ok && actor && !actor.isSuperAdmin) {
+        const rows = await runSql(`SELECT TOP 1 tenant_id FROM online_orders WHERE id = @id`, {
+          id: { value: String(body.onlineOrderId || body.orderId || '') },
+        });
+        if (!rows || !rows[0] || String(rows[0].tenant_id) !== String(actor.tenantId)) {
+          return { ok: false, error: 'Sipariş yok' };
+        }
+      }
+      return printed;
+    }
     if (n === 'sync-online-orders') return { ok: true, newOrders: 0, message: 'Senkron VDS webhook/poll ile' };
     if (n === 'hemenyolda-webhook-push') return hemenyoldaPush.handle(body || {}, auth);
     if (n === 'send-sms-otp') {
@@ -546,27 +610,45 @@ function createVdsFunctions({ runSql, cfg }) {
       if (!phone || phone.length !== 10 || !phone.startsWith('5')) {
         return { success: false, error: 'Geçerli telefon numarası girin' };
       }
-      const code = String(Math.floor(100000 + Math.random() * 900000));
-      const exp = Date.now() + 4 * 60 * 1000;
-      const payload = JSON.stringify({ phone, purpose, codeHash: sha256Hex(code), exp });
-      const payloadB64 = b64urlEncode(payload);
-      const sig = hmacSignB64url(payloadB64, otpSecret);
-      const otpToken = `${payloadB64}.${sig}`;
-      const message = `SefPOS dogrulama kodunuz: ${code}. Kod 4 dakika gecerlidir.`;
+      const store = getOtpStore();
+      if (!store) return { success: false, error: 'SMS doğrulama sunucuda kapalı' };
+      const ip = (ctx && ctx.ip) || 'local';
+      if (!smsLimiter.hit(`otp-ip:${ip}`, 10, 10 * 60 * 1000).ok) {
+        return { success: false, error: 'Çok fazla deneme. Biraz sonra tekrar deneyin.' };
+      }
+      if (!smsLimiter.hit(`otp-ph:${phone}`, 3, 10 * 60 * 1000).ok) {
+        return { success: false, error: 'Bu numaraya çok fazla kod gönderildi.' };
+      }
+      const issued = store.issue(phone, purpose);
+      const message = `SefPOS dogrulama kodunuz: ${issued.code}. Kod 4 dakika gecerlidir.`;
       await postOztekSms(cfg, phone, message, 'SMS OTP');
-      return { success: true, otpToken };
+      return authz.publicOtpResponse(issued);
     }
     if (n === 'verify-sms-otp') {
+      const ip = (ctx && ctx.ip) || 'local';
+      if (!smsLimiter.hit(`otp-verify:${ip}`, 20, 10 * 60 * 1000).ok) {
+        return { success: false, error: 'Çok fazla deneme. Biraz sonra tekrar deneyin.' };
+      }
       const verified = await verifyOtpPayload(body || {}, body?.purpose || 'signup');
       if (!verified.ok) return { success: false, error: verified.error };
       return { success: true };
     }
     if (n === 'reset-password-sms') {
+      const ip = (ctx && ctx.ip) || 'local';
+      if (!smsLimiter.hit(`otp-reset:${ip}`, 8, 60 * 60 * 1000).ok) {
+        return { success: false, error: 'Çok fazla deneme. Biraz sonra tekrar deneyin.' };
+      }
       return handleResetPasswordSms(body || {});
     }
     if (n === 'send-sms-welcome') {
       const phone = normalizeOtpPhone(body?.phone || '');
-      if (!phone) return { success: false, error: 'Telefon zorunlu' };
+      const store = getOtpStore();
+      if (!phone || !store || !store.recentlyVerified(phone)) {
+        return { success: false, error: 'Önce telefon doğrulaması gerekli' };
+      }
+      if (!smsLimiter.hit(`welcome:${phone}`, 2, 24 * 60 * 60 * 1000).ok) {
+        return { success: true };
+      }
       try {
         await postOztekSms(
           cfg,
@@ -575,16 +657,19 @@ function createVdsFunctions({ runSql, cfg }) {
           'SMS welcome',
         );
       } catch (e) {
-        // Kayit basarili olsun; welcome SMS ikincil
         console.error('[vds-fn] welcome sms:', e.message || e);
       }
       return { success: true };
     }
     if (n === 'send-sms-custom') {
-      if (!auth) return { success: false, error: 'Oturum gerekli' };
+      const actor = ctx && ctx.actor;
+      if (!auth || !actor || !actor.isSuperAdmin) return { success: false, error: 'Yetkisiz' };
       const phone = normalizeOtpPhone(body?.phone || '');
-      const message = String(body?.message || '').trim();
+      const message = String(body?.message || '').trim().slice(0, 300);
       if (!phone || !message) return { success: false, error: 'Telefon ve mesaj zorunlu' };
+      if (!smsLimiter.hit(`sms-custom:${actor.tenantId || actor.userId}`, 30, 24 * 60 * 60 * 1000).ok) {
+        return { success: false, error: 'Günlük SMS kotası doldu' };
+      }
       await postOztekSms(cfg, phone, message, 'SMS custom');
       return { success: true };
     }
@@ -597,7 +682,7 @@ function createVdsFunctions({ runSql, cfg }) {
         base: '/vds-api/integrations/partner',
       };
     }
-    if (PUBLIC_FNS.has(n)) return handleIncomingWebhook(body || {});
+    if (PUBLIC_FNS.has(n)) return handleIncomingWebhook(body || {}, ctx);
     return { success: false, error: `Bilinmeyen fonksiyon: ${n}` };
   }
 

@@ -28,10 +28,15 @@ function loadConfig() {
   return raw;
 }
 
+const authz = require('./vdsAuthz.cjs');
+
 const cfg = loadConfig();
 const LISTEN_HOST = cfg.listenHost || '127.0.0.1';
 const LISTEN_PORT = Number(cfg.listen || 8787);
-const TOKEN_TTL_SEC = Number(cfg.tokenTtlSec || 86400);
+/** Kısa ömürlü erişim jetonu. Aktif kasa /refresh ile uzatır. */
+const TOKEN_TTL_SEC = Number(cfg.tokenTtlSec || 4 * 60 * 60);
+const rateLimiter = authz.createRateLimiter();
+const UPLOAD_ROOT = cfg.uploadDir || path.join(path.dirname(CONFIG_PATH), 'vds-uploads');
 
 let sql = null;
 let bcrypt = null;
@@ -59,7 +64,7 @@ const pool = new sql.ConnectionPool({
     trustServerCertificate: cfg.trustServerCertificate !== false,
     enableArithAbort: true,
   },
-  pool: { max: 10, min: 0, idleTimeoutMillis: 30000 },
+  pool: { max: Math.max(10, Number(cfg.poolMax || 40)), min: 0, idleTimeoutMillis: 30000 },
 });
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -114,8 +119,8 @@ const SQL_ROW_ALLOWLIST = {
   stock_movements: ['id', 'tenant_id', 'product_id', 'movement_type', 'quantity', 'unit_cost', 'total_cost', 'supplier_name', 'note', 'created_by', 'source_branch_id', 'target_branch_id', 'reference_type', 'reference_no', 'created_at'],
   order_cancel_logs: ['id', 'tenant_id', 'branch_id', 'order_id', 'order_item_id', 'order_number', 'product_name', 'quantity', 'unit_price', 'cancel_reason', 'cancelled_by', 'cancelled_by_name', 'created_at'],
   roles: ['id', 'tenant_id', 'name', 'permissions', 'created_at'],
-  profiles: ['id', 'tenant_id', 'branch_id', 'role_id', 'email', 'full_name', 'role', 'avatar_url', 'phone', 'username', 'is_super_admin', 'onboarding_completed', 'allowed_ips', 'is_active', 'created_at'],
-  app_users: ['id', 'email', 'password_hash', 'tenant_id', 'created_at'],
+  profiles: ['id', 'tenant_id', 'branch_id', 'role_id', 'email', 'full_name', 'role', 'avatar_url', 'phone', 'username', 'onboarding_completed', 'allowed_ips', 'is_active', 'created_at'],
+  app_users: ['id', 'email', 'tenant_id', 'created_at'],
   shift_definitions: ['id', 'tenant_id', 'branch_id', 'shift_no', 'name', 'start_time', 'end_time', 'color', 'is_active', 'created_at', 'updated_at'],
   shifts: ['id', 'tenant_id', 'branch_id', 'shift_definition_id', 'shift_no', 'shift_name', 'business_date', 'terminal_id', 'terminal_name', 'opened_by', 'opened_at', 'opening_cash', 'opening_cash_breakdown', 'opening_notes', 'closed_by', 'closed_at', 'closing_cash', 'closing_cash_breakdown', 'closing_notes', 'cash_revenue', 'card_revenue', 'open_account_revenue', 'total_revenue', 'expense_total', 'cash_in_total', 'cash_out_total', 'expected_cash', 'cash_difference', 'order_count', 'status', 'created_at', 'updated_at'],
   daily_closures: ['id', 'tenant_id', 'branch_id', 'business_date', 'closed_by', 'closed_at', 'notes', 'status'],
@@ -613,36 +618,129 @@ function parseSqlRolePermissions(raw) {
   }
 }
 
-function signToken(userId) {
-  const exp = Math.floor(Date.now() / 1000) + TOKEN_TTL_SEC;
-  const payload = `${userId}|${exp}`;
-  const sig = crypto.createHmac('sha256', cfg.secret).update(payload).digest('hex');
-  return Buffer.from(`${payload}|${sig}`).toString('base64url');
+let sessionsTableOk = true;
+
+async function openSession(userId) {
+  const sid = crypto.randomUUID();
+  if (!sessionsTableOk) return sid;
+  try {
+    await runSql(
+      `INSERT INTO api_sessions (id, user_id, expires_at, created_at)
+       VALUES (@id, @uid, DATEADD(second, @ttl, SYSUTCDATETIME()), SYSUTCDATETIME())`,
+      { id: { value: sid }, uid: { value: userId }, ttl: { value: TOKEN_TTL_SEC } },
+    );
+  } catch (e) {
+    const msg = String((e && e.message) || e);
+    if (/Invalid object name|api_sessions/i.test(msg)) sessionsTableOk = false;
+    else console.error('[vds-api] session insert', msg);
+  }
+  return sid;
 }
 
-function verifyToken(header) {
-  const raw = String(header || '').replace(/^Bearer\s+/i, '').trim();
-  if (!raw) return null;
-  let decoded;
+async function sessionAlive(sid, userId, graceSec = 0) {
+  if (!sessionsTableOk) return true;
   try {
-    decoded = Buffer.from(raw, 'base64url').toString('utf8');
-  } catch {
+    const rows = await runSql(
+      `SELECT TOP 1 id FROM api_sessions
+       WHERE id = @id AND user_id = @uid AND revoked_at IS NULL
+         AND expires_at > DATEADD(second, -@grace, SYSUTCDATETIME())`,
+      { id: { value: sid }, uid: { value: userId }, grace: { value: Number(graceSec) || 0 } },
+    );
+    return !!(rows && rows[0]);
+  } catch (e) {
+    const msg = String((e && e.message) || e);
+    if (/Invalid object name|api_sessions/i.test(msg)) {
+      sessionsTableOk = false;
+      return true;
+    }
+    console.error('[vds-api] session check', msg);
+    return false;
+  }
+}
+
+async function revokeSession(sid) {
+  if (!sid || !sessionsTableOk) return;
+  try {
+    await runSql(`UPDATE api_sessions SET revoked_at = SYSUTCDATETIME() WHERE id = @id`, {
+      id: { value: sid },
+    });
+  } catch (e) {
+    const msg = String((e && e.message) || e);
+    if (/Invalid object name|api_sessions/i.test(msg)) sessionsTableOk = false;
+  }
+}
+
+function issueToken(userId, sid) {
+  return authz.signAccessToken({
+    userId: String(userId),
+    sid: String(sid),
+    secret: cfg.secret,
+    ttlSec: TOKEN_TTL_SEC,
+    nowSec: Math.floor(Date.now() / 1000),
+  });
+}
+
+async function verifyRequestToken(header) {
+  const parsed = authz.readAccessToken(header, cfg.secret, Math.floor(Date.now() / 1000));
+  if (!parsed) return null;
+  const alive = await sessionAlive(parsed.sid, parsed.userId);
+  if (!alive) return null;
+  return parsed;
+}
+
+const actorCache = new Map();
+
+async function loadActor(userId) {
+  const hit = actorCache.get(String(userId));
+  if (hit && Date.now() - hit.at < 15000) return hit.actor;
+  let rows = [];
+  try {
+    rows = await runSql(
+      `SELECT TOP 1 p.id AS profile_id, p.tenant_id, p.role, p.is_super_admin, p.is_active
+       FROM profiles p
+       LEFT JOIN app_users u ON u.id = @id
+       WHERE p.id = @id OR (u.email IS NOT NULL AND p.email = u.email)`,
+      { id: { value: userId } },
+    );
+  } catch (e) {
+    console.error('[vds-api] actor', (e && e.message) || e);
     return null;
   }
-  const parts = decoded.split('|');
-  if (parts.length !== 3) return null;
-  const [userId, expStr, sig] = parts;
-  const exp = Number(expStr);
-  if (!userId || !Number.isFinite(exp) || exp < Math.floor(Date.now() / 1000)) return null;
-  const expected = crypto.createHmac('sha256', cfg.secret).update(`${userId}|${expStr}`).digest('hex');
-  const a = Buffer.from(sig);
-  const b = Buffer.from(expected);
-  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
-  return { userId };
+  const row = rows && rows[0];
+  if (!row || !row.tenant_id) return null;
+  if (row.is_active === false || row.is_active === 0) {
+    return { inactive: true, userId: String(userId) };
+  }
+  const isSuper = row.is_super_admin === true || row.is_super_admin === 1;
+  let tenantId = String(row.tenant_id);
+  if (isSuper) {
+    try {
+      const imp = await runSql(
+        `SELECT TOP 1 target_tenant_id FROM admin_tenant_impersonation WHERE user_id = @id`,
+        { id: { value: row.profile_id } },
+      );
+      if (imp && imp[0] && imp[0].target_tenant_id) tenantId = String(imp[0].target_tenant_id);
+    } catch {
+      /* impersonation tablosu yoksa kendi kiracısı */
+    }
+  }
+  const actor = {
+    userId: String(userId),
+    profileId: String(row.profile_id),
+    tenantId,
+    isSuperAdmin: isSuper,
+    role: String(row.role || ''),
+    inactive: false,
+  };
+  actorCache.set(String(userId), { at: Date.now(), actor });
+  return actor;
 }
 
-async function handleQuery(body) {
+async function handleQuery(body, actor) {
   try {
+    const prepared = authz.prepareQuery(actor, body || {});
+    if (prepared.error) return { data: null, error: prepared.error };
+    body = prepared.body;
     const { table, operation, select, filters, orderBy, limitVal, data, countOnly, headOnly } = body || {};
     const safeTable = safeId(table);
     if (!safeTable) return { data: null, error: 'tablo gerekli' };
@@ -658,7 +756,7 @@ async function handleQuery(body) {
       const hasJoin = select && /\w+\s*\(/.test(select);
       if (hasJoin) {
         const rows = await execSelectWithJoins(safeTable, select, filters, orderBy, limitVal);
-        return { data: rows, error: null };
+        return { data: authz.redactRows(rows), error: null };
       }
       const params = {};
       const where = buildWhere(filters, params, 'w');
@@ -669,7 +767,7 @@ async function handleQuery(body) {
       const top = limitVal ? `TOP ${parseInt(limitVal, 10)}` : '';
       const q = ['SELECT', top, cols, 'FROM', safeTable, where, order].filter(Boolean).join(' ').trim();
       const rows = await runSql(q, params);
-      return { data: aliasSqlRows(safeTable, rows), error: null };
+      return { data: authz.redactRows(aliasSqlRows(safeTable, rows)), error: null };
     }
 
     if (operation === 'insert') {
@@ -711,10 +809,10 @@ async function handleQuery(body) {
       return { data: rowArr.length === 1 ? results[0] || null : results, error: null };
     }
 
-    return { data: null, error: 'Bilinmeyen operasyon: ' + operation };
+    return { data: null, error: 'Bilinmeyen operasyon' };
   } catch (err) {
     console.error('[vds-api] query', (body && body.table) || '?', (body && body.operation) || '?', err && err.message ? err.message : err);
-    return { data: null, error: (err && err.message) || String(err) };
+    return { data: null, error: authz.clientErrorMessage() };
   }
 }
 
@@ -722,10 +820,20 @@ async function handleLogin(email, password) {
   const loginEmail = String(email || '').trim().toLowerCase();
   const rows = await runSql('EXEC sp_get_user_by_email @email', { email: { value: loginEmail } });
   const row = rows && rows[0];
-  if (!row) return { success: false, error: 'Kullanici bulunamadi: ' + loginEmail };
-  if (!row.password_hash) return { success: false, error: 'Sifre hash bulunamadi' };
+  if (!row || !row.password_hash) return { success: false, error: authz.loginFailureMessage() };
   const passwordMatch = await bcrypt.compare(String(password), String(row.password_hash));
-  if (!passwordMatch) return { success: false, error: 'Sifre hatali' };
+  if (!passwordMatch) return { success: false, error: authz.loginFailureMessage() };
+  try {
+    const prof = await runSql(
+      `SELECT TOP 1 is_active FROM profiles WHERE id = @id OR email = @email`,
+      { id: { value: row.profile_id || row.user_id }, email: { value: loginEmail } },
+    );
+    if (prof && prof[0] && (prof[0].is_active === false || prof[0].is_active === 0)) {
+      return { success: false, error: 'Hesap pasif. Yöneticinize başvurun.', suspended: true };
+    }
+  } catch (e) {
+    console.error('[vds-api] login active', (e && e.message) || e);
+  }
   const userRecord = {
     user_id: row.user_id,
     email: row.email,
@@ -754,7 +862,9 @@ async function handleLogin(email, password) {
     branch_is_main: row.branch_is_main === true || row.branch_is_main === 1,
     role_permissions: parseSqlRolePermissions(row.role_permissions) || DEFAULT_PERMISSIONS,
   };
-  return { success: true, data: userRecord, token: signToken(String(row.user_id)) };
+  const sid = await openSession(String(row.user_id));
+  actorCache.delete(String(row.user_id));
+  return { success: true, data: userRecord, token: issueToken(row.user_id, sid) };
 }
 
 async function handleRegister(body) {
@@ -885,21 +995,23 @@ async function handleResolveLogin(input) {
   if (rows.length > 1) {
     return { ok: false, reason: 'ambiguous', message: 'Bu kullanıcı adı birden fazla firmada var; tam e-posta adresinizi girin.' };
   }
-  return { ok: false, reason: 'not_found', message: 'Kullanıcı bulunamadı. Kullanıcı adını / telefonu / e-postayı kontrol edin.' };
+  return { ok: false, reason: 'not_found', message: 'Giriş bilgisi doğrulanamadı' };
 }
 
-async function handleRpc(fn, p) {
-  p = p || {};
+async function handleRpc(fn, p, actor) {
+  const guarded = authz.guardRpc(actor, fn, p || {});
+  if (guarded.error) return { data: null, error: guarded.error };
+  p = guarded.params;
   if (fn === 'unlock_stale_payment_locks') {
     await runSql(
       `UPDATE restaurant_tables SET payment_locked = 0, payment_locked_at = NULL,
        payment_locked_by_session = NULL, payment_lock_expires_at = NULL
-       WHERE payment_locked = 1 AND (
+       WHERE tenant_id = @tid AND payment_locked = 1 AND (
          (payment_lock_expires_at IS NOT NULL AND payment_lock_expires_at < GETUTCDATE())
          OR (payment_locked_at IS NOT NULL AND payment_locked_at < DATEADD(minute, -4, GETUTCDATE()))
          OR (payment_locked_at IS NULL AND payment_lock_expires_at IS NULL)
        )`,
-      {},
+      { tid: { value: p.p_tenant_id } },
     );
     return { data: null, error: null };
   }
@@ -908,8 +1020,9 @@ async function handleRpc(fn, p) {
     if (!tableId) return { data: { success: false, error: 'table_id zorunlu' }, error: null };
     await runSql(
       `UPDATE restaurant_tables SET payment_locked = 0, payment_locked_at = NULL,
-       payment_locked_by_session = NULL, payment_lock_expires_at = NULL WHERE id = @id`,
-      { id: { value: tableId } },
+       payment_locked_by_session = NULL, payment_lock_expires_at = NULL
+       WHERE id = @id AND tenant_id = @tid`,
+      { id: { value: tableId }, tid: { value: p.p_tenant_id } },
     );
     return { data: { success: true }, error: null };
   }
@@ -970,6 +1083,10 @@ async function handleRpc(fn, p) {
   if (fn === 'close_shift') {
     const shiftId = String(p.p_shift_id || '');
     if (!shiftId) return { data: null, error: 'p_shift_id zorunlu' };
+    const owned = await runSql(`SELECT TOP 1 tenant_id FROM shifts WHERE id = @sid`, { sid: { value: shiftId } });
+    if (!owned || !owned[0] || String(owned[0].tenant_id) !== String(p.p_tenant_id)) {
+      return { data: null, error: 'Vardiya bulunamadı' };
+    }
     const closingCash = Number(p.p_closing_cash) || 0;
     const closedBy = String(p.p_closed_by || '');
     const payRows = await runSql(
@@ -1017,8 +1134,8 @@ async function handleRpc(fn, p) {
       p.p_business_date ||
       (await runSql(`SELECT CONVERT(varchar(10), CAST(GETDATE() AS date), 23) AS d`, {}))?.[0]?.d;
     const openCnt = await runSql(
-      `SELECT COUNT(*) AS cnt FROM shifts WHERE branch_id = @bid AND status = N'open'`,
-      { bid: { value: branchId } },
+      `SELECT COUNT(*) AS cnt FROM shifts WHERE tenant_id = @tid AND branch_id = @bid AND status = N'open'`,
+      { tid: { value: tenantId }, bid: { value: branchId } },
     );
     if (openCnt && openCnt[0] && Number(openCnt[0].cnt) > 0) {
       return { data: null, error: 'Acik vardiya var; once vardiyalari kapatin' };
@@ -1038,7 +1155,7 @@ async function handleRpc(fn, p) {
     );
     return { data: await sqlSelectRowById('daily_closures', newId), error: null };
   }
-  return { data: null, error: `Bilinmeyen RPC: ${fn}` };
+  return { data: null, error: 'Bilinmeyen RPC' };
 }
 
 const { createVdsFunctions } = require('./vdsFunctions.cjs');
@@ -1046,20 +1163,45 @@ const { createVdsPartnerApi } = require('./vdsPartnerApi.cjs');
 const vdsFns = createVdsFunctions({ runSql, cfg });
 const vdsPartner = createVdsPartnerApi({ runSql, cfg });
 
-function readBody(req) {
+function readRaw(req, limit = 2_000_000) {
   return new Promise((resolve, reject) => {
     const chunks = [];
-    req.on('data', (c) => chunks.push(c));
-    req.on('end', () => {
-      const raw = Buffer.concat(chunks).toString('utf8');
-      if (!raw) return resolve({});
-      try {
-        resolve(JSON.parse(raw));
-      } catch (e) {
-        reject(e);
+    let size = 0;
+    req.on('data', (c) => {
+      size += c.length;
+      if (size > limit) {
+        const err = new Error('İstek gövdesi çok büyük');
+        err.status = 413;
+        reject(err);
+        req.destroy();
+        return;
       }
+      chunks.push(c);
     });
+    req.on('end', () => resolve(Buffer.concat(chunks)));
     req.on('error', reject);
+  });
+}
+
+function readBody(req, limit) {
+  return readRaw(req, limit).then((buf) => {
+    const raw = buf.toString('utf8');
+    if (!raw) return {};
+    return JSON.parse(raw);
+  });
+}
+
+function clientIp(req) {
+  const xf = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+  return xf || req.socket?.remoteAddress || 'local';
+}
+
+function tooMany(res, hit) {
+  return sendJson(res, 429, {
+    success: false,
+    data: null,
+    error: 'Çok fazla deneme. Biraz sonra tekrar deneyin.',
+    retryAfterMs: hit.retryAfterMs || 0,
   });
 }
 
@@ -1071,8 +1213,7 @@ function corsHeaders(req) {
     origin === 'https://www.sefpos.com.tr' ||
     origin === 'http://localhost:5180' ||
     origin === 'http://127.0.0.1:5180' ||
-    /^https:\/\/[a-z0-9.-]*sefpos\.com\.tr$/i.test(origin) ||
-    /^https:\/\/[a-z0-9-]+\.pages\.dev$/i.test(origin);
+    /^https:\/\/([a-z0-9-]+\.)?sefpos\.com\.tr$/i.test(origin);
   const headers = {
     'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type, Authorization',
@@ -1113,26 +1254,72 @@ const server = http.createServer(async (req, res) => {
   }
   try {
     if (method === 'GET' && (p === '/health' || p === '/')) {
-      return sendJson(res, 200, { ok: true, db: cfg.database, vds: true });
+      return sendJson(res, 200, { ok: true, vds: true });
     }
     if (method === 'POST' && p === '/login') {
+      const ip = clientIp(req);
+      const gate = rateLimiter.hit(`login:${ip}`, 30, 10 * 60 * 1000);
+      if (!gate.ok) return tooMany(res, gate);
       const body = await readBody(req);
+      const emailGate = rateLimiter.hit(`login-email:${String(body.email || '').toLowerCase()}`, 12, 10 * 60 * 1000);
+      if (!emailGate.ok) return tooMany(res, emailGate);
       const result = await handleLogin(body.email, body.password);
       return sendJson(res, 200, result);
     }
     if (method === 'POST' && p === '/register') {
+      const ip = clientIp(req);
+      const gate = rateLimiter.hit(`register:${ip}`, 8, 60 * 60 * 1000);
+      if (!gate.ok) return tooMany(res, gate);
       const body = await readBody(req);
       try {
         const result = await handleRegister(body);
         return sendJson(res, 200, result);
       } catch (e) {
-        return sendJson(res, 200, { success: false, error: e.message || 'Kayıt başarısız' });
+        console.error('[vds-api] register', (e && e.message) || e);
+        return sendJson(res, 200, { success: false, error: 'Kayıt tamamlanamadı' });
       }
     }
     if (method === 'POST' && p === '/resolve-login') {
+      const gate = rateLimiter.hit(`resolve:${clientIp(req)}`, 30, 10 * 60 * 1000);
+      if (!gate.ok) return tooMany(res, gate);
       const body = await readBody(req);
       const result = await handleResolveLogin(body.input);
       return sendJson(res, 200, result);
+    }
+    if (method === 'POST' && p === '/refresh') {
+      const parsed = authz.readAccessToken(req.headers.authorization, cfg.secret, Math.floor(Date.now() / 1000) - TOKEN_TTL_SEC);
+      if (!parsed) return sendJson(res, 401, { success: false, error: 'Oturum gerekli' });
+      const alive = await sessionAlive(parsed.sid, parsed.userId, TOKEN_TTL_SEC);
+      if (!alive) return sendJson(res, 401, { success: false, error: 'Oturum gerekli' });
+      try {
+        await runSql(
+          `UPDATE api_sessions SET expires_at = DATEADD(second, @ttl, SYSUTCDATETIME()) WHERE id = @id AND revoked_at IS NULL`,
+          { id: { value: parsed.sid }, ttl: { value: TOKEN_TTL_SEC } },
+        );
+      } catch { /* tablo yoksa jeton yine yenilenir */ }
+      return sendJson(res, 200, { success: true, token: issueToken(parsed.userId, parsed.sid) });
+    }
+    if (method === 'POST' && p === '/logout') {
+      const parsed = authz.readAccessToken(req.headers.authorization, cfg.secret, Math.floor(Date.now() / 1000) - TOKEN_TTL_SEC);
+      if (parsed) await revokeSession(parsed.sid);
+      return sendJson(res, 200, { success: true });
+    }
+    if (method === 'GET' && p.startsWith('/files/')) {
+      const parts = p.split('/').filter(Boolean);
+      if (parts.length !== 3 || parts[0] !== 'files') return sendJson(res, 404, { error: 'not found' });
+      const tenantPart = parts[1];
+      const filePart = parts[2];
+      if (!/^[0-9a-f-]{36}$/i.test(tenantPart) || !/^[a-z0-9._-]{1,80}$/i.test(filePart)) {
+        return sendJson(res, 404, { error: 'not found' });
+      }
+      const filePath = path.join(UPLOAD_ROOT, tenantPart, filePart);
+      if (!filePath.startsWith(path.join(UPLOAD_ROOT, tenantPart))) return sendJson(res, 404, { error: 'not found' });
+      if (!fs.existsSync(filePath)) return sendJson(res, 404, { error: 'not found' });
+      const ext = path.extname(filePath).toLowerCase();
+      const types = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif' };
+      res.writeHead(200, { 'Content-Type': types[ext] || 'application/octet-stream', 'Cache-Control': 'public, max-age=86400', ...corsHeaders(req) });
+      fs.createReadStream(filePath).pipe(res);
+      return;
     }
     if (method === 'GET' && p === '/public-menu') {
       const u = new URL(req.url, 'http://127.0.0.1');
@@ -1157,34 +1344,97 @@ const server = http.createServer(async (req, res) => {
     }
     if (method === 'POST' && p.startsWith('/fn/')) {
       const fnName = decodeURIComponent(p.slice(4).split('/')[0] || '');
-      const body = await readBody(req);
-      const auth = verifyToken(req.headers.authorization);
-      if (!vdsFns.PUBLIC_FNS.has(fnName.toLowerCase()) && !auth) {
+      const rawBuf = await readRaw(req);
+      const raw = rawBuf.toString('utf8');
+      let body = {};
+      if (raw) {
+        try { body = JSON.parse(raw); } catch { return sendJson(res, 400, { success: false, error: 'Geçersiz JSON' }); }
+      }
+      const url = new URL(req.url || '/', 'http://127.0.0.1');
+      const auth = await verifyRequestToken(req.headers.authorization);
+      const actor = auth ? await loadActor(auth.userId) : null;
+      if (!vdsFns.PUBLIC_FNS.has(fnName.toLowerCase()) && (!auth || !actor || actor.inactive)) {
         return sendJson(res, 200, { success: false, error: 'Oturum gerekli' });
       }
       try {
-        const result = await vdsFns.handleFn(fnName, body || {}, auth);
+        const result = await vdsFns.handleFn(fnName, body || {}, auth, {
+          ip: clientIp(req),
+          raw,
+          headers: req.headers,
+          query: url.searchParams,
+          actor,
+        });
         return sendJson(res, 200, result);
       } catch (e) {
-        return sendJson(res, 200, { success: false, error: e.message || String(e) });
+        console.error('[vds-api] fn', fnName, (e && e.message) || e);
+        return sendJson(res, 200, { success: false, error: 'İşlem tamamlanamadı' });
       }
     }
-    const auth = verifyToken(req.headers.authorization);
+    const auth = await verifyRequestToken(req.headers.authorization);
     if (!auth) return sendJson(res, 401, { data: null, error: 'Oturum gerekli' });
+    const actor = await loadActor(auth.userId);
+    if (!actor || actor.inactive) return sendJson(res, 401, { data: null, error: 'Oturum gerekli' });
+    if (method === 'GET' && p === '/events') {
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        'Cache-Control': 'no-cache',
+        Connection: 'keep-alive',
+        ...corsHeaders(req),
+      });
+      let last = '';
+      const timer = setInterval(async () => {
+        try {
+          const rows = await runSql(
+            `SELECT
+               CONVERT(varchar(30), (SELECT MAX(updated_at) FROM orders WHERE tenant_id = @tid), 126) AS last_order,
+               (SELECT COUNT(*) FROM restaurant_tables WHERE tenant_id = @tid AND ISNULL(status, N'') NOT IN (N'empty', N'free', N'')) AS busy_tables,
+               (SELECT COUNT(*) FROM print_jobs WHERE tenant_id = @tid AND status = N'pending') AS pending_prints`,
+            { tid: { value: actor.tenantId } },
+          );
+          const sig = JSON.stringify((rows && rows[0]) || {});
+          if (sig !== last) {
+            last = sig;
+            res.write(`data: ${sig}\n\n`);
+          } else {
+            res.write(`: ping\n\n`);
+          }
+        } catch (e) {
+          console.error('[vds-api] events', (e && e.message) || e);
+          res.write(`: ping\n\n`);
+        }
+      }, 2000);
+      req.on('close', () => clearInterval(timer));
+      return;
+    }
+    if (method === 'POST' && p === '/upload') {
+      const body = await readBody(req, 7_000_000);
+      const ext = String(body.ext || 'png').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 5);
+      if (!['png', 'jpg', 'jpeg', 'webp', 'gif'].includes(ext)) {
+        return sendJson(res, 400, { error: 'Desteklenmeyen dosya türü' });
+      }
+      const buf = Buffer.from(String(body.dataBase64 || ''), 'base64');
+      if (buf.length < 16 || buf.length > 5_000_000) return sendJson(res, 400, { error: 'Dosya boyutu geçersiz' });
+      const name = `${Date.now()}-${crypto.randomBytes(4).toString('hex')}.${ext}`;
+      const dir = path.join(UPLOAD_ROOT, actor.tenantId);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, name), buf);
+      return sendJson(res, 200, { url: `/vds-api/files/${actor.tenantId}/${name}` });
+    }
     if (method === 'POST' && p === '/query') {
       const body = await readBody(req);
-      const result = await handleQuery(body);
+      const result = await handleQuery(body, actor);
       return sendJson(res, 200, result);
     }
     if (method === 'POST' && p === '/rpc') {
       const body = await readBody(req);
-      const result = await handleRpc(body.fn, body.params);
+      const result = await handleRpc(body.fn, body.params, actor);
       return sendJson(res, 200, result);
     }
     return sendJson(res, 404, { error: 'not found' });
   } catch (err) {
     console.error('[vds-api]', err);
-    return sendJson(res, 500, { data: null, error: err.message || String(err) });
+    const status = err && err.status === 413 ? 413 : 500;
+    return sendJson(res, status, { data: null, error: status === 413 ? 'İstek gövdesi çok büyük' : 'İşlem tamamlanamadı' });
   }
 });
 

@@ -24,6 +24,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Unit tests
+        run: npm test
+
       - name: Build app
         env:
           VITE_STOCK_COUNT_BATCH_RPC: "true"
