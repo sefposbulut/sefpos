@@ -37,6 +37,7 @@ import { FeaturesCatalogPage } from '../sections/FeaturesCatalogPage';
 import { ContactPageSection } from '../sections/ContactPageSection';
 import { APP_VERSION } from '../../../lib/appVersion';
 import {
+  GARSON_APK_DOWNLOAD_PATH,
   GARSON_APK_FILENAME,
   GARSON_APP_STORE_URL,
   garsonApkDownloadHref,
@@ -162,6 +163,24 @@ export function PricingPage({ onLogin, onNavigate }: LandingPageProps) {
 
 export function DownloadPage({ onLogin }: LandingPageProps) {
   const ver = APP_VERSION;
+  const [apkReady, setApkReady] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(GARSON_APK_DOWNLOAD_PATH, { method: 'HEAD', cache: 'no-store' })
+      .then((res) => {
+        if (cancelled) return;
+        const contentType = (res.headers.get('content-type') || '').toLowerCase();
+        setApkReady(res.status === 200 && !contentType.includes('text/html'));
+      })
+      .catch(() => {
+        if (!cancelled) setApkReady(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   return (
     <>
       <section className="bg-slate-950 text-white py-20">
@@ -212,13 +231,23 @@ export function DownloadPage({ onLogin }: LandingPageProps) {
               <h3 className="font-bold text-lg mb-4 flex items-center gap-2">
                 <Smartphone className="w-5 h-5 text-orange-400 shrink-0" /> Android
               </h3>
-              <a
-                href={garsonApkDownloadHref()}
-                download={GARSON_APK_FILENAME}
-                className="inline-flex w-full items-center justify-center gap-2 bg-orange-600 hover:bg-orange-500 text-white font-bold px-6 py-4 rounded-xl text-center"
-              >
-                <Smartphone className="w-5 h-5 shrink-0" /> Android APK indir
-              </a>
+              {apkReady ? (
+                <a
+                  href={garsonApkDownloadHref()}
+                  download={GARSON_APK_FILENAME}
+                  className="inline-flex w-full items-center justify-center gap-2 bg-orange-600 hover:bg-orange-500 text-white font-bold px-6 py-4 rounded-xl text-center"
+                >
+                  <Smartphone className="w-5 h-5 shrink-0" /> Android APK indir
+                </a>
+              ) : (
+                <button
+                  type="button"
+                  disabled
+                  className="inline-flex w-full items-center justify-center gap-2 bg-slate-600 text-slate-300 font-bold px-6 py-4 rounded-xl text-center cursor-not-allowed"
+                >
+                  <Smartphone className="w-5 h-5 shrink-0" /> Android APK yakında
+                </button>
+              )}
               <ol className="mt-5 list-decimal space-y-2 pl-5 text-sm leading-relaxed text-slate-300">
                 <li>Telefonunuzdan linke dokunup APK&apos;yı indirin.</li>
                 <li>Android &apos;Bilinmeyen kaynaklardan yüklemeye izin ver&apos; uyarısında tarayıcınıza izin verin.</li>
