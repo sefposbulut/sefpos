@@ -1,4 +1,4 @@
-const CACHE_NAME = 'sefpos-web-12';
+const CACHE_NAME = 'sefpos-web-13';
 const STATIC_ASSETS = ['./', './index.html'];
 
 self.addEventListener('install', (event) => {
@@ -20,7 +20,15 @@ self.addEventListener('activate', (event) => {
   );
 });
 
+function isDirectStaticFile(url) {
+  const path = url.pathname;
+  if (path === '/gizlilik-sefpos-garson.html') return true;
+  if (/^\/download\/.+\.apk$/i.test(path)) return true;
+  return false;
+}
+
 function isNavigationRequest(request, url) {
+  if (isDirectStaticFile(url)) return false;
   if (request.mode === 'navigate') return true;
   const path = url.pathname;
   if (path === '/' || path.endsWith('/')) return true;
@@ -41,6 +49,8 @@ self.addEventListener('fetch', (event) => {
   if (url.protocol === 'chrome-extension:') return;
   if (url.origin !== self.location.origin) return;
   if (url.pathname.includes('/vds-api')) return;
+  // Gizlilik HTML ve APK tarayıcıya gerçek dosya olarak gitsin (SPA önbelleği yok).
+  if (isDirectStaticFile(url)) return;
 
   // HTML: ağ önce — soft refresh eski arayüzü bırakmasın
   if (isNavigationRequest(event.request, url)) {

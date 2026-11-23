@@ -84,6 +84,75 @@ async function resolveLatestSetupFilename() {
   return name;
 }
 
+function apkDownloadName(pathname) {
+  const raw = pathname.split('/').pop() || 'download.apk';
+  const safe = raw.replace(/[^A-Za-z0-9._-]/g, '');
+  return safe || 'download.apk';
+}
+
+function isGarsonApkPath(pathname) {
+  return /^\/download\/[^/]+\.apk$/i.test(pathname);
+}
+
+/** APK gerçek dosya kalsın. SPA index.html dönerse 404 ver. */
+async function serveDownloadApk(request, env) {
+  const url = new URL(request.url);
+  const assetRes = await env.ASSETS.fetch(request);
+  const ct = (assetRes.headers.get('content-type') || '').toLowerCase();
+  if (!assetRes.ok || ct.includes('text/html')) {
+    return new Response('Not Found', {
+      status: 404,
+      headers: {
+        'Content-Type': 'text/plain; charset=utf-8',
+        'Cache-Control': 'no-store',
+      },
+    });
+  }
+  const headers = new Headers(assetRes.headers);
+  headers.set('Content-Type', 'application/vnd.android.package-archive');
+  headers.set('X-Content-Type-Options', 'nosniff');
+  headers.set('Content-Disposition', `attachment; filename="${apkDownloadName(url.pathname)}"`);
+  return new Response(assetRes.body, { status: assetRes.status, headers });
+}
+
+/**
+ * /gizlilik-sefpos-garson.html gerçek politika dosyası.
+ * Pages .html adresini uzantısız yola 307 yapabiliyor; gövdeyi 200 ile geri ver.
+ */
+async function serveGarsonPrivacy(request, env) {
+  let assetRes = await env.ASSETS.fetch(request);
+  if (assetRes.status >= 300 && assetRes.status < 400) {
+    const loc = assetRes.headers.get('Location');
+    if (loc) {
+      const nextUrl = new URL(loc, request.url);
+      assetRes = await env.ASSETS.fetch(
+        new Request(nextUrl.toString(), { method: request.method, headers: request.headers }),
+      );
+    }
+  }
+  if (!assetRes.ok) {
+    return new Response('Not Found', {
+      status: 404,
+      headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' },
+    });
+  }
+  const headers = new Headers(assetRes.headers);
+  headers.set('Content-Type', 'text/html; charset=utf-8');
+  headers.delete('Location');
+  if (request.method === 'HEAD') {
+    return new Response(null, { status: 200, headers });
+  }
+  const body = await assetRes.arrayBuffer();
+  const text = new TextDecoder('utf-8').decode(body);
+  if (!text.includes('ŞEFPOS GARSON')) {
+    return new Response('Not Found', {
+      status: 404,
+      headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' },
+    });
+  }
+  return new Response(body, { status: 200, headers });
+}
+
 async function redirectLatestWindowsSetup() {
   try {
     const artifact = await resolveLatestSetupFilename();
@@ -108,6 +177,20 @@ export default {
     }
 
     const path = url.pathname;
+
+    if (path === '/gizlilik-sefpos-garson.html') {
+      if (request.method !== 'GET' && request.method !== 'HEAD') {
+        return new Response('Method Not Allowed', { status: 405 });
+      }
+      return serveGarsonPrivacy(request, env);
+    }
+
+    if (isGarsonApkPath(path)) {
+      if (request.method !== 'GET' && request.method !== 'HEAD') {
+        return new Response('Method Not Allowed', { status: 405 });
+      }
+      return serveDownloadApk(request, env);
+    }
 
     if (path === '/download/setup' || path === '/download/Sefpos-Setup.exe') {
       if (request.method === 'GET' || request.method === 'HEAD') {

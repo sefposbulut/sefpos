@@ -1,1 +1,4 @@
+# Mevcut dosyalar (gizlilik HTML, /download/*.apk) bu kuraldan önce sunulur.
+# /* /index.html 200 Pages'te sonsuz döngü diye yok sayılır; eksik APK'yı
+# index.html yapmamak _worker.js içindeki dışlamadadır. IIS için web.config.
 /*    /index.html   200

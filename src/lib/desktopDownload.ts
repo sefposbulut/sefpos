@@ -36,3 +36,20 @@ export function printAgentDownloadHref(): string {
   }
   return `${PRODUCTION_ORIGIN}${PRINT_AGENT_DOWNLOAD_PATH}`;
 }
+
+/** Şefpos Garson Android APK — aynı origin. Dosya VDS `httpdocs/download` altındadır; repoya konmaz. */
+export const GARSON_APK_DOWNLOAD_PATH = '/download/sefpos-garson.apk';
+
+export const GARSON_APK_FILENAME = 'sefpos-garson.apk';
+
+/** Şefpos Garson — iPhone App Store. */
+export const GARSON_APP_STORE_URL =
+  'https://apps.apple.com/tr/app/%C5%9Fefpos-garson/id6792358938';
+
+/** Garson APK — aynı origin `/download/sefpos-garson.apk`. */
+export function garsonApkDownloadHref(): string {
+  if (typeof window !== 'undefined') {
+    return `${window.location.origin}${GARSON_APK_DOWNLOAD_PATH}`;
+  }
+  return `${PRODUCTION_ORIGIN}${GARSON_APK_DOWNLOAD_PATH}`;
+}

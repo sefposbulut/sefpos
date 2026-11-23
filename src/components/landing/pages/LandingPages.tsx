@@ -9,6 +9,7 @@ import {
   Laptop,
   Wifi,
   HardDrive,
+  Smartphone,
   Phone,
   Mail,
   MapPin,
@@ -36,9 +37,20 @@ import { FeaturesCatalogPage } from '../sections/FeaturesCatalogPage';
 import { ContactPageSection } from '../sections/ContactPageSection';
 import { APP_VERSION } from '../../../lib/appVersion';
 import {
+  GARSON_APK_FILENAME,
+  GARSON_APP_STORE_URL,
+  garsonApkDownloadHref,
   onWindowsSetupDownloadClick,
   windowsSetupDownloadHref,
 } from '../../../lib/desktopDownload';
+
+function AppStoreGlyph({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} aria-hidden="true" fill="currentColor">
+      <path d="M16.37 12.65c.02 2.2 1.93 2.93 1.95 2.94-.02.05-.3 1.04-.99 2.06-.6.88-1.22 1.75-2.2 1.77-.96.02-1.27-.57-2.37-.57s-1.44.55-2.35.59c-.94.04-1.66-.95-2.27-1.82-1.24-1.79-2.18-5.06-.91-7.27.63-1.1 1.76-1.79 2.99-1.81.93-.02 1.81.63 2.37.63.56 0 1.61-.78 2.71-.66.46.02 1.76.19 2.59 1.41-.07.04-1.55.9-1.52 2.73zM14.7 6.92c.5-.61.84-1.45.75-2.29-.72.03-1.6.48-2.11 1.09-.46.54-.87 1.4-.76 2.22.81.06 1.63-.41 2.12-1.02z" />
+    </svg>
+  );
+}
 
 export type LandingPageProps = {
   onLogin: () => void;
@@ -174,6 +186,52 @@ export function DownloadPage({ onLogin }: LandingPageProps) {
               <li className="flex gap-2"><Shield className="w-5 h-5 text-orange-400 shrink-0" /> Otomatik güncelleme — onaylı kurulum</li>
             </ul>
           </div>
+        </div>
+      </section>
+      <section className="bg-slate-950 text-white py-16 md:py-20 border-t border-slate-800" aria-labelledby="garson-download-heading">
+        <div className="max-w-7xl mx-auto px-4">
+          <h2 id="garson-download-heading" className="text-3xl md:text-4xl font-black mb-3">Şefpos Garson</h2>
+          <p className="text-slate-300 text-base md:text-lg mb-8 max-w-2xl">
+            Garsonlar telefondan masa siparişi alsın. iPhone için App Store, Android için kurulum dosyası.
+          </p>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6">
+            <div className="bg-slate-800 rounded-2xl p-6 md:p-8 border border-slate-700 flex flex-col">
+              <h3 className="font-bold text-lg mb-4 flex items-center gap-2">
+                <AppStoreGlyph className="w-5 h-5 text-orange-400 shrink-0" /> iPhone
+              </h3>
+              <a
+                href={GARSON_APP_STORE_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex w-full items-center justify-center gap-2 bg-orange-600 hover:bg-orange-500 text-white font-bold px-6 py-4 rounded-xl text-center"
+              >
+                <AppStoreGlyph className="w-5 h-5 shrink-0" /> iPhone (App Store)
+              </a>
+            </div>
+            <div className="bg-slate-800 rounded-2xl p-6 md:p-8 border border-slate-700 flex flex-col">
+              <h3 className="font-bold text-lg mb-4 flex items-center gap-2">
+                <Smartphone className="w-5 h-5 text-orange-400 shrink-0" /> Android
+              </h3>
+              <a
+                href={garsonApkDownloadHref()}
+                download={GARSON_APK_FILENAME}
+                className="inline-flex w-full items-center justify-center gap-2 bg-orange-600 hover:bg-orange-500 text-white font-bold px-6 py-4 rounded-xl text-center"
+              >
+                <Smartphone className="w-5 h-5 shrink-0" /> Android APK indir
+              </a>
+              <ol className="mt-5 list-decimal space-y-2 pl-5 text-sm leading-relaxed text-slate-300">
+                <li>Telefonunuzdan linke dokunup APK&apos;yı indirin.</li>
+                <li>Android &apos;Bilinmeyen kaynaklardan yüklemeye izin ver&apos; uyarısında tarayıcınıza izin verin.</li>
+                <li>İndirilen dosyayı açıp kurun.</li>
+              </ol>
+              <p className="text-sm text-slate-400 mt-4">Google Play sürümü yakında.</p>
+            </div>
+          </div>
+          <p className="mt-6 text-sm">
+            <a href="/gizlilik-sefpos-garson.html" className="text-orange-300 hover:text-orange-200 underline font-semibold">
+              Gizlilik politikası
+            </a>
+          </p>
         </div>
       </section>
       <CTABand title="Web panelden de kullanın" subtitle="Tarayıcıdan giriş; masaüstü şart değil." onPrimary={onLogin} primaryLabel="Web Girişi" />
